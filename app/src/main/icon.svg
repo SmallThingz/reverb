@@ -1,0 +1,17 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reverb app icon">
+  <rect width="512" height="512" rx="112" fill="#0D1324"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#2DD4BF" opacity="0.16" transform="translate(56 0) skewX(-8)">
+      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
+      <path d="M240 306L332 358" stroke-width="26"/>
+    </g>
+    <g stroke="#2DD4BF" opacity="0.34" transform="translate(28 0) skewX(-8)">
+      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
+      <path d="M240 306L332 358" stroke-width="26"/>
+    </g>
+    <g stroke="#FFFFFF" transform="skewX(-8)">
+      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
+      <path d="M240 306L332 358" stroke-width="26"/>
+    </g>
+  </g>
+</svg>

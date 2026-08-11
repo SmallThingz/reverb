@@ -1,0 +1,125 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:9.2.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0'
+        classpath 'org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.3.0'
+    }
+}
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.addAll(
+            '-jvm-default=no-compatibility',
+            '-Xno-param-assertions',
+            '-Xno-receiver-assertions',
+            '-Xno-call-assertions',
+        )
+    }
+}
+
+def releaseStoreFilePath = findProperty('RELEASE_STORE_FILE') ?: 'release.keystore'
+def releaseStorePassword = findProperty('RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = findProperty('RELEASE_KEY_ALIAS')
+def releaseKeyPassword = findProperty('RELEASE_KEY_PASSWORD')
+def releaseSigningReady =
+    file(releaseStoreFilePath).exists() &&
+        releaseStorePassword &&
+        releaseKeyAlias &&
+        releaseKeyPassword
+
+android {
+    namespace = 'app.smallthingz.reverb'
+    compileSdk = 37
+    buildToolsVersion = '37.0.0'
+
+    defaultConfig{
+        applicationId "app.smallthingz.reverb"
+        minSdk = 28
+        targetSdk = 37
+        versionCode 16
+        versionName "0.1.0"
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseStoreFilePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources = true
+            proguardFile file('proguard.cfg')
+            proguardFile getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig = releaseSigningReady ? signingConfigs.release : signingConfigs.debug
+        }
+
+        debug {
+        }
+    }
+    buildFeatures {
+        buildConfig = false
+        compose = true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        dex {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += [
+                'DebugProbesKt.bin',
+                'META-INF/LICENSE*',
+                'META-INF/AL2.0',
+                'META-INF/LGPL2.1',
+                'META-INF/*.version',
+                'META-INF/androidx/**',
+                'META-INF/version-control-info.textproto',
+                'kotlin-tooling-metadata.json',
+            ]
+        }
+    }
+
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.18.0'
+    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.documentfile:documentfile:1.1.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
+    implementation platform('androidx.compose:compose-bom:2026.05.01')
+    implementation 'androidx.compose.animation:animation'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material:material-icons-core'
+
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+
+    testImplementation 'junit:junit:4.13.2'
+}

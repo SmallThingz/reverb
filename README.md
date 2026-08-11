@@ -1,6 +1,6 @@
 <h1>
-  <img src="SaidIt/src/main/icon.svg" alt="TimeTravel app icon" width="52" valign="middle" />
-  TimeTravel
+  <img src="app/src/main/icon.svg" alt="Reverb app icon" width="52" valign="middle" />
+  Reverb
 </h1>
 
 ![android](https://img.shields.io/badge/android-28%2B-3ddc84?logo=android&logoColor=0f172a)
@@ -9,14 +9,7 @@
 
 Rolling audio buffer recorder for Android. Keeps recent audio alive, survives restarts, and exports past audio fast.
 
-Forked from `Echo`, now reworked and shipped as `TimeTravel`.
-
-## 📸 Screenshots
-
-<p>
-  <img src="docs/home.png" alt="Home screen" width="400" />
-  <img src="docs/recordings.png" alt="Recordings screen" width="400" />
-</p>
+Forked from `Echo`, now reworked and shipped as `Reverb`.
 
 ## ✨ Highlights
 
@@ -27,12 +20,12 @@ Forked from `Echo`, now reworked and shipped as `TimeTravel`.
 
 ## 📦 App
 
-- Package: `app.smallthingz.timetravel`
-- Module: `SaidIt`
+- Package: `app.smallthingz.reverb`
+- Module: `app`
 
 ## 🛠️ Build
 
 ```bash
-./gradlew :SaidIt:assembleDebug
-./gradlew :SaidIt:assembleRelease
+./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <service
+            android:name=".ReverbService"
+            android:exported="true"
+            tools:ignore="ExportedService"
+            tools:replace="android:exported"
+            tools:node="merge" />
+
+        <receiver
+            android:name=".DebugCommandReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="app.smallthingz.reverb.debug.ENABLE_LISTENING" />
+                <action android:name="app.smallthingz.reverb.debug.DISABLE_LISTENING" />
+                <action android:name="app.smallthingz.reverb.debug.CLEAR_BUFFER" />
+                <action android:name="app.smallthingz.reverb.debug.INJECT_BUFFER" />
+                <action android:name="app.smallthingz.reverb.debug.FORCE_APP_STORAGE_EXPORTS" />
+                <action android:name="app.smallthingz.reverb.debug.EXPORT_FULL" />
+                <action android:name="app.smallthingz.reverb.debug.EXPORT_SECONDS" />
+                <action android:name="app.smallthingz.reverb.debug.MERGE_ALL" />
+                <action android:name="app.smallthingz.reverb.debug.REENCODE_ALL" />
+                <action android:name="app.smallthingz.reverb.debug.SET_OUTPUT_CONFIG" />
+                <action android:name="app.smallthingz.reverb.debug.APPLY_SETTINGS" />
+                <action android:name="app.smallthingz.reverb.debug.CHECKPOINT" />
+                <action android:name="app.smallthingz.reverb.debug.LOG_STATE" />
+                <action android:name="app.smallthingz.reverb.debug.DUMP_REPORT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".DebugQueryReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="app.smallthingz.reverb.debug.QUERY_STATUS" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

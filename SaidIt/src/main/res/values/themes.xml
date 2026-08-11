@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.TimeTravel" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@android:color/white</item>
-    </style>
-</resources>
