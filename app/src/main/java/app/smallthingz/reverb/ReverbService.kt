@@ -99,9 +99,6 @@ class ReverbService : Service() {
     private var cachedRetentionSampleBytes = 0L
 
     @Volatile
-    private var cachedPersistentPcmSizeBytes = 0L
-
-    @Volatile
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
     @Volatile
@@ -123,14 +120,14 @@ class ReverbService : Service() {
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
     private lateinit var exportWorkExecutor: ExecutorService
-    private lateinit var persistentAudioRingStore: PersistentAudioRingStore
+    private lateinit var persistentAudioChunkStore: PersistentAudioChunkStore
 
     @Volatile private var wakeLock: PowerManager.WakeLock? = null
 
     private val pendingError = AtomicReference<String?>(null)
 
     override fun onCreate() {
-        persistentAudioRingStore = PersistentAudioRingStore(this)
+        persistentAudioChunkStore = PersistentAudioChunkStore(this)
         createNotificationChannel()
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
@@ -166,19 +163,19 @@ class ReverbService : Service() {
             exportWorkExecutor.shutdownNow()
             runCatching { exportWorkExecutor.awaitTermination(2, TimeUnit.SECONDS) }
         }
-        persistentAudioRingStore.close()
+        persistentAudioChunkStore.close()
         audioThread.quitSafely()
         super.onDestroy()
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        audioHandler.post { persistentAudioRingStore.checkpoint() }
+        audioHandler.post { persistentAudioChunkStore.checkpoint() }
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
-        audioHandler.post { persistentAudioRingStore.checkpoint() }
+        audioHandler.post { persistentAudioChunkStore.checkpoint() }
     }
 
     override fun onBind(intent: Intent): IBinder = BackgroundRecorderBinder()
@@ -197,7 +194,7 @@ class ReverbService : Service() {
             super.dump(fd, writer, args)
             return
         }
-        val persisted = if (::persistentAudioRingStore.isInitialized) persistentAudioRingStore.peekSnapshot() else null
+        val persisted = if (::persistentAudioChunkStore.isInitialized) persistentAudioChunkStore.peekSnapshot() else null
         writer.println("ReverbService")
         writer.println("  state=$state")
         writer.println("  listeningEnabled=${isListeningEnabled()}")
@@ -208,11 +205,12 @@ class ReverbService : Service() {
         writer.println("  fillRate=$fillRate")
         writer.println("  exportDir=${describeConfiguredOutputDirectory(this)}")
         writer.println(
-            "  persisted filled=${persisted?.filledBytes ?: 0} capacity=${persisted?.capacityBytes ?: 0} " +
-                "sampleRate=${persisted?.sampleRate ?: 0} channelCount=${persisted?.channelCount ?: 0} " +
+            "  persisted filled=${persisted?.filledBytes ?: 0} duration=${persisted?.durationSeconds ?: 0.0} " +
+                "chunks=${persisted?.chunkCount ?: 0} sampleRate=${persisted?.currentSampleRate ?: 0} " +
+                "channelCount=${persisted?.currentChannelCount ?: 0} " +
                 "lastWrite=${persisted?.lastWriteAtMillis ?: 0}",
         )
-        writer.println("  rawHistoryFile=${ReverbConfig.BUFFER_PCM_FILE_NAME}")
+        writer.println("  rawHistoryDirectory=${ReverbConfig.BUFFER_CACHE_FOLDER_NAME}/${ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME}")
     }
 
     fun enableListening() {
@@ -313,7 +311,6 @@ class ReverbService : Service() {
             bitrateKbps = null,
             sampleFormat = pcmSampleFormat,
         )
-        cachedPersistentPcmSizeBytes = cachedRetentionSampleBytes
     }
 
     private fun resolveOperationalConfiguration(
@@ -456,7 +453,7 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
-            persistentAudioRingStore.checkpoint()
+            persistentAudioChunkStore.checkpoint()
             releaseAudioRecord()
             mainHandler.post {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -532,11 +529,17 @@ class ReverbService : Service() {
             flushAudioRecord()
             if (!isExportPending(exportToken)) return@post
 
-            val bytesAvailable = availableBufferedSampleBytes()
-            val prependBytes = (memorySeconds * fillRate).toLong()
-            val skipBytes = maxOf(0L, bytesAvailable - prependBytes)
-            val useBytes = bytesAvailable - skipBytes
-            exportBufferedRange(skipBytes, useBytes, receiver, newFileName, exportToken)
+            val totalDuration = availableBufferedDurationSeconds()
+            val requestedDuration = memorySeconds.toDouble().coerceAtLeast(0.0)
+            val end = totalDuration
+            val start = maxOf(0.0, end - requestedDuration)
+            val lease = acquireExportRange(start, end)
+            if (lease == null) {
+                clearExportState(exportToken)
+                notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
+                return@post
+            }
+            exportBufferedRange(lease, receiver, newFileName, exportToken)
         }
     }
 
@@ -560,14 +563,28 @@ class ReverbService : Service() {
             flushAudioRecord()
             if (!isExportPending(exportToken)) return@post
 
-            val bytesAvailable = availableBufferedSampleBytes()
-            val boundedStart = startOffsetSeconds.coerceAtLeast(0f)
-            val boundedEnd = endOffsetSeconds.coerceAtLeast(boundedStart)
-            val skipBytes = (boundedStart * fillRate).toLong().coerceAtMost(bytesAvailable)
-            val endBytes = (boundedEnd * fillRate).toLong().coerceAtMost(bytesAvailable)
-            val useBytes = (endBytes - skipBytes).coerceAtLeast(0L)
-            exportBufferedRange(skipBytes, useBytes, receiver, newFileName, exportToken)
+            val totalDuration = availableBufferedDurationSeconds()
+            val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
+            val boundedEnd = endOffsetSeconds.toDouble().coerceIn(boundedStart, totalDuration)
+            val lease = acquireExportRange(boundedStart, boundedEnd)
+            if (lease == null) {
+                clearExportState(exportToken)
+                notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
+                return@post
+            }
+            exportBufferedRange(lease, receiver, newFileName, exportToken)
         }
+    }
+
+    private fun acquireExportRange(
+        requestedStartSeconds: Double,
+        requestedEndSeconds: Double,
+    ): PersistentAudioChunkStore.RangeLease? {
+        val targetBytesPerSecond = fillRate.coerceAtLeast(1).toDouble()
+        val maxDuration = exportFileSizeLimitBytes(outputFormat).toDouble() / targetBytesPerSecond
+        val end = requestedEndSeconds.coerceAtLeast(requestedStartSeconds)
+        val start = maxOf(requestedStartSeconds, end - maxDuration)
+        return persistentAudioChunkStore.acquireRange(start, end)
     }
 
     fun cancelCurrentExport(): Boolean {
@@ -593,33 +610,16 @@ class ReverbService : Service() {
     }
 
     private fun exportBufferedRange(
-        skipBytes: Long,
-        useBytes: Long,
+        lease: PersistentAudioChunkStore.RangeLease,
         receiver: AudioFileReceiver,
         newFileName: String,
         exportToken: ExportCancellationToken,
     ) {
-        if (!isExportPending(exportToken)) return
-        val bytesAvailable = availableBufferedSampleBytes()
-        val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1).toLong()
-        val alignedAvailable = alignDown(bytesAvailable, frameBytes)
-        var boundedSkip = alignDown(skipBytes.coerceIn(0L, alignedAvailable), frameBytes)
-        var boundedUse = alignDown(
-            useBytes.coerceAtLeast(0L).coerceAtMost(alignedAvailable - boundedSkip),
-            frameBytes,
-        )
-        val maxExportSampleBytes = (exportFileSizeLimitBytes(outputFormat) / frameBytes) * frameBytes
-        if (boundedUse > maxExportSampleBytes) {
-            boundedSkip += boundedUse - maxExportSampleBytes
-            boundedUse = maxExportSampleBytes
-        }
-        if (boundedUse <= 0L) {
-            clearExportState(exportToken)
-            notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
+        if (!isExportPending(exportToken)) {
+            lease.close()
             return
         }
-        val startedAtMillis =
-            System.currentTimeMillis() - 1000L * (alignedAvailable - boundedSkip) / maxOf(fillRate, 1)
+        val startedAtMillis = lease.startedAtMillis
         val exportFormat = outputFormat
         val exportCodec = outputCodec
         val exportSampleRate = sampleRate
@@ -642,36 +642,38 @@ class ReverbService : Service() {
                                     exportFormat,
                                     exportCodec,
                                 )
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Unable to prepare export file", e)
-                            val message = userFacingError(getString(R.string.cant_create_file_generic), e)
-                            reportError(message)
-                            notifyReceiverFailure(receiver, message, e)
-                            return@Callable Unit
-                        }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Unable to prepare export file", e)
+                                val message = userFacingError(getString(R.string.cant_create_file_generic), e)
+                                reportError(message)
+                                notifyReceiverFailure(receiver, message, e)
+                                return@Callable Unit
+                            }
                         outTarget = target
                         var durationMillis = 0L
-                        val readSucceeded =
-                            WavAudioFileWriter(
-                                this@ReverbService,
-                                target,
-                                exportSampleRate,
-                                exportChannelMode.channelCount,
-                                exportSampleFormat,
-                            ).use { writer ->
-                                val didRead = readBufferedPcm(boundedSkip, boundedUse) { array, offset, count ->
-                                    ensureExportNotCancelled(exportToken)
-                                    writer.write(array, offset, count)
-                                    count
-                                }
+                        WavAudioFileWriter(
+                            this@ReverbService,
+                            target,
+                            exportSampleRate,
+                            exportChannelMode.channelCount,
+                            exportSampleFormat,
+                        ).use { writer ->
+                            lease.readNormalized(
+                                targetSampleRate = exportSampleRate,
+                                targetChannelCount = exportChannelMode.channelCount,
+                                targetSampleFormat = exportSampleFormat,
+                            ) { array, offset, count ->
                                 ensureExportNotCancelled(exportToken)
-                                durationMillis = (
-                                    writer.totalSampleBytesWritten * 1000f / maxOf(exportFillRate, 1)
-                                ).toLong()
-                                didRead
+                                writer.write(array, offset, count)
+                                count
                             }
-                        if (!readSucceeded) {
-                            throw IOException("Requested PCM range not available in raw buffer")
+                            ensureExportNotCancelled(exportToken)
+                            if (writer.totalSampleBytesWritten <= 0L) {
+                                throw IOException("Requested timeline range produced no PCM")
+                            }
+                            durationMillis = (
+                                writer.totalSampleBytesWritten * 1000.0 / maxOf(exportFillRate, 1).toDouble()
+                            ).toLong()
                         }
                         requireExportedOutput(target)
                         ensureExportNotCancelled(exportToken)
@@ -707,7 +709,7 @@ class ReverbService : Service() {
                             notifyReceiverCancelled(receiver)
                             return@Callable Unit
                         }
-                        Log.e(TAG, "Error while exporting raw history into ${outTarget?.displayName ?: newFileName}", e)
+                        Log.e(TAG, "Error while exporting audio history into ${outTarget?.displayName ?: newFileName}", e)
                         val message = userFacingError(
                             getString(R.string.error_during_writing_history_into) +
                                 (outTarget?.displayName ?: newFileName),
@@ -717,6 +719,7 @@ class ReverbService : Service() {
                         notifyReceiverFailure(receiver, message, e)
                         deleteOutputTarget(outTarget)
                     } finally {
+                        lease.close()
                         if (exportToken.cancelled.get() && !committed) {
                             deleteOutputTarget(outTarget)
                         }
@@ -730,6 +733,12 @@ class ReverbService : Service() {
                     exportToken.started.set(true)
                     super.run()
                 }
+
+                override fun done() {
+                    if (!exportToken.started.get()) {
+                        lease.close()
+                    }
+                }
             }
         val accepted = synchronized(exportStateLock) {
             if (activeExportToken !== exportToken || exportToken.cancelled.get()) {
@@ -740,6 +749,7 @@ class ReverbService : Service() {
             }
         }
         if (!accepted) {
+            lease.close()
             exportTask.cancel(true)
             return
         }
@@ -747,6 +757,7 @@ class ReverbService : Service() {
             exportWorkExecutor.execute(exportTask)
         } catch (e: RejectedExecutionException) {
             exportToken.cancelled.set(true)
+            lease.close()
             clearExportState(exportToken)
             Log.w(TAG, "Export rejected because the service is shutting down", e)
             notifyReceiverFailure(receiver, getString(R.string.save_failed), e)
@@ -807,15 +818,11 @@ class ReverbService : Service() {
             if (state != STATE_LISTENING) return@post
             flushAudioRecord()
 
-            val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1).toLong()
-            val bytesAvailable = alignDown(availableBufferedSampleBytes(), frameBytes)
-            val prependBytes = alignDown(
-                (prependedMemorySeconds * fillRate).toLong().coerceAtLeast(0L),
-                frameBytes,
-            )
-            val useBytes = minOf(bytesAvailable, prependBytes)
-            val skipBytes = bytesAvailable - useBytes
-            val startedAtMillis = System.currentTimeMillis() - 1000L * useBytes / maxOf(fillRate, 1)
+            val totalDuration = availableBufferedDurationSeconds()
+            val prependDuration = prependedMemorySeconds.toDouble().coerceAtLeast(0.0)
+            val start = maxOf(0.0, totalDuration - prependDuration)
+            val lease = persistentAudioChunkStore.acquireRange(start, totalDuration)
+            val startedAtMillis = lease?.startedAtMillis ?: System.currentTimeMillis()
 
             try {
                 recordingTarget = createOutputTarget(
@@ -829,6 +836,7 @@ class ReverbService : Service() {
                 state = STATE_RECORDING
                 updateWakeLockState()
             } catch (e: Exception) {
+                lease?.close()
                 Log.e(TAG, "Unable to create recording output", e)
                 deleteOutputTarget(recordingTarget)
                 recordingTarget = null
@@ -837,18 +845,18 @@ class ReverbService : Service() {
                 return@post
             }
 
-            if (skipBytes >= bytesAvailable) {
-                return@post
-            }
-
+            if (lease == null) return@post
             try {
-                val writer = audioFileWriter
-                val readSucceeded = readBufferedPcm(skipBytes, useBytes) { array, offset, count ->
-                    writer?.write(array, offset, count)
-                    count
-                }
-                if (!readSucceeded) {
-                    throw IOException("Buffered audio was overwritten while starting recording")
+                lease.use {
+                    val writer = audioFileWriter
+                    it.readNormalized(
+                        targetSampleRate = sampleRate,
+                        targetChannelCount = channelMode.channelCount,
+                        targetSampleFormat = pcmSampleFormat,
+                    ) { array, offset, count ->
+                        writer?.write(array, offset, count)
+                        count
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error while priming recording into ${recordingTarget?.displayName}", e)
@@ -893,7 +901,7 @@ class ReverbService : Service() {
 
         if (restartInput) {
             audioHandler.removeCallbacks(audioReader)
-            persistentAudioRingStore.checkpoint()
+            persistentAudioChunkStore.checkpoint()
             releaseAudioRecord()
         }
         if (restartInput) {
@@ -1085,19 +1093,15 @@ class ReverbService : Service() {
     }
 
     private fun availableBufferedSampleBytes(): Long {
-        return if (::persistentAudioRingStore.isInitialized) persistentAudioRingStore.countFilledBytes() else 0L
+        return if (::persistentAudioChunkStore.isInitialized) persistentAudioChunkStore.countFilledBytes() else 0L
     }
 
-    private fun readBufferedPcm(
-        skipBytes: Long,
-        maxBytes: Long,
-        reader: PersistentAudioRingStore.Consumer,
-    ): Boolean {
-        return persistentAudioRingStore.read(skipBytes, maxBytes, reader)
+    private fun availableBufferedDurationSeconds(): Double {
+        return if (::persistentAudioChunkStore.isInitialized) persistentAudioChunkStore.durationSeconds() else 0.0
     }
 
     private fun canExportBufferedAudio(): Boolean {
-        return availableBufferedSampleBytes() > 0L || state == STATE_LISTENING || state == STATE_PAUSED
+        return availableBufferedDurationSeconds() > 0.0 || state == STATE_LISTENING || state == STATE_PAUSED
     }
 
     private fun flushAudioRecord() {
@@ -1133,14 +1137,10 @@ class ReverbService : Service() {
             captureBuffer.limit(alignedRead)
             captureBuffer.get(captureScratch, 0, alignedRead)
             publishVisualization(captureScratch, 0, alignedRead)
-            persistentAudioRingStore.append(
+            persistentAudioChunkStore.append(
                 array = captureScratch,
                 offset = 0,
                 count = alignedRead,
-                requestedCapacityBytes = cachedPersistentPcmSizeBytes,
-                requestedSampleRate = sampleRate,
-                requestedChannelCount = channelMode.channelCount,
-                sampleFormat = pcmSampleFormat,
             )
             val writer = audioFileWriter
             if (writer != null) {
@@ -1214,7 +1214,7 @@ class ReverbService : Service() {
             .commit()
         state = STATE_READY
         audioHandler.removeCallbacks(audioReader)
-        runCatching { persistentAudioRingStore.checkpoint() }
+        runCatching { persistentAudioChunkStore.checkpoint() }
         releaseAudioRecord()
         updateWakeLockState()
         reportError(if (error == null) message else userFacingError(message, error))
@@ -1226,8 +1226,11 @@ class ReverbService : Service() {
 
     fun getState(callback: StateCallback) {
         audioHandler.post {
-            val configuredBytes = cachedRetentionSampleBytes
-            val memorizedBytes = availableBufferedSampleBytes().coerceAtMost(configuredBytes)
+            val configuredSeconds = when (getConfiguredRetentionMode(this)) {
+                RetentionMode.TIME -> getConfiguredRetentionSeconds(this).toFloat()
+                RetentionMode.SIZE -> cachedRetentionSampleBytes * bytesToSeconds
+            }
+            val memorizedSeconds = availableBufferedDurationSeconds().toFloat()
             val recordedBytes = audioFileWriter?.totalSampleBytesWritten ?: 0L
             val listening = state == STATE_LISTENING || state == STATE_RECORDING
             val recording = state == STATE_RECORDING
@@ -1235,8 +1238,8 @@ class ReverbService : Service() {
                 callback.state(
                     listening,
                     recording,
-                    memorizedBytes * bytesToSeconds,
-                    configuredBytes * bytesToSeconds,
+                    memorizedSeconds,
+                    configuredSeconds,
                     recordedBytes * bytesToSeconds,
                 )
             }
@@ -1326,7 +1329,7 @@ class ReverbService : Service() {
     fun clearBuffer() {
         audioHandler.post {
             if (state != STATE_RECORDING) {
-                persistentAudioRingStore.clear()
+                persistentAudioChunkStore.clear()
             }
         }
     }
@@ -1373,7 +1376,7 @@ class ReverbService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        audioHandler.post { persistentAudioRingStore.checkpoint() }
+        audioHandler.post { persistentAudioChunkStore.checkpoint() }
     }
 
     private fun buildNotification(): Notification {
@@ -1401,13 +1404,19 @@ class ReverbService : Service() {
     }
 
     private fun configurePersistentBuffer() {
-        persistentAudioRingStore.configure(
-            requestedCapacityBytes = cachedPersistentPcmSizeBytes,
+        val mode = getConfiguredRetentionMode(this)
+        val retentionValue = when (mode) {
+            RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
+            RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
+        }
+        persistentAudioChunkStore.configure(
+            requestedRetentionMode = mode,
+            requestedRetentionValue = retentionValue,
             requestedSampleRate = sampleRate,
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
         )
-        if (persistentAudioRingStore.hasData() && !isListeningEnabled() && state == STATE_READY) {
+        if (persistentAudioChunkStore.hasData() && !isListeningEnabled() && state == STATE_READY) {
             state = STATE_PAUSED
         }
     }
@@ -1423,7 +1432,7 @@ class ReverbService : Service() {
             }
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
-            persistentAudioRingStore.checkpoint()
+            persistentAudioChunkStore.checkpoint()
             releaseAudioRecord()
         }
     }
@@ -1467,7 +1476,7 @@ class ReverbService : Service() {
                 ACTION_DEBUG_ENABLE_LISTENING -> mainHandler.post { enableListening() }
                 ACTION_DEBUG_DISABLE_LISTENING -> mainHandler.post { disableListening() }
                 ACTION_DEBUG_CLEAR_BUFFER -> if (state != STATE_RECORDING) {
-                    persistentAudioRingStore.clear()
+                    persistentAudioChunkStore.clear()
                 }
                 ACTION_DEBUG_INJECT_BUFFER -> injectDebugBuffer(seconds)
                 ACTION_DEBUG_FORCE_APP_STORAGE_EXPORTS -> {
@@ -1487,7 +1496,7 @@ class ReverbService : Service() {
                         }
                     writeDebugReport("apply-settings:" + result)
                 }
-                ACTION_DEBUG_CHECKPOINT -> persistentAudioRingStore.checkpoint()
+                ACTION_DEBUG_CHECKPOINT -> persistentAudioChunkStore.checkpoint()
                 ACTION_DEBUG_LOG_STATE -> logDebugState()
                 ACTION_DEBUG_DUMP_REPORT -> writeDebugReport("manual-dump")
             }
@@ -1513,53 +1522,50 @@ class ReverbService : Service() {
             return
         }
         val logicalRetentionBytes = cachedRetentionSampleBytes
-        val persistentBytes = cachedPersistentPcmSizeBytes
-        if (persistentBytes <= 0L) {
-            Log.w(TAG, "injectDebugBuffer ignored persistent=$persistentBytes")
+        if (logicalRetentionBytes <= 0L) {
+            Log.w(TAG, "injectDebugBuffer ignored retention=$logicalRetentionBytes")
             return
         }
-        val totalBytes = (seconds * fillRate).toLong().coerceAtLeast(0L)
+        val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1).toLong()
+        val totalBytes = alignDown((seconds * fillRate).toLong().coerceAtLeast(0L), frameBytes)
         val chunk = ByteArray(64 * 1024)
         var remaining = totalBytes
         while (remaining > 0L) {
-            val count = minOf(chunk.size.toLong(), remaining).toInt()
-            persistentAudioRingStore.append(
+            val count = alignDown(minOf(chunk.size.toLong(), remaining), frameBytes).toInt()
+            if (count <= 0) break
+            persistentAudioChunkStore.append(
                 array = chunk,
                 offset = 0,
                 count = count,
-                requestedCapacityBytes = persistentBytes,
-                requestedSampleRate = sampleRate,
-                requestedChannelCount = channelMode.channelCount,
-                sampleFormat = pcmSampleFormat,
             )
             remaining -= count.toLong()
         }
         state = STATE_PAUSED
         updateWakeLockState()
-        persistentAudioRingStore.checkpoint()
+        persistentAudioChunkStore.checkpoint()
         Log.d(
             TAG,
             "injectDebugBuffer seconds=$seconds logical=$logicalRetentionBytes " +
-                "persisted=$persistentBytes " +
                 "available=${availableBufferedSampleBytes()}",
         )
         writeDebugReport("inject-buffer-${seconds}s")
     }
 
     private fun logDebugState() {
-        val persisted = persistentAudioRingStore.peekSnapshot()
+        val persisted = persistentAudioChunkStore.peekSnapshot()
         Log.d(
             TAG,
             "debug-state state=$state " +
                 "sampleRate=$sampleRate channels=${channelMode.channelCount} codec=${outputCodec.prefValue} " +
                 "format=${outputFormat.prefValue} logicalRetention=${cachedRetentionSampleBytes} " +
-                "persistedFilled=${persisted?.filledBytes ?: 0} persistedCapacity=${persisted?.capacityBytes ?: 0}",
+                "persistedFilled=${persisted?.filledBytes ?: 0} persistedDuration=${persisted?.durationSeconds ?: 0.0} " +
+                "chunks=${persisted?.chunkCount ?: 0}",
         )
     }
 
     private fun writeDebugReport(reason: String) {
         val reportFile = resolveDebugReportFile()
-        val persisted = persistentAudioRingStore.peekSnapshot()
+        val persisted = persistentAudioChunkStore.peekSnapshot()
         val status =
             buildString {
                 append("reason=").append(reason)
@@ -1569,7 +1575,8 @@ class ReverbService : Service() {
                 append(" format=").append(outputFormat.prefValue)
                 append(" codec=").append(outputCodec.prefValue)
                 append(" persistedFilled=").append(persisted?.filledBytes ?: 0)
-                append(" persistedCapacity=").append(persisted?.capacityBytes ?: 0)
+                append(" persistedDuration=").append(persisted?.durationSeconds ?: 0.0)
+                append(" persistedChunks=").append(persisted?.chunkCount ?: 0)
                 append(" persistedLastWrite=").append(persisted?.lastWriteAtMillis ?: 0)
                 append(" exportDir=").append(describeConfiguredOutputDirectory(this@ReverbService))
             }

@@ -3,9 +3,11 @@ package app.smallthingz.reverb
 object ReverbConfig {
 
     const val APP_STORAGE_FOLDER_NAME = "Reverb"
-    const val BUFFER_CACHE_FOLDER_NAME = "buffer-cache"
-    const val BUFFER_META_FILE_NAME = "buffer.meta"
-    const val BUFFER_PCM_FILE_NAME = "buffer.pcm"
+    const val BUFFER_CACHE_FOLDER_NAME = "reverb"
+    const val BUFFER_CHUNKS_FOLDER_NAME = "chunks"
+    const val BUFFER_INDEX_A_FILE_NAME = "index.a"
+    const val BUFFER_INDEX_B_FILE_NAME = "index.b"
+    const val LEGACY_BUFFER_CACHE_FOLDER_NAME = "buffer-cache"
 
     const val DATABASE_FILE_NAME = "reverb-recordings.db"
     const val FALLBACK_MIME_TYPE_AUDIO = "audio/*"
