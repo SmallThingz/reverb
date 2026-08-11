@@ -15,10 +15,6 @@ enum class PrefKey {
     INPUT_ROUTE,
     SAMPLE_RATE,
     THEME_MODE,
-    CUSTOM_EXPORT_MODE,
-    CUSTOM_EXPORT_UNIT,
-    CUSTOM_EXPORT_PAST_SECONDS,
-    CUSTOM_EXPORT_PAST_SIZE_MIB,
 }
 
 fun SharedPreferences.getString(key: PrefKey, default: String?): String? = getString(key.name, default)

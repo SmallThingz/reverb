@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,7 +33,10 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun AppTopBar(
     selectionActive: Boolean,
+    showBack: Boolean,
     onBrandClick: () -> Unit,
+    onBackClick: () -> Unit,
+    onFilesClick: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     if (selectionActive) return
@@ -48,34 +52,57 @@ internal fun AppTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .statusBarsPadding()
             .padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .graphicsLayer {
-                    scaleX = brandScale
-                    scaleY = brandScale
-                }
-                .clip(RoundedCornerShape(15.dp))
-                .background(Color(0xFF0D1324))
-                .clickable(
-                    interactionSource = brandInteraction,
-                    indication = null,
-                    onClick = onBrandClick,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_brand_mark),
-                contentDescription = stringResource(R.string.app_name),
-                tint = Color.Unspecified,
-                modifier = Modifier.size(42.dp),
-            )
+        if (showBack) {
+            IconButton(onClick = onBackClick) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_close),
+                    contentDescription = stringResource(R.string.close),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .graphicsLayer {
+                        scaleX = brandScale
+                        scaleY = brandScale
+                    }
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(Color(0xFF0D1324))
+                    .clickable(
+                        interactionSource = brandInteraction,
+                        indication = null,
+                        onClick = onBrandClick,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_brand_mark),
+                    contentDescription = stringResource(R.string.app_name),
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(42.dp),
+                )
+            }
         }
 
         Spacer(Modifier.weight(1f))
+
+        if (!showBack) {
+            IconButton(onClick = onFilesClick) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_tab_files),
+                    contentDescription = stringResource(R.string.files_tab),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
+        }
 
         IconButton(onClick = onSettingsClick) {
             Icon(

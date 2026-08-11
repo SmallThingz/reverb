@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,13 +22,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,7 +68,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.KeyboardOptions
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -748,7 +748,11 @@ fun SettingsScreen(
                 shadowElevation = 1.dp,
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).height(64.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 8.dp)
+                        .height(64.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = {
@@ -804,6 +808,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .background(MaterialTheme.colorScheme.surface)
                 .verticalScroll(rememberScrollState())
                 .pointerInput(Unit) {
                     detectTapGestures {
@@ -813,7 +818,6 @@ fun SettingsScreen(
                     }
                 },
         ) {
-            SectionTitle(stringResource(R.string.theme_title))
             SettingsDropdown(
                 label = stringResource(R.string.theme_title),
                 selectedValue = selectedThemeLabel,
@@ -825,10 +829,10 @@ fun SettingsScreen(
                     saveCurrentToSnapshot(currentSnapshot)
                     pushUndoState()
                 },
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
 
-            HorizontalDivider(Modifier.padding(vertical = 24.dp))
+            Spacer(Modifier.height(12.dp))
 
             SectionTitle(stringResource(R.string.retention_mode_title))
             Row(
@@ -895,7 +899,7 @@ fun SettingsScreen(
                 )
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 24.dp))
+            Spacer(Modifier.height(12.dp))
 
             SectionTitle(stringResource(R.string.recording_settings_title))
             Row(
@@ -1043,50 +1047,57 @@ fun SettingsScreen(
             }
 
             SectionTitle(stringResource(R.string.storage_settings_title))
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = exportPathText,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (selectedExportTreeUri != null) {
-                        IconButton(onClick = {
-                            selectedExportTreeUri = null
-                            refreshExportDirectoryUi()
-                            refreshMoveRecordingsAvailability()
-                            saveCurrentToSnapshot(currentSnapshot)
-                            pushUndoState()
-                        }) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = exportPathText,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selectedExportTreeUri != null) {
+                            IconButton(onClick = {
+                                selectedExportTreeUri = null
+                                refreshExportDirectoryUi()
+                                refreshMoveRecordingsAvailability()
+                                saveCurrentToSnapshot(currentSnapshot)
+                                pushUndoState()
+                            }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_reset),
+                                    contentDescription = stringResource(R.string.default_folder),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) }) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_reset),
-                                contentDescription = stringResource(R.string.default_folder),
+                                painter = painterResource(R.drawable.ic_folder),
+                                contentDescription = stringResource(R.string.choose_folder),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                    IconButton(onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_folder),
-                            contentDescription = stringResource(R.string.choose_folder),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    TextButton(
+                        onClick = { moveExistingRecordings() },
+                        enabled = canMove,
+                    ) {
+                        Text(stringResource(R.string.move_recordings))
                     }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                TextButton(
-                    onClick = { moveExistingRecordings() },
-                    enabled = canMove,
-                ) {
-                    Text(stringResource(R.string.move_recordings))
                 }
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 24.dp))
+            Spacer(Modifier.height(12.dp))
 
             SectionTitle(stringResource(R.string.background_persistence_title))
             SwitchRow(
@@ -1099,22 +1110,30 @@ fun SettingsScreen(
                     pushUndoState()
                 },
             )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                Text(
-                    text = stringResource(
-                        if (batteryOptimizationRestricted) R.string.battery_optimization_status_limited
-                        else R.string.battery_optimization_status_ok,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                if (batteryOptimizationRestricted) {
-                    TextButton(onClick = { openBatteryOptimizationSettings() }) {
-                        Text(stringResource(R.string.battery_optimization_button))
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (batteryOptimizationRestricted) R.string.battery_optimization_status_limited
+                            else R.string.battery_optimization_status_ok,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (batteryOptimizationRestricted) {
+                        TextButton(onClick = { openBatteryOptimizationSettings() }) {
+                            Text(stringResource(R.string.battery_optimization_button))
+                        }
                     }
                 }
             }
@@ -1169,11 +1188,10 @@ fun SettingsScreen(
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodyLarge,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (0.15).sp,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
     )
 }
 
@@ -1204,6 +1222,7 @@ private fun SettingsDropdown(
             enabled = enabled,
             isError = error != null,
             supportingText = error?.let { { Text(it) } },
+            shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth(),
         )
         if (enabled) {
@@ -1261,6 +1280,7 @@ private fun SettingsTextField(
         singleLine = true,
         prefix = if (prefix != null) {{ Text(prefix) }} else null,
         keyboardOptions = keyboardOptions,
+        shape = RoundedCornerShape(18.dp),
         modifier = modifier,
     )
 }
@@ -1272,26 +1292,32 @@ private fun SwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .clickable { onCheckedChange(!checked) },
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onCheckedChange(!checked) },
+            ) {
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

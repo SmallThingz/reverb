@@ -15,18 +15,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -34,19 +26,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
-private const val TAB_CAPTURE = 0
-private const val TAB_FILES = 1
 private const val URI_SCHEME_PACKAGE = "package"
 private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
 private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
@@ -185,10 +172,11 @@ private fun MainScreen(
     showPermissionDenied: Boolean,
     onThemeChanged: (AppThemeMode) -> Unit,
 ) {
-    var selectedTab by rememberSaveable { mutableIntStateOf(TAB_CAPTURE) }
+    var showFiles by rememberSaveable { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var filesSelectionActive by rememberSaveable { mutableStateOf(false) }
+    BackHandler(enabled = showFiles && !showSettings) { showFiles = false }
     if (showSettings) {
         BackHandler {
             showSettings = false
@@ -202,25 +190,21 @@ private fun MainScreen(
             modifier = Modifier.fillMaxSize(),
             topBar = {
                 AppTopBar(
-                    selectionActive = selectedTab == TAB_FILES && filesSelectionActive,
+                    selectionActive = showFiles && filesSelectionActive,
+                    showBack = showFiles,
                     onBrandClick = { showAboutDialog = true },
+                    onBackClick = { showFiles = false },
+                    onFilesClick = { showFiles = true },
                     onSettingsClick = { showSettings = true },
                 )
-            },
-            bottomBar = {
-                if (permissionsGranted) {
-                    ReverbBottomBar(
-                        selectedTab = selectedTab,
-                        onTabSelected = { selectedTab = it },
-                    )
-                }
             },
         ) { innerPadding ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
                 if (permissionsGranted) {
-                    when (selectedTab) {
-                        TAB_CAPTURE -> CaptureScreen()
-                        TAB_FILES -> FilesScreen(onSelectionActiveChange = { filesSelectionActive = it })
+                    if (showFiles) {
+                        FilesScreen(onSelectionActiveChange = { filesSelectionActive = it })
+                    } else {
+                        CaptureScreen()
                     }
                 } else if (!showPermissionDenied) {
                     Surface(Modifier.fillMaxSize()) {
@@ -238,65 +222,6 @@ private fun MainScreen(
 
         if (showAboutDialog) {
             AboutDialog(onDismiss = { showAboutDialog = false })
-        }
-    }
-}
-
-@Composable
-private fun ReverbBottomBar(
-    selectedTab: Int,
-    onTabSelected: (Int) -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(bottom = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            shape = RoundedCornerShape(30.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-        ) {
-            Row(Modifier.padding(6.dp)) {
-                ReverbNavItem(
-                    selected = selectedTab == TAB_CAPTURE,
-                    icon = R.drawable.ic_tab_home,
-                    contentDescription = stringResource(R.string.capture_tab),
-                    onClick = { onTabSelected(TAB_CAPTURE) },
-                )
-                Spacer(Modifier.width(6.dp))
-                ReverbNavItem(
-                    selected = selectedTab == TAB_FILES,
-                    icon = R.drawable.ic_tab_files,
-                    contentDescription = stringResource(R.string.files_tab),
-                    onClick = { onTabSelected(TAB_FILES) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReverbNavItem(
-    selected: Boolean,
-    icon: Int,
-    contentDescription: String,
-    onClick: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.size(50.dp),
-        shape = RoundedCornerShape(22.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        IconButton(onClick = onClick) {
-            Icon(
-                painter = painterResource(icon),
-                contentDescription = contentDescription,
-                tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-            )
         }
     }
 }

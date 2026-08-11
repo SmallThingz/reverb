@@ -20,8 +20,6 @@ object ReverbConfig {
     const val DEFAULT_RETENTION_SIZE_BYTES = 512L * 1024L * 1024L
 
     val DEFAULT_CHANNEL_MODE = ChannelMode.MONO
-    val DEFAULT_CUSTOM_EXPORT_MODE = CustomExportMode.PAST
-    val DEFAULT_CUSTOM_EXPORT_UNIT = CustomExportUnit.TIME
 
     const val FORMAT_SIZE_MIB = "0.0"
     const val FORMAT_RETENTION_SIZE_MIB = "0.###"

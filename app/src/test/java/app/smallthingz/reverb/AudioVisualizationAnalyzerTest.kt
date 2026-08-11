@@ -33,6 +33,29 @@ class AudioVisualizationAnalyzerTest {
     }
 
     @Test
+    fun quietVoiceLevelInput_isStillVisible() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val pcm = pcm16Tone(frequencyHz = 440.0, amplitude = 0.02)
+
+        val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, SAMPLE_RATE.toInt())
+
+        assertTrue(frame.activity > 0.02f)
+        assertTrue(frame.bins.maxOrNull()!! > 0.01f)
+    }
+
+    @Test
+    fun highSampleRateInput_stillUsesSpeechEnergy() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val sampleRate = 192_000.0
+        val pcm = pcm16Tone(frequencyHz = 1_000.0, amplitude = 0.25, sampleRate = sampleRate)
+
+        val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, sampleRate.toInt())
+
+        assertTrue(frame.activity > 0.1f)
+        assertTrue(frame.bins.maxOrNull()!! > 0.05f)
+    }
+
+    @Test
     fun allSupportedPcmFormats_feedTheVisualizer() {
         val analyzer = AudioVisualizationAnalyzer()
 
@@ -53,13 +76,17 @@ class AudioVisualizationAnalyzerTest {
         assertTrue(analyzer.analyze(floatPcm, 0, floatPcm.size, PcmSampleFormat.PCM_FLOAT, 1, SAMPLE_RATE.toInt()).activity > 0.1f)
     }
 
-    private fun pcm16Tone(frequencyHz: Double, amplitude: Double): ByteArray {
+    private fun pcm16Tone(
+        frequencyHz: Double,
+        amplitude: Double,
+        sampleRate: Double = SAMPLE_RATE,
+    ): ByteArray {
         return ByteBuffer.allocate(SAMPLE_COUNT * Short.SIZE_BYTES)
             .order(ByteOrder.nativeOrder())
             .apply {
                 repeat(SAMPLE_COUNT) { index ->
                     putShort(
-                        (sin(2.0 * PI * frequencyHz * index / SAMPLE_RATE) * amplitude * Short.MAX_VALUE)
+                        (sin(2.0 * PI * frequencyHz * index / sampleRate) * amplitude * Short.MAX_VALUE)
                             .toInt()
                             .toShort(),
                     )

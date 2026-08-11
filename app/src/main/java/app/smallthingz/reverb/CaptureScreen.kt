@@ -25,7 +25,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,9 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -72,8 +69,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -100,14 +95,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 import kotlin.math.sin
 
-private const val MIB: Double = 1024.0 * 1024.0
 private const val BLOB_POINT_COUNT = 64
 
 class NotifyFileReceiver(
@@ -482,12 +474,8 @@ fun CaptureScreen() {
 
     if (showExportRangeDialog) {
         val currentSeconds = memorizedSeconds.coerceAtLeast(0f)
-        val currentBufferBytes = remember(context, service, memorizedSeconds) {
-            currentBufferExportBytes(context, service, memorizedSeconds)
-        }
         ExportRangeDialog(
             currentBufferSeconds = currentSeconds,
-            currentBufferBytes = currentBufferBytes,
             onExport = { range ->
                 showExportRangeDialog = false
                 if (range.warningDurationSeconds != null) {
@@ -643,7 +631,10 @@ private fun MainCaptureContent(
                 Spacer(Modifier.height(14.dp))
                 LinearProgressIndicator(
                     progress = { fillProgress },
-                    modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
+                    modifier = Modifier.fillMaxWidth().height(11.dp).clip(CircleShape),
+                    color = if (isListening) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 )
             }
         }
@@ -678,7 +669,7 @@ private fun MainCaptureContent(
                 )
                 CaptureActionButton(
                     icon = R.drawable.ic_export_range,
-                    contentDescription = stringResource(R.string.custom_time),
+                    contentDescription = stringResource(R.string.export_range_title),
                     enabled = !exportBlocked,
                     onClick = onExportCustom,
                 )
@@ -775,7 +766,12 @@ private fun AudioBlobControl(
         animationSpec = tween(110),
         label = "pressScale",
     )
-    val activity = if (active && !isSaving) visualizationFrame.activity.coerceIn(0f, 1f) else 0f
+    val targetActivity = if (active && !isSaving) visualizationFrame.activity.coerceIn(0f, 1f) else 0f
+    val activity by animateFloatAsState(
+        targetValue = targetActivity,
+        animationSpec = tween(durationMillis = 72),
+        label = "audioActivity",
+    )
     val blobX = remember { FloatArray(BLOB_POINT_COUNT) }
     val blobY = remember { FloatArray(BLOB_POINT_COUNT) }
     val blobPath = remember { Path() }
@@ -828,7 +824,7 @@ private fun AudioBlobControl(
             modifier = Modifier.size(232.dp),
         ) {
             val minSize = size.minDimension
-            val baseRadius = minSize * 0.285f + activity * minSize * 0.035f
+            val baseRadius = minSize * 0.275f + activity * minSize * 0.055f
             val visualBins = if (active && !isSaving) visualizationFrame.bins else ReverbService.VisualizationFrame.EMPTY.bins
             val phase = visualizationFrame.sequence * 0.045f
             val pointCount = BLOB_POINT_COUNT
@@ -839,13 +835,13 @@ private fun AudioBlobControl(
                 val mirrored = if (p <= 0.5f) p * 2f else (1f - p) * 2f
                 val binIndex = (mirrored * (visualBins.size - 1)).roundToInt().coerceIn(0, visualBins.lastIndex)
                 val spike = if (active) {
-                    visualBins[binIndex] * minSize * 0.105f * (0.72f + activity * 0.7f)
+                    visualBins[binIndex] * minSize * 0.155f * (0.68f + activity * 0.85f)
                 } else {
                     0f
                 }
                 val idle = if (active) {
                     sin(angle * 3f + phase) * minSize * 0.006f +
-                        sin(angle * 5f - phase * 0.7f) * minSize * 0.003f
+                        sin(angle * 5f - phase * 0.7f) * minSize * 0.004f
                 } else {
                     0f
                 }
@@ -998,7 +994,7 @@ private fun ClearBufferDialog(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = stringResource(R.string.clear_buffer),
+                    text = stringResource(R.string.clear_history_title),
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
@@ -1014,13 +1010,11 @@ private fun ClearBufferDialog(
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_check),
+                    painter = painterResource(R.drawable.ic_delete),
                     contentDescription = stringResource(R.string.clear_buffer),
                     tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(22.dp),
                 )
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.clear_buffer))
             }
         },
     )
@@ -1073,175 +1067,85 @@ private fun ExportClampDialog(
 @Composable
 private fun ExportRangeDialog(
     currentBufferSeconds: Float,
-    currentBufferBytes: Long,
     onExport: (ExportRange) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val prefs = remember { getRecorderPreferences(context) }
-
-    var scopeMode by remember { mutableStateOf(getConfiguredCustomExportMode(context)) }
-    var unitMode by remember { mutableStateOf(getConfiguredCustomExportUnit(context)) }
-
-    var startTimeText by remember { mutableStateOf("0:00") }
-    var endTimeText by remember {
-        mutableStateOf(formatDurationInput(currentBufferSeconds.toInt()))
+    val availableSeconds = remember { currentBufferSeconds.coerceAtLeast(0f) }
+    val maxSeconds = availableSeconds.coerceAtLeast(1f)
+    var rangeStart by remember { mutableFloatStateOf(0f) }
+    var rangeEnd by remember { mutableFloatStateOf(availableSeconds) }
+    var startText by remember { mutableStateOf("0:00") }
+    var endText by remember {
+        mutableStateOf(formatDurationInput(availableSeconds.roundToInt()))
     }
-    var startSizeText by remember { mutableStateOf(formatSizeInputMib(0L)) }
-    var endSizeText by remember { mutableStateOf(formatSizeInputMib(currentBufferBytes)) }
-    var pastTimeText by remember {
-        val defaultSeconds = currentBufferSeconds.toInt().coerceAtLeast(1)
-        val preferredSeconds = prefs.getInt(PrefKey.CUSTOM_EXPORT_PAST_SECONDS, defaultSeconds).coerceAtLeast(1)
-        mutableStateOf(formatDurationInput(preferredSeconds))
-    }
-    var pastSizeText by remember {
-        mutableStateOf(
-            prefs.getString(PrefKey.CUSTOM_EXPORT_PAST_SIZE_MIB, formatSizeInputMib(currentBufferBytes))
-                ?: formatSizeInputMib(currentBufferBytes),
-        )
-    }
-
-    var startTimeError by remember { mutableStateOf<String?>(null) }
-    var endTimeError by remember { mutableStateOf<String?>(null) }
-    var startSizeError by remember { mutableStateOf<String?>(null) }
-    var endSizeError by remember { mutableStateOf<String?>(null) }
-    var pastTimeError by remember { mutableStateOf<String?>(null) }
-    var pastSizeError by remember { mutableStateOf<String?>(null) }
+    var startError by remember { mutableStateOf<String?>(null) }
+    var endError by remember { mutableStateOf<String?>(null) }
 
     fun clampExportRange(startSeconds: Float, endSeconds: Float): ExportRange {
         val exportConfig = currentExportConfig(context, null)
         val maxDurationSeconds = exportDurationLimitSeconds(
-            exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-            exportConfig.channelCount, exportConfig.bitrateKbps,
+            exportConfig.format,
+            exportConfig.codec,
+            exportConfig.sampleRate,
+            exportConfig.channelCount,
+            exportConfig.bitrateKbps,
             exportConfig.sampleFormat,
         ).toFloat().coerceAtLeast(1f)
         val boundedEnd = endSeconds.coerceAtLeast(startSeconds)
         val requestedDuration = boundedEnd - startSeconds
-        if (requestedDuration <= maxDurationSeconds) {
-            return ExportRange(startSeconds, boundedEnd, null)
+        return if (requestedDuration <= maxDurationSeconds) {
+            ExportRange(startSeconds, boundedEnd, null)
+        } else {
+            ExportRange(
+                startSeconds = (boundedEnd - maxDurationSeconds).coerceAtLeast(0f),
+                endSeconds = boundedEnd,
+                warningDurationSeconds = maxDurationSeconds,
+            )
         }
-        return ExportRange(
-            startSeconds = (boundedEnd - maxDurationSeconds).coerceAtLeast(0f),
-            endSeconds = boundedEnd,
-            warningDurationSeconds = maxDurationSeconds,
-        )
     }
 
-    val firstFieldFocusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) { firstFieldFocusRequester.requestFocus() }
+    fun applyTextRange() {
+        val parsedStart = parseDurationInput(startText)?.toFloat()
+        val parsedEnd = parseDurationInput(endText)?.toFloat()
+        startError = if (parsedStart == null || parsedStart < 0f || parsedStart >= availableSeconds) {
+            context.getString(R.string.custom_export_range_invalid)
+        } else null
+        endError = if (parsedEnd == null || parsedEnd <= 0f || parsedEnd > availableSeconds ||
+            (parsedStart != null && parsedEnd <= parsedStart)
+        ) {
+            context.getString(R.string.custom_export_range_invalid)
+        } else null
+        if (startError == null && endError == null && parsedStart != null && parsedEnd != null) {
+            rangeStart = parsedStart
+            rangeEnd = parsedEnd
+        }
+    }
 
     fun submit() {
-        val currentSeconds = currentBufferSeconds
-        if (currentSeconds <= 0f) {
-            Toast.makeText(context, R.string.nothing_to_export, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val rangeMode = scopeMode == CustomExportMode.RANGE
-        val timeUnit = unitMode == CustomExportUnit.TIME
-
-        if (rangeMode && timeUnit) {
-            val startSec = parseDurationInput(startTimeText)?.toFloat()
-            val endSec = parseDurationInput(endTimeText)?.toFloat()
-            if (startSec == null || startSec < 0f) {
-                startTimeError = context.getString(R.string.retention_time_invalid)
-                return
-            }
-            startTimeError = null
-            if (endSec == null || endSec <= 0f) {
-                endTimeError = context.getString(R.string.retention_time_invalid)
-                return
-            }
-            endTimeError = null
-            if (startSec > currentSeconds) {
-                startTimeError = context.getString(R.string.custom_export_range_invalid)
-                return
-            }
-            startTimeError = null
-            if (endSec <= startSec || endSec > currentSeconds) {
-                endTimeError = context.getString(R.string.custom_export_range_invalid)
-                return
-            }
-            endTimeError = null
-            onExport(clampExportRange(startSec, endSec))
-            return
-        }
-
-        if (rangeMode && !timeUnit) {
-            val startBytes = parseSizeInputMib(startSizeText)
-            val endBytes = parseSizeInputMib(endSizeText)
-            if (startBytes == null || startBytes < 0L) {
-                startSizeError = context.getString(R.string.custom_export_size_invalid)
-                return
-            }
-            startSizeError = null
-            if (endBytes == null || endBytes <= 0L) {
-                endSizeError = context.getString(R.string.custom_export_size_invalid)
-                return
-            }
-            endSizeError = null
-            if (startBytes > currentBufferBytes) {
-                startSizeError = context.getString(R.string.custom_export_range_invalid)
-                return
-            }
-            startSizeError = null
-            if (endBytes <= startBytes || endBytes > currentBufferBytes) {
-                endSizeError = context.getString(R.string.custom_export_range_invalid)
-                return
-            }
-            endSizeError = null
-            onExport(
-                clampExportRange(
-                    sizeBytesToExportSeconds(startBytes, context),
-                    sizeBytesToExportSeconds(endBytes, context),
-                ),
-            )
-            return
-        }
-
-        if (!rangeMode && timeUnit) {
-            val pastSec = parseDurationInput(pastTimeText)?.toFloat()
-            if (pastSec == null || pastSec <= 0f) {
-                pastTimeError = context.getString(R.string.retention_time_invalid)
-                return
-            }
-            pastTimeError = null
-            prefs.edit().putInt(PrefKey.CUSTOM_EXPORT_PAST_SECONDS, pastSec.roundToInt()).apply()
-            onExport(clampExportRange((currentSeconds - pastSec).coerceAtLeast(0f), currentSeconds))
-            return
-        }
-
-        val pastBytes = parseSizeInputMib(pastSizeText)
-        if (pastBytes == null || pastBytes <= 0L) {
-            pastSizeError = context.getString(R.string.custom_export_size_invalid)
-            return
-        }
-        pastSizeError = null
-        if (pastBytes > currentBufferBytes) {
-            pastSizeError = context.getString(R.string.custom_export_range_invalid)
-            return
-        }
-        pastSizeError = null
-        prefs.edit().putString(PrefKey.CUSTOM_EXPORT_PAST_SIZE_MIB, pastSizeText).apply()
-        onExport(
-            clampExportRange(
-                (currentSeconds - sizeBytesToExportSeconds(pastBytes, context)).coerceAtLeast(0f),
-                currentSeconds,
-            ),
-        )
+        applyTextRange()
+        if (startError != null || endError != null || availableSeconds <= 0f) return
+        onExport(clampExportRange(rangeStart, rangeEnd))
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(22.dp),
         title = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_export_range),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    text = stringResource(R.string.export),
+                    text = stringResource(R.string.export_range_title),
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
@@ -1249,212 +1153,88 @@ private fun ExportRangeDialog(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = stringResource(R.string.close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         },
         text = {
-            BoxWithConstraints {
-                val pad = if (maxWidth > 360.dp) 16.dp else 0.dp
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = pad)
-                ) {
-                SingleChoiceSegmentedButtonRow(
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = "${formatShortTimer(rangeStart)}  –  ${formatShortTimer(rangeEnd)}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+                RangeSlider(
+                    value = rangeStart..rangeEnd,
+                    onValueChange = { range ->
+                        val start = range.start.coerceIn(0f, availableSeconds)
+                        val end = range.endInclusive.coerceIn(start, availableSeconds)
+                        rangeStart = start
+                        rangeEnd = end
+                        startText = formatDurationInput(start.roundToInt())
+                        endText = formatDurationInput(end.roundToInt())
+                        startError = null
+                        endError = null
+                    },
+                    valueRange = 0f..maxSeconds,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    SegmentedButton(
-                        selected = scopeMode == CustomExportMode.PAST,
-                        onClick = {
-                            scopeMode = CustomExportMode.PAST
-                            setConfiguredCustomExportMode(context, CustomExportMode.PAST)
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text(stringResource(R.string.custom_export_mode_past)) }
-                    SegmentedButton(
-                        selected = scopeMode == CustomExportMode.RANGE,
-                        onClick = {
-                            scopeMode = CustomExportMode.RANGE
-                            setConfiguredCustomExportMode(context, CustomExportMode.RANGE)
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text(stringResource(R.string.custom_export_mode_range)) }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                SingleChoiceSegmentedButtonRow(
+                )
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    SegmentedButton(
-                        selected = unitMode == CustomExportUnit.TIME,
-                        onClick = {
-                            unitMode = CustomExportUnit.TIME
-                            setConfiguredCustomExportUnit(context, CustomExportUnit.TIME)
+                    OutlinedTextField(
+                        value = startText,
+                        onValueChange = { value ->
+                            startText = value
+                            startError = null
+                            val parsed = parseDurationInput(value)?.toFloat()
+                            if (parsed != null && parsed >= 0f && parsed < rangeEnd) rangeStart = parsed
                         },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text(stringResource(R.string.retention_time_label)) }
-                    SegmentedButton(
-                        selected = unitMode == CustomExportUnit.SIZE,
-                        onClick = {
-                            unitMode = CustomExportUnit.SIZE
-                            setConfiguredCustomExportUnit(context, CustomExportUnit.SIZE)
+                        label = { Text(stringResource(R.string.custom_export_start_label)) },
+                        isError = startError != null,
+                        supportingText = startError?.let { { Text(it) } },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = endText,
+                        onValueChange = { value ->
+                            endText = value
+                            endError = null
+                            val parsed = parseDurationInput(value)?.toFloat()
+                            if (parsed != null && parsed > rangeStart && parsed <= availableSeconds) rangeEnd = parsed
                         },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text(stringResource(R.string.custom_export_unit_size)) }
+                        label = { Text(stringResource(R.string.custom_export_end_label)) },
+                        isError = endError != null,
+                        supportingText = endError?.let { { Text(it) } },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-
-                Spacer(Modifier.height(16.dp))
-
-                when {
-                    scopeMode == CustomExportMode.PAST && unitMode == CustomExportUnit.TIME -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedTextField(
-                                value = pastTimeText,
-                                onValueChange = { pastTimeText = it; pastTimeError = null },
-                                label = { Text(stringResource(R.string.custom_export_past_label)) },
-                                isError = pastTimeError != null,
-                                supportingText = pastTimeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f).focusRequester(firstFieldFocusRequester),
-                            )
-                            IconButton(onClick = { submit() }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    scopeMode == CustomExportMode.PAST && unitMode == CustomExportUnit.SIZE -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedTextField(
-                                value = pastSizeText,
-                                onValueChange = { pastSizeText = it; pastSizeError = null },
-                                label = { Text(stringResource(R.string.custom_export_past_label)) },
-                                isError = pastSizeError != null,
-                                supportingText = pastSizeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f).focusRequester(firstFieldFocusRequester),
-                            )
-                            IconButton(onClick = { submit() }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    scopeMode == CustomExportMode.RANGE && unitMode == CustomExportUnit.TIME -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedTextField(
-                                value = startTimeText,
-                                onValueChange = { startTimeText = it; startTimeError = null },
-                                label = { Text(stringResource(R.string.custom_export_start_label)) },
-                                isError = startTimeError != null,
-                                supportingText = startTimeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f).focusRequester(firstFieldFocusRequester),
-                            )
-                            OutlinedTextField(
-                                value = endTimeText,
-                                onValueChange = { endTimeText = it; endTimeError = null },
-                                label = { Text(stringResource(R.string.custom_export_end_label)) },
-                                isError = endTimeError != null,
-                                supportingText = endTimeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { submit() }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    scopeMode == CustomExportMode.RANGE && unitMode == CustomExportUnit.SIZE -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedTextField(
-                                value = startSizeText,
-                                onValueChange = { startSizeText = it; startSizeError = null },
-                                label = { Text(stringResource(R.string.custom_export_start_label)) },
-                                isError = startSizeError != null,
-                                supportingText = startSizeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f).focusRequester(firstFieldFocusRequester),
-                            )
-                            OutlinedTextField(
-                                value = endSizeText,
-                                onValueChange = { endSizeText = it; endSizeError = null },
-                                label = { Text(stringResource(R.string.custom_export_end_label)) },
-                                isError = endSizeError != null,
-                                supportingText = endSizeError?.let { { Text(it) } },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done,
-                                ),
-                                keyboardActions = KeyboardActions(onDone = { submit() }),
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { submit() }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.export),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-                }
+                Text(
+                    text = stringResource(R.string.export_range_buffer_hint, formatShortTimer(availableSeconds)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            TextButton(onClick = { submit() }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_export_all),
+                    contentDescription = stringResource(R.string.export),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        },
     )
 }
 
@@ -1562,37 +1342,4 @@ private fun currentExportConfig(context: Context, recorder: ReverbService?): Exp
         channelCount = channelMode.channelCount,
         bitrateKbps = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
     )
-}
-
-private fun currentBufferExportBytes(
-    context: Context,
-    recorder: ReverbService?,
-    memorizedSeconds: Float,
-): Long {
-    val exportConfig = currentExportConfig(context, recorder)
-    return estimateExportSizeBytes(
-        exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-        exportConfig.channelCount, memorizedSeconds.coerceAtLeast(0f).toLong(),
-        exportConfig.bitrateKbps, exportConfig.sampleFormat,
-    )
-}
-
-private fun sizeBytesToExportSeconds(sizeBytes: Long, context: Context): Float {
-    val exportConfig = currentExportConfig(context, null)
-    return estimateExportDurationSeconds(
-        exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-        exportConfig.channelCount, sizeBytes, exportConfig.bitrateKbps, exportConfig.sampleFormat,
-    ).toFloat()
-}
-
-private fun parseSizeInputMib(value: String): Long? {
-    val mib = value.trim().replace(',', '.').toDoubleOrNull() ?: return null
-    if (!mib.isFinite() || mib < 0.0) return null
-    if (mib >= Long.MAX_VALUE / MIB) return null
-    return (mib * MIB).roundToLong()
-}
-
-private fun formatSizeInputMib(sizeBytes: Long): String {
-    val mebibytes = sizeBytes.coerceAtLeast(0L) / MIB
-    return String.format(Locale.US, "%.1f", mebibytes)
 }

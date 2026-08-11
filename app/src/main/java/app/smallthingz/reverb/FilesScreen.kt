@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.widget.Toast
 import java.util.Date
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -220,6 +222,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     val selectionActive by remember { derivedStateOf { selectedIds.isNotEmpty() } }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
     DisposableEffect(Unit) { onDispose { onSelectionActiveChange(false) } }
+    BackHandler(enabled = selectionActive) { clearSelection() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -232,6 +235,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .statusBarsPadding()
                             .height(48.dp)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,

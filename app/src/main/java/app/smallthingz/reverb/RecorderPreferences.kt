@@ -262,26 +262,6 @@ enum class AppThemeMode(
     }
 }
 
-enum class CustomExportMode {
-    RANGE,
-    PAST,
-    ;
-
-    companion object {
-        fun fromStorage(value: Int): CustomExportMode = entries.getOrElse(value) { PAST }
-    }
-}
-
-enum class CustomExportUnit {
-    TIME,
-    SIZE,
-    ;
-
-    companion object {
-        fun fromStorage(value: Int): CustomExportUnit = entries.getOrElse(value) { TIME }
-    }
-}
-
 fun getRecorderPreferences(context: Context): SharedPreferences {
     return context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
 }
@@ -290,32 +270,6 @@ fun getConfiguredRetentionMode(context: Context): RetentionMode {
     return RetentionMode.fromStorage(
         getRecorderPreferences(context).getInt(PrefKey.RETENTION_MODE, RetentionMode.SIZE.ordinal),
     )
-}
-
-fun getConfiguredCustomExportMode(context: Context): CustomExportMode {
-    return CustomExportMode.fromStorage(
-        getRecorderPreferences(context).getInt(
-            PrefKey.CUSTOM_EXPORT_MODE,
-            ReverbConfig.DEFAULT_CUSTOM_EXPORT_MODE.ordinal,
-        ),
-    )
-}
-
-fun setConfiguredCustomExportMode(context: Context, mode: CustomExportMode) {
-    getRecorderPreferences(context).edit().putInt(PrefKey.CUSTOM_EXPORT_MODE, mode.ordinal).apply()
-}
-
-fun getConfiguredCustomExportUnit(context: Context): CustomExportUnit {
-    return CustomExportUnit.fromStorage(
-        getRecorderPreferences(context).getInt(
-            PrefKey.CUSTOM_EXPORT_UNIT,
-            ReverbConfig.DEFAULT_CUSTOM_EXPORT_UNIT.ordinal,
-        ),
-    )
-}
-
-fun setConfiguredCustomExportUnit(context: Context, unit: CustomExportUnit) {
-    getRecorderPreferences(context).edit().putInt(PrefKey.CUSTOM_EXPORT_UNIT, unit.ordinal).apply()
 }
 
 fun isWakeLockEnabled(context: Context): Boolean {

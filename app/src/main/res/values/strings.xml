@@ -6,6 +6,7 @@
     <string name="error_during_recording_into">Error recording: </string>
     <string name="cant_create_file_generic">Couldn\'t create file.</string>
     <string name="clear_buffer">Clear</string>
+    <string name="clear_history_title">Discard history?</string>
     <string name="capture_tab">Capture</string>
     <string name="files_tab">Files</string>
     <string name="open_options">Open options</string>
@@ -17,6 +18,8 @@
     <string name="custom_export_start_label">Start</string>
     <string name="custom_export_end_label">End</string>
     <string name="custom_export_range_invalid">End must be after start.</string>
+    <string name="export_range_title">Export range</string>
+    <string name="export_range_buffer_hint">Available history: %1$s</string>
     <string name="custom_export_past_label">How far back</string>
     <string name="custom_export_size_invalid">Use MiB value like 12.0.</string>
     <string name="export_limit_summary">Max export: %1$s</string>

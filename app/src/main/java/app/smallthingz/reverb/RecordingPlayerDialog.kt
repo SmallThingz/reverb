@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,8 +23,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -195,16 +200,40 @@ fun RecordingPlayerDialog(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                Slider(
-                    value = currentPosition.toFloat(),
-                    onValueChange = { currentPosition = it.toInt(); isDragging = true },
-                    valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
-                    onValueChangeFinished = {
-                        if (prepared && !released) runCatching { mediaPlayer?.seekTo(currentPosition) }
-                        isDragging = false
-                    },
-                    enabled = prepared,
-                )
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val progress = if (duration > 0) {
+                        currentPosition.toFloat() / duration.toFloat()
+                    } else {
+                        0f
+                    }
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(CircleShape),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
+                    Slider(
+                        value = currentPosition.toFloat(),
+                        onValueChange = { currentPosition = it.toInt(); isDragging = true },
+                        valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
+                        onValueChangeFinished = {
+                            if (prepared && !released) runCatching { mediaPlayer?.seekTo(currentPosition) }
+                            isDragging = false
+                        },
+                        enabled = prepared,
+                        colors = SliderDefaults.colors(
+                            activeTrackColor = Color.Transparent,
+                            inactiveTrackColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

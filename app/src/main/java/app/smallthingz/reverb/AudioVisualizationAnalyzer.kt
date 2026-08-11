@@ -18,6 +18,8 @@ internal class AudioVisualizationAnalyzer {
     private val real = FloatArray(FFT_SIZE)
     private val imaginary = FloatArray(FFT_SIZE)
     private val smoothedBins = FloatArray(OUTPUT_BINS)
+    private val waveformSums = FloatArray(OUTPUT_BINS)
+    private val waveformCounts = IntArray(OUTPUT_BINS)
     private val window = FloatArray(FFT_SIZE) { index ->
         (0.5 - 0.5 * cos(2.0 * PI * index / (FFT_SIZE - 1))).toFloat()
     }
@@ -30,13 +32,17 @@ internal class AudioVisualizationAnalyzer {
     }
 
     private var smoothedActivity = 0f
+    private var noiseFloor = INITIAL_NOISE_FLOOR
     private var sequence = 0L
 
     fun reset() {
         real.fill(0f)
         imaginary.fill(0f)
         smoothedBins.fill(0f)
+        waveformSums.fill(0f)
+        waveformCounts.fill(0)
         smoothedActivity = 0f
+        noiseFloor = INITIAL_NOISE_FLOOR
         sequence = 0L
     }
 
@@ -55,6 +61,8 @@ internal class AudioVisualizationAnalyzer {
 
         real.fill(0f)
         imaginary.fill(0f)
+        waveformSums.fill(0f)
+        waveformCounts.fill(0)
 
         val frameCount = minOf(availableFrames, FFT_SIZE)
         val firstFrame = availableFrames - frameCount
@@ -73,6 +81,9 @@ internal class AudioVisualizationAnalyzer {
             }
             monoSample = (monoSample / channels).coerceIn(-1f, 1f)
             sumSquares += monoSample * monoSample
+            val envelopeBin = (frameIndex * OUTPUT_BINS / frameCount).coerceIn(0, OUTPUT_BINS - 1)
+            waveformSums[envelopeBin] += kotlin.math.abs(monoSample)
+            waveformCounts[envelopeBin]++
             val fftIndex = destinationOffset + frameIndex
             real[fftIndex] = monoSample * window[fftIndex]
         }
@@ -80,7 +91,11 @@ internal class AudioVisualizationAnalyzer {
         runFft()
 
         val rms = sqrt(sumSquares / frameCount).toFloat()
-        val targetActivity = (rms * RMS_SENSITIVITY).coerceIn(0f, 1f)
+        if (rms < max(0.08f, noiseFloor * 2.5f)) {
+            noiseFloor = (noiseFloor * 0.992f + rms * 0.008f)
+                .coerceIn(MIN_NOISE_FLOOR, MAX_NOISE_FLOOR)
+        }
+        val targetActivity = ((rms - noiseFloor) * RMS_SENSITIVITY).coerceIn(0f, 1f)
         smoothedActivity = if (targetActivity > smoothedActivity) {
             smoothedActivity * ACTIVITY_ATTACK_OLD + targetActivity * (1f - ACTIVITY_ATTACK_OLD)
         } else {
@@ -114,7 +129,16 @@ internal class AudioVisualizationAnalyzer {
                 0f
             }
             val cleaned = (normalized * SPECTRUM_GAIN - NOISE_FLOOR).coerceAtLeast(0f)
-            val shaped = cleaned.coerceAtMost(1f).pow(SPECTRUM_CURVE)
+            val spectrum = cleaned.coerceAtMost(1f).pow(SPECTRUM_CURVE)
+            val waveformAverage = if (waveformCounts[outputIndex] > 0) {
+                waveformSums[outputIndex] / waveformCounts[outputIndex]
+            } else {
+                0f
+            }
+            val waveform = ((waveformAverage - noiseFloor * 0.55f) * WAVEFORM_GAIN)
+                .coerceIn(0f, 1f)
+                .pow(WAVEFORM_CURVE)
+            val shaped = max(spectrum, waveform * (0.72f + smoothedActivity * 0.35f))
             smoothedBins[outputIndex] =
                 smoothedBins[outputIndex] * BIN_SMOOTHING + shaped * (1f - BIN_SMOOTHING)
         }
@@ -200,18 +224,23 @@ internal class AudioVisualizationAnalyzer {
     }
 
     companion object {
-        const val OUTPUT_BINS = 32
+        const val OUTPUT_BINS = 64
         private const val FFT_SIZE = 512
         private const val FFT_BITS = 9
-        private const val RMS_SENSITIVITY = 7.5f
+        private const val RMS_SENSITIVITY = 13.5f
         private const val SPECTRUM_FRACTION = 0.42f
         private const val SPEECH_MAX_HZ = 10_000
-        private const val SPECTRUM_GAIN = 7.5f
+        private const val SPECTRUM_GAIN = 11.0f
         private const val SPECTRUM_CURVE = 0.82f
         private const val NOISE_FLOOR = 0.02f
+        private const val WAVEFORM_GAIN = 9.0f
+        private const val WAVEFORM_CURVE = 0.72f
         private const val BIN_SMOOTHING = 0.72f
         private const val ACTIVITY_ATTACK_OLD = 0.55f
         private const val ACTIVITY_RELEASE_OLD = 0.88f
+        private const val INITIAL_NOISE_FLOOR = 0.008f
+        private const val MIN_NOISE_FLOOR = 0.0015f
+        private const val MAX_NOISE_FLOOR = 0.045f
         private val NATIVE_LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN
 
         private fun reverseBits(value: Int, bitCount: Int): Int {
