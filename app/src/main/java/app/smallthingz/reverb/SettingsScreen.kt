@@ -21,9 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -159,7 +157,7 @@ fun SettingsScreen(
     var computedExportSizeMb by remember { mutableStateOf(0.0) }
     var exportPathText by remember { mutableStateOf("") }
     var canMove by remember { mutableStateOf(false) }
-    var batteryOptimizationRestricted by remember { mutableStateOf(true) }
+    var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
     var showBufferResetWarning by remember { mutableStateOf(false) }
 
     // Pre-computed label lists
@@ -710,17 +708,12 @@ fun SettingsScreen(
                 .background(MaterialTheme.colorScheme.surface),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            item(key = "background-reliability") {
-                BackgroundReliabilitySection(
-                    batteryOptimizationRestricted = batteryOptimizationRestricted,
-                    wakeLockEnabled = currentSnapshot.wakeLockEnabled,
-                    onBatterySettingsClick = { openBatteryOptimizationSettings() },
-                    onWakeLockChanged = { enabled ->
-                        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = enabled)
-                        saveCurrentToSnapshot(currentSnapshot)
-                        pushUndoState()
-                    },
-                )
+            if (batteryOptimizationRestricted) {
+                item(key = "background-reliability") {
+                    BackgroundReliabilitySection(
+                        onBatterySettingsClick = { openBatteryOptimizationSettings() },
+                    )
+                }
             }
 
             item(key = "theme") {
@@ -1028,6 +1021,26 @@ fun SettingsScreen(
             }
                 }
             }
+
+            item(key = "wake-lock") {
+                Column {
+                    Spacer(Modifier.height(16.dp))
+                    ReliabilityRow(
+                        title = stringResource(R.string.wake_lock_label),
+                        summary = stringResource(R.string.wake_lock_summary),
+                        trailing = {
+                            Switch(
+                                checked = currentSnapshot.wakeLockEnabled,
+                                onCheckedChange = { enabled ->
+                                    currentSnapshot = currentSnapshot.copy(wakeLockEnabled = enabled)
+                                    saveCurrentToSnapshot(currentSnapshot)
+                                    pushUndoState()
+                                },
+                            )
+                        },
+                    )
+                }
+            }
         }
     }
 
@@ -1075,69 +1088,17 @@ fun SettingsScreen(
 
 @Composable
 private fun BackgroundReliabilitySection(
-    batteryOptimizationRestricted: Boolean,
-    wakeLockEnabled: Boolean,
     onBatterySettingsClick: () -> Unit,
-    onWakeLockChanged: (Boolean) -> Unit,
 ) {
     Column {
         SectionTitle(stringResource(R.string.background_persistence_title))
         ReliabilityRow(
-            step = "0",
             title = stringResource(R.string.background_reliability_0_title),
-            summary = stringResource(
-                if (batteryOptimizationRestricted) R.string.battery_optimization_status_limited
-                else R.string.battery_optimization_status_ok,
-            ),
-            trailing = if (batteryOptimizationRestricted) {
-                {
-                    TextButton(onClick = onBatterySettingsClick) {
-                        Text(stringResource(R.string.battery_optimization_button))
-                    }
+            summary = stringResource(R.string.battery_optimization_status_limited),
+            trailing = {
+                TextButton(onClick = onBatterySettingsClick) {
+                    Text(stringResource(R.string.battery_optimization_button))
                 }
-            } else {
-                {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_check),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            },
-        )
-        ReliabilityRow(
-            step = "1",
-            title = stringResource(R.string.background_reliability_1_title),
-            summary = stringResource(R.string.background_reliability_1_summary),
-            trailing = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_check),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            },
-        )
-        ReliabilityRow(
-            step = "2",
-            title = stringResource(R.string.background_reliability_2_title),
-            summary = stringResource(R.string.background_reliability_2_summary),
-            trailing = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_check),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            },
-        )
-        ReliabilityRow(
-            step = "3",
-            title = stringResource(R.string.wake_lock_label),
-            summary = stringResource(R.string.wake_lock_summary),
-            trailing = {
-                Switch(
-                    checked = wakeLockEnabled,
-                    onCheckedChange = onWakeLockChanged,
-                )
             },
         )
         Spacer(Modifier.height(12.dp))
@@ -1146,7 +1107,6 @@ private fun BackgroundReliabilitySection(
 
 @Composable
 private fun ReliabilityRow(
-    step: String,
     title: String,
     summary: String,
     trailing: (@Composable () -> Unit)? = null,
@@ -1162,23 +1122,10 @@ private fun ReliabilityRow(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(32.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = step,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 12.dp, end = 8.dp),
+                    .padding(end = 8.dp),
             ) {
                 Text(
                     text = title,

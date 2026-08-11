@@ -247,6 +247,28 @@ fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }
 
+/**
+ * Consumes the one-time startup battery-optimization prompt.
+ *
+ * The prompt is intentionally remembered independently of the live system exemption state:
+ * users may change that state later, and Reverb should reflect it in Settings without nagging
+ * them again on startup.
+ *
+ * @return true when the one-time prompt should be shown on this launch.
+ */
+fun consumeBatteryOptimizationStartupPrompt(context: Context): Boolean {
+    val prefs = getRecorderPreferences(context)
+    if (prefs.getBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, false)) return false
+
+    // Commit before exposing the prompt so process death cannot turn a one-time prompt into a
+    // recurring startup interruption.
+    prefs.edit()
+        .putBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, true)
+        .commit()
+
+    return !isIgnoringBatteryOptimizations(context)
+}
+
 fun getConfiguredThemeMode(context: Context): AppThemeMode {
     return AppThemeMode.fromPrefValue(
         getRecorderPreferences(context).getString(PrefKey.THEME_MODE, AppThemeMode.SYSTEM.prefValue),

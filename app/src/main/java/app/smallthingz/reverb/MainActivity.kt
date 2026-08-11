@@ -64,21 +64,27 @@ private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permis
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
+    private var showBatteryOptimizationPrompt by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
+    private var batteryOptimizationPromptPending = false
 
     private val microphonePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
                 permissionsGranted = true
                 showPermissionDenied = false
-                maybeRequestNotificationPermission()
+                if (!maybeRequestNotificationPermission()) {
+                    maybeShowBatteryOptimizationPrompt()
+                }
             } else {
                 showPermissionDenied = true
             }
         }
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> Unit }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            maybeShowBatteryOptimizationPrompt()
+        }
 
     private var microphonePermissionRequested = false
     private var notificationPermissionRequested = false
@@ -90,6 +96,7 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
+        batteryOptimizationPromptPending = consumeBatteryOptimizationStartupPrompt(this)
         themeMode = getConfiguredThemeMode(this)
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
@@ -103,6 +110,14 @@ class MainActivity : ComponentActivity() {
                             startActivity(intent)
                         },
                         onExit = { finish() },
+                    )
+                } else if (permissionsGranted && showBatteryOptimizationPrompt) {
+                    BatteryOptimizationPromptDialog(
+                        onAllow = {
+                            showBatteryOptimizationPrompt = false
+                            openBatteryOptimizationSettings()
+                        },
+                        onDismiss = { showBatteryOptimizationPrompt = false },
                     )
                 }
                 MainScreen(
@@ -125,7 +140,9 @@ class MainActivity : ComponentActivity() {
         if (hasRequiredPermissions()) {
             permissionsGranted = true
             showPermissionDenied = false
-            maybeRequestNotificationPermission()
+            if (!maybeRequestNotificationPermission()) {
+                maybeShowBatteryOptimizationPrompt()
+            }
             return
         }
         if (microphonePermissionRequested) {
@@ -140,11 +157,46 @@ class MainActivity : ComponentActivity() {
         return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+    private fun maybeRequestNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return false
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
         notificationPermissionRequested = true
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        return true
+    }
+
+    private fun maybeShowBatteryOptimizationPrompt() {
+        if (!batteryOptimizationPromptPending || !permissionsGranted) return
+        batteryOptimizationPromptPending = false
+        showBatteryOptimizationPrompt = true
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        val intents = listOf(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            },
+            Intent("android.settings.VIEW_ADVANCED_POWER_USAGE_DETAIL").apply {
+                data = Uri.parse("package:$packageName")
+                putExtra("package_name", packageName)
+                putExtra("packageName", packageName)
+            },
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
+            },
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS),
+        )
+        val launched = intents.any { intent ->
+            if (intent.resolveActivity(packageManager) == null) return@any false
+            runCatching {
+                startActivity(intent)
+                true
+            }.getOrDefault(false)
+        }
+        if (!launched) {
+            AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
+        }
     }
 
     private fun applyPhonePortraitOnly() {
@@ -182,6 +234,30 @@ private fun PermissionDeniedDialog(
         dismissButton = {
             TextButton(onClick = onExit) {
                 Text(stringResource(R.string.exit))
+            }
+        },
+    )
+}
+
+@Composable
+private fun BatteryOptimizationPromptDialog(
+    onAllow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(18.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        title = { Text(stringResource(R.string.battery_optimization_prompt_title)) },
+        text = { Text(stringResource(R.string.battery_optimization_prompt_message)) },
+        confirmButton = {
+            TextButton(onClick = onAllow) {
+                Text(stringResource(R.string.battery_optimization_prompt_allow))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.not_now))
             }
         },
     )
