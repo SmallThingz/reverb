@@ -46,12 +46,14 @@ internal object PcmNormalizer {
         require(payloadByteOffset >= 0L && payloadByteOffset + sourceByteCountLong <= payloadBytes) {
             "Chunk segment outside payload"
         }
-        val segmentStart = payloadByteOffset.toInt()
-        val sourceBytes = fullPayload.copyOfRange(segmentStart, segmentStart + sourceByteCountLong.toInt())
-
         val sourceFrames = sourceFrameCount.toInt()
         val samples = FloatArray(sourceFrames * sourceChannelCount)
-        decode(sourceBytes, sourceSampleFormat, samples)
+        decode(
+            source = fullPayload,
+            sourceOffset = payloadByteOffset.toInt(),
+            format = sourceSampleFormat,
+            output = samples,
+        )
 
         val targetFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
         val framesPerOutputBuffer = maxOf(1, OUTPUT_BUFFER_BYTES / targetFrameBytes)
@@ -96,18 +98,19 @@ internal object PcmNormalizer {
 
     private fun decode(
         source: ByteArray,
+        sourceOffset: Int,
         format: PcmSampleFormat,
         output: FloatArray,
     ) {
         when (format) {
             PcmSampleFormat.PCM_8 -> {
                 for (index in output.indices) {
-                    output[index] = ((source[index].toInt() and 0xff) - 128) / 128f
+                    output[index] = ((source[sourceOffset + index].toInt() and 0xff) - 128) / 128f
                 }
             }
 
             PcmSampleFormat.PCM_16 -> {
-                var offset = 0
+                var offset = sourceOffset
                 for (index in output.indices) {
                     val bits = (source[offset].toInt() and 0xff) or (source[offset + 1].toInt() shl 8)
                     output[index] = bits.toShort() / 32768f
@@ -116,14 +119,15 @@ internal object PcmNormalizer {
             }
 
             PcmSampleFormat.PCM_FLOAT -> {
-                var offset = 0
+                var offset = sourceOffset
                 for (index in output.indices) {
                     val bits =
                         (source[offset].toInt() and 0xff) or
                             ((source[offset + 1].toInt() and 0xff) shl 8) or
                             ((source[offset + 2].toInt() and 0xff) shl 16) or
                             (source[offset + 3].toInt() shl 24)
-                    output[index] = Float.fromBits(bits).coerceIn(-1f, 1f)
+                    val decoded = Float.fromBits(bits)
+                    output[index] = if (decoded.isFinite()) decoded.coerceIn(-1f, 1f) else 0f
                     offset += 4
                 }
             }
@@ -152,7 +156,7 @@ internal object PcmNormalizer {
         val sample = value.coerceIn(-1f, 1f)
         return when (format) {
             PcmSampleFormat.PCM_8 -> {
-                output[offset] = (sample * 127f + 128f).roundToInt().coerceIn(0, 255).toByte()
+                output[offset] = (sample * 128f + 128f).roundToInt().coerceIn(0, 255).toByte()
                 offset + 1
             }
 

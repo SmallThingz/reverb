@@ -57,9 +57,8 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         oldVersion: Int,
         newVersion: Int,
     ) {
-        if (oldVersion < 2 && newVersion >= 2) {
-            db.migrateToVersion2()
-        }
+        // Alpha policy: schema changes are destructive. Do not carry migration chains yet.
+        db.recreateSchema()
     }
 
     override fun onDowngrade(
@@ -197,27 +196,6 @@ private fun SQLiteDatabase.createSchema() {
             ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} INTEGER NOT NULL,
             ${RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS} INTEGER
         )
-        """.trimIndent(),
-    )
-}
-
-private fun SQLiteDatabase.migrateToVersion2() {
-    execSQL(
-        """
-        ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS}
-        ADD COLUMN ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} INTEGER NOT NULL DEFAULT 0
-        """.trimIndent(),
-    )
-    execSQL(
-        """
-        UPDATE ${RecordingDatabase.TABLE_RECORDINGS}
-        SET ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} = ${RecordingDatabase.COLUMN_CREATED_AT_MILLIS}
-        """.trimIndent(),
-    )
-    execSQL(
-        """
-        ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS}
-        ADD COLUMN ${RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS} INTEGER
         """.trimIndent(),
     )
 }
