@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -39,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +62,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -158,7 +156,6 @@ fun SettingsScreen(
     var exportPathText by remember { mutableStateOf("") }
     var canMove by remember { mutableStateOf(false) }
     var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
-    var showBufferResetWarning by remember { mutableStateOf(false) }
 
     // Pre-computed label lists
     val themeLabels = remember { AppThemeMode.entries.map { context.getString(it.labelRes) } }
@@ -200,12 +197,16 @@ fun SettingsScreen(
         val gen = ++moveAvailabilityGeneration[0]
         canMove = false
         scope.launch {
-            val result = runCatching {
+            val result = try {
                 RecordingRepository.hasMovableKnownRecordings(
                     context,
                     getOutputDirectoryId(context, selectedExportTreeUri),
                 )
-            }.getOrDefault(false)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
             if (gen == moveAvailabilityGeneration[0]) canMove = result
         }
     }
@@ -302,16 +303,14 @@ fun SettingsScreen(
             return
         }
         val chCount = selectedChannelMode.channelCount
-        val bitrate = getConfiguredCodecBitrateKbps(context, selectedCodec, sr, chCount)
         val exportLimitBytes = exportFileSizeLimitBytes(selectedFormat)
         val exportLimitDurationSeconds = estimateExportDurationSeconds(
-            selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, bitrate, selectedSampleFormat,
+            selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, null, selectedSampleFormat,
         )
         computedExportLimitSeconds = exportLimitDurationSeconds
         val estimatedSizeMb = bytesToMegabytes(
-            estimateExportSizeBytes(
-                selectedFormat, selectedCodec, sr, chCount,
-                retentionTimeSecondsValue.toLong(), bitrate, selectedSampleFormat,
+            bytesForRetentionSeconds(
+                retentionTimeSecondsValue.toLong(), sr, chCount, selectedSampleFormat,
             ),
         )
         computedExportSizeMb = estimatedSizeMb
@@ -321,9 +320,8 @@ fun SettingsScreen(
             retentionSizeText = formatRetentionSizeMib(estimatedSizeMb)
         } else {
             retentionTimeText = formatDurationInput(
-                estimateExportDurationSeconds(
-                    selectedFormat, selectedCodec, sr, chCount,
-                    rawMegabytesToBytes(retentionSizeMbValue), bitrate, selectedSampleFormat,
+                retentionSecondsForBytes(
+                    rawMegabytesToBytes(retentionSizeMbValue), sr, chCount, selectedSampleFormat,
                 ),
             )
             if (!preserveActiveInputs) retentionSizeText = formatRetentionSizeMib(retentionSizeMbValue)
@@ -341,6 +339,7 @@ fun SettingsScreen(
     fun restorePreviousSettings() {
         if (!hasUnsavedChanges) return
         val prev = originalSnapshot
+        val abandonedExportTreeUri = selectedExportTreeUri
         retentionTimeError = null
         retentionSizeError = null
 
@@ -348,6 +347,9 @@ fun SettingsScreen(
         retentionTimeSecondsValue = prev.retentionTime
         retentionSizeMbValue = prev.retentionSizeMb
         selectedExportTreeUri = prev.exportDirectoryUri?.let(Uri::parse)
+        if (abandonedExportTreeUri != selectedExportTreeUri) {
+            RecordingRepository.releasePendingDirectoryAndCleanup(context, abandonedExportTreeUri)
+        }
 
         selectedTheme = prev.themeMode
         selectedThemeLabel = context.getString(prev.themeMode.labelRes)
@@ -386,14 +388,6 @@ fun SettingsScreen(
         retentionTimeError = null
         retentionSizeError = null
 
-        if (service?.isRecordingActive() == true) {
-            AppFeedbackCenter.post(
-                context.getString(R.string.settings_apply_blocked_recording),
-                FeedbackTone.ERROR,
-            )
-            return false
-        }
-
         val format = selectedFormat
         val codec = selectedCodec
         val sampleFormat = selectedSampleFormat
@@ -429,8 +423,7 @@ fun SettingsScreen(
         retentionTimeSecondsValue = retentionTime
         retentionSizeMbValue = sizeMb
 
-        setConfiguredThemeMode(context, selectedTheme)
-        getRecorderPreferences(context).edit()
+        val settingsEditor = getRecorderPreferences(context).edit()
             .putInt(PrefKey.RETENTION_MODE, activeRetentionMode.ordinal)
             .putLong(PrefKey.RETENTION_SECONDS, retentionTime.toLong())
             .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedSizeBytes)
@@ -440,8 +433,17 @@ fun SettingsScreen(
             .putString(PrefKey.INPUT_ROUTE, route.prefValue)
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
             .putBoolean(PrefKey.WAKE_LOCK_ENABLED, currentSnapshot.wakeLockEnabled)
-            .apply()
-        setConfiguredExportTreeUri(context, selectedExportTreeUri)
+            .putString(PrefKey.THEME_MODE, selectedTheme.prefValue)
+        if (selectedExportTreeUri != null) {
+            settingsEditor.putString(PrefKey.EXPORT_DIRECTORY_URI, selectedExportTreeUri.toString())
+        } else {
+            settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
+        }
+        if (!settingsEditor.commit()) {
+            AppFeedbackCenter.post(context.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+            return false
+        }
+        RecordingRepository.releasePendingDirectoryAndCleanup(context, selectedExportTreeUri)
         onThemeChanged(selectedTheme)
 
         val currentService = service
@@ -460,21 +462,17 @@ fun SettingsScreen(
     }
 
     fun bindUiFromPreferences() {
-        val prefs = getRecorderPreferences(context)
-
         val configuredThemeMode = getConfiguredThemeMode(context)
         val configuredMode = getConfiguredRetentionMode(context)
         val configuredTime = getConfiguredRetentionSeconds(context).coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-        val storedSizeBytes = prefs.getLong(PrefKey.AUDIO_MEMORY_SIZE, 512L * BYTES_IN_MEGABYTE)
+        val storedSizeBytes = getConfiguredRetentionSizeBytes(context)
         val configuredFormat = getConfiguredOutputFormat(context)
         val configuredCodec = getConfiguredOutputCodec(context)
         val configuredSampleFormatVal = getConfiguredPcmSampleFormat(context)
         val configuredRouteVal = getConfiguredInputRouteMode(context)
         val configuredSourceVal = getConfiguredAudioSourceMode(context)
         val configuredChannelModeVal = getConfiguredChannelMode(context)
-        val configuredRateVal = prefs.getInt(PrefKey.SAMPLE_RATE, ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE)
-            .takeIf { it > 0 }
-            ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
+        val configuredRateVal = getConfiguredSampleRate(context)
         val configuredExportTreeUriVal = getConfiguredExportTreeUri(context)
 
         activeRetentionMode = configuredMode
@@ -520,6 +518,7 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
         if (treeUri == null) return@rememberLauncherForActivityResult
+        RecordingRepository.retainPendingDirectory(treeUri)
         val permissionTaken = runCatching {
             context.contentResolver.takePersistableUriPermission(
                 treeUri,
@@ -527,10 +526,15 @@ fun SettingsScreen(
             )
         }.isSuccess
         if (!permissionTaken) {
+            RecordingRepository.releasePendingDirectoryAndCleanup(context, treeUri)
             AppFeedbackCenter.post(context.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
+        val previousTreeUri = selectedExportTreeUri
         selectedExportTreeUri = treeUri
+        if (previousTreeUri != treeUri) {
+            RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
+        }
         exportPathText = describeOutputDirectory(context, treeUri)
         saveCurrentToSnapshot(currentSnapshot)
         pushUndoState()
@@ -560,6 +564,7 @@ fun SettingsScreen(
             if (bound) {
                 context.unbindService(connection)
             }
+            RecordingRepository.releasePendingDirectoryAndCleanup(context, selectedExportTreeUri)
         }
     }
 
@@ -605,12 +610,15 @@ fun SettingsScreen(
         if (!persistSettings()) return
         canMove = false
         scope.launch {
-            val result = runCatching { RecordingRepository.moveAllToConfiguredDirectory(context) }
-                .getOrElse {
-                    AppFeedbackCenter.post(context.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
-                    refreshMoveRecordingsAvailability()
-                    return@launch
-                }
+            val result = try {
+                RecordingRepository.moveAllToConfiguredDirectory(context)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                AppFeedbackCenter.post(context.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
+                refreshMoveRecordingsAvailability()
+                return@launch
+            }
             val message = when {
                 result.moved == 0 && result.removedMissing == 0 -> context.getString(R.string.move_recordings_none)
                 result.removedMissing > 0 -> {
@@ -671,22 +679,7 @@ fun SettingsScreen(
                     IconButton(
                         onClick = {
                             if (!hasUnsavedChanges) return@IconButton
-                            val s = service
-                            val rateChanged = currentSnapshot.sampleRate != originalSnapshot.sampleRate
-                            val formatChanged = currentSnapshot.sampleFormat != originalSnapshot.sampleFormat
-                            val channelChanged = currentSnapshot.channelMode != originalSnapshot.channelMode
-                            val retentionChanged = currentSnapshot.retentionMode != originalSnapshot.retentionMode ||
-                                when (currentSnapshot.retentionMode) {
-                                    RetentionMode.TIME -> currentSnapshot.retentionTime != originalSnapshot.retentionTime
-                                    RetentionMode.SIZE -> currentSnapshot.retentionSizeMb != originalSnapshot.retentionSizeMb
-                                }
-                            if ((rateChanged || formatChanged || channelChanged || retentionChanged) &&
-                                s != null && s.hasBufferedAudio()
-                            ) {
-                                showBufferResetWarning = true
-                            } else {
-                                if (persistSettings()) onBack()
-                            }
+                            if (persistSettings()) onBack()
                         },
                         enabled = hasUnsavedChanges,
                     ) {
@@ -990,7 +983,9 @@ fun SettingsScreen(
                         )
                         if (selectedExportTreeUri != null) {
                             IconButton(onClick = {
+                                val previousTreeUri = selectedExportTreeUri
                                 selectedExportTreeUri = null
+                                RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
                                 refreshExportDirectoryUi()
                                 refreshMoveRecordingsAvailability()
                                 saveCurrentToSnapshot(currentSnapshot)
@@ -1044,46 +1039,6 @@ fun SettingsScreen(
         }
     }
 
-    if (showBufferResetWarning) {
-        AlertDialog(
-            onDismissRequest = { showBufferResetWarning = false },
-            shape = RoundedCornerShape(18.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            confirmButton = {
-                TextButton(onClick = {
-                    showBufferResetWarning = false
-                    if (persistSettings()) onBack()
-                }) {
-                    Text(stringResource(R.string.settings_buffer_reset_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showBufferResetWarning = false }) {
-                    Text(stringResource(R.string.settings_buffer_reset_cancel))
-                }
-            },
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.settings_buffer_reset_warning),
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = { showBufferResetWarning = false }) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = stringResource(R.string.close),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            },
-            text = { Text(stringResource(R.string.settings_buffer_reset_warning_body)) },
-        )
-    }
 }
 
 @Composable

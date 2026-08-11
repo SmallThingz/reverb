@@ -62,6 +62,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -121,6 +122,8 @@ fun FilesScreen(
                 pendingDeletions.keys.toList().forEach { id ->
                     if (id !in storedIds) pendingDeletions.remove(id)
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 if (generation == refreshGeneration[0]) {
                     notice = LibraryNotice(
@@ -136,7 +139,13 @@ fun FilesScreen(
 
     LaunchedEffect(Unit) {
         if (!hasLoaded) {
-            recordings = runCatching { RecordingRepository.listKnown(context) }.getOrDefault(emptyList())
+            recordings = try {
+                RecordingRepository.listKnown(context)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                emptyList()
+            }
             hasLoaded = true
         }
 
@@ -149,22 +158,47 @@ fun FilesScreen(
     suspend fun finalizeDeletions() {
         val pending = pendingDeletions.values.toList()
         if (pending.isEmpty()) return
-        pending.forEach { pendingDeletions.remove(it.id) }
         var deleted = 0
         var failed = false
         pending.forEach { recording ->
-            val didDelete = runCatching { RecordingRepository.delete(context, recording) }
-                .getOrElse { failed = true; false }
+            val didDelete = try {
+                RecordingRepository.delete(context, recording)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                failed = true
+                false
+            }
+            pendingDeletions.remove(recording.id)
             if (didDelete) deleted++
         }
-        runCatching { RecordingRepository.refresh(context) }
-            .onSuccess { recordings = it }
-            .onFailure { failed = true }
+        try {
+            recordings = RecordingRepository.refresh(context)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            failed = true
+        }
         if (failed || deleted == 0) {
             notice = LibraryNotice(
                 context.getString(R.string.recording_delete_failed),
                 FeedbackTone.ERROR,
             )
+        }
+    }
+
+    fun commitPendingDeletionsInBackground() {
+        if (pendingDeletions.isEmpty()) return
+        deletionJob?.cancel()
+        deletionJob = null
+        val pending = pendingDeletions.values.toList()
+        pendingDeletions.clear()
+        isDeleting = false
+        val appContext = context.applicationContext
+        recordingCleanupScope.launch {
+            pending.forEach { recording ->
+                runCatching { RecordingRepository.delete(appContext, recording) }
+            }
         }
     }
 
@@ -175,28 +209,15 @@ fun FilesScreen(
                 refresh(showSpinner = false)
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
-                deletionJob?.cancel()
-                deletionJob = scope.launch {
-                    notice = null
-                    finalizeDeletions()
-                    isDeleting = false
-                }
+                notice = null
+                commitPendingDeletionsInBackground()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             deletionJob?.cancel()
-            if (pendingDeletions.isNotEmpty()) {
-                val pending = pendingDeletions.values.toList()
-                val appContext = context.applicationContext
-                pendingDeletions.clear()
-                recordingCleanupScope.launch {
-                    pending.forEach {
-                        runCatching { RecordingRepository.delete(appContext, it) }
-                    }
-                }
-            }
+            commitPendingDeletionsInBackground()
         }
     }
 
@@ -533,6 +554,8 @@ private fun RenameRecordingDialog(
                 } else {
                     onRenamed()
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 error = context.getString(R.string.rename_recording_failed)
             } finally {

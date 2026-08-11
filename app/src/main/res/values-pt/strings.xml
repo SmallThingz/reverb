@@ -2,20 +2,16 @@
 <resources>
     <string name="recording_saved">Salvo</string>
     <string name="error_during_writing_history_into">Erro ao gravar o histórico de áudio: </string>
-    <string name="error_during_recording_into">Erro ao gravar: </string>
     <string name="cant_create_file_generic">Não foi possível criar o arquivo.</string>
     <string name="clear_buffer">Limpar</string>
     <string name="record_all_memory">Exportar tudo</string>
-    <string name="custom_time">Exportação personalizada</string>
     <string name="custom_export_start_label">Início</string>
     <string name="custom_export_end_label">Fim</string>
     <string name="custom_export_range_invalid">O fim deve ser após o início.</string>
-    <string name="custom_export_past_label">Quão para trás</string>
     <string name="export_limit_summary">Exportação máxima: %1$s</string>
     <string name="export_limit_dialog_title">Limite de exportação</string>
     <string name="export_limit_dialog_message">O comprimento atual é grande demais. Exportando apenas os últimos %1$s.</string>
     <string name="saving">Salvando…</string>
-    <string name="saved_snackbar">Salvo</string>
     <string name="save_failed">Não foi possível salvar a gravação.</string>
     <string name="nothing_to_export">Nada para exportar.</string>
     <string name="allow">Permitir</string>
@@ -61,13 +57,8 @@
     <string name="move_recordings_none">Nenhuma gravação para mover.</string>
     <string name="wake_lock_label">Manter CPU ativa</string>
     <string name="wake_lock_summary">Mantém um wake lock parcial durante o buffer ao vivo. Maior sobrevivência, maior custo de bateria.</string>
-    <string name="battery_optimization_status_ok">Otimização de bateria: sem restrições</string>
     <string name="battery_optimization_status_limited">Otimização de bateria: com restrições</string>
     <string name="battery_optimization_button">Configurações de bateria</string>
-    <string name="settings_saved">Salvo.</string>
-    <string name="settings_saved_next_start">Salvo. Inicia na próxima vez.</string>
-    <string name="settings_apply_blocked_recording">Pare a gravação primeiro.</string>
-    <string name="unsupported_config_message">Não suportado.</string>
     <string name="audio_input_init_failed">Não foi possível iniciar o microfone.</string>
     <string name="custom_memory_size_invalid">Insira um número válido.</string>
     <string name="permission_required">Permissão necessária</string>
@@ -104,10 +95,6 @@
         <item quantity="many">%1$d entradas ausentes removidas.</item>
         <item quantity="other">%1$d entradas ausentes removidas.</item>
     </plurals>
-    <string name="custom_export_mode_range">Intervalo</string>
-    <string name="custom_export_mode_past">Passado</string>
-    <string name="custom_export_unit_size">Tamanho</string>
-    <string name="custom_export_size_invalid">Use um valor em MiB como 12.0.</string>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
     <string name="codec_pcm_16">PCM</string>

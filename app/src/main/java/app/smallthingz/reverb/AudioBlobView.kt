@@ -28,7 +28,6 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var targetLife = COLLAPSED_LIFE
     private var currentLife = COLLAPSED_LIFE
     private var active = false
-    private var recording = false
     private var enabledState = true
     private var saving = false
     private var renderingVisible = true
@@ -105,19 +104,16 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     fun updateState(
         active: Boolean,
-        recording: Boolean,
         enabled: Boolean,
         saving: Boolean,
         visible: Boolean,
         primary: Int,
         tertiary: Int,
         paused: Int,
-        error: Int,
     ) {
-        val stateChanged = this.active != active || this.recording != recording ||
+        val stateChanged = this.active != active ||
             enabledState != enabled || this.saving != saving || renderingVisible != visible
         this.active = active
-        this.recording = recording
         enabledState = enabled
         this.saving = saving
         renderingVisible = visible
@@ -126,7 +122,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             active && !saving -> 1f
             else -> COLLAPSED_LIFE
         }
-        renderer.setPalette(primary, tertiary, paused, error)
+        renderer.setPalette(primary, tertiary, paused)
         if (!active || saving) {
             targetActivity = 0f
             targetBands.fill(0f)
@@ -149,7 +145,6 @@ internal class AudioBlobView(context: Context) : View(context) {
             bands = currentBands,
             life = currentLife,
             active = active && !saving,
-            recording = recording,
         )
     }
 
@@ -265,7 +260,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         val activeFrameDelayMillis: Long
         val idleFrameDelayMillis: Long
         fun resize(width: Int, height: Int)
-        fun setPalette(primary: Int, tertiary: Int, paused: Int, error: Int)
+        fun setPalette(primary: Int, tertiary: Int, paused: Int)
         fun draw(
             canvas: Canvas,
             width: Int,
@@ -275,7 +270,6 @@ internal class AudioBlobView(context: Context) : View(context) {
             bands: FloatArray,
             life: Float,
             active: Boolean,
-            recording: Boolean,
         )
     }
 
@@ -288,22 +282,19 @@ internal class AudioBlobView(context: Context) : View(context) {
         private var primary = 0
         private var tertiary = 0
         private var paused = 0
-        private var error = 0
 
         override fun resize(width: Int, height: Int) {
             shader.setFloatUniform("resolution", width.toFloat(), height.toFloat())
         }
 
-        override fun setPalette(primary: Int, tertiary: Int, paused: Int, error: Int) {
-            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused && this.error == error) return
+        override fun setPalette(primary: Int, tertiary: Int, paused: Int) {
+            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused) return
             this.primary = primary
             this.tertiary = tertiary
             this.paused = paused
-            this.error = error
             shader.setColorUniform("primaryColor", primary)
             shader.setColorUniform("tertiaryColor", tertiary)
             shader.setColorUniform("pausedColor", paused)
-            shader.setColorUniform("errorColor", error)
         }
 
         override fun draw(
@@ -315,14 +306,12 @@ internal class AudioBlobView(context: Context) : View(context) {
             bands: FloatArray,
             life: Float,
             active: Boolean,
-            recording: Boolean,
         ) {
             if (width <= 0 || height <= 0) return
             shader.setFloatUniform("time", timeSeconds)
             shader.setFloatUniform("activity", activity)
             shader.setFloatUniform("life", life)
             shader.setFloatUniform("active", if (active) 1f else 0f)
-            shader.setFloatUniform("recording", if (recording) 1f else 0f)
             shader.setFloatUniform("bands0", bands[0], bands[1], bands[2], bands[3])
             shader.setFloatUniform("bands1", bands[4], bands[5], bands[6], bands[7])
             canvas.drawCircle(
@@ -346,7 +335,6 @@ internal class AudioBlobView(context: Context) : View(context) {
         private var primary = 0
         private var tertiary = 0
         private var paused = 0
-        private var error = 0
         private var gradientState = -1
 
         override fun resize(width: Int, height: Int) {
@@ -355,12 +343,11 @@ internal class AudioBlobView(context: Context) : View(context) {
             gradientState = -1
         }
 
-        override fun setPalette(primary: Int, tertiary: Int, paused: Int, error: Int) {
-            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused && this.error == error) return
+        override fun setPalette(primary: Int, tertiary: Int, paused: Int) {
+            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused) return
             this.primary = primary
             this.tertiary = tertiary
             this.paused = paused
-            this.error = error
             gradientState = -1
         }
 
@@ -373,7 +360,6 @@ internal class AudioBlobView(context: Context) : View(context) {
             bands: FloatArray,
             life: Float,
             active: Boolean,
-            recording: Boolean,
         ) {
             if (width <= 0 || height <= 0) return
             val minSize = minOf(width, height).toFloat()
@@ -400,18 +386,14 @@ internal class AudioBlobView(context: Context) : View(context) {
             }
             path.close()
 
-            val state = when {
-                recording -> 2
-                active -> 1
-                else -> 0
-            }
+            val state = if (active) 1 else 0
             if (gradientState != state) {
-                paint.shader = when (state) {
-                    2 -> null
-                    1 -> LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)
-                    else -> null
+                paint.shader = if (active) {
+                    LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)
+                } else {
+                    null
                 }
-                paint.color = if (recording) error else if (active) primary else paused
+                paint.color = if (active) primary else paused
                 gradientState = state
             }
             canvas.drawPath(path, paint)
@@ -438,13 +420,11 @@ internal class AudioBlobView(context: Context) : View(context) {
             uniform float activity;
             uniform float life;
             uniform float active;
-            uniform float recording;
             uniform float4 bands0;
             uniform float4 bands1;
             layout(color) uniform half4 primaryColor;
             layout(color) uniform half4 tertiaryColor;
             layout(color) uniform half4 pausedColor;
-            layout(color) uniform half4 errorColor;
 
             half4 main(float2 fragCoord) {
                 float minSize = min(resolution.x, resolution.y);
@@ -474,9 +454,7 @@ internal class AudioBlobView(context: Context) : View(context) {
                 half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));
                 float colorLife = smoothstep(0.36, 0.86, life);
                 half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));
-                bodyColor = mix(bodyColor, errorColor, half(recording));
                 half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));
-                glowColor = mix(glowColor, errorColor, half(recording));
 
                 float alpha = body + glow;
                 half3 premultiplied = bodyColor.rgb * half(body) + glowColor.rgb * half(glow);

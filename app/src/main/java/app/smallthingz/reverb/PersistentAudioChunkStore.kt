@@ -7,6 +7,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.ArrayDeque
@@ -82,7 +83,7 @@ internal class PersistentAudioChunkStore(
         ensureLoadedLocked()
 
         val normalizedRetention = requestedRetentionValue.coerceAtLeast(0L)
-        val validFormat = requestedSampleRate > 0 && requestedChannelCount > 0
+        val validFormat = requestedSampleRate > 0 && requestedChannelCount in 1..MAX_CHANNEL_COUNT
         val formatChanged =
             configuredSampleRate != requestedSampleRate ||
                 configuredChannelCount != requestedChannelCount ||
@@ -164,6 +165,11 @@ internal class PersistentAudioChunkStore(
             sourceOffset += alignedWriteCount
             remaining -= alignedWriteCount
             lastWriteAtMillis = System.currentTimeMillis()
+
+            // Keep the logical timeline inside its configured retention window as data
+            // arrives. This is still O(1) in the common case and only performs a delete
+            // when an old chunk actually expires.
+            cleanupRetentionLocked()
 
             if (record.payloadBytes >= limit) {
                 finalizeActiveLocked()
@@ -253,6 +259,7 @@ internal class PersistentAudioChunkStore(
                 record = record,
                 startFrame = startFrame,
                 frameCount = frameCount,
+                payloadOffsetBytes = record.payloadOffsetBytes,
                 payloadBytesAtAcquire = record.payloadBytes,
                 payloadChecksumAtAcquire = record.payloadChecksum,
             )
@@ -276,6 +283,20 @@ internal class PersistentAudioChunkStore(
     fun checkpoint() {
         ensureLoadedLocked()
         writeActiveHeaderLocked()
+        retryRetiredDeletesLocked()
+        writeIndexLocked()
+    }
+
+    /**
+     * Ends the current capture span without discarding history. The next append creates
+     * a fresh chunk with a fresh wall-clock timestamp even when the PCM format is unchanged.
+     */
+    @Synchronized
+    fun sealActiveChunk() {
+        ensureLoadedLocked()
+        if (activeRecord == null) return
+        finalizeActiveLocked()
+        cleanupRetentionLocked()
         retryRetiredDeletesLocked()
         writeIndexLocked()
     }
@@ -315,6 +336,61 @@ internal class PersistentAudioChunkStore(
         private var closedLease = false
 
         @Synchronized
+        fun acquireSubRange(
+            startOffsetSeconds: Double,
+            endOffsetSeconds: Double,
+        ): RangeLease? {
+            check(!closedLease) { "RangeLease is closed" }
+            if (!startOffsetSeconds.isFinite() || !endOffsetSeconds.isFinite()) return null
+            val start = startOffsetSeconds.coerceIn(0.0, durationSeconds)
+            val end = endOffsetSeconds.coerceIn(start, durationSeconds)
+            if (end <= start) return null
+
+            synchronized(store) {
+                val selected = ArrayList<Segment>()
+                var cursor = 0.0
+                var selectedStartedAtMillis = 0L
+                var selectedDuration = 0.0
+                for (segment in segments) {
+                    val rate = segment.record.sampleRate
+                    if (rate <= 0 || segment.frameCount <= 0L) continue
+                    val segmentDuration = segment.frameCount.toDouble() / rate.toDouble()
+                    val segmentStart = cursor
+                    val segmentEnd = cursor + segmentDuration
+                    cursor = segmentEnd
+                    if (end <= segmentStart) break
+                    if (start >= segmentEnd) continue
+
+                    val localStart = maxOf(start, segmentStart) - segmentStart
+                    val localEnd = minOf(end, segmentEnd) - segmentStart
+                    val firstFrame = floor(localStart * rate).toLong().coerceIn(0L, segment.frameCount)
+                    val lastFrame = ceil(localEnd * rate).toLong().coerceIn(firstFrame, segment.frameCount)
+                    val childFrames = lastFrame - firstFrame
+                    if (childFrames <= 0L) continue
+
+                    segment.record.refCount++
+                    val absoluteStartFrame = segment.startFrame + firstFrame
+                    selected += segment.copy(
+                        startFrame = absoluteStartFrame,
+                        frameCount = childFrames,
+                    )
+                    if (selectedStartedAtMillis == 0L) {
+                        selectedStartedAtMillis = segment.record.createdAtMillis +
+                            (absoluteStartFrame * 1000L / rate)
+                    }
+                    selectedDuration += childFrames.toDouble() / rate.toDouble()
+                }
+                if (selected.isEmpty()) return null
+                return RangeLease(
+                    store = store,
+                    segments = selected,
+                    startedAtMillis = selectedStartedAtMillis,
+                    durationSeconds = selectedDuration,
+                )
+            }
+        }
+
+        @Synchronized
         fun readNormalized(
             targetSampleRate: Int,
             targetChannelCount: Int,
@@ -322,7 +398,7 @@ internal class PersistentAudioChunkStore(
             consumer: Consumer,
         ): ReadResult {
             check(!closedLease) { "RangeLease is closed" }
-            require(targetSampleRate > 0 && targetChannelCount > 0)
+            require(targetSampleRate > 0 && targetChannelCount in 1..MAX_CHANNEL_COUNT)
 
             var totalOutputBytes = 0L
             var cumulativeDuration = 0.0
@@ -337,6 +413,7 @@ internal class PersistentAudioChunkStore(
 
                 totalOutputBytes += PcmNormalizer.normalizeSegment(
                     file = segment.record.file,
+                    payloadDataOffset = segment.payloadOffsetBytes,
                     payloadBytes = segment.payloadBytesAtAcquire,
                     expectedPayloadChecksum = segment.payloadChecksumAtAcquire,
                     payloadByteOffset = segment.startFrame * segment.record.frameBytes.toLong(),
@@ -369,6 +446,7 @@ internal class PersistentAudioChunkStore(
         val record: ChunkRecord,
         val startFrame: Long,
         val frameCount: Long,
+        val payloadOffsetBytes: Long,
         val payloadBytesAtAcquire: Long,
         val payloadChecksumAtAcquire: Int,
     )
@@ -384,6 +462,8 @@ internal class PersistentAudioChunkStore(
         val channelCount: Int,
         val sampleFormat: PcmSampleFormat,
         var payloadChecksum: Int,
+        var headerGeneration: Long,
+        val payloadOffsetBytes: Long,
         var refCount: Int = 0,
         var pendingDelete: Boolean = false,
     ) {
@@ -425,7 +505,7 @@ internal class PersistentAudioChunkStore(
     private data class ParsedHeader(
         val id: UInt,
         val state: ChunkState,
-        val checksumValid: Boolean,
+        val generation: Long,
         val createdAtMillis: Long,
         val payloadBytes: Long,
         val sampleFrames: Long,
@@ -433,6 +513,23 @@ internal class PersistentAudioChunkStore(
         val channelCount: Int,
         val sampleFormat: PcmSampleFormat,
         val payloadChecksum: Int,
+        val payloadOffsetBytes: Long,
+    )
+
+    private data class ParsedImmutableHeader(
+        val id: UInt,
+        val createdAtMillis: Long,
+        val sampleRate: Int,
+        val channelCount: Int,
+        val sampleFormat: PcmSampleFormat,
+    )
+
+    private data class ParsedMutableSlot(
+        val generation: Long,
+        val state: ChunkState,
+        val payloadChecksum: Int,
+        val payloadBytes: Long,
+        val sampleFrames: Long,
     )
 
     private fun ensureLoadedLocked() {
@@ -473,17 +570,36 @@ internal class PersistentAudioChunkStore(
 
     private fun scanChunkFilesLocked(): MutableMap<UInt, ChunkRecord> {
         val result = LinkedHashMap<UInt, ChunkRecord>()
-        val files = chunksDirectory.listFiles().orEmpty()
+        val files = chunksDirectory.listFiles()
+            ?: throw IOException("Unable to list chunks directory: ${chunksDirectory.absolutePath}")
         for (file in files) {
             if (!file.isFile) continue
             val id = file.name.toUIntOrNull()
             if (id == null || file.name != id.toString()) {
-                runCatching { file.delete() }
+                try {
+                    Files.deleteIfExists(file.toPath())
+                } catch (error: IOException) {
+                    throw IOException("Unable to remove invalid chunk artifact ${file.absolutePath}", error)
+                }
                 continue
             }
-            val record = runCatching { readChunkRecord(file, id) }.getOrNull()
-            if (record == null || result.put(id, record) != null) {
-                runCatching { file.delete() }
+            val record = try {
+                readChunkRecord(file, id)
+            } catch (error: IOException) {
+                // A transient filesystem/provider failure is not evidence of corruption.
+                // Abort recovery rather than deleting or forgetting audio we could not read.
+                throw IOException("Unable to inspect chunk ${file.absolutePath}", error)
+            }
+            if (record == null) {
+                try {
+                    Files.deleteIfExists(file.toPath())
+                } catch (error: IOException) {
+                    throw IOException("Unable to remove corrupt chunk ${file.absolutePath}", error)
+                }
+                continue
+            }
+            if (result.put(id, record) != null) {
+                throw IOException("Duplicate chunk id on disk: $id")
             }
         }
         return result
@@ -495,6 +611,15 @@ internal class PersistentAudioChunkStore(
     ) {
         indexGeneration = index.generation
         nextChunkId = index.nextChunkId
+
+        for (indexed in index.records) {
+            val record = scanned[indexed.id] ?: continue
+            if (!indexRecordMatchesChunk(indexed, record)) {
+                indexGeneration = 0L
+                restoreWithoutIndexLocked(scanned.values.toList())
+                return
+            }
+        }
 
         for (indexed in index.records) {
             val record = scanned.remove(indexed.id) ?: continue
@@ -518,7 +643,7 @@ internal class PersistentAudioChunkStore(
 
         // Anything not reachable from the committed end-cap is stale cleanup from a prior crash.
         for (stale in scanned.values) {
-            runCatching { stale.file.delete() }
+            retireRecordLocked(stale)
         }
     }
 
@@ -558,7 +683,7 @@ internal class PersistentAudioChunkStore(
         if (frameBytesLong <= 0L || frameBytesLong > Int.MAX_VALUE.toLong()) return null
         val frameBytes = frameBytesLong.toInt()
 
-        val actualPayload = (file.length() - CHUNK_HEADER_BYTES).coerceAtLeast(0L)
+        val actualPayload = (Files.size(file.toPath()) - header.payloadOffsetBytes).coerceAtLeast(0L)
         if (actualPayload > CHUNK_PAYLOAD_BYTES.toLong()) return null
         val alignedActualPayload = actualPayload - actualPayload % frameBytes.toLong()
         if (alignedActualPayload <= 0L) {
@@ -566,7 +691,7 @@ internal class PersistentAudioChunkStore(
             return null
         }
 
-        if (header.checksumValid && header.state == ChunkState.FINALIZED) {
+        if (header.state == ChunkState.FINALIZED) {
             if (
                 actualPayload != alignedActualPayload ||
                 header.payloadBytes != actualPayload ||
@@ -585,15 +710,17 @@ internal class PersistentAudioChunkStore(
                 channelCount = header.channelCount,
                 sampleFormat = header.sampleFormat,
                 payloadChecksum = header.payloadChecksum,
+                headerGeneration = header.generation,
+                payloadOffsetBytes = header.payloadOffsetBytes,
             )
         }
 
-        // ACTIVE headers and checksum-torn headers can have stale counters after a crash.
-        // The immutable format fields are validated above, and the payload length is bounded.
+        // ACTIVE metadata can lag the payload after a crash. The immutable prefix is
+        // independently checksummed, so payload geometry can be reconstructed safely.
         RandomAccessFile(file, "rw").use { access ->
-            access.setLength(CHUNK_HEADER_BYTES.toLong() + alignedActualPayload)
+            access.setLength(header.payloadOffsetBytes + alignedActualPayload)
         }
-        val checksum = crc32FilePayload(file, alignedActualPayload)
+        val checksum = crc32FilePayload(file, header.payloadOffsetBytes, alignedActualPayload)
         val recovered = ChunkRecord(
             id = header.id,
             file = file,
@@ -605,9 +732,19 @@ internal class PersistentAudioChunkStore(
             channelCount = header.channelCount,
             sampleFormat = header.sampleFormat,
             payloadChecksum = checksum,
+            headerGeneration = header.generation,
+            payloadOffsetBytes = header.payloadOffsetBytes,
         )
-        writeChunkHeader(recovered, forceToDisk = true)
+        writeMutableChunkSlot(recovered, forceToDisk = true)
         return recovered
+    }
+
+    private fun indexRecordMatchesChunk(indexed: IndexRecord, record: ChunkRecord): Boolean {
+        return indexed.id == record.id &&
+            indexed.createdAtMillis == record.createdAtMillis &&
+            indexed.sampleRate == record.sampleRate &&
+            indexed.channelCount == record.channelCount &&
+            indexed.sampleFormat == record.sampleFormat
     }
 
     private fun createActiveChunkLocked(): ChunkRecord? {
@@ -635,6 +772,8 @@ internal class PersistentAudioChunkStore(
             channelCount = configuredChannelCount,
             sampleFormat = configuredSampleFormat,
             payloadChecksum = 0,
+            headerGeneration = 0L,
+            payloadOffsetBytes = CHUNK_HEADER_BYTES.toLong(),
         )
         var openedAccess: RandomAccessFile? = null
         val access = try {
@@ -642,7 +781,7 @@ internal class PersistentAudioChunkStore(
                 throw IOException("Unable to create chunk file: ${file.absolutePath}")
             }
             openedAccess = RandomAccessFile(file, "rw")
-            writeChunkHeader(record, access = requireNotNull(openedAccess), forceToDisk = false)
+            writeInitialChunkHeader(record, access = requireNotNull(openedAccess))
             requireNotNull(openedAccess)
         } catch (error: Exception) {
             runCatching { openedAccess?.close() }
@@ -673,7 +812,7 @@ internal class PersistentAudioChunkStore(
         record.state = ChunkState.FINALIZED
         record.payloadChecksum = activePayloadCrc.value.toInt()
         try {
-            writeChunkHeader(record, access = activeAccess, forceToDisk = true)
+            writeMutableChunkSlot(record, access = activeAccess, forceToDisk = true)
         } catch (error: Exception) {
             // Once finalization has started, do not append to this file again. The on-disk
             // header may be complete, partial, or merely unsynced depending on the failure.
@@ -690,7 +829,7 @@ internal class PersistentAudioChunkStore(
     private fun writeActiveHeaderLocked() {
         val record = activeRecord ?: return
         record.payloadChecksum = activePayloadCrc.value.toInt()
-        writeChunkHeader(record, access = activeAccess, forceToDisk = true)
+        writeMutableChunkSlot(record, access = activeAccess, forceToDisk = true)
     }
 
     private fun closeActiveAccessLocked() {
@@ -765,7 +904,10 @@ internal class PersistentAudioChunkStore(
     }
 
     private fun tryDeleteRetiredRecordLocked(record: ChunkRecord): Boolean {
-        val deleted = !record.file.exists() || runCatching { record.file.delete() }.getOrDefault(false)
+        val deleted = runCatching {
+            Files.deleteIfExists(record.file.toPath())
+            true
+        }.getOrDefault(false)
         if (deleted) {
             retiredById.remove(record.id)
         } else {
@@ -807,8 +949,9 @@ internal class PersistentAudioChunkStore(
     }
 
     private fun configuredFrameBytesLocked(): Int {
-        if (configuredSampleRate <= 0 || configuredChannelCount <= 0) return 0
-        return configuredChannelCount * configuredSampleFormat.bytesPerSample
+        if (configuredSampleRate <= 0 || configuredChannelCount !in 1..MAX_CHANNEL_COUNT) return 0
+        val frameBytes = configuredChannelCount.toLong() * configuredSampleFormat.bytesPerSample.toLong()
+        return frameBytes.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt() ?: 0
     }
 
     private fun chunkPayloadLimitLocked(frameBytes: Int): Long {
@@ -822,7 +965,16 @@ internal class PersistentAudioChunkStore(
                 else retentionValue * bytesPerSecond
             }
         }
-        val rawLimit = minOf(CHUNK_PAYLOAD_BYTES.toLong(), retentionBound)
+        // Retention evicts whole immutable chunks. If a small retention window were
+        // represented by one chunk, the first frame of the next chunk would evict
+        // essentially the entire history. Keep several chunks inside small windows so
+        // rollover only drops a small fraction of the requested retention at a time.
+        val retentionGranularityBound = if (retentionBound == Long.MAX_VALUE) {
+            Long.MAX_VALUE
+        } else {
+            (retentionBound / MIN_CHUNKS_PER_RETENTION).coerceAtLeast(frameBytes.toLong())
+        }
+        val rawLimit = minOf(CHUNK_PAYLOAD_BYTES.toLong(), retentionGranularityBound)
         return (rawLimit / frameBytes.toLong()) * frameBytes.toLong()
     }
 
@@ -834,72 +986,148 @@ internal class PersistentAudioChunkStore(
         return retainedDurationSeconds
     }
 
-    private fun writeChunkHeader(
+    private fun writeInitialChunkHeader(
         record: ChunkRecord,
-        access: RandomAccessFile? = null,
-        forceToDisk: Boolean,
+        access: RandomAccessFile,
     ) {
         val bytes = ByteArray(CHUNK_HEADER_BYTES)
         writeIntLE(bytes, 0, CHUNK_MAGIC)
         writeIntLE(bytes, 4, CHUNK_VERSION)
         writeIntLE(bytes, 8, record.id.toInt())
-        writeIntLE(bytes, 12, record.state.code)
+        writeIntLE(bytes, 12, CHUNK_HEADER_BYTES)
         writeLongLE(bytes, 16, record.createdAtMillis)
-        writeLongLE(bytes, 24, record.payloadBytes)
-        writeLongLE(bytes, 32, record.sampleFrames)
-        writeIntLE(bytes, 40, record.sampleRate)
-        writeIntLE(bytes, 44, record.channelCount)
-        writeIntLE(bytes, 48, sampleFormatCode(record.sampleFormat))
-        writeIntLE(bytes, 52, record.payloadChecksum)
-        writeIntLE(bytes, 56, crc32(bytes, 0, 56))
-        writeIntLE(bytes, 60, 0)
+        writeIntLE(bytes, 24, record.sampleRate)
+        writeIntLE(bytes, 28, record.channelCount)
+        writeIntLE(bytes, 32, sampleFormatCode(record.sampleFormat))
+        writeIntLE(bytes, 36, 0)
+        writeIntLE(bytes, 40, crc32(bytes, 0, CHUNK_IMMUTABLE_CRC_OFFSET))
+        writeIntLE(bytes, 44, 0)
 
-        if (access != null) {
-            access.seek(0L)
-            access.write(bytes)
-            access.seek(CHUNK_HEADER_BYTES.toLong() + record.payloadBytes)
-            if (forceToDisk) access.fd.sync()
-        } else {
-            RandomAccessFile(record.file, "rw").use { opened ->
-                opened.seek(0L)
-                opened.write(bytes)
-                if (forceToDisk) opened.fd.sync()
+        // Slot A starts at generation 1. Slot B remains all zeroes until the first
+        // checkpoint/finalization. Immutable metadata is never rewritten afterward.
+        record.headerGeneration = 1L
+        writeMutableSlotBytes(bytes, CHUNK_SLOT_A_OFFSET, record)
+
+        access.seek(0L)
+        access.write(bytes)
+        access.setLength(CHUNK_HEADER_BYTES.toLong())
+        access.fd.sync()
+        access.seek(CHUNK_HEADER_BYTES.toLong())
+    }
+
+    private fun writeMutableChunkSlot(
+        record: ChunkRecord,
+        access: RandomAccessFile? = null,
+        forceToDisk: Boolean,
+    ) {
+        val nextGeneration = if (record.headerGeneration == Long.MAX_VALUE) 1L else record.headerGeneration + 1L
+        val slotOffset = if ((nextGeneration and 1L) == 0L) CHUNK_SLOT_B_OFFSET else CHUNK_SLOT_A_OFFSET
+        val bytes = ByteArray(CHUNK_SLOT_BYTES)
+        val previousGeneration = record.headerGeneration
+        record.headerGeneration = nextGeneration
+        try {
+            writeMutableSlotBytes(bytes, 0, record)
+            if (access != null) {
+                access.seek(slotOffset.toLong())
+                access.write(bytes)
+                access.seek(record.payloadOffsetBytes + record.payloadBytes)
+                if (forceToDisk) access.fd.sync()
+            } else {
+                RandomAccessFile(record.file, "rw").use { opened ->
+                    opened.seek(slotOffset.toLong())
+                    opened.write(bytes)
+                    if (forceToDisk) opened.fd.sync()
+                }
             }
+        } catch (error: Exception) {
+            record.headerGeneration = previousGeneration
+            throw error
         }
     }
 
+    private fun writeMutableSlotBytes(
+        bytes: ByteArray,
+        offset: Int,
+        record: ChunkRecord,
+    ) {
+        writeLongLE(bytes, offset, record.headerGeneration)
+        writeIntLE(bytes, offset + 8, record.state.code)
+        writeIntLE(bytes, offset + 12, record.payloadChecksum)
+        writeLongLE(bytes, offset + 16, record.payloadBytes)
+        writeLongLE(bytes, offset + 24, record.sampleFrames)
+        writeIntLE(bytes, offset + 32, crc32(bytes, offset, CHUNK_SLOT_CRC_OFFSET))
+        writeIntLE(bytes, offset + 36, 0)
+    }
+
     private fun readChunkHeader(file: File): ParsedHeader? {
-        if (file.length() < CHUNK_HEADER_BYTES) return null
+        if (Files.size(file.toPath()) < CHUNK_HEADER_BYTES) return null
         val bytes = ByteArray(CHUNK_HEADER_BYTES)
         RandomAccessFile(file, "r").use { access ->
             access.readFully(bytes)
         }
         if (readIntLE(bytes, 0) != CHUNK_MAGIC || readIntLE(bytes, 4) != CHUNK_VERSION) return null
-        val state = ChunkState.fromCode(readIntLE(bytes, 12)) ?: return null
-        val sampleFormat = sampleFormatFromCode(readIntLE(bytes, 48)) ?: return null
-        return ParsedHeader(
+        if (readIntLE(bytes, 12) != CHUNK_HEADER_BYTES) return null
+        if (readIntLE(bytes, 40) != crc32(bytes, 0, CHUNK_IMMUTABLE_CRC_OFFSET)) return null
+
+        val sampleFormat = sampleFormatFromCode(readIntLE(bytes, 32)) ?: return null
+        val immutable = ParsedImmutableHeader(
             id = readIntLE(bytes, 8).toUInt(),
-            state = state,
-            checksumValid = readIntLE(bytes, 56) == crc32(bytes, 0, 56),
             createdAtMillis = readLongLE(bytes, 16),
-            payloadBytes = readLongLE(bytes, 24),
-            sampleFrames = readLongLE(bytes, 32),
-            sampleRate = readIntLE(bytes, 40),
-            channelCount = readIntLE(bytes, 44),
+            sampleRate = readIntLE(bytes, 24),
+            channelCount = readIntLE(bytes, 28),
             sampleFormat = sampleFormat,
-            payloadChecksum = readIntLE(bytes, 52),
+        )
+        val first = readMutableSlot(bytes, CHUNK_SLOT_A_OFFSET)
+        val second = readMutableSlot(bytes, CHUNK_SLOT_B_OFFSET)
+        val mutable = when {
+            first == null -> second
+            second == null -> first
+            first.generation >= second.generation -> first
+            else -> second
+        } ?: return null
+
+        return ParsedHeader(
+            id = immutable.id,
+            state = mutable.state,
+            generation = mutable.generation,
+            createdAtMillis = immutable.createdAtMillis,
+            payloadBytes = mutable.payloadBytes,
+            sampleFrames = mutable.sampleFrames,
+            sampleRate = immutable.sampleRate,
+            channelCount = immutable.channelCount,
+            sampleFormat = immutable.sampleFormat,
+            payloadChecksum = mutable.payloadChecksum,
+            payloadOffsetBytes = CHUNK_HEADER_BYTES.toLong(),
+        )
+    }
+
+    private fun readMutableSlot(bytes: ByteArray, offset: Int): ParsedMutableSlot? {
+        if (readIntLE(bytes, offset + 32) != crc32(bytes, offset, CHUNK_SLOT_CRC_OFFSET)) return null
+        val generation = readLongLE(bytes, offset)
+        if (generation <= 0L) return null
+        val state = ChunkState.fromCode(readIntLE(bytes, offset + 8)) ?: return null
+        val payloadBytes = readLongLE(bytes, offset + 16)
+        val sampleFrames = readLongLE(bytes, offset + 24)
+        if (payloadBytes < 0L || sampleFrames < 0L) return null
+        return ParsedMutableSlot(
+            generation = generation,
+            state = state,
+            payloadChecksum = readIntLE(bytes, offset + 12),
+            payloadBytes = payloadBytes,
+            sampleFrames = sampleFrames,
         )
     }
 
     private fun writeIndexLocked() {
         if (!loaded && chunksDirectory.exists().not()) return
-        indexGeneration++
         val recordCount = chunks.size
         val indexBytes =
             INDEX_HEADER_BYTES.toLong() + recordCount.toLong() * INDEX_RECORD_BYTES.toLong() + INDEX_CRC_BYTES
         if (indexBytes > MAX_INDEX_BYTES) {
             throw IOException("Chunk index exceeds supported size: $indexBytes bytes")
         }
+        val previousGeneration = indexGeneration
+        indexGeneration = if (indexGeneration == Long.MAX_VALUE) 1L else indexGeneration + 1L
         val bytes = ByteArray(indexBytes.toInt())
         writeIntLE(bytes, 0, INDEX_MAGIC)
         writeIntLE(bytes, 4, INDEX_VERSION)
@@ -929,26 +1157,31 @@ internal class PersistentAudioChunkStore(
             output.fd.sync()
         }
         try {
-            Files.move(
-                temp.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: Exception) {
-            if (target.exists() && !target.delete()) {
-                throw IOException("Unable to replace ${target.absolutePath}")
+            try {
+                Files.move(
+                    temp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    temp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
             }
-            if (!temp.renameTo(target)) {
-                throw IOException("Unable to commit ${target.absolutePath}")
-            }
+        } catch (error: Exception) {
+            indexGeneration = previousGeneration
+            temp.delete()
+            throw error
         }
     }
 
     private fun readIndex(file: File): LoadedIndex? {
-        val fileLength = file.length()
+        if (!file.isFile) return null
+        val fileLength = runCatching { Files.size(file.toPath()) }.getOrNull() ?: return null
         if (
-            !file.isFile ||
             fileLength < INDEX_HEADER_BYTES + INDEX_CRC_BYTES ||
             fileLength > MAX_INDEX_BYTES
         ) {
@@ -963,35 +1196,63 @@ internal class PersistentAudioChunkStore(
         if (expectedSize != bytes.size.toLong()) return null
         if (readIntLE(bytes, bytes.size - INDEX_CRC_BYTES) != crc32(bytes, 0, bytes.size - INDEX_CRC_BYTES)) return null
 
+        val generation = readLongLE(bytes, 8)
+        if (generation <= 0L) return null
+
         val records = ArrayList<IndexRecord>(count)
+        val ids = HashSet<UInt>(count)
         var offset = INDEX_HEADER_BYTES
         repeat(count) {
+            val id = readIntLE(bytes, offset).toUInt()
+            if (!ids.add(id)) return null
             val state = ChunkState.fromCode(readIntLE(bytes, offset + 4)) ?: return null
             val sampleFormat = sampleFormatFromCode(readIntLE(bytes, offset + 40)) ?: return null
+            val payloadBytes = readLongLE(bytes, offset + 16)
+            val sampleFrames = readLongLE(bytes, offset + 24)
+            val sampleRate = readIntLE(bytes, offset + 32)
+            val channelCount = readIntLE(bytes, offset + 36)
+            if (
+                payloadBytes < 0L || payloadBytes > CHUNK_PAYLOAD_BYTES.toLong() ||
+                sampleFrames < 0L || sampleRate <= 0 || channelCount !in 1..MAX_CHANNEL_COUNT
+            ) {
+                return null
+            }
             records += IndexRecord(
-                id = readIntLE(bytes, offset).toUInt(),
+                id = id,
                 state = state,
                 createdAtMillis = readLongLE(bytes, offset + 8),
-                payloadBytes = readLongLE(bytes, offset + 16),
-                sampleFrames = readLongLE(bytes, offset + 24),
-                sampleRate = readIntLE(bytes, offset + 32),
-                channelCount = readIntLE(bytes, offset + 36),
+                payloadBytes = payloadBytes,
+                sampleFrames = sampleFrames,
+                sampleRate = sampleRate,
+                channelCount = channelCount,
                 sampleFormat = sampleFormat,
                 payloadChecksum = readIntLE(bytes, offset + 44),
             )
             offset += INDEX_RECORD_BYTES
         }
+        for (index in 1 until records.size) {
+            val distance = unsignedDistance(records[index - 1].id, records[index].id)
+            if (distance == 0L || distance >= UINT32_HALF_RANGE) return null
+        }
+        if (records.isNotEmpty()) {
+            val distanceToEndCap = unsignedDistance(records.last().id, readIntLE(bytes, 16).toUInt())
+            if (distanceToEndCap == 0L || distanceToEndCap >= UINT32_HALF_RANGE) return null
+        }
         return LoadedIndex(
-            generation = readLongLE(bytes, 8),
+            generation = generation,
             nextChunkId = readIntLE(bytes, 16).toUInt(),
             records = records,
         )
     }
 
-    private fun crc32FilePayload(file: File, payloadBytes: Long): Int {
+    private fun crc32FilePayload(
+        file: File,
+        payloadOffsetBytes: Long,
+        payloadBytes: Long,
+    ): Int {
         val crc = CRC32()
         RandomAccessFile(file, "r").use { input ->
-            input.seek(CHUNK_HEADER_BYTES.toLong())
+            input.seek(payloadOffsetBytes)
             val scratch = ByteArray(64 * 1024)
             var remaining = payloadBytes
             while (remaining > 0L) {
@@ -1006,14 +1267,20 @@ internal class PersistentAudioChunkStore(
 
     private companion object {
         const val CHUNK_MAGIC = 0x52564348 // RVCH
-        const val CHUNK_VERSION = 1
-        const val CHUNK_HEADER_BYTES = 64
+        const val CHUNK_VERSION = 2
+        const val CHUNK_HEADER_BYTES = 128
+        const val CHUNK_IMMUTABLE_CRC_OFFSET = 40
+        const val CHUNK_SLOT_A_OFFSET = 48
+        const val CHUNK_SLOT_B_OFFSET = 88
+        const val CHUNK_SLOT_BYTES = 40
+        const val CHUNK_SLOT_CRC_OFFSET = 32
         const val CHUNK_PAYLOAD_BYTES = 1024 * 1024
+        const val MIN_CHUNKS_PER_RETENTION = 16L
         const val MAX_CHANNEL_COUNT = 2
         const val UINT32_HALF_RANGE = 0x8000_0000L
 
         const val INDEX_MAGIC = 0x52564958 // RVIX
-        const val INDEX_VERSION = 1
+        const val INDEX_VERSION = 2
         const val INDEX_HEADER_BYTES = 24
         const val INDEX_RECORD_BYTES = 48
         const val INDEX_CRC_BYTES = 4

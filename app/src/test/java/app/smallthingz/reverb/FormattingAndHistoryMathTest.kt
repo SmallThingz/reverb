@@ -218,7 +218,8 @@ class FormattingAndHistoryMathTest {
     @Test
     fun wavExportSizeLimit_isJustUnderFourGiB() {
         val limit = exportFileSizeLimitBytes(ExportFormat.WAV)
-        assertEquals(0xFFFF_FFFFL - 44L, limit)
+        assertEquals(0xFFFF_FFFFL, limit)
+        assertEquals(0xFFFF_FFFFL - 44L, exportPayloadLimitBytes(ExportFormat.WAV))
     }
 
     @Test

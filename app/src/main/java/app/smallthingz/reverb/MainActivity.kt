@@ -56,6 +56,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 private const val URI_SCHEME_PACKAGE = "package"
 private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
@@ -96,7 +97,8 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
-        batteryOptimizationPromptPending = consumeBatteryOptimizationStartupPrompt(this)
+        batteryOptimizationPromptPending = isBatteryOptimizationStartupPromptPending(this)
+        RecordingRepository.schedulePersistedPermissionCleanup(this)
         themeMode = getConfiguredThemeMode(this)
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
@@ -168,7 +170,10 @@ class MainActivity : ComponentActivity() {
     private fun maybeShowBatteryOptimizationPrompt() {
         if (!batteryOptimizationPromptPending || !permissionsGranted) return
         batteryOptimizationPromptPending = false
-        showBatteryOptimizationPrompt = true
+        markBatteryOptimizationStartupPromptHandled(this)
+        if (!isIgnoringBatteryOptimizations(this)) {
+            showBatteryOptimizationPrompt = true
+        }
     }
 
     private fun openBatteryOptimizationSettings() {
@@ -284,11 +289,24 @@ private fun MainScreen(
 
     fun refreshLibrarySnapshot() {
         scope.launch {
-            runCatching { RecordingRepository.listKnown(context) }
-                .onSuccess { known ->
-                    librarySnapshot = known
-                    libraryCount = known.size
-                }
+            try {
+                val known = RecordingRepository.listKnown(context)
+                librarySnapshot = known
+                libraryCount = known.size
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                Unit
+            }
+            try {
+                val refreshed = RecordingRepository.refresh(context)
+                librarySnapshot = refreshed
+                libraryCount = refreshed.size
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                Unit
+            }
         }
     }
 

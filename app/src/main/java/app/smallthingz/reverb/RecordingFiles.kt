@@ -7,15 +7,16 @@ import android.net.Uri
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import android.util.Log
 import java.io.IOException
 import java.io.InputStream
-import java.io.RandomAccessFile
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
 
 private val TAG = "RecordingFiles"
 private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
@@ -27,13 +28,14 @@ enum class RecordingStorageType {
     DOCUMENT,
 }
 
+internal enum class RecordingAssetState {
+    PRESENT,
+    MISSING,
+    UNAVAILABLE,
+}
+
 internal fun resolveRecordingStorageType(recording: RecordingEntity): RecordingStorageType? {
     return RecordingStorageType.entries.firstOrNull { it.name == recording.storageType }
-        ?: when {
-            recording.id.startsWith("content://", ignoreCase = true) -> RecordingStorageType.DOCUMENT
-            recording.id.isNotBlank() -> RecordingStorageType.FILE
-            else -> null
-        }
 }
 
 data class RecordingOutputTarget(
@@ -378,7 +380,7 @@ fun describeRecordingLocation(
 
 fun resolveRecordingStartTimeMillis(file: File): Long {
     parseRecordingStartTimeMillis(file.nameWithoutExtension)?.let { return it }
-    return file.lastModified()
+    return file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
 }
 
 fun resolveRecordingStartTimeMillis(
@@ -386,7 +388,7 @@ fun resolveRecordingStartTimeMillis(
     fallbackMillis: Long,
 ): Long {
     parseRecordingStartTimeMillis(displayName.substringBeforeLast('.', displayName))?.let { return it }
-    return fallbackMillis
+    return fallbackMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
 }
 
 fun resolveRecordingDurationMillis(file: File): Long {
@@ -509,11 +511,24 @@ fun resolveOutputTargetSize(
     }
 }
 
+@Throws(IOException::class)
+internal fun verifyOutputTargetSize(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedBytes: Long,
+): Long {
+    require(expectedBytes > 0L) { "Expected output size must be positive" }
+    val reportedSize = resolveOutputTargetSize(context, target)
+    if (reportedSize > 0L) return reportedSize
+    return countOutputTargetBytes(context, target, expectedBytes)
+}
+
 fun buildRecordingEntity(
     context: Context,
     target: RecordingOutputTarget,
     durationMillis: Long,
     codecSummary: String,
+    knownSizeBytes: Long? = null,
 ): RecordingEntity {
     return RecordingEntity(
         id = target.id,
@@ -521,23 +536,46 @@ fun buildRecordingEntity(
         mimeType = target.mimeType,
         startedAtMillis = target.startedAtMillis,
         durationMillis = durationMillis,
-        sizeBytes = resolveOutputTargetSize(context, target),
+        sizeBytes = knownSizeBytes?.takeIf { it > 0L } ?: resolveOutputTargetSize(context, target),
         codecSummary = codecSummary,
         storageType = target.storageType.name,
         directoryId = target.directoryId,
     )
 }
 
-fun recordingExists(
+internal fun recordingAssetState(
     context: Context,
     recording: RecordingEntity,
-): Boolean {
+): RecordingAssetState {
     return when (resolveRecordingStorageType(recording)) {
-        RecordingStorageType.FILE -> File(recording.id).isFile
-        RecordingStorageType.DOCUMENT -> runCatching {
-            DocumentFile.fromSingleUri(context, Uri.parse(recording.id))?.exists() == true
-        }.onFailure { Log.w(TAG, "Unable to inspect recording ${recording.id}", it) }.getOrDefault(false)
-        null -> false
+        RecordingStorageType.FILE -> try {
+            val file = File(recording.id)
+            if (file.isFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
+            RecordingAssetState.UNAVAILABLE
+        }
+
+        RecordingStorageType.DOCUMENT -> {
+            val uri = runCatching { Uri.parse(recording.id) }.getOrNull()
+                ?: return RecordingAssetState.MISSING
+            try {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+                } ?: RecordingAssetState.UNAVAILABLE
+            } catch (error: Exception) {
+                Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
+                RecordingAssetState.UNAVAILABLE
+            }
+        }
+
+        null -> RecordingAssetState.MISSING
     }
 }
 
@@ -545,15 +583,22 @@ fun deleteRecordingAsset(
     context: Context,
     recording: RecordingEntity,
 ): Boolean {
+    when (recordingAssetState(context, recording)) {
+        RecordingAssetState.MISSING -> return true
+        RecordingAssetState.UNAVAILABLE -> return false
+        RecordingAssetState.PRESENT -> Unit
+    }
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
             val file = File(recording.id)
-            !file.exists() || file.delete()
+            runCatching { file.delete() || !file.exists() }
+                .onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }
+                .getOrDefault(false)
         }
 
         RecordingStorageType.DOCUMENT -> runCatching {
             val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id))
-            document == null || !document.exists() || document.delete()
+            document?.delete() == true || recordingAssetState(context, recording) == RecordingAssetState.MISSING
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
         null -> true
     }
@@ -593,31 +638,61 @@ fun copyRecordingToConfiguredDirectory(
             mimeType = recording.mimeType,
             startedAtMillis = recording.startedAtMillis,
         ).also { target = it }
+        val sourceSize = when (resolveRecordingStorageType(recording)) {
+            RecordingStorageType.FILE -> File(recording.id).length().takeIf { it > 0L }
+            RecordingStorageType.DOCUMENT -> {
+                val uri = Uri.parse(recording.id)
+                runCatching {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                        descriptor.statSize.takeIf { it > 0L }
+                    }
+                }.getOrNull() ?: DocumentFile.fromSingleUri(context, uri)?.length()?.takeIf { it > 0L }
+            }
+            null -> null
+        } ?: recording.sizeBytes.takeIf { it > 0L }
         val input = when (resolveRecordingStorageType(recording)) {
             RecordingStorageType.FILE -> FileInputStream(File(recording.id))
             RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(Uri.parse(recording.id))
             null -> throw IOException("Unknown recording storage type: ${recording.storageType}")
         } ?: throw IOException("Unable to open source recording")
+        var copiedBytes = 0L
         input.use { source ->
             when (resolvedTarget.storageType) {
                 RecordingStorageType.FILE -> {
                     FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
-                        source.copyTo(output)
+                        copiedBytes = source.copyTo(output)
+                        output.fd.sync()
                     }
                 }
 
                 RecordingStorageType.DOCUMENT -> {
                     context.contentResolver.openOutputStream(requireNotNull(resolvedTarget.uri), "w")?.use { output ->
-                        source.copyTo(output)
+                        copiedBytes = source.copyTo(output)
+                        output.flush()
                     } ?: throw IOException("Unable to open target output stream")
                 }
             }
+        }
+        if (copiedBytes <= 0L) {
+            throw IOException("Recording source was empty")
+        }
+        if (sourceSize != null && copiedBytes != sourceSize) {
+            throw IOException("Recording copy was incomplete: expected=$sourceSize copied=$copiedBytes")
+        }
+        val targetSize = resolveOutputTargetSize(context, resolvedTarget)
+        val verifiedTargetSize = if (targetSize > 0L) {
+            targetSize
+        } else {
+            countOutputTargetBytes(context, resolvedTarget, copiedBytes)
+        }
+        if (verifiedTargetSize != copiedBytes) {
+            throw IOException("Recording copy size mismatch: copied=$copiedBytes target=$verifiedTargetSize")
         }
 
         recording.copy(
             id = resolvedTarget.id,
             displayName = resolvedTarget.displayName,
-            sizeBytes = resolveOutputTargetSize(context, resolvedTarget),
+            sizeBytes = verifiedTargetSize,
             storageType = resolvedTarget.storageType.name,
             directoryId = resolvedTarget.directoryId,
         )
@@ -674,15 +749,20 @@ fun listCurrentOutputDirectoryRecordings(
             val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@runCatching emptyList()
             tree.listFiles()
                 .asSequence()
-                .filter { it.isFile && it.length() > 0L }
+                .filter { it.isFile }
                 .filter { file -> file.name?.substringAfterLast('.', "")?.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
                 .mapNotNull { file ->
                     val uri = file.uri
                     val name = file.name ?: return@mapNotNull null
                     val id = uri.toString()
-                    val size = file.length()
+                    // A number of SAF providers use zero to mean "unknown size". Do not
+                    // discard a readable recording just because metadata is incomplete.
+                    val size = file.length().coerceAtLeast(0L)
                     val existing = knownRecordings[id]
-                    if (existing != null && existing.displayName == name && existing.sizeBytes == size) {
+                    if (
+                        existing != null && existing.displayName == name &&
+                        (size == 0L || existing.sizeBytes == size)
+                    ) {
                         existing
                     } else {
                         RecordingEntity(
@@ -714,10 +794,18 @@ private fun createLocalOutputTarget(
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
     }
 
-    val uniqueName = findAvailableDisplayName(requestedDisplayName) { candidate ->
-        File(storageDir, candidate).exists()
+    val dotIndex = requestedDisplayName.lastIndexOf('.')
+    val name = if (dotIndex > 0) requestedDisplayName.substring(0, dotIndex) else requestedDisplayName
+    val extension = if (dotIndex > 0) requestedDisplayName.substring(dotIndex) else ""
+    var suffix = 1
+    var uniqueName: String
+    var file: File
+    while (true) {
+        uniqueName = if (suffix == 1) requestedDisplayName else "$name ($suffix)$extension"
+        file = File(storageDir, uniqueName)
+        if (file.createNewFile()) break
+        suffix++
     }
-    val file = File(storageDir, uniqueName)
     return RecordingOutputTarget(
         id = file.absolutePath,
         displayName = uniqueName,
@@ -735,20 +823,30 @@ private fun renameFileRecording(
 ): RecordingEntity? {
     val source = File(recording.id)
     val parent = source.parentFile ?: return null
-    val uniqueName = findAvailableDisplayName(displayName) { candidate ->
-        candidate != source.name && File(parent, candidate).exists()
+    if (displayName == source.name) return recording
+
+    val dotIndex = displayName.lastIndexOf('.')
+    val name = if (dotIndex > 0) displayName.substring(0, dotIndex) else displayName
+    val extension = if (dotIndex > 0) displayName.substring(dotIndex) else ""
+    var suffix = 1
+    while (suffix > 0) {
+        val uniqueName = if (suffix == 1) displayName else "$name ($suffix)$extension"
+        val target = File(parent, uniqueName)
+        try {
+            Files.move(source.toPath(), target.toPath())
+            return recording.copy(
+                id = target.absolutePath,
+                displayName = uniqueName,
+            )
+        } catch (_: FileAlreadyExistsException) {
+            suffix++
+        } catch (_: IOException) {
+            return null
+        } catch (_: SecurityException) {
+            return null
+        }
     }
-    if (uniqueName == source.name) {
-        return recording
-    }
-    val target = File(parent, uniqueName)
-    if (!source.renameTo(target)) {
-        return null
-    }
-    return recording.copy(
-        id = target.absolutePath,
-        displayName = uniqueName,
-    )
+    return null
 }
 
 private fun renameDocumentRecording(
@@ -793,10 +891,13 @@ private fun createDocumentOutputTarget(
         mimeType,
         uniqueName,
     ) ?: throw IOException("Unable to create output document")
+    val actualDisplayName = DocumentFile.fromSingleUri(context, documentUri)?.name
+        ?.takeIf { it.isNotBlank() }
+        ?: uniqueName
 
     return RecordingOutputTarget(
         id = documentUri.toString(),
-        displayName = uniqueName,
+        displayName = actualDisplayName,
         mimeType = mimeType,
         storageType = RecordingStorageType.DOCUMENT,
         directoryId = treeUri.toString(),
@@ -857,40 +958,78 @@ private fun parseRecordingStartTimeMillis(value: String): Long? {
 
 private fun readWavDurationMillis(file: File): Long {
     return runCatching {
-        RandomAccessFile(file, "r").use { input ->
-            input.seek(22L)
-            val channelCount = input.readUnsignedShortLE()
-            input.seek(24L)
-            val sampleRate = input.readIntLE()
-            input.seek(34L)
-            val bitsPerSample = input.readUnsignedShortLE()
-            input.seek(40L)
-            val dataSize = input.readIntLE().toLong() and 0xFFFF_FFFFL
-
-            val byteRate = sampleRate.toLong() * channelCount.toLong() * bitsPerSample.toLong() / 8L
-            if (byteRate <= 0L) 0L else dataSize * 1000L / byteRate
-        }
+        FileInputStream(file).use(::readWavDurationMillis)
     }.onFailure { Log.w(TAG, "readWavDurationMillis(file=$file) failed", it) }.getOrDefault(0L)
 }
 
 private fun readWavDurationMillis(input: InputStream): Long {
     return runCatching {
-        val header = ByteArray(44)
-        var readTotal = 0
-        while (readTotal < header.size) {
-            val read = input.read(header, readTotal, header.size - readTotal)
-            if (read <= 0) break
-            readTotal += read
+        val riffHeader = ByteArray(12)
+        if (!input.readFully(riffHeader)) return@runCatching 0L
+        if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
+            return@runCatching 0L
         }
-        if (readTotal < 44) return@runCatching 0L
 
-        val channelCount = littleEndianShort(header, 22)
-        val sampleRate = littleEndianInt(header, 24)
-        val bitsPerSample = littleEndianShort(header, 34)
-        val dataSize = littleEndianInt(header, 40).toLong() and 0xFFFF_FFFFL
-        val byteRate = sampleRate.toLong() * channelCount.toLong() * bitsPerSample.toLong() / 8L
-        if (byteRate <= 0L) 0L else dataSize * 1000L / byteRate
+        var byteRate = 0L
+        var dataSize = -1L
+        val chunkHeader = ByteArray(8)
+        while (input.readFully(chunkHeader)) {
+            val chunkSize = littleEndianUnsignedInt(chunkHeader, 4)
+            when {
+                chunkHeader.regionMatchesAscii(0, "fmt ") -> {
+                    if (chunkSize < 16L) return@runCatching 0L
+                    val format = ByteArray(16)
+                    if (!input.readFully(format)) return@runCatching 0L
+                    byteRate = littleEndianUnsignedInt(format, 8)
+                    if (!input.skipFully(chunkSize - format.size.toLong())) return@runCatching 0L
+                }
+
+                chunkHeader.regionMatchesAscii(0, "data") -> {
+                    dataSize = chunkSize
+                    if (byteRate > 0L) {
+                        return@runCatching dataSize * 1000L / byteRate
+                    }
+                    if (!input.skipFully(chunkSize)) return@runCatching 0L
+                }
+
+                else -> if (!input.skipFully(chunkSize)) return@runCatching 0L
+            }
+            if ((chunkSize and 1L) != 0L && !input.skipFully(1L)) return@runCatching 0L
+            if (byteRate > 0L && dataSize >= 0L) {
+                return@runCatching dataSize * 1000L / byteRate
+            }
+        }
+        0L
     }.onFailure { Log.w(TAG, "readWavDurationMillis(input) failed", it) }.getOrDefault(0L)
+}
+
+private fun countOutputTargetBytes(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedBytes: Long,
+): Long {
+    val input = when (target.storageType) {
+        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
+        RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(requireNotNull(target.uri))
+    } ?: throw IOException("Unable to reopen copied recording")
+    input.use { source ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        val readLimit = if (expectedBytes == Long.MAX_VALUE) Long.MAX_VALUE else expectedBytes + 1L
+        while (total < readLimit) {
+            val maxRead = minOf(buffer.size.toLong(), readLimit - total).toInt()
+            if (maxRead <= 0) break
+            val read = source.read(buffer, 0, maxRead)
+            if (read < 0) break
+            if (read == 0) {
+                if (source.read() < 0) break
+                total++
+            } else {
+                total += read.toLong()
+            }
+        }
+        return total
+    }
 }
 
 private fun littleEndianInt(
@@ -903,25 +1042,45 @@ private fun littleEndianInt(
         ((data[offset + 3].toInt() and 0xFF) shl 24)
 }
 
-private fun littleEndianShort(
-    data: ByteArray,
-    offset: Int,
-): Int {
-    return (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
+private fun littleEndianUnsignedInt(data: ByteArray, offset: Int): Long {
+    return littleEndianInt(data, offset).toLong() and 0xFFFF_FFFFL
 }
 
-private fun RandomAccessFile.readIntLE(): Int {
-    val b0 = read()
-    val b1 = read()
-    val b2 = read()
-    val b3 = read()
-    if (b3 < 0) return 0
-    return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+private fun ByteArray.regionMatchesAscii(offset: Int, expected: String): Boolean {
+    if (offset < 0 || expected.length > size - offset) return false
+    for (index in expected.indices) {
+        if ((this[offset + index].toInt() and 0xFF) != expected[index].code) return false
+    }
+    return true
 }
 
-private fun RandomAccessFile.readUnsignedShortLE(): Int {
-    val b0 = read()
-    val b1 = read()
-    if (b1 < 0) return 0
-    return b0 or (b1 shl 8)
+private fun InputStream.readFully(buffer: ByteArray): Boolean {
+    var offset = 0
+    while (offset < buffer.size) {
+        val read = read(buffer, offset, buffer.size - offset)
+        if (read < 0) return false
+        if (read == 0) {
+            val value = read()
+            if (value < 0) return false
+            buffer[offset] = value.toByte()
+            offset++
+        } else {
+            offset += read
+        }
+    }
+    return true
+}
+
+private fun InputStream.skipFully(byteCount: Long): Boolean {
+    var remaining = byteCount
+    while (remaining > 0L) {
+        val skipped = skip(remaining)
+        if (skipped > 0L) {
+            remaining -= skipped
+        } else {
+            if (read() < 0) return false
+            remaining--
+        }
+    }
+    return true
 }

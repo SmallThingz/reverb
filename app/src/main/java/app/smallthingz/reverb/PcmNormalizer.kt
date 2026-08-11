@@ -7,11 +7,12 @@ import kotlin.math.roundToInt
 
 /** Export-only PCM conversion. Recording stores exactly what AudioRecord produced. */
 internal object PcmNormalizer {
-    private const val CHUNK_HEADER_BYTES = 64L
     private const val OUTPUT_BUFFER_BYTES = 64 * 1024
+    private const val CRC_SCRATCH_BYTES = 64 * 1024
 
     fun normalizeSegment(
         file: java.io.File,
+        payloadDataOffset: Long,
         payloadBytes: Long,
         expectedPayloadChecksum: Int,
         payloadByteOffset: Long,
@@ -29,28 +30,37 @@ internal object PcmNormalizer {
         require(sourceChannelCount in 1..2 && targetChannelCount in 1..2)
         require(sourceSampleRate > 0)
 
-        require(payloadBytes in 1..Int.MAX_VALUE.toLong()) { "Chunk payload too large" }
-        val fullPayload = ByteArray(payloadBytes.toInt())
-        RandomAccessFile(file, "r").use { input ->
-            input.seek(CHUNK_HEADER_BYTES)
-            input.readFully(fullPayload)
-        }
-        val crc = CRC32().apply { update(fullPayload) }.value.toInt()
-        if (crc != expectedPayloadChecksum) {
-            throw java.io.IOException("PCM chunk checksum mismatch: ${file.name}")
-        }
-
         val sourceFrameBytes = sourceChannelCount * sourceSampleFormat.bytesPerSample
         val sourceByteCountLong = sourceFrameCount * sourceFrameBytes.toLong()
         require(sourceByteCountLong <= Int.MAX_VALUE.toLong()) { "Chunk segment byte range too large" }
-        require(payloadByteOffset >= 0L && payloadByteOffset + sourceByteCountLong <= payloadBytes) {
+        require(payloadDataOffset >= 0L && payloadBytes > 0L)
+        require(payloadByteOffset >= 0L && payloadByteOffset <= payloadBytes - sourceByteCountLong) {
             "Chunk segment outside payload"
         }
+        val sourceBytes = ByteArray(sourceByteCountLong.toInt())
+        val crc = CRC32()
+        val scratch = ByteArray(CRC_SCRATCH_BYTES)
+        RandomAccessFile(file, "r").use { input ->
+            input.seek(payloadDataOffset)
+            var remaining = payloadBytes
+            while (remaining > 0L) {
+                val count = minOf(scratch.size.toLong(), remaining).toInt()
+                input.readFully(scratch, 0, count)
+                crc.update(scratch, 0, count)
+                remaining -= count.toLong()
+            }
+            if (crc.value.toInt() != expectedPayloadChecksum) {
+                throw java.io.IOException("PCM chunk checksum mismatch: ${file.name}")
+            }
+            input.seek(payloadDataOffset + payloadByteOffset)
+            input.readFully(sourceBytes)
+        }
+
         val sourceFrames = sourceFrameCount.toInt()
         val samples = FloatArray(sourceFrames * sourceChannelCount)
         decode(
-            source = fullPayload,
-            sourceOffset = payloadByteOffset.toInt(),
+            source = sourceBytes,
+            sourceOffset = 0,
             format = sourceSampleFormat,
             output = samples,
         )

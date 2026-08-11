@@ -21,7 +21,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -56,6 +55,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,6 +87,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -174,10 +175,9 @@ fun CaptureScreen(
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
     var isListening by remember { mutableStateOf(false) }
-    var isRecording by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var memorizedSeconds by remember { mutableFloatStateOf(0f) }
-    var recordedSeconds by remember { mutableFloatStateOf(0f) }
+    var retainedPayloadBytes by remember { mutableLongStateOf(0L) }
     val blobController = remember { AudioBlobController() }
 
     var showClearDialog by remember { mutableStateOf(false) }
@@ -185,22 +185,23 @@ fun CaptureScreen(
     var showExportClampDialog by remember { mutableStateOf(false) }
     var clampWarningSeconds by remember { mutableFloatStateOf(0f) }
     var pendingExportRange by remember { mutableStateOf<ExportRange?>(null) } // Not saveable — non-serializable
+    var rangeSnapshot by remember { mutableStateOf<ReverbService.TimelineSnapshot?>(null) }
+    var pendingExportSnapshot by remember { mutableStateOf<ReverbService.TimelineSnapshot?>(null) }
+    var isPreparingRange by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
+    val screenAlive = remember { AtomicBoolean(true) }
 
     val stateCallback = remember {
         object : ReverbService.StateCallback {
             override fun state(
                 listeningEnabled: Boolean,
-                recording: Boolean,
                 memorized: Float,
-                totalMemory: Float,
-                recorded: Float,
+                memorizedBytes: Long,
             ) {
                 isListening = listeningEnabled
-                isRecording = recording
                 memorizedSeconds = memorized
-                recordedSeconds = recorded
+                retainedPayloadBytes = memorizedBytes
             }
         }
     }
@@ -210,14 +211,46 @@ fun CaptureScreen(
             override fun onServiceConnected(className: ComponentName, binder: IBinder) {
                 val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
                     ?: run {
+                        rangeSnapshot?.close()
+                        rangeSnapshot = null
+                        pendingExportSnapshot?.close()
+                        pendingExportSnapshot = null
+                        pendingExportRange = null
+                        showExportRangeDialog = false
+                        showExportClampDialog = false
+                        isPreparingRange = false
                         service = null
                         return
                     }
-                service = typedBinder.service
+                val connectedService = typedBinder.service
+                if (service != null && service !== connectedService) {
+                    rangeSnapshot?.close()
+                    rangeSnapshot = null
+                    pendingExportSnapshot?.close()
+                    pendingExportSnapshot = null
+                    pendingExportRange = null
+                    showExportRangeDialog = false
+                    showExportClampDialog = false
+                    isPreparingRange = false
+                }
+                service = connectedService
                 service?.getState(stateCallback)
             }
 
             override fun onServiceDisconnected(name: ComponentName) {
+                rangeSnapshot?.close()
+                rangeSnapshot = null
+                pendingExportSnapshot?.close()
+                pendingExportSnapshot = null
+                pendingExportRange = null
+                showExportRangeDialog = false
+                showExportClampDialog = false
+                isPreparingRange = false
+                if (isSaving) {
+                    isSaving = false
+                    saveStatus = null
+                    errorMessage = context.getString(R.string.save_failed)
+                }
                 service = null
             }
         }
@@ -226,6 +259,14 @@ fun CaptureScreen(
     val visualizationCallback = remember {
         ReverbService.VisualizationCallback { frame ->
             blobController.submit(frame)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            screenAlive.set(false)
+            rangeSnapshot?.close()
+            pendingExportSnapshot?.close()
         }
     }
 
@@ -245,6 +286,14 @@ fun CaptureScreen(
                 Lifecycle.Event.ON_START -> bindIfNeeded()
 
                 Lifecycle.Event.ON_STOP -> {
+                    rangeSnapshot?.close()
+                    rangeSnapshot = null
+                    pendingExportSnapshot?.close()
+                    pendingExportSnapshot = null
+                    pendingExportRange = null
+                    showExportRangeDialog = false
+                    showExportClampDialog = false
+                    isPreparingRange = false
                     if (bound) {
                         context.unbindService(connection)
                         bound = false
@@ -259,10 +308,15 @@ fun CaptureScreen(
         bindIfNeeded()
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            rangeSnapshot?.close()
+            rangeSnapshot = null
+            pendingExportSnapshot?.close()
+            pendingExportSnapshot = null
             if (bound) {
                 context.unbindService(connection)
                 bound = false
             }
+            service = null
         }
     }
 
@@ -349,9 +403,12 @@ fun CaptureScreen(
                 onProceed = {
                     showExportClampDialog = false
                     val range = pendingExportRange ?: return@ExportClampDialog
+                    val snapshot = pendingExportSnapshot
                     pendingExportRange = null
+                    pendingExportSnapshot = null
                     startExport(
                         context, service, range, scope,
+                        snapshot = snapshot,
                         setSaving = { isSaving = it },
                         onStatus = { saveStatus = it },
                         onError = { errorMessage = it },
@@ -361,122 +418,121 @@ fun CaptureScreen(
                 onDismiss = {
                     showExportClampDialog = false
                     pendingExportRange = null
+                    pendingExportSnapshot?.close()
+                    pendingExportSnapshot = null
                 },
             )
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (isRecording) {
-            val onStopRecording = remember(service, isSaving) {
-                {
-                    val s = service
-                    if (s != null && !isSaving) {
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        isSaving = true
-                        saveStatus = CaptureSaveStatus.Saving(cancellable = false)
-                        s.stopRecording(
-                            SaveResultReceiver(
-                                context = context,
-                                scope = scope,
-                                setSaving = { isSaving = it },
-                                onStatus = { saveStatus = it },
-                                onError = { errorMessage = it },
-                                onSaved = onRecordingSaved,
-                            ),
-                        )
-                    }
+        val onListenToggle = remember(service, isSaving, isListening) {
+            {
+                val s = service
+                if (s != null && !isSaving) {
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    isListening = !isListening
+                    if (isListening) s.enableListening() else s.disableListening()
                 }
             }
-            RecordingOverlay(
-                recordedSeconds = recordedSeconds,
-                isSaving = isSaving,
-                blobController = blobController,
-                visualizerVisible = visualizerVisible,
-                onStopRecording = onStopRecording,
-            )
-        } else {
-            val onListenToggle = remember(service, isSaving, isListening) {
-                {
-                    val s = service
-                    if (s != null && !isSaving) {
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        isListening = !isListening
-                        if (isListening) s.enableListening() else s.disableListening()
-                    }
-                }
-            }
-            val onClearBuffer = remember(isSaving, isRecording) {
-                {
-                    if (!isSaving && !isRecording) {
-                        showClearDialog = true
-                    }
-                }
-            }
-            val handler = remember(service) {
-                { range: ExportRange ->
-                    if (range.warningDurationSeconds != null) {
-                        clampWarningSeconds = range.warningDurationSeconds
-                        pendingExportRange = range
-                        showExportClampDialog = true
-                    } else {
-                        startExport(
-                            context, service, range, scope,
-                            setSaving = { isSaving = it },
-                            onStatus = { saveStatus = it },
-                            onError = { errorMessage = it },
-                            onSaved = onRecordingSaved,
-                        )
-                    }
-                }
-            }
-            val onExportFull = remember(service, isSaving, memorizedSeconds, handler) {
-                {
-                    val s = service
-                    if (s != null && !isSaving) {
-                        val secs = memorizedSeconds.coerceAtLeast(0f)
-                        if (secs > 0f) {
-                            handleExport(context, s, secs, handler)
-                        } else {
-                            AppFeedbackCenter.post(
-                                context.getString(R.string.nothing_to_export),
-                                FeedbackTone.INFO,
-                            )
-                        }
-                    }
-                }
-            }
-            val onExportCustom = remember(isSaving, memorizedSeconds) {
-                {
-                    if (!isSaving) {
-                        val secs = memorizedSeconds.coerceAtLeast(0f)
-                        if (secs > 0f) {
-                            showExportRangeDialog = true
-                        } else {
-                            AppFeedbackCenter.post(
-                                context.getString(R.string.nothing_to_export),
-                                FeedbackTone.INFO,
-                            )
-                        }
-                    }
-                }
-            }
-            MainCaptureContent(
-                memorizedSeconds = memorizedSeconds,
-                isListening = isListening,
-                isRecording = isRecording,
-                isSaving = isSaving,
-                service = service,
-                blobController = blobController,
-                onListenToggle = onListenToggle,
-                onClearBuffer = onClearBuffer,
-                onExportFull = onExportFull,
-                onExportCustom = onExportCustom,
-                showLibraryButton = showLibraryButton,
-                visualizerVisible = visualizerVisible,
-                onOpenLibrary = onOpenLibrary,
-            )
         }
+        val onClearBuffer = remember(isSaving) {
+            {
+                if (!isSaving) {
+                    showClearDialog = true
+                }
+            }
+        }
+        val onExportFull = remember(service, isSaving, isPreparingRange) {
+            {
+                val s = service
+                if (s != null && !isSaving && !isPreparingRange) {
+                    isPreparingRange = true
+                    s.acquireTimelineSnapshot { snapshot ->
+                        isPreparingRange = false
+                        if (!screenAlive.get() || service !== s) {
+                            snapshot?.close()
+                            return@acquireTimelineSnapshot
+                        }
+                        if (snapshot == null || snapshot.durationSeconds <= 0.0) {
+                            snapshot?.close()
+                            AppFeedbackCenter.post(
+                                context.getString(R.string.nothing_to_export),
+                                FeedbackTone.INFO,
+                            )
+                            return@acquireTimelineSnapshot
+                        }
+                        handleExport(context, s, snapshot.durationSeconds.toFloat()) { range ->
+                            if (range.warningDurationSeconds != null) {
+                                clampWarningSeconds = range.warningDurationSeconds
+                                pendingExportRange = range
+                                pendingExportSnapshot?.close()
+                                pendingExportSnapshot = snapshot
+                                showExportClampDialog = true
+                            } else {
+                                startExport(
+                                    context, s, range, scope,
+                                    snapshot = snapshot,
+                                    setSaving = { isSaving = it },
+                                    onStatus = { saveStatus = it },
+                                    onError = { errorMessage = it },
+                                    onSaved = onRecordingSaved,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val onExportCustom = remember(service, isSaving, isPreparingRange, memorizedSeconds) {
+            {
+                if (!isSaving && !isPreparingRange) {
+                    val s = service
+                    if (s != null) {
+                        val secs = memorizedSeconds.coerceAtLeast(0f)
+                        if (secs > 0f) {
+                            isPreparingRange = true
+                            s.acquireTimelineSnapshot { snapshot ->
+                                isPreparingRange = false
+                                if (!screenAlive.get() || service !== s) {
+                                    snapshot?.close()
+                                } else if (snapshot != null && snapshot.durationSeconds > 0.0) {
+                                    rangeSnapshot?.close()
+                                    rangeSnapshot = snapshot
+                                    showExportRangeDialog = true
+                                } else {
+                                    snapshot?.close()
+                                    AppFeedbackCenter.post(
+                                        context.getString(R.string.nothing_to_export),
+                                        FeedbackTone.INFO,
+                                    )
+                                }
+                            }
+                        } else {
+                            AppFeedbackCenter.post(
+                                context.getString(R.string.nothing_to_export),
+                                FeedbackTone.INFO,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        MainCaptureContent(
+            memorizedSeconds = memorizedSeconds,
+            retainedPayloadBytes = retainedPayloadBytes,
+            isListening = isListening,
+            isSaving = isSaving,
+            service = service,
+            blobController = blobController,
+            onListenToggle = onListenToggle,
+            onClearBuffer = onClearBuffer,
+            onExportFull = onExportFull,
+            onExportCustom = onExportCustom,
+            showLibraryButton = showLibraryButton,
+            visualizerVisible = visualizerVisible,
+            onOpenLibrary = onOpenLibrary,
+        )
 
         CaptureSaveStatusCard(
             status = saveStatus,
@@ -499,8 +555,9 @@ fun CaptureScreen(
         }
     }
 
-    if (showExportRangeDialog) {
-        val currentSeconds = memorizedSeconds.coerceAtLeast(0f)
+    val activeRangeSnapshot = rangeSnapshot
+    if (showExportRangeDialog && activeRangeSnapshot != null) {
+        val currentSeconds = activeRangeSnapshot.durationSeconds.toFloat().coerceAtLeast(0f)
         ExportRangeDialog(
             currentBufferSeconds = currentSeconds,
             onExport = { range ->
@@ -508,10 +565,15 @@ fun CaptureScreen(
                 if (range.warningDurationSeconds != null) {
                     clampWarningSeconds = range.warningDurationSeconds
                     pendingExportRange = range
+                    pendingExportSnapshot = rangeSnapshot
+                    rangeSnapshot = null
                     showExportClampDialog = true
                 } else {
+                    val snapshot = rangeSnapshot
+                    rangeSnapshot = null
                     startExport(
                         context, service, range, scope,
+                        snapshot = snapshot,
                         setSaving = { isSaving = it },
                         onStatus = { saveStatus = it },
                         onError = { errorMessage = it },
@@ -519,7 +581,11 @@ fun CaptureScreen(
                     )
                 }
             },
-            onDismiss = { showExportRangeDialog = false },
+            onDismiss = {
+                showExportRangeDialog = false
+                rangeSnapshot?.close()
+                rangeSnapshot = null
+            },
         )
     }
 
@@ -534,8 +600,8 @@ fun CaptureScreen(
 @Composable
 private fun MainCaptureContent(
     memorizedSeconds: Float,
+    retainedPayloadBytes: Long,
     isListening: Boolean,
-    isRecording: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
     blobController: AudioBlobController,
@@ -552,7 +618,8 @@ private fun MainCaptureContent(
 
     val displayedCurrentSeconds = memorizedSeconds.coerceAtLeast(0f).toInt()
     val exportConfig = currentExportConfig(context, service)
-    val currentBytes = remember(exportConfig, displayedCurrentSeconds) {
+    val currentBytes = retainedPayloadBytes.coerceAtLeast(0L)
+    val estimatedExportBytes = remember(exportConfig, displayedCurrentSeconds) {
         estimateExportSizeBytes(
             exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
             exportConfig.channelCount, displayedCurrentSeconds.toLong(),
@@ -560,7 +627,7 @@ private fun MainCaptureContent(
         )
     }
     val exportLimitBytes = remember(exportConfig.format) { exportFileSizeLimitBytes(exportConfig.format) }
-    val overExportLimit = remember(currentBytes, exportLimitBytes) { currentBytes > exportLimitBytes }
+    val overExportLimit = remember(estimatedExportBytes, exportLimitBytes) { estimatedExportBytes > exportLimitBytes }
 
     val timerText = remember(retentionMode, displayedCurrentSeconds, currentBytes) {
         when (retentionMode) {
@@ -580,8 +647,8 @@ private fun MainCaptureContent(
     }
     val serviceReady = service != null
     val hasHistory = memorizedSeconds > 0f
-    val exportBlocked = !serviceReady || isSaving || isRecording || !hasHistory
-    val clearEnabled = serviceReady && !isSaving && !isRecording && hasHistory
+    val exportBlocked = !serviceReady || isSaving || !hasHistory
+    val clearEnabled = serviceReady && !isSaving && hasHistory
 
     Column(
         modifier = Modifier
@@ -598,7 +665,6 @@ private fun MainCaptureContent(
             val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
             AudioBlobControl(
                 isListening = isListening,
-                isRecording = false,
                 isSaving = isSaving,
                 enabled = serviceReady,
                 blobController = blobController,
@@ -714,38 +780,8 @@ private fun CaptureSaveStatusCard(
 }
 
 @Composable
-private fun RecordingOverlay(
-    recordedSeconds: Float,
-    isSaving: Boolean,
-    blobController: AudioBlobController,
-    visualizerVisible: Boolean,
-    onStopRecording: () -> Unit,
-) {
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface),
-        contentAlignment = Alignment.Center,
-    ) {
-        val timerText = remember(recordedSeconds) { formatShortTimer(recordedSeconds) }
-        val blobSize = minOf(maxWidth * 0.88f, maxHeight * 0.76f, 372.dp)
-        AudioBlobControl(
-            isListening = true,
-            isRecording = true,
-            isSaving = isSaving,
-            blobController = blobController,
-            primaryText = timerText,
-            visualizerVisible = visualizerVisible,
-            modifier = Modifier.size(blobSize),
-            onClick = onStopRecording,
-        )
-    }
-}
-
-@Composable
 private fun AudioBlobControl(
     isListening: Boolean,
-    isRecording: Boolean,
     isSaving: Boolean,
     blobController: AudioBlobController,
     enabled: Boolean = true,
@@ -756,7 +792,7 @@ private fun AudioBlobControl(
     modifier: Modifier = Modifier.size(236.dp),
     onClick: () -> Unit,
 ) {
-    val active = isListening || isRecording
+    val active = isListening
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val attachedView = remember { arrayOfNulls<AudioBlobView>(1) }
@@ -768,21 +804,13 @@ private fun AudioBlobControl(
     )
     val colors = MaterialTheme.colorScheme
     val interactionEnabled = enabled && !isSaving
-    val actionIcon = when {
-        isRecording -> R.drawable.ic_stop
-        isListening -> R.drawable.ic_player_pause
-        else -> R.drawable.ic_capture_wave
+    val actionIcon = if (isListening) R.drawable.ic_player_pause else R.drawable.ic_capture_wave
+    val actionDescription = if (isListening) {
+        stringResource(R.string.tap_to_pause_buffer)
+    } else {
+        stringResource(R.string.tap_to_start_buffer)
     }
-    val actionDescription = when {
-        isRecording -> stringResource(R.string.done)
-        isListening -> stringResource(R.string.tap_to_pause_buffer)
-        else -> stringResource(R.string.tap_to_start_buffer)
-    }
-    val contentColor = when {
-        isRecording -> colors.onError
-        active -> colors.onPrimary
-        else -> colors.onSurfaceVariant
-    }
+    val contentColor = if (active) colors.onPrimary else colors.onSurfaceVariant
 
     DisposableEffect(blobController) {
         onDispose {
@@ -816,14 +844,12 @@ private fun AudioBlobControl(
             update = { view ->
                 view.updateState(
                     active = active,
-                    recording = isRecording,
                     enabled = enabled,
                     saving = isSaving,
                     visible = visualizerVisible,
                     primary = colors.primary.toArgb(),
                     tertiary = colors.tertiary.toArgb(),
                     paused = colors.surfaceContainerHighest.toArgb(),
-                    error = colors.error.toArgb(),
                 )
             },
             modifier = Modifier.fillMaxSize(),
@@ -834,7 +860,7 @@ private fun AudioBlobControl(
                 painter = painterResource(actionIcon),
                 contentDescription = actionDescription,
                 tint = contentColor,
-                modifier = Modifier.size(if (isRecording) 36.dp else 38.dp),
+                modifier = Modifier.size(38.dp),
             )
             if (primaryText != null) {
                 Spacer(Modifier.height(10.dp))
@@ -1170,27 +1196,34 @@ private fun startExport(
     service: ReverbService?,
     range: ExportRange,
     scope: CoroutineScope,
+    snapshot: ReverbService.TimelineSnapshot? = null,
     setSaving: (Boolean) -> Unit,
     onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit = {},
     onSaved: () -> Unit = {},
 ) {
-    val recorder = service ?: return
+    val recorder = service ?: run {
+        snapshot?.close()
+        setSaving(false)
+        onStatus(null)
+        onError(context.getString(R.string.save_failed))
+        return
+    }
     setSaving(true)
     onStatus(CaptureSaveStatus.Saving(cancellable = true))
-    recorder.dumpRecordingRange(
-        range.startSeconds,
-        range.endSeconds,
-        SaveResultReceiver(
+    val receiver = SaveResultReceiver(
             context = context,
             scope = scope,
             setSaving = setSaving,
             onStatus = onStatus,
             onError = onError,
             onSaved = onSaved,
-        ),
-        "",
     )
+    if (snapshot != null) {
+        recorder.dumpRecordingRange(snapshot, range.startSeconds, range.endSeconds, receiver, "")
+    } else {
+        recorder.dumpRecordingRange(range.startSeconds, range.endSeconds, receiver, "")
+    }
 }
 
 private fun handleExport(
@@ -1229,11 +1262,13 @@ private class SaveResultReceiver(
 
     override fun fileReady(recording: RecordingEntity) {
         setSaving(false)
-        scope.launch {
+        backgroundRecordingResultScope.launch {
             val saved = runCatching { RecordingRepository.register(appContext, recording) }
                 .getOrDefault(recording)
-            onStatus(CaptureSaveStatus.Saved(saved))
-            onSaved()
+            scope.launch {
+                onStatus(CaptureSaveStatus.Saved(saved))
+                onSaved()
+            }
         }
     }
 

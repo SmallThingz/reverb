@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 private const val WAV_HEADER_BYTES = 44L
-private const val WAV_MAX_EXPORT_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
+private const val WAV_MAX_FILE_BYTES = 0xFFFF_FFFFL
 
 private val STANDARD_SAMPLE_RATES =
     intArrayOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
@@ -247,39 +247,20 @@ fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-/**
- * Consumes the one-time startup battery-optimization prompt.
- *
- * The prompt is intentionally remembered independently of the live system exemption state:
- * users may change that state later, and Reverb should reflect it in Settings without nagging
- * them again on startup.
- *
- * @return true when the one-time prompt should be shown on this launch.
- */
-fun consumeBatteryOptimizationStartupPrompt(context: Context): Boolean {
-    val prefs = getRecorderPreferences(context)
-    if (prefs.getBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, false)) return false
+fun isBatteryOptimizationStartupPromptPending(context: Context): Boolean {
+    return !getRecorderPreferences(context).getBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, false)
+}
 
-    // Commit before exposing the prompt so process death cannot turn a one-time prompt into a
-    // recurring startup interruption.
-    prefs.edit()
+fun markBatteryOptimizationStartupPromptHandled(context: Context) {
+    getRecorderPreferences(context).edit()
         .putBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, true)
-        .commit()
-
-    return !isIgnoringBatteryOptimizations(context)
+        .apply()
 }
 
 fun getConfiguredThemeMode(context: Context): AppThemeMode {
     return AppThemeMode.fromPrefValue(
         getRecorderPreferences(context).getString(PrefKey.THEME_MODE, AppThemeMode.SYSTEM.prefValue),
     )
-}
-
-fun setConfiguredThemeMode(
-    context: Context,
-    mode: AppThemeMode,
-) {
-    getRecorderPreferences(context).edit().putString(PrefKey.THEME_MODE, mode.prefValue).apply()
 }
 
 fun getConfiguredRetentionSeconds(context: Context): Long {
@@ -354,7 +335,7 @@ fun getConfiguredSampleRate(context: Context): Int {
     val prefs = getRecorderPreferences(context)
     if (prefs.contains(PrefKey.SAMPLE_RATE)) {
         val requested = prefs.getInt(PrefKey.SAMPLE_RATE, 0)
-        if (requested > 0) return requested
+        if (requested in STANDARD_SAMPLE_RATES) return requested
     }
     return ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
 }
@@ -373,7 +354,7 @@ fun getConfiguredMemorySizeBytes(
             val configuredSizeBytes = getConfiguredRetentionSizeBytes(context)
             val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
             if (frameBytes <= 0L) 0L else {
-                val rawBudget = (configuredSizeBytes - WAV_HEADER_BYTES).coerceAtLeast(frameBytes)
+                val rawBudget = configuredSizeBytes.coerceAtLeast(frameBytes)
                 (rawBudget / frameBytes) * frameBytes
             }
         }
@@ -508,7 +489,11 @@ fun estimateExportDurationSeconds(
     return ((sizeBytes - WAV_HEADER_BYTES).coerceAtLeast(0L)) / bps
 }
 
-fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_EXPORT_BYTES
+fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_FILE_BYTES
+
+fun exportPayloadLimitBytes(format: ExportFormat): Long {
+    return (exportFileSizeLimitBytes(format) - WAV_HEADER_BYTES).coerceAtLeast(0L)
+}
 
 fun exportDurationLimitSeconds(
     format: ExportFormat,
@@ -628,7 +613,7 @@ fun isInputConfigSupported(
                 .build()
             val routeAccepted = preferredDevice == null || record.setPreferredDevice(preferredDevice)
             routeAccepted && record.state == AudioRecord.STATE_INITIALIZED
-        } catch (_: Throwable) {
+        } catch (_: Exception) {
             false
         } finally {
             runCatching { record?.release() }

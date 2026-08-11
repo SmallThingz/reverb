@@ -37,7 +37,10 @@ interface RecordingDao {
 
     suspend fun deleteByIds(ids: List<String>)
 
-    suspend fun hasMovableRecordings(targetDirectoryId: String): Boolean
+    suspend fun applyChanges(
+        upserts: List<RecordingEntity>,
+        deleteIds: List<String>,
+    )
 }
 
 class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper(
@@ -97,12 +100,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         }
 
         override suspend fun upsert(recording: RecordingEntity) {
-            writableDatabase.insertWithOnConflict(
-                TABLE_RECORDINGS,
-                null,
-                recording.toContentValues(),
-                SQLiteDatabase.CONFLICT_REPLACE,
-            )
+            writableDatabase.upsertRecording(recording)
         }
 
         override suspend fun upsertAll(recordings: List<RecordingEntity>) {
@@ -110,12 +108,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             writableDatabase.beginTransaction()
             try {
                 recordings.forEach { recording ->
-                    writableDatabase.insertWithOnConflict(
-                        TABLE_RECORDINGS,
-                        null,
-                        recording.toContentValues(),
-                        SQLiteDatabase.CONFLICT_REPLACE,
-                    )
+                    writableDatabase.upsertRecording(recording)
                 }
                 writableDatabase.setTransactionSuccessful()
             } finally {
@@ -132,28 +125,36 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             val db = writableDatabase
             db.beginTransaction()
             try {
-                ids.chunked(MAX_DELETE_BIND_ARGS).forEach { batch ->
-                    val placeholders = batch.joinToString(",") { "?" }
-                    db.delete(TABLE_RECORDINGS, "$COLUMN_ID IN ($placeholders)", batch.toTypedArray())
-                }
+                db.deleteIds(ids)
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
             }
         }
 
-        override suspend fun hasMovableRecordings(targetDirectoryId: String): Boolean {
-            return readableDatabase.rawQuery(
-                "SELECT 1 FROM $TABLE_RECORDINGS WHERE $COLUMN_DIRECTORY_ID != ? LIMIT 1",
-                arrayOf(targetDirectoryId),
-            ).use { it.moveToFirst() }
+        override suspend fun applyChanges(
+            upserts: List<RecordingEntity>,
+            deleteIds: List<String>,
+        ) {
+            if (upserts.isEmpty() && deleteIds.isEmpty()) return
+            val db = writableDatabase
+            db.beginTransaction()
+            try {
+                upserts.forEach { recording ->
+                    db.upsertRecording(recording)
+                }
+                db.deleteIds(deleteIds)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
         }
     }
 
     companion object {
         private const val DATABASE_NAME = ReverbConfig.DATABASE_FILE_NAME
+        // Alpha schema mismatches are rebuilt destructively; no migration chain is retained.
         private const val DATABASE_VERSION = 2
-        private const val MAX_DELETE_BIND_ARGS = 500
         internal const val TABLE_RECORDINGS = "recordings"
         internal const val COLUMN_ID = "id"
         internal const val COLUMN_DISPLAY_NAME = "displayName"
@@ -176,6 +177,27 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 instance ?: RecordingDatabase(context).also { instance = it }
             }
         }
+    }
+}
+
+private fun SQLiteDatabase.upsertRecording(recording: RecordingEntity) {
+    val result = insertWithOnConflict(
+        RecordingDatabase.TABLE_RECORDINGS,
+        null,
+        recording.toContentValues(),
+        SQLiteDatabase.CONFLICT_REPLACE,
+    )
+    check(result != -1L) { "Unable to persist recording ${recording.id}" }
+}
+
+private fun SQLiteDatabase.deleteIds(ids: List<String>) {
+    ids.chunked(500).forEach { batch ->
+        val placeholders = batch.joinToString(",") { "?" }
+        delete(
+            RecordingDatabase.TABLE_RECORDINGS,
+            "${RecordingDatabase.COLUMN_ID} IN ($placeholders)",
+            batch.toTypedArray(),
+        )
     }
 }
 
