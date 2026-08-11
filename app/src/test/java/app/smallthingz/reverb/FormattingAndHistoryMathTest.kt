@@ -65,6 +65,28 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun mergeObservedRecording_doesNotRewriteHealthyLastSeenTimestamp() {
+        val existing = RecordingEntity(
+            id = "id",
+            displayName = "clip.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 500L,
+            durationMillis = 1_000L,
+            sizeBytes = 2_000L,
+            codecSummary = "PCM 16-bit",
+            storageType = RecordingStorageType.FILE.name,
+            directoryId = "dir",
+            createdAtMillis = 10L,
+            lastSeenAtMillis = 20L,
+            missingSinceMillis = null,
+        )
+
+        val merged = mergeObservedRecording(existing, existing, nowMillis = 40L)
+
+        assertEquals(existing, merged)
+    }
+
+    @Test
     fun formatShortTimer_handlesMinuteAndHourBoundaries() {
         assertEquals("0:00", formatShortTimer(0f))
         assertEquals("1:05", formatShortTimer(65.9f))
@@ -176,10 +198,10 @@ class FormattingAndHistoryMathTest {
         assertEquals(AudioSourceMode.VOICE_RECOGNITION, AudioSourceMode.defaultMode())
         assertTrue(ordered.indexOf(AudioSourceMode.VOICE_RECOGNITION) < ordered.indexOf(AudioSourceMode.MIC))
         assertTrue(ordered.indexOf(AudioSourceMode.VOICE_COMMUNICATION) < ordered.indexOf(AudioSourceMode.UNPROCESSED))
-        assertTrue(ordered.contains(AudioSourceMode.VOICE_CALL))
-        assertTrue(ordered.contains(AudioSourceMode.VOICE_UPLINK))
-        assertTrue(ordered.contains(AudioSourceMode.VOICE_DOWNLINK))
-        assertTrue(ordered.contains(AudioSourceMode.REMOTE_SUBMIX))
+        assertFalse(ordered.contains(AudioSourceMode.VOICE_CALL))
+        assertFalse(ordered.contains(AudioSourceMode.VOICE_UPLINK))
+        assertFalse(ordered.contains(AudioSourceMode.VOICE_DOWNLINK))
+        assertFalse(ordered.contains(AudioSourceMode.REMOTE_SUBMIX))
     }
 
     @Test

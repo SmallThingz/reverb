@@ -121,5 +121,7 @@ private fun openGithub(context: Context) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPO_URL)))
     } catch (_: ActivityNotFoundException) {
         Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
+    } catch (_: RuntimeException) {
+        Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
     }
 }

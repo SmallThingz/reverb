@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.KeyboardOptions
 import android.view.inputmethod.InputMethodManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -125,7 +126,6 @@ fun SettingsScreen(
     var hasUnsavedChanges by remember { mutableStateOf(false) }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
-    var serviceBound by remember { mutableStateOf(false) }
 
     var capabilityUiReady by remember { mutableStateOf(false) }
     var capabilityRefreshGeneration by remember { mutableIntStateOf(0) }
@@ -380,14 +380,35 @@ fun SettingsScreen(
         }
     }
 
+    fun primeCapabilityPath(preferred: SettingsSnapshot, capabilityContext: Context) {
+        val formats = supportedFormats()
+        val format = preferred.format?.takeIf { it in formats } ?: formats.first()
+        val codecs = supportedCodecs(format)
+        val codec = preferred.codec?.takeIf { it in codecs } ?: codecs.first()
+        val sampleFormat = preferred.sampleFormat
+        val routes = supportedInputRouteModes(capabilityContext)
+        val route = preferred.route?.takeIf { it in routes } ?: routes.first()
+        val sources = supportedAudioSourceModes(capabilityContext, route, format, codec, sampleFormat)
+        val source = preferred.source?.takeIf { it in sources } ?: sources.first()
+        val channels = supportedChannelModes(capabilityContext, source, route, format, codec, sampleFormat)
+        val channel = preferred.channelMode?.takeIf { it in channels } ?: channels.first()
+        supportedSampleRates(capabilityContext, source, route, format, codec, channel, sampleFormat)
+    }
+
     fun refreshCapabilityUiAsync(resetOriginalSnapshot: Boolean) {
         val generation = ++capabilityRefreshGeneration
         val preferred = SettingsSnapshot().also { saveCurrentToSnapshot(it) }
+        val appContext = context.applicationContext
         scope.launch(Dispatchers.Default) {
-            warmRecorderCapabilityCache(context)
+            val primed = runCatching { primeCapabilityPath(preferred, appContext) }.isSuccess
             withContext(Dispatchers.Main) {
                 if (generation != capabilityRefreshGeneration) return@withContext
-                applyResolvedCapabilityUi(preferred, resetOriginalSnapshot)
+                if (primed) {
+                    applyResolvedCapabilityUi(preferred, resetOriginalSnapshot)
+                } else {
+                    capabilityUiReady = true
+                    sampleRateUnsupported = true
+                }
             }
         }
     }
@@ -511,21 +532,18 @@ fun SettingsScreen(
 
         val currentService = service
         if (currentService == null) {
+            saveCurrentToSnapshot(currentSnapshot)
+            originalSnapshot.copyFrom(currentSnapshot)
+            hasUnsavedChanges = false
             if (showFeedback) Toast.makeText(context, R.string.settings_saved_next_start, Toast.LENGTH_SHORT).show()
             return true
         }
 
-        when (currentService.applyUpdatedPreferences()) {
-            ReverbService.ApplySettingsResult.BLOCKED_RECORDING -> {
-                if (showFeedback) {
-                    Toast.makeText(context, R.string.settings_apply_blocked_recording, Toast.LENGTH_SHORT).show()
-                }
-                return false
-            }
-            ReverbService.ApplySettingsResult.APPLIED_NOW -> {
-                if (showFeedback) Toast.makeText(context, R.string.settings_saved, Toast.LENGTH_SHORT).show()
-            }
-        }
+        currentService.applyUpdatedPreferences()
+        saveCurrentToSnapshot(currentSnapshot)
+        originalSnapshot.copyFrom(currentSnapshot)
+        hasUnsavedChanges = false
+        if (showFeedback) Toast.makeText(context, R.string.settings_saved, Toast.LENGTH_SHORT).show()
         return true
     }
 
@@ -542,17 +560,9 @@ fun SettingsScreen(
         val configuredRouteVal = getConfiguredInputRouteMode(context)
         val configuredSourceVal = getConfiguredAudioSourceMode(context)
         val configuredChannelModeVal = getConfiguredChannelMode(context)
-        val configuredRateVal = prefs.getInt(
-            PrefKey.SAMPLE_RATE,
-            getPreferredSampleRate(
-                context, configuredSourceVal, configuredRouteVal,
-                configuredFormat, configuredCodec, configuredChannelModeVal, configuredSampleFormatVal,
-            ),
-        ).takeIf { it > 0 }
-            ?: getPreferredSampleRate(
-                context, configuredSourceVal, configuredRouteVal,
-                configuredFormat, configuredCodec, configuredChannelModeVal, configuredSampleFormatVal,
-            )
+        val configuredRateVal = prefs.getInt(PrefKey.SAMPLE_RATE, ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE)
+            .takeIf { it > 0 }
+            ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
         val configuredExportTreeUriVal = getConfiguredExportTreeUri(context)
 
         activeRetentionMode = configuredMode
@@ -640,15 +650,12 @@ fun SettingsScreen(
                 val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
                     ?: run {
                         service = null
-                        serviceBound = false
                         return
                     }
                 service = typedBinder.service
-                serviceBound = true
             }
             override fun onServiceDisconnected(arg0: ComponentName) {
                 service = null
-                serviceBound = false
             }
         }
     }
@@ -731,6 +738,13 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) { bindUiFromPreferences() }
+
+    BackHandler {
+        if (hasUnsavedChanges) {
+            restorePreviousSettings()
+        }
+        onBack()
+    }
 
     val estimatePrefixVal = remember(selectedFormat) {
         if (selectedFormat.isPcmContainer) {
@@ -914,9 +928,10 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedFormatLabel = label
                             selectedFormat = availableFormats.first { context.getString(it.labelRes) == label }
-                            refreshCodecOptions()
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
+                            capabilityUiReady = false
+                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -931,9 +946,10 @@ fun SettingsScreen(
                             selectedChannelMode = availableChannelModes.first {
                                 context.getString(it.labelRes) == label
                             }
-                            refreshSampleRates()
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
+                            capabilityUiReady = false
+                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -954,10 +970,10 @@ fun SettingsScreen(
                                 selectedSampleFormat = PcmSampleFormat.entries.first {
                                     context.getString(it.labelRes) == label
                                 }
-                                refreshSourceModes(selectedSource, selectedChannelMode, selectedSampleRate)
-                                refreshRetentionFields(preserveActiveInputs = true)
                                 saveCurrentToSnapshot(currentSnapshot)
                                 pushUndoState()
+                                capabilityUiReady = false
+                                refreshCapabilityUiAsync(false)
                             },
                             modifier = Modifier.weight(1f),
                         )
@@ -971,9 +987,10 @@ fun SettingsScreen(
                             onOptionSelected = { label ->
                                 selectedCodecLabel = label
                                 selectedCodec = availableCodecs.first { context.getString(it.labelRes) == label }
-                                refreshSourceModes()
                                 saveCurrentToSnapshot(currentSnapshot)
                                 pushUndoState()
+                                capabilityUiReady = false
+                                refreshCapabilityUiAsync(false)
                             },
                             modifier = Modifier.weight(1f),
                         )
@@ -1022,9 +1039,10 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedSourceLabel = label
                             selectedSource = availableSourceModes.first { context.getString(it.labelRes) == label }
-                            refreshChannelModes()
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
+                            capabilityUiReady = false
+                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1037,9 +1055,10 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedRouteLabel = label
                             selectedRoute = availableRouteModes.first { context.getString(it.labelRes) == label }
-                            refreshCodecOptions()
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
+                            capabilityUiReady = false
+                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )

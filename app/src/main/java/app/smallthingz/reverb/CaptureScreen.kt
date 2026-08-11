@@ -84,19 +84,23 @@ import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 class NotifyFileReceiver(
     private val context: Context,
-    private val scope: CoroutineScope,
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
-        scope.launch(Dispatchers.IO) {
+        backgroundRecordingResultScope.launch {
             val saved = runCatching { RecordingRepository.register(appContext, recording) }
                 .getOrDefault(recording)
             if (
@@ -110,7 +114,7 @@ class NotifyFileReceiver(
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
-        scope.launch(Dispatchers.Main) {
+        backgroundRecordingResultScope.launch(Dispatchers.Main) {
             Toast.makeText(
                 appContext, message.ifBlank { appContext.getString(R.string.save_failed) },
                 Toast.LENGTH_LONG,
@@ -309,14 +313,16 @@ fun CaptureScreen() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            val s = service
-            if (s != null) {
-                s.getState(stateCallback)
-                s.consumePendingError()?.let { errorMessage = it }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                val s = service
+                if (s != null) {
+                    s.getState(stateCallback)
+                    s.consumePendingError()?.let { errorMessage = it }
+                }
+                delay(500)
             }
-            delay(500)
         }
     }
 
@@ -780,6 +786,45 @@ private fun AudioBlobControl(
 }
 
 @Composable
+private fun ErrorDialog(
+    message: String,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(18.dp),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.error),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = stringResource(R.string.close),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        text = {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = {},
+    )
+}
+
+@Composable
 private fun ClearBufferDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -1049,7 +1094,7 @@ private fun startExport(
 ) {
     val s = service ?: return
     setSaving(true)
-    scope.launch {
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
         val result = snackbarHostState.showSnackbar(
             message = context.getString(R.string.saving),
             actionLabel = context.getString(R.string.cancel),
@@ -1129,11 +1174,8 @@ private fun currentExportConfig(context: Context, recorder: ReverbService?): Exp
     val format = activeConfig?.format ?: getConfiguredOutputFormat(context)
     val codec = activeConfig?.codec ?: getConfiguredOutputCodec(context)
     val sampleFormat = activeConfig?.sampleFormat ?: getConfiguredPcmSampleFormat(context)
-    val sourceMode = activeConfig?.sourceMode ?: getConfiguredAudioSourceMode(context)
     val channelMode = activeConfig?.channelMode ?: getConfiguredChannelMode(context)
-    val routeMode = activeConfig?.routeMode ?: getConfiguredInputRouteMode(context)
-    val sampleRate = activeConfig?.sampleRate
-        ?: getConfiguredSampleRate(context, sourceMode, routeMode, format, codec, channelMode)
+    val sampleRate = activeConfig?.sampleRate ?: getConfiguredSampleRate(context)
     return ExportUiConfig(
         format = format,
         codec = codec,

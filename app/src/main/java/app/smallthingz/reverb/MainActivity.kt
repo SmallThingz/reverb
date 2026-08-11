@@ -48,7 +48,6 @@ class MainActivity : ComponentActivity() {
             if (granted) {
                 permissionsGranted = true
                 showPermissionDenied = false
-                scheduleRecorderCapabilityCacheWarm(applicationContext)
                 maybeRequestNotificationPermission()
             } else {
                 showPermissionDenied = true
@@ -103,7 +102,6 @@ class MainActivity : ComponentActivity() {
         if (hasRequiredPermissions()) {
             permissionsGranted = true
             showPermissionDenied = false
-            scheduleRecorderCapabilityCacheWarm(applicationContext)
             maybeRequestNotificationPermission()
             return
         }
@@ -178,9 +176,6 @@ private fun MainScreen(
     var filesSelectionActive by rememberSaveable { mutableStateOf(false) }
     BackHandler(enabled = showFiles && !showSettings) { showFiles = false }
     if (showSettings) {
-        BackHandler {
-            showSettings = false
-        }
         SettingsScreen(
             onBack = { showSettings = false },
             onThemeChanged = onThemeChanged,

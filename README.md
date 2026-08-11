@@ -16,7 +16,7 @@ Forked from `Echo`, now reworked and shipped as `Reverb`.
 - Rolling buffer with disk-backed restore
 - Material audio blob driven live from the recorder, with visualization work disabled when the capture UI is not visible
 - Streamed WAV export without loading the whole history into memory
-- In-app player, rename, share, delete, and move flows
+- In-app player, rename, delete, and move flows
 - Hardware-aware sample format, rate, source, route, and channel selection
 
 ## 📦 App

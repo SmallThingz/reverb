@@ -42,10 +42,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 
 @SuppressLint("ImplicitSamInstance")
 class ReverbService : Service() {
@@ -97,6 +93,8 @@ class ReverbService : Service() {
     @Volatile
     private var activeExportReceiver: AudioFileReceiver? = null
 
+    private val exportStateLock = Any()
+
     @Volatile
     private var cachedRetentionSampleBytes = 0L
 
@@ -107,13 +105,15 @@ class ReverbService : Service() {
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
     @Volatile
+    private var pendingSettingsApply = false
+
+    @Volatile
     private var visualizationCallback: VisualizationCallback? = null
 
     private val captureScratch = ByteArray(CAPTURE_SCRATCH_BYTES)
     private val captureBuffer = ByteBuffer.allocateDirect(CAPTURE_SCRATCH_BYTES)
         .order(ByteOrder.nativeOrder())
     private val visualizationAnalyzer = AudioVisualizationAnalyzer()
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
     private val visualizationDispatchScheduled = AtomicBoolean(false)
@@ -130,10 +130,8 @@ class ReverbService : Service() {
     private val pendingError = AtomicReference<String?>(null)
 
     override fun onCreate() {
-        loadConfiguration()
         persistentAudioRingStore = PersistentAudioRingStore(this)
         createNotificationChannel()
-        refreshCachedBufferSizing()
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -144,18 +142,22 @@ class ReverbService : Service() {
             }
         }
         audioHandler.post {
+            loadConfiguredPreferences()
             configurePersistentBuffer()
-        }
-
-        if (isListeningEnabled()) {
-            innerStartListening()
+            mainHandler.post {
+                if (isListeningEnabled()) {
+                    innerStartListening()
+                }
+            }
         }
     }
 
     override fun onDestroy() {
         visualizationCallback = null
-        activeExportToken?.cancelled?.set(true)
-        activeExportFuture?.cancel(true)
+        pendingVisualizationFrame.set(null)
+        mainHandler.removeCallbacks(visualizationDispatcher)
+        visualizationDispatchScheduled.set(false)
+        cancelCurrentExport()
         flushAndPersistBeforeShutdown()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -166,7 +168,6 @@ class ReverbService : Service() {
         }
         persistentAudioRingStore.close()
         audioThread.quitSafely()
-        serviceScope.coroutineContext[Job]?.cancel()
         super.onDestroy()
     }
 
@@ -232,6 +233,21 @@ class ReverbService : Service() {
         return getRecorderPreferences(this).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
     }
 
+    private fun loadConfiguredPreferences() {
+        sourceMode = getConfiguredAudioSourceMode(this)
+        channelMode = getConfiguredChannelMode(this)
+        inputRouteMode = getConfiguredInputRouteMode(this)
+        outputFormat = getConfiguredOutputFormat(this)
+        outputCodec = getConfiguredOutputCodec(this)
+        pcmSampleFormat = getConfiguredPcmSampleFormat(this)
+        sampleRate = getConfiguredSampleRate(this).takeIf { it > 0 }
+            ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
+        audioSource = sourceMode.sourceValue
+        fillRate = sampleRate * channelMode.channelCount * pcmSampleFormat.bytesPerSample
+        cachedConfigSnapshot = null
+        refreshCachedBufferSizing()
+    }
+
     private fun loadConfiguration() {
         var selectedSourceMode = getConfiguredAudioSourceMode(this)
         var selectedChannelMode = getConfiguredChannelMode(this)
@@ -240,15 +256,7 @@ class ReverbService : Service() {
         var selectedCodec = getConfiguredOutputCodec(this)
         val selectedSampleFormat = getConfiguredPcmSampleFormat(this)
 
-        val requestedRate = getConfiguredSampleRate(
-            this,
-            selectedSourceMode,
-            selectedRouteMode,
-            selectedFormat,
-            selectedCodec,
-            selectedChannelMode,
-            selectedSampleFormat,
-        )
+        val requestedRate = getConfiguredSampleRate(this)
         val resolvedConfig = resolveOperationalConfiguration(
             preferredSourceMode = selectedSourceMode,
             preferredChannelMode = selectedChannelMode,
@@ -401,6 +409,9 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         audioHandler.removeCallbacks(audioReader)
         releaseAudioRecord()
+        // Binding the paused UI should not probe microphone hardware. Resolve the
+        // requested configuration only when capture is actually about to start.
+        loadConfiguration()
         configurePersistentBuffer()
 
         val record = createAudioRecord()
@@ -432,7 +443,7 @@ class ReverbService : Service() {
         }
         audioHandler.post {
             if (state == STATE_RECORDING) {
-                stopRecordingOnAudioThread(NotifyFileReceiver(this@ReverbService, serviceScope))
+                stopRecordingOnAudioThread(NotifyFileReceiver(this@ReverbService))
             }
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
@@ -459,7 +470,7 @@ class ReverbService : Service() {
         }
 
         return try {
-            AudioRecord.Builder()
+            val record = AudioRecord.Builder()
                 .setAudioSource(audioSource)
                 .setAudioFormat(
                     AudioFormat.Builder()
@@ -470,11 +481,16 @@ class ReverbService : Service() {
                 )
                 .setBufferSizeInBytes(maxOf(minBuffer * 2, MIN_AUDIO_RECORD_BUFFER_SIZE))
                 .build()
-                .also { record ->
-                    if (inputRouteMode == InputRouteMode.BUILTIN_MIC) {
-                        findBuiltInMicrophone(this)?.let { record.preferredDevice = it }
-                    }
+            if (inputRouteMode == InputRouteMode.BUILTIN_MIC) {
+                val builtInMic = findBuiltInMicrophone(this)
+                val routeAccepted = builtInMic != null &&
+                    runCatching { record.setPreferredDevice(builtInMic) }.getOrDefault(false)
+                if (!routeAccepted) {
+                    runCatching { record.release() }
+                    return null
                 }
+            }
+            record
         } catch (error: Throwable) {
             Log.e(TAG, "Unable to create AudioRecord", error)
             null
@@ -498,15 +514,21 @@ class ReverbService : Service() {
             notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
             return
         }
+        val exportToken = beginExport(receiver) ?: run {
+            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
+            return
+        }
 
         audioHandler.post {
+            if (!isExportPending(exportToken)) return@post
             flushAudioRecord()
+            if (!isExportPending(exportToken)) return@post
 
             val bytesAvailable = availableBufferedSampleBytes()
             val prependBytes = (memorySeconds * fillRate).toLong()
             val skipBytes = maxOf(0L, bytesAvailable - prependBytes)
             val useBytes = bytesAvailable - skipBytes
-            exportBufferedRange(skipBytes, useBytes, receiver, newFileName)
+            exportBufferedRange(skipBytes, useBytes, receiver, newFileName, exportToken)
         }
     }
 
@@ -520,9 +542,15 @@ class ReverbService : Service() {
             notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
             return
         }
+        val exportToken = beginExport(receiver) ?: run {
+            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
+            return
+        }
 
         audioHandler.post {
+            if (!isExportPending(exportToken)) return@post
             flushAudioRecord()
+            if (!isExportPending(exportToken)) return@post
 
             val bytesAvailable = availableBufferedSampleBytes()
             val boundedStart = startOffsetSeconds.coerceAtLeast(0f)
@@ -530,29 +558,30 @@ class ReverbService : Service() {
             val skipBytes = (boundedStart * fillRate).toLong().coerceAtMost(bytesAvailable)
             val endBytes = (boundedEnd * fillRate).toLong().coerceAtMost(bytesAvailable)
             val useBytes = (endBytes - skipBytes).coerceAtLeast(0L)
-            exportBufferedRange(skipBytes, useBytes, receiver, newFileName)
+            exportBufferedRange(skipBytes, useBytes, receiver, newFileName, exportToken)
         }
     }
 
     fun cancelCurrentExport(): Boolean {
-        while (true) {
-            val token = activeExportToken ?: return false
-            if (activeExportToken !== token) continue
-            val future = activeExportFuture
-            val receiver = activeExportReceiver
+        var receiverToNotify: AudioFileReceiver? = null
+        val cancelled = synchronized(exportStateLock) {
+            val token = activeExportToken ?: return@synchronized false
+            if (token.committed.get()) return@synchronized false
+
             token.cancelled.set(true)
-            if (!token.started.get() && future?.cancel(true) == true) {
-                if (activeExportToken === token) {
-                    activeExportToken = null
-                    activeExportFuture = null
-                    activeExportReceiver = null
-                }
-                notifyReceiverCancelled(receiver)
-                return true
+            val future = activeExportFuture
+            if (!token.started.get() && (future == null || future.cancel(true))) {
+                receiverToNotify = activeExportReceiver
+                clearExportStateLocked(token)
+            } else {
+                future?.cancel(true)
             }
-            future?.cancel(true)
-            return true
+            true
         }
+        if (cancelled && receiverToNotify != null) {
+            notifyReceiverCancelled(receiverToNotify)
+        }
+        return cancelled
     }
 
     private fun exportBufferedRange(
@@ -560,11 +589,9 @@ class ReverbService : Service() {
         useBytes: Long,
         receiver: AudioFileReceiver,
         newFileName: String,
+        exportToken: ExportCancellationToken,
     ) {
-        if (activeExportToken != null) {
-            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
-            return
-        }
+        if (!isExportPending(exportToken)) return
         val bytesAvailable = availableBufferedSampleBytes()
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1).toLong()
         val alignedAvailable = alignDown(bytesAvailable, frameBytes)
@@ -579,6 +606,7 @@ class ReverbService : Service() {
             boundedUse = maxExportSampleBytes
         }
         if (boundedUse <= 0L) {
+            clearExportState(exportToken)
             notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
             return
         }
@@ -590,9 +618,6 @@ class ReverbService : Service() {
         val exportChannelMode = channelMode
         val exportSampleFormat = pcmSampleFormat
         val exportFillRate = fillRate
-        val exportToken = ExportCancellationToken(nextExportTokenId.getAndIncrement())
-        activeExportToken = exportToken
-        activeExportReceiver = receiver
         val exportTask =
             object : FutureTask<Unit>(
                 Callable {
@@ -642,7 +667,10 @@ class ReverbService : Service() {
                         }
                         requireExportedOutput(target)
                         ensureExportNotCancelled(exportToken)
-                        committed = true
+                        committed = markExportCommitted(exportToken)
+                        if (!committed) {
+                            throw InterruptedIOException("Export cancelled")
+                        }
                         notifyReceiver(
                             receiver,
                             buildRecordingEntity(
@@ -684,11 +712,7 @@ class ReverbService : Service() {
                         if (exportToken.cancelled.get() && !committed) {
                             deleteOutputTarget(outTarget)
                         }
-                        if (activeExportToken === exportToken) {
-                            activeExportToken = null
-                            activeExportFuture = null
-                            activeExportReceiver = null
-                        }
+                        clearExportState(exportToken)
                         Thread.interrupted()
                     }
                     Unit
@@ -699,19 +723,67 @@ class ReverbService : Service() {
                     super.run()
                 }
             }
-        activeExportFuture = exportTask
+        val accepted = synchronized(exportStateLock) {
+            if (activeExportToken !== exportToken || exportToken.cancelled.get()) {
+                false
+            } else {
+                activeExportFuture = exportTask
+                true
+            }
+        }
+        if (!accepted) {
+            exportTask.cancel(true)
+            return
+        }
         try {
             exportWorkExecutor.execute(exportTask)
         } catch (e: RejectedExecutionException) {
             exportToken.cancelled.set(true)
-            if (activeExportToken === exportToken) {
-                activeExportToken = null
-                activeExportFuture = null
-                activeExportReceiver = null
-            }
+            clearExportState(exportToken)
             Log.w(TAG, "Export rejected because the service is shutting down", e)
             notifyReceiverFailure(receiver, getString(R.string.save_failed), e)
         }
+    }
+
+    private fun beginExport(receiver: AudioFileReceiver): ExportCancellationToken? =
+        synchronized(exportStateLock) {
+            if (activeExportToken != null) {
+                null
+            } else {
+                ExportCancellationToken(nextExportTokenId.getAndIncrement()).also { token ->
+                    activeExportToken = token
+                    activeExportFuture = null
+                    activeExportReceiver = receiver
+                }
+            }
+        }
+
+    private fun isExportPending(token: ExportCancellationToken): Boolean =
+        synchronized(exportStateLock) {
+            activeExportToken === token && !token.cancelled.get()
+        }
+
+    private fun markExportCommitted(token: ExportCancellationToken): Boolean =
+        synchronized(exportStateLock) {
+            if (activeExportToken !== token || token.cancelled.get()) {
+                false
+            } else {
+                token.committed.set(true)
+                true
+            }
+        }
+
+    private fun clearExportState(token: ExportCancellationToken) {
+        synchronized(exportStateLock) {
+            clearExportStateLocked(token)
+        }
+    }
+
+    private fun clearExportStateLocked(token: ExportCancellationToken) {
+        if (activeExportToken !== token) return
+        activeExportToken = null
+        activeExportFuture = null
+        activeExportReceiver = null
     }
 
     fun startRecording(prependedMemorySeconds: Float) {
@@ -750,6 +822,7 @@ class ReverbService : Service() {
                 updateWakeLockState()
             } catch (e: Exception) {
                 Log.e(TAG, "Unable to create recording output", e)
+                deleteOutputTarget(recordingTarget)
                 recordingTarget = null
                 audioFileWriter = null
                 showToast(userFacingError(getString(R.string.cant_create_file_generic), e))
@@ -776,107 +849,82 @@ class ReverbService : Service() {
         }
     }
 
-    fun getMemorySize(): Long = cachedRetentionSampleBytes
-
-    fun setMemorySize(memorySize: Long) {
-        getRecorderPreferences(this).edit()
-            .putInt(PrefKey.RETENTION_MODE, RetentionMode.SIZE.ordinal)
-            .putLong(PrefKey.AUDIO_MEMORY_SIZE, memorySize.coerceAtLeast(1L))
-            .apply()
-        reloadConfiguration()
-    }
-
-    fun getSamplingRate(): Int = sampleRate
-
     fun isRecordingActive(): Boolean = state == STATE_RECORDING
-
-    fun setSampleRate(sampleRate: Int) {
-        getRecorderPreferences(this).edit()
-            .putInt(PrefKey.SAMPLE_RATE, sampleRate)
-            .apply()
-        reloadConfiguration()
-    }
 
     fun applyUpdatedPreferences(): ApplySettingsResult {
         if (state == STATE_RECORDING) {
-            return ApplySettingsResult.BLOCKED_RECORDING
+            pendingSettingsApply = true
+            return ApplySettingsResult.DEFERRED_UNTIL_RECORDING_STOPS
         }
+        audioHandler.post { applyConfiguredPreferencesOnAudioThread() }
+        return ApplySettingsResult.APPLIED_NOW
+    }
 
+    private fun applyConfiguredPreferencesOnAudioThread() {
+        check(audioHandler.looper == Looper.myLooper())
+        if (state == STATE_RECORDING) {
+            pendingSettingsApply = true
+            return
+        }
+        pendingSettingsApply = false
         val newSourceMode = getConfiguredAudioSourceMode(this)
         val newChannelMode = getConfiguredChannelMode(this)
         val newRouteMode = getConfiguredInputRouteMode(this)
         val newFormat = getConfiguredOutputFormat(this)
         val newCodec = getConfiguredOutputCodec(this)
         val newSampleFormat = getConfiguredPcmSampleFormat(this)
-        val newSampleRate = resolveOperationalSampleRate(
-            this,
-            getConfiguredSampleRate(
-                this, newSourceMode, newRouteMode, newFormat, newCodec, newChannelMode, newSampleFormat,
-            ),
-            newSourceMode,
-            newRouteMode,
-            newFormat,
-            newCodec,
-            newChannelMode,
-            newSampleFormat,
-        )
         val captureConfigChanged =
             newSourceMode != sourceMode ||
                 newChannelMode != channelMode ||
                 newRouteMode != inputRouteMode ||
-                newSampleRate != sampleRate ||
+                newFormat != outputFormat ||
+                newCodec != outputCodec ||
+                getConfiguredSampleRate(this) != sampleRate ||
                 newSampleFormat != pcmSampleFormat
         val restartInput = state == STATE_LISTENING && isListeningEnabled() && captureConfigChanged
+
+        if (restartInput) {
+            audioHandler.removeCallbacks(audioReader)
+            persistentAudioRingStore.checkpoint()
+            releaseAudioRecord()
+        }
+        if (restartInput) {
+            startAudioInputOnAudioThread()
+        } else {
+            loadConfiguredPreferences()
+            configurePersistentBuffer()
+        }
         updateWakeLockState()
-
-        audioHandler.post {
-            if (restartInput) {
-                audioHandler.removeCallbacks(audioReader)
-                persistentAudioRingStore.checkpoint()
-                releaseAudioRecord()
-            }
-            loadConfiguration()
-            if (restartInput) {
-                startAudioInputOnAudioThread()
-            } else {
-                configurePersistentBuffer()
-                updateWakeLockState()
-            }
-        }
-        return ApplySettingsResult.APPLIED_NOW
-    }
-
-    fun reloadConfiguration(): Boolean {
-        if (state == STATE_RECORDING) return false
-        val restartInput = state == STATE_LISTENING && isListeningEnabled()
-        audioHandler.post {
-            if (restartInput) {
-                audioHandler.removeCallbacks(audioReader)
-                persistentAudioRingStore.checkpoint()
-                releaseAudioRecord()
-            }
-            loadConfiguration()
-            if (restartInput) {
-                startAudioInputOnAudioThread()
-            } else {
-                configurePersistentBuffer()
-                updateWakeLockState()
-            }
-        }
-        return true
     }
 
     fun stopRecording(receiver: AudioFileReceiver?) {
-        audioHandler.post { stopRecordingOnAudioThread(receiver) }
+        audioHandler.post {
+            stopRecordingOnAudioThread(receiver)
+            if (pendingSettingsApply && state != STATE_RECORDING) {
+                applyConfiguredPreferencesOnAudioThread()
+            }
+        }
     }
 
-    private fun stopRecordingOnAudioThread(receiver: AudioFileReceiver?) {
+    private fun stopRecordingOnAudioThread(
+        receiver: AudioFileReceiver?,
+        flushInput: Boolean = true,
+    ) {
         check(audioHandler.looper == Looper.myLooper())
-        if (state != STATE_RECORDING) return
+        if (state != STATE_RECORDING) {
+            notifyReceiverCancelled(receiver)
+            return
+        }
+
+        if (flushInput) {
+            flushAudioRecord()
+            // A read/write failure during the final drain may have already finalized
+            // or failed this recording. Do not touch the detached writer again.
+            if (state != STATE_RECORDING) return
+        }
 
         state = STATE_LISTENING
         updateWakeLockState()
-        flushAudioRecord()
 
         val writer = audioFileWriter
         val target = recordingTarget
@@ -1054,9 +1102,13 @@ class ReverbService : Service() {
     private fun readCaptureIntoScratch(): Int {
         val currentRecord = audioRecord ?: return 0
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
-        val requestedBytes = captureScratch.size - (captureScratch.size % frameBytes)
+        val targetFrames = maxOf(1L, sampleRate.toLong() * CAPTURE_READ_TARGET_MILLIS / 1000L)
+        val requestedBytes = minOf(
+            captureScratch.size.toLong(),
+            targetFrames * frameBytes.toLong(),
+        ).toInt().let { it - it % frameBytes }
         captureBuffer.clear()
-        val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_NON_BLOCKING)
+        val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
         if (read == AudioRecord.ERROR_DEAD_OBJECT) {
             if (!restartAudioRecordOnAudioThread()) {
                 throw IOException("Audio input disconnected")
@@ -1067,15 +1119,16 @@ class ReverbService : Service() {
             throw IOException("AudioRecord read failed: $read")
         }
 
-        if (read > 0) {
+        val alignedRead = read - read % frameBytes
+        if (alignedRead > 0) {
             captureBuffer.position(0)
-            captureBuffer.limit(read)
-            captureBuffer.get(captureScratch, 0, read)
-            publishVisualization(captureScratch, 0, read)
+            captureBuffer.limit(alignedRead)
+            captureBuffer.get(captureScratch, 0, alignedRead)
+            publishVisualization(captureScratch, 0, alignedRead)
             persistentAudioRingStore.append(
                 array = captureScratch,
                 offset = 0,
-                count = read,
+                count = alignedRead,
                 requestedCapacityBytes = cachedPersistentPcmSizeBytes,
                 requestedSampleRate = sampleRate,
                 requestedChannelCount = channelMode.channelCount,
@@ -1084,7 +1137,7 @@ class ReverbService : Service() {
             val writer = audioFileWriter
             if (writer != null) {
                 try {
-                    writer.write(captureScratch, 0, read)
+                    writer.write(captureScratch, 0, alignedRead)
                 } catch (error: Exception) {
                     Log.e(TAG, "Live recording write failed", error)
                     failActiveRecordingOnAudioThread(error)
@@ -1094,19 +1147,10 @@ class ReverbService : Service() {
 
         if (state != STATE_LISTENING && state != STATE_RECORDING) return read
         if (audioRecord !== currentRecord) return read
-        if (read == requestedBytes) {
+        if (read > 0) {
             audioHandler.post(audioReader)
         } else {
-            val bufferSizeInSeconds = currentRecord.bufferSizeInFrames / maxOf(sampleRate, 1).toFloat()
-            val delaySeconds = (bufferSizeInSeconds - 1f)
-                .coerceIn(bufferSizeInSeconds * 0.5f, bufferSizeInSeconds * 0.9f)
-            val normalDelayMillis = (delaySeconds * 1000f).toLong()
-            val delayMillis = if (visualizationCallback != null) {
-                minOf(normalDelayMillis, VISUALIZATION_CAPTURE_INTERVAL_MILLIS)
-            } else {
-                normalDelayMillis
-            }
-            audioHandler.postDelayed(audioReader, delayMillis)
+            audioHandler.postDelayed(audioReader, EMPTY_READ_RETRY_MILLIS)
         }
         return read
     }
@@ -1149,7 +1193,14 @@ class ReverbService : Service() {
 
     private fun failListeningOnAudioThread(message: String, error: Throwable?) {
         check(audioHandler.looper == Looper.myLooper())
-        failActiveRecordingOnAudioThread(null)
+        if (state == STATE_RECORDING) {
+            // The input path failed, not the output writer. Preserve any valid audio
+            // already written instead of deleting the whole in-progress recording.
+            stopRecordingOnAudioThread(
+                NotifyFileReceiver(this@ReverbService),
+                flushInput = false,
+            )
+        }
         getRecorderPreferences(this).edit()
             .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             .apply()
@@ -1265,8 +1316,11 @@ class ReverbService : Service() {
     fun hasBufferedAudio(): Boolean = availableBufferedSampleBytes() > 0L
 
     fun clearBuffer() {
-        if (state == STATE_RECORDING) return
-        audioHandler.post { persistentAudioRingStore.clear() }
+        audioHandler.post {
+            if (state != STATE_RECORDING) {
+                persistentAudioRingStore.clear()
+            }
+        }
     }
 
     private val bytesToSeconds: Float
@@ -1282,6 +1336,15 @@ class ReverbService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        // A platform sticky restart reaches onStartCommand before the audio-thread
+        // initialization posted from onCreate has finished. Restore the logical
+        // listening state immediately so the foreground-service deadline is met;
+        // the queued audio work remains ordered behind initial configuration.
+        if (state != STATE_LISTENING && state != STATE_RECORDING && isListeningEnabled()) {
+            state = STATE_LISTENING
+            updateWakeLockState()
+            audioHandler.post { startAudioInputOnAudioThread() }
+        }
         if (state == STATE_LISTENING || state == STATE_RECORDING) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -1309,11 +1372,11 @@ class ReverbService : Service() {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        return NotificationCompat.Builder(this, BACKGROUND_NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setSmallIcon(R.drawable.ic_notification_recording)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
     }
@@ -1348,14 +1411,9 @@ class ReverbService : Service() {
         runOnAudioThreadAndWait {
             audioHandler.removeCallbacks(audioReader)
             if (state == STATE_RECORDING) {
-                flushAudioRecord()
-                audioHandler.removeCallbacks(audioReader)
-                val writer = audioFileWriter
-                audioFileWriter = null
-                recordingTarget = null
-                runCatching { writer?.close() }
-                    .onFailure { Log.e(TAG, "Error while closing recording file during shutdown", it) }
+                stopRecordingOnAudioThread(receiver = null)
             }
+            audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             persistentAudioRingStore.checkpoint()
             releaseAudioRecord()
@@ -1438,7 +1496,7 @@ class ReverbService : Service() {
             return
         }
         Log.d(TAG, "exportDebug seconds=$seconds available=${availableBufferedSampleBytes()}")
-        dumpRecording(seconds, NotifyFileReceiver(this, serviceScope), "")
+        dumpRecording(seconds, NotifyFileReceiver(this), "")
     }
 
     private fun injectDebugBuffer(seconds: Float) {
@@ -1528,9 +1586,9 @@ class ReverbService : Service() {
         val notificationManager = getSystemService(NotificationManager::class.java) ?: return
         notificationManager.createNotificationChannel(
             NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
+                BACKGROUND_NOTIFICATION_CHANNEL_ID,
                 getString(R.string.app_name),
-                NotificationManager.IMPORTANCE_DEFAULT,
+                NotificationManager.IMPORTANCE_LOW,
             ),
         )
     }
@@ -1625,20 +1683,23 @@ class ReverbService : Service() {
         // `started` flips in FutureTask.run() before any export work begins so queued
         // cancellations can be completed synchronously without racing the worker body.
         val started: AtomicBoolean = AtomicBoolean(false),
+        val committed: AtomicBoolean = AtomicBoolean(false),
     )
 
     enum class ApplySettingsResult {
         APPLIED_NOW,
-        BLOCKED_RECORDING,
+        DEFERRED_UNTIL_RECORDING_STOPS,
     }
 
     companion object {
         val TAG: String = ReverbService::class.java.simpleName
         const val NOTIFICATION_CHANNEL_ID = "ReverbRecorderChannel"
+        const val BACKGROUND_NOTIFICATION_CHANNEL_ID = "ReverbBackgroundRecorderChannel"
         const val FOREGROUND_NOTIFICATION_ID = 458
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
-        const val CAPTURE_SCRATCH_BYTES = 64 * 1024
-        const val VISUALIZATION_CAPTURE_INTERVAL_MILLIS = 100L
+        const val CAPTURE_SCRATCH_BYTES = 256 * 1024
+        const val CAPTURE_READ_TARGET_MILLIS = 160L
+        const val EMPTY_READ_RETRY_MILLIS = 20L
         const val VISUALIZATION_ANALYSIS_INTERVAL_NANOS = 90_000_000L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX

@@ -51,6 +51,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,6 +88,8 @@ private sealed class ListItem {
     ) : ListItem()
 }
 
+private val recordingCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 @Composable
 fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
@@ -95,6 +98,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
 
     var recordings by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var refreshGeneration by remember { mutableIntStateOf(0) }
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
     val pendingDeletions = remember { mutableStateMapOf<String, RecordingEntity>() }
@@ -107,19 +111,23 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     var playerRecording by remember { mutableStateOf<RecordingEntity?>(null) }
 
     fun refresh() {
+        val generation = ++refreshGeneration
         isRefreshing = true
         scope.launch {
             try {
                 val stored = RecordingRepository.refresh(context)
+                if (generation != refreshGeneration) return@launch
                 recordings = stored
                 val storedIds = stored.mapTo(mutableSetOf()) { it.id }
                 pendingDeletions.keys.toList().forEach { id ->
                     if (id !in storedIds) pendingDeletions.remove(id)
                 }
             } catch (_: Exception) {
-                Toast.makeText(context, R.string.recordings_refresh_failed, Toast.LENGTH_SHORT).show()
+                if (generation == refreshGeneration) {
+                    Toast.makeText(context, R.string.recordings_refresh_failed, Toast.LENGTH_SHORT).show()
+                }
             } finally {
-                isRefreshing = false
+                if (generation == refreshGeneration) isRefreshing = false
             }
         }
     }
@@ -160,10 +168,11 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (pendingDeletions.isNotEmpty()) {
                 val pending = pendingDeletions.values.toList()
+                val appContext = context.applicationContext
                 pendingDeletions.clear()
-                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                recordingCleanupScope.launch {
                     pending.forEach {
-                        runCatching { RecordingRepository.delete(context.applicationContext, it) }
+                        runCatching { RecordingRepository.delete(appContext, it) }
                     }
                 }
             }
@@ -388,6 +397,8 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
                     try {
                         context.startActivity(buildOpenRecordingIntent(context, currentRecording))
                     } catch (_: ActivityNotFoundException) {
+                        Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
+                    } catch (_: RuntimeException) {
                         Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
                     }
                 },

@@ -130,8 +130,17 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
 
         override suspend fun deleteByIds(ids: List<String>) {
             if (ids.isEmpty()) return
-            val placeholders = ids.joinToString(",") { "?" }
-            writableDatabase.delete(TABLE_RECORDINGS, "$COLUMN_ID IN ($placeholders)", ids.toTypedArray())
+            val db = writableDatabase
+            db.beginTransaction()
+            try {
+                ids.chunked(MAX_DELETE_BIND_ARGS).forEach { batch ->
+                    val placeholders = batch.joinToString(",") { "?" }
+                    db.delete(TABLE_RECORDINGS, "$COLUMN_ID IN ($placeholders)", batch.toTypedArray())
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
         }
 
         override suspend fun hasMovableRecordings(targetDirectoryId: String): Boolean {
@@ -145,6 +154,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
     companion object {
         private const val DATABASE_NAME = ReverbConfig.DATABASE_FILE_NAME
         private const val DATABASE_VERSION = 2
+        private const val MAX_DELETE_BIND_ARGS = 500
         internal const val TABLE_RECORDINGS = "recordings"
         internal const val COLUMN_ID = "id"
         internal const val COLUMN_DISPLAY_NAME = "displayName"

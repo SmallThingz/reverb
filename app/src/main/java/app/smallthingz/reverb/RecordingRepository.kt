@@ -14,6 +14,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 syncConfiguredDirectory(context)
+                pruneMissingLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
                 RecordingDatabase.getInstance(context).recordingDao().listAll()
             }
         }
@@ -60,6 +61,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val renamed = renameRecordingAsset(context, recording, requestedBaseName) ?: return@withLock null
+                if (renamed == recording) return@withLock recording
                 RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id)
                 RecordingDatabase.getInstance(context).recordingDao().upsert(renamed)
                 renamed
@@ -82,7 +84,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 syncConfiguredDirectory(context)
-                pruneMissingLocked(context)
+                pruneMissingLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
                 RecordingDatabase.getInstance(context).recordingDao().hasMovableRecordings(targetDirectoryId)
             }
         }
@@ -145,14 +147,15 @@ object RecordingRepository {
     private suspend fun syncConfiguredDirectory(context: Context) {
         val dao = RecordingDatabase.getInstance(context).recordingDao()
         val currentDirectoryId = getConfiguredOutputDirectoryId(context)
-        val imported = listCurrentOutputDirectoryRecordings(context)
         val existing = dao.listByDirectory(currentDirectoryId)
-        val nowMillis = System.currentTimeMillis()
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
+        val imported = listCurrentOutputDirectoryRecordings(context, existingById)
+        val nowMillis = System.currentTimeMillis()
         val importedPresent = imported.map { mergeObservedRecording(existingById[it.id], it, nowMillis) }
         val importedIds = HashSet<String>(importedPresent.size)
         importedPresent.mapTo(importedIds) { it.id }
+        val importedUpdates = importedPresent.filter { existingById[it.id] != it }
         val updates = mutableListOf<RecordingEntity>()
         val staleIds = mutableListOf<String>()
 
@@ -174,8 +177,8 @@ object RecordingRepository {
                 }
             }
 
-        if (importedPresent.isNotEmpty()) {
-            dao.upsertAll(importedPresent)
+        if (importedUpdates.isNotEmpty()) {
+            dao.upsertAll(importedUpdates)
         }
         if (updates.isNotEmpty()) {
             dao.upsertAll(updates)
@@ -185,13 +188,17 @@ object RecordingRepository {
         }
     }
 
-    private suspend fun pruneMissingLocked(context: Context): Int {
+    private suspend fun pruneMissingLocked(
+        context: Context,
+        skipDirectoryId: String? = null,
+    ): Int {
         val dao = RecordingDatabase.getInstance(context).recordingDao()
         val all = dao.listAll()
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
         val missingIds = mutableListOf<String>()
         all.forEach { recording ->
+            if (recording.directoryId == skipDirectoryId) return@forEach
             val updated =
                 if (recordingExists(context, recording)) {
                     markRecordingPresent(recording, nowMillis)
@@ -226,7 +233,11 @@ internal fun mergeObservedRecording(
 ): RecordingEntity {
     return observed.copy(
         createdAtMillis = existing?.createdAtMillis ?: observed.createdAtMillis,
-        lastSeenAtMillis = nowMillis,
+        lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null) {
+            nowMillis
+        } else {
+            existing.lastSeenAtMillis
+        },
         missingSinceMillis = null,
     )
 }
@@ -235,7 +246,7 @@ internal fun markRecordingPresent(
     recording: RecordingEntity,
     nowMillis: Long,
 ): RecordingEntity {
-    return if (recording.lastSeenAtMillis == nowMillis && recording.missingSinceMillis == null) {
+    return if (recording.missingSinceMillis == null) {
         recording
     } else {
         recording.copy(

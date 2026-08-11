@@ -12,35 +12,21 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.PowerManager
 import androidx.annotation.StringRes
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 private const val WAV_HEADER_BYTES = 44L
 private const val WAV_MAX_EXPORT_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
-private const val CAPABILITY_WARM_THREAD_NAME = "reverb-capability-warm"
 
 private val STANDARD_SAMPLE_RATES =
     intArrayOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
+private val CAPABILITY_PROBE_SAMPLE_RATES =
+    intArrayOf(44_100, 48_000, 32_000, 96_000, 24_000, 16_000, 8_000, 88_200, 64_000, 22_050, 12_000, 11_025, 7_350)
 private val codecSupportCache = ConcurrentHashMap<CodecSupportKey, Boolean>()
 private val inputConfigCache = ConcurrentHashMap<InputConfigKey, Boolean>()
-private val sampleRatesCache = ConcurrentHashMap<SampleRatesKey, List<Int>>()
-private val sourceModesCache = ConcurrentHashMap<SourceModesKey, List<AudioSourceMode>>()
-private val channelModesCache = ConcurrentHashMap<ChannelModesKey, List<ChannelMode>>()
-private val capabilityWarmLock = Any()
-private val capabilityWarmExecutor = Executors.newSingleThreadExecutor { runnable ->
-    Thread(runnable, CAPABILITY_WARM_THREAD_NAME).apply {
-        isDaemon = true
-        priority = Thread.MIN_PRIORITY
-    }
-}
-private val capabilityWarmScheduled = AtomicBoolean(false)
-
-@Volatile
-private var capabilityCacheWarm = false
 
 private data class CodecSupportKey(
     val format: ExportFormat,
@@ -55,34 +41,6 @@ private data class InputConfigKey(
     val routeMode: InputRouteMode,
     val channelMode: ChannelMode,
     val sampleFormat: PcmSampleFormat,
-    val hasBuiltInMic: Boolean,
-)
-
-private data class SampleRatesKey(
-    val sourceMode: AudioSourceMode,
-    val routeMode: InputRouteMode,
-    val format: ExportFormat,
-    val codec: ExportCodec,
-    val channelMode: ChannelMode,
-    val sampleFormat: PcmSampleFormat,
-    val hasBuiltInMic: Boolean,
-)
-
-private data class SourceModesKey(
-    val routeMode: InputRouteMode,
-    val format: ExportFormat,
-    val codec: ExportCodec,
-    val sampleFormat: PcmSampleFormat,
-    val hasBuiltInMic: Boolean,
-)
-
-private data class ChannelModesKey(
-    val sourceMode: AudioSourceMode,
-    val routeMode: InputRouteMode,
-    val format: ExportFormat,
-    val codec: ExportCodec,
-    val sampleFormat: PcmSampleFormat,
-    val hasBuiltInMic: Boolean,
 )
 
 private inline fun <K : Any, V : Any> ConcurrentHashMap<K, V>.cached(
@@ -200,8 +158,14 @@ enum class AudioSourceMode(
 
         fun fromSourceValue(value: Int): AudioSourceMode = bySourceValue[value] ?: defaultMode()
 
-        fun availableModes(): List<AudioSourceMode> = preferredOrder
+        fun availableModes(): List<AudioSourceMode> = preferredOrder.filter { mode ->
+            !mode.requiresPrivilegedCapturePermission &&
+                (mode != VOICE_PERFORMANCE || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+        }
     }
+
+    private val requiresPrivilegedCapturePermission: Boolean
+        get() = this == VOICE_CALL || this == VOICE_UPLINK || this == VOICE_DOWNLINK || this == REMOTE_SUBMIX
 }
 
 enum class InputRouteMode(@param:StringRes @field:StringRes val labelRes: Int) {
@@ -366,21 +330,13 @@ fun getConfiguredChannelMode(context: Context): ChannelMode {
     )
 }
 
-fun getConfiguredSampleRate(
-    context: Context,
-    sourceMode: AudioSourceMode = getConfiguredAudioSourceMode(context),
-    routeMode: InputRouteMode = getConfiguredInputRouteMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    channelMode: ChannelMode = getConfiguredChannelMode(context),
-    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
-): Int {
+fun getConfiguredSampleRate(context: Context): Int {
     val prefs = getRecorderPreferences(context)
     if (prefs.contains(PrefKey.SAMPLE_RATE)) {
         val requested = prefs.getInt(PrefKey.SAMPLE_RATE, 0)
         if (requested > 0) return requested
     }
-    return getPreferredSampleRate(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
+    return ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
 }
 
 fun getConfiguredMemorySizeBytes(
@@ -562,42 +518,10 @@ fun supportedSampleRates(
     channelMode: ChannelMode,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<Int> {
-    val key = SampleRatesKey(
-        sourceMode = sourceMode,
-        routeMode = routeMode,
-        format = format,
-        codec = codec,
-        channelMode = channelMode,
-        sampleFormat = sampleFormat,
-        hasBuiltInMic = hasBuiltInMicrophone(context),
-    )
-    return sampleRatesCache.cached(key) {
-        standardSampleRates().filter { sampleRate ->
-            isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat) &&
-                isCodecSupported(format, codec, sampleRate, channelMode)
-        }
+    return standardSampleRates().filter { sampleRate ->
+        isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat) &&
+            isCodecSupported(format, codec, sampleRate, channelMode)
     }
-}
-
-fun getPreferredSampleRate(
-    context: Context,
-    sourceMode: AudioSourceMode,
-    routeMode: InputRouteMode,
-    format: ExportFormat,
-    codec: ExportCodec,
-    channelMode: ChannelMode,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): Int {
-    val supported = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
-    if (supported.isNotEmpty()) {
-        return orderSampleRatesByPreference(supported, ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE).first()
-    }
-    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    val nativeRate = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull()
-    return nativeRate?.takeIf { it > 0 }
-        ?: orderSampleRatesByPreference(
-            standardSampleRates(), ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE,
-        ).first()
 }
 
 fun resolveOperationalSampleRate(
@@ -610,6 +534,12 @@ fun resolveOperationalSampleRate(
     channelMode: ChannelMode,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Int {
+    if (requestedRate > 0 &&
+        isCodecSupported(format, codec, requestedRate, channelMode) &&
+        isInputConfigSupported(context, requestedRate, sourceMode, routeMode, channelMode, sampleFormat)
+    ) {
+        return requestedRate
+    }
     val advertised = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
     val operationalCandidates = buildList {
         addAll(advertised)
@@ -630,20 +560,11 @@ fun supportedAudioSourceModes(
     codec: ExportCodec,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<AudioSourceMode> {
-    val key = SourceModesKey(
-        routeMode = routeMode,
-        format = format,
-        codec = codec,
-        sampleFormat = sampleFormat,
-        hasBuiltInMic = hasBuiltInMicrophone(context),
-    )
-    val modes = sourceModesCache.cached(key) {
-        AudioSourceMode.availableModes().filter { sourceMode ->
-            ChannelMode.entries.any { channelMode ->
-                supportedSampleRates(
-                    context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
-                ).isNotEmpty()
-            }
+    val modes = AudioSourceMode.availableModes().filter { sourceMode ->
+        ChannelMode.entries.any { channelMode ->
+            hasAnySupportedSampleRate(
+                context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
+            )
         }
     }
     return if (modes.isNotEmpty()) modes else listOf(AudioSourceMode.defaultMode())
@@ -657,20 +578,10 @@ fun supportedChannelModes(
     codec: ExportCodec,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<ChannelMode> {
-    val key = ChannelModesKey(
-        sourceMode = sourceMode,
-        routeMode = routeMode,
-        format = format,
-        codec = codec,
-        sampleFormat = sampleFormat,
-        hasBuiltInMic = hasBuiltInMicrophone(context),
-    )
-    val modes = channelModesCache.cached(key) {
-        ChannelMode.entries.filter { channelMode ->
-            supportedSampleRates(
-                context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
-            ).isNotEmpty()
-        }
+    val modes = ChannelMode.entries.filter { channelMode ->
+        hasAnySupportedSampleRate(
+            context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
+        )
     }
     return if (modes.isNotEmpty()) modes else listOf(ChannelMode.MONO)
 }
@@ -694,11 +605,11 @@ fun sampleRateLabel(sampleRate: Int): String {
 
 fun hasBuiltInMicrophone(context: Context): Boolean = findBuiltInMicrophone(context) != null
 
-fun findBuiltInMicrophone(context: Context): AudioDeviceInfo? {
+fun findBuiltInMicrophone(context: Context): AudioDeviceInfo? = runCatching {
     val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+    audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
         .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
-}
+}.getOrNull()
 
 fun isInputConfigSupported(
     context: Context,
@@ -717,25 +628,26 @@ fun isInputConfigSupported(
         routeMode = routeMode,
         channelMode = channelMode,
         sampleFormat = sampleFormat,
-        hasBuiltInMic = hasBuiltInMicrophone(context),
     )
-    return inputConfigCache.cached(key) {
+    if (inputConfigCache[key] == true) return true
+    val supported = run {
         val minBuffer = AudioRecord.getMinBufferSize(
             sampleRate,
             channelMode.inputChannelMask,
             sampleFormat.audioEncoding,
         )
         if (minBuffer <= 0) {
-            return@cached false
+            return@run false
         }
 
         val preferredDevice = if (routeMode == InputRouteMode.BUILTIN_MIC) findBuiltInMicrophone(context) else null
         if (routeMode == InputRouteMode.BUILTIN_MIC && preferredDevice == null) {
-            return@cached false
+            return@run false
         }
 
+        var record: AudioRecord? = null
         try {
-            val record = AudioRecord.Builder()
+            record = AudioRecord.Builder()
                 .setAudioSource(sourceMode.sourceValue)
                 .setAudioFormat(
                     AudioFormat.Builder()
@@ -746,16 +658,16 @@ fun isInputConfigSupported(
                 )
                 .setBufferSizeInBytes(max(minBuffer * 2, 16 * 1024))
                 .build()
-            if (preferredDevice != null) {
-                record.preferredDevice = preferredDevice
-            }
-            val initialized = record.state == AudioRecord.STATE_INITIALIZED
-            record.release()
-            initialized
+            val routeAccepted = preferredDevice == null || record.setPreferredDevice(preferredDevice)
+            routeAccepted && record.state == AudioRecord.STATE_INITIALIZED
         } catch (_: Throwable) {
             false
+        } finally {
+            runCatching { record?.release() }
         }
     }
+    if (supported) inputConfigCache.putIfAbsent(key, true)
+    return supported
 }
 
 fun isCodecSupported(
@@ -778,44 +690,24 @@ fun supportedCodecs(format: ExportFormat): List<ExportCodec> {
     return if (format == ExportFormat.WAV) listOf(ExportCodec.PCM_16) else emptyList()
 }
 
-fun warmRecorderCapabilityCache(context: Context) {
-    if (capabilityCacheWarm) return
-    synchronized(capabilityWarmLock) {
-        if (capabilityCacheWarm) return
-        val appContext = context.applicationContext
-        val routes = supportedInputRouteModes(appContext)
-        val formats = supportedFormats()
-        formats.forEach { format ->
-            supportedCodecs(format).forEach { codec ->
-                routes.forEach { route ->
-                    AudioSourceMode.availableModes().forEach { source ->
-                        ChannelMode.entries.forEach { channelMode ->
-                            PcmSampleFormat.entries.forEach { sampleFormat ->
-                                supportedSampleRates(
-                                    appContext, source, route, format, codec, channelMode, sampleFormat,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        capabilityCacheWarm = true
-    }
-}
-
-fun scheduleRecorderCapabilityCacheWarm(context: Context) {
-    if (capabilityCacheWarm || !capabilityWarmScheduled.compareAndSet(false, true)) {
-        return
-    }
-    val appContext = context.applicationContext
-    capabilityWarmExecutor.execute {
-        try {
-            warmRecorderCapabilityCache(appContext)
-        } finally {
-            capabilityWarmScheduled.set(false)
+private fun hasAnySupportedSampleRate(
+    context: Context,
+    sourceMode: AudioSourceMode,
+    routeMode: InputRouteMode,
+    format: ExportFormat,
+    codec: ExportCodec,
+    channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat,
+): Boolean {
+    for (sampleRate in CAPABILITY_PROBE_SAMPLE_RATES) {
+        if (
+            isCodecSupported(format, codec, sampleRate, channelMode) &&
+            isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat)
+        ) {
+            return true
         }
     }
+    return false
 }
 
 private fun bytesPerSecond(

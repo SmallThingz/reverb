@@ -106,12 +106,11 @@ fun buildRecordingUri(
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
             val file = File(recording.id)
-            runCatching { FileProvider.getUriForFile(context, "${context.packageName}.provider", file) }
-                .getOrElse { Uri.fromFile(file) }
+            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         }
 
         RecordingStorageType.DOCUMENT -> Uri.parse(recording.id)
-        null -> Uri.EMPTY
+        null -> throw IllegalArgumentException("Unknown recording storage type: ${recording.storageType}")
     }
 }
 
@@ -150,13 +149,10 @@ fun resolveRecordingCodecInfo(file: File): String {
             sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
         )
     }.getOrElse { e ->
-        Log.w(TAG, "resolveRecordingCodecInfo(file=$file) failed, trying fallback", e)
+        Log.w(TAG, "resolveRecordingCodecInfo(file=$file) failed, using filename fallback", e)
         resolveRecordingCodecInfo(
             extension = file.extension,
-            bitrate = runCatching {
-                retriever.setDataSource(file.absolutePath)
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
-            }.getOrNull(),
+            bitrate = null,
             sampleRate = null,
         )
     }.also {
@@ -178,13 +174,10 @@ fun resolveRecordingCodecInfo(
             sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
         )
     }.getOrElse { e ->
-        Log.w(TAG, "resolveRecordingCodecInfo(uri=$uri) failed, trying fallback", e)
+        Log.w(TAG, "resolveRecordingCodecInfo(uri=$uri) failed, using filename fallback", e)
         resolveRecordingCodecInfo(
             extension = displayName.substringAfterLast('.', ""),
-            bitrate = runCatching {
-                retriever.setDataSource(context, uri)
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
-            }.getOrNull(),
+            bitrate = null,
             sampleRate = null,
         )
     }.also {
@@ -577,7 +570,7 @@ fun renameRecordingAsset(
         }
         sanitized = "$sanitized.$extension"
     }
-    if (sanitized == recording.displayName) return null
+    if (sanitized == recording.displayName) return recording
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> renameFileRecording(recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
@@ -640,7 +633,10 @@ fun copyRecordingToConfiguredDirectory(
     }
 }
 
-fun listCurrentOutputDirectoryRecordings(context: Context): List<RecordingEntity> {
+fun listCurrentOutputDirectoryRecordings(
+    context: Context,
+    knownRecordings: Map<String, RecordingEntity> = emptyMap(),
+): List<RecordingEntity> {
     val treeUri = getConfiguredExportTreeUri(context)
     return if (treeUri == null) {
         val directory = getSavedRecordingsDirectory(context)
@@ -649,17 +645,24 @@ fun listCurrentOutputDirectoryRecordings(context: Context): List<RecordingEntity
             ?.filter { it.isFile && it.length() > 0L && !it.isHidden }
             ?.filter { it.extension.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
             ?.map { file ->
-                RecordingEntity(
-                    id = file.absolutePath,
-                    displayName = file.name,
-                    mimeType = guessMimeType(file.name),
-                    startedAtMillis = resolveRecordingStartTimeMillis(file),
-                    durationMillis = resolveRecordingDurationMillis(file),
-                    sizeBytes = file.length(),
-                    codecSummary = resolveRecordingCodecInfo(file),
-                    storageType = RecordingStorageType.FILE.name,
-                    directoryId = directory.absolutePath,
-                )
+                val id = file.absolutePath
+                val size = file.length()
+                val existing = knownRecordings[id]
+                if (existing != null && existing.displayName == file.name && existing.sizeBytes == size) {
+                    existing
+                } else {
+                    RecordingEntity(
+                        id = id,
+                        displayName = file.name,
+                        mimeType = guessMimeType(file.name),
+                        startedAtMillis = resolveRecordingStartTimeMillis(file),
+                        durationMillis = resolveRecordingDurationMillis(file),
+                        sizeBytes = size,
+                        codecSummary = resolveRecordingCodecInfo(file),
+                        storageType = RecordingStorageType.FILE.name,
+                        directoryId = directory.absolutePath,
+                    )
+                }
             }
             ?.toList()
             .orEmpty()
@@ -673,17 +676,24 @@ fun listCurrentOutputDirectoryRecordings(context: Context): List<RecordingEntity
                 .mapNotNull { file ->
                     val uri = file.uri
                     val name = file.name ?: return@mapNotNull null
-                    RecordingEntity(
-                        id = uri.toString(),
-                        displayName = name,
-                        mimeType = file.type ?: guessMimeType(name),
-                        startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
-                        durationMillis = resolveRecordingDurationMillis(context, uri, name),
-                        sizeBytes = file.length(),
-                        codecSummary = resolveRecordingCodecInfo(context, uri, name),
-                        storageType = RecordingStorageType.DOCUMENT.name,
-                        directoryId = treeUri.toString(),
-                    )
+                    val id = uri.toString()
+                    val size = file.length()
+                    val existing = knownRecordings[id]
+                    if (existing != null && existing.displayName == name && existing.sizeBytes == size) {
+                        existing
+                    } else {
+                        RecordingEntity(
+                            id = id,
+                            displayName = name,
+                            mimeType = file.type ?: guessMimeType(name),
+                            startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
+                            durationMillis = resolveRecordingDurationMillis(context, uri, name),
+                            sizeBytes = size,
+                            codecSummary = resolveRecordingCodecInfo(context, uri, name),
+                            storageType = RecordingStorageType.DOCUMENT.name,
+                            directoryId = treeUri.toString(),
+                        )
+                    }
                 }
                 .toList()
         }.onFailure { Log.w(TAG, "Unable to list configured output directory $treeUri", it) }.getOrDefault(emptyList())

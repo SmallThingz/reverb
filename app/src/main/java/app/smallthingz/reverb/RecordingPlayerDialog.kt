@@ -45,6 +45,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -59,6 +62,7 @@ fun RecordingPlayerDialog(
     onPlaybackFailed: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
+    val lifecycleOwner = LocalLifecycleOwner.current
     var mediaPlayer by remember(recording.id) { mutableStateOf<MediaPlayer?>(null) }
     var prepared by remember(recording.id) { mutableStateOf(false) }
     var isPlaying by remember(recording.id) { mutableStateOf(false) }
@@ -130,6 +134,17 @@ fun RecordingPlayerDialog(
         }
 
         onDispose { releasePlayer() }
+    }
+
+    DisposableEffect(lifecycleOwner, recording.id) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE && isPlaying) {
+                runCatching { mediaPlayer?.pause() }
+                isPlaying = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(isPlaying, isDragging) {
