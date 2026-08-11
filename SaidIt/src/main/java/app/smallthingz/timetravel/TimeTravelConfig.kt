@@ -26,13 +26,8 @@ object TimeTravelConfig {
     const val FORMAT_SIZE_MIB = "0.0"
     const val FORMAT_RETENTION_SIZE_MIB = "0.###"
     const val THREAD_NAME_AUDIO = "timeTravelAudioThread"
-    const val THREAD_NAME_EXPORT = "timeTravelExportThread"
     const val THREAD_NAME_EXPORT_WORK = "timeTravelExportWork"
     const val DEBUG_ACTION_PREFIX = "app.smallthingz.timetravel.debug."
     const val EXTRA_SECONDS = "seconds"
-    const val EXTRA_FORMAT = "format"
-    const val EXTRA_CODEC = "codec"
-
-    const val CAPTURE_SCRATCH_BYTES = 16384
 
 }

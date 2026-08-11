@@ -38,6 +38,11 @@
     <string name="copy">Copy</string>
     <string name="share">Share</string>
     <string name="nothing_to_export">Nothing to export.</string>
+    <string name="export_in_progress">An export is already in progress.</string>
+    <string name="buffer_status_buffering">Buffering</string>
+    <string name="buffer_status_paused">Paused</string>
+    <string name="tap_to_pause_buffer">Tap to pause capture</string>
+    <string name="tap_to_start_buffer">Tap to start capture</string>
     <string name="allow">Allow</string>
     <string name="exit">Exit</string>
     <string name="done">Done</string>
@@ -61,24 +66,8 @@
     <string name="background_persistence_title">Background</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">Codec</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_format_label">Bit depth</string>
     <string name="sample_format_pcm_8">8-bit integer</string>
     <string name="sample_format_pcm_16">16-bit integer</string>
@@ -106,8 +95,8 @@
     <string name="default_folder">Default</string>
     <string name="move_recordings">Move existing</string>
     <string name="move_recordings_none">No recordings to move.</string>
-    <string name="aggressive_restart_label">Aggressive restart</string>
-    <string name="aggressive_restart_summary">Reschedule recorder service after task swipe or system kill whenever buffer should survive.</string>
+    <string name="move_recordings_failed">Couldn\'t move recordings.</string>
+    <string name="cant_access_folder">Couldn\'t access that folder.</string>
     <string name="wake_lock_label">Keep CPU awake</string>
     <string name="wake_lock_summary">Hold a partial wake lock while live buffering. Highest survival, highest battery cost.</string>
 
@@ -116,10 +105,9 @@
     <string name="battery_optimization_button">Battery settings</string>
     <string name="settings_saved">Saved.</string>
     <string name="settings_saved_next_start">Saved. Starts next time.</string>
-    <string name="settings_saved_deferred_input">Saved. Input changes apply next time.</string>
     <string name="settings_apply_blocked_recording">Stop recording first.</string>
     <string name="settings_buffer_reset_warning">Change capture settings</string>
-    <string name="settings_buffer_reset_warning_body">Changing the sample rate or bit format will reset the current buffer position. All buffered audio will be discarded.</string>
+    <string name="settings_buffer_reset_warning_body">Changing retention capacity, channels, sample rate, or bit depth clears the current audio history.</string>
     <string name="settings_buffer_reset_confirm">Reset &amp; apply</string>
     <string name="settings_buffer_reset_cancel">Cancel</string>
     <string name="unsupported_config_message">Not supported.</string>
@@ -130,6 +118,7 @@
     <string name="permission_required_message">Microphone access required.</string>
     <string name="recordings_empty_title">No saved clips</string>
     <string name="recordings_empty_body">Exports and live saves show up here.</string>
+    <string name="recordings_refresh_failed">Couldn\'t refresh recordings.</string>
     <string name="delete_recording">Delete</string>
     <string name="rename_recording">Rename</string>
     <string name="rename_recording_invalid">Enter a valid name.</string>

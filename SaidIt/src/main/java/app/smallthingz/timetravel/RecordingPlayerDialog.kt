@@ -54,18 +54,18 @@ fun RecordingPlayerDialog(
     onPlaybackFailed: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    var prepared by remember { mutableStateOf(false) }
-    var isPlaying by remember { mutableStateOf(false) }
-    var currentPosition by remember { mutableIntStateOf(0) }
-    var duration by remember {
+    var mediaPlayer by remember(recording.id) { mutableStateOf<MediaPlayer?>(null) }
+    var prepared by remember(recording.id) { mutableStateOf(false) }
+    var isPlaying by remember(recording.id) { mutableStateOf(false) }
+    var currentPosition by remember(recording.id) { mutableIntStateOf(0) }
+    var duration by remember(recording.id) {
         mutableIntStateOf(recording.durationMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
     }
-    var isDragging by remember { mutableStateOf(false) }
-    var released by remember { mutableStateOf(false) }
+    var isDragging by remember(recording.id) { mutableStateOf(false) }
+    var released by remember(recording.id) { mutableStateOf(false) }
 
-    val playerCodecSummary = remember { buildPlayerCodecSummary(recording.codecSummary) }
-    val sizeText = remember { formatShortFileSize(recording.sizeBytes) }
+    val playerCodecSummary = remember(recording.codecSummary) { buildPlayerCodecSummary(recording.codecSummary) }
+    val sizeText = remember(recording.sizeBytes) { formatShortFileSize(recording.sizeBytes) }
 
     fun releasePlayer() {
         if (released) return
@@ -111,9 +111,10 @@ fun RecordingPlayerDialog(
             true
         }
         try {
-            when (RecordingStorageType.valueOf(recording.storageType)) {
+            when (resolveRecordingStorageType(recording)) {
                 RecordingStorageType.FILE -> player.setDataSource(File(recording.id).absolutePath)
                 RecordingStorageType.DOCUMENT -> player.setDataSource(context, Uri.parse(recording.id))
+                null -> throw IllegalArgumentException("Unknown recording storage type")
             }
             player.prepareAsync()
             mediaPlayer = player
@@ -139,7 +140,7 @@ fun RecordingPlayerDialog(
         }
     }
 
-    val dismissRequest = remember(onDismiss) {
+    val dismissRequest = remember(recording.id, onDismiss) {
         {
             releasePlayer()
             onDismiss()
@@ -222,7 +223,7 @@ fun RecordingPlayerDialog(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                val seekBack = remember {
+                val seekBack = remember(recording.id) {
                     {
                         val player = mediaPlayer
                         if (player != null && prepared && !released) {
@@ -233,7 +234,7 @@ fun RecordingPlayerDialog(
                         }
                     }
                 }
-                val togglePlay = remember {
+                val togglePlay = remember(recording.id) {
                     {
                         val player = mediaPlayer
                         if (player != null && prepared && !released) {
@@ -249,7 +250,7 @@ fun RecordingPlayerDialog(
                         }
                     }
                 }
-                val seekForward = remember {
+                val seekForward = remember(recording.id) {
                     {
                         val player = mediaPlayer
                         if (player != null && prepared && !released) {

@@ -45,24 +45,8 @@
     <string name="background_persistence_title">后台</string>
     <string name="format_label">格式</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">编解码器</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">采样率</string>
     <string name="audio_source_label">来源</string>
     <string name="channel_mode_label">声道</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">默认</string>
     <string name="move_recordings">移动现有录音</string>
     <string name="move_recordings_none">没有可移动的录音。</string>
-    <string name="aggressive_restart_label">激进重启</string>
-    <string name="aggressive_restart_summary">在任务被划掉或系统终止后，只要缓冲区需要保留，就重新调度录音服务。</string>
     <string name="wake_lock_label">保持 CPU 唤醒</string>
     <string name="wake_lock_summary">在实时缓冲期间持有部分唤醒锁。生存性最高，耗电也最高。</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">电池设置</string>
     <string name="settings_saved">已保存。</string>
     <string name="settings_saved_next_start">已保存。下次启动时生效。</string>
-    <string name="settings_saved_deferred_input">已保存。输入更改将在下次生效。</string>
     <string name="settings_apply_blocked_recording">先停止录音。</string>
     <string name="unsupported_config_message">不支持。</string>
     <string name="audio_input_init_failed">无法启动麦克风。</string>

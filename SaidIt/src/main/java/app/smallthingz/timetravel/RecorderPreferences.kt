@@ -11,40 +11,25 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
-import android.media.MediaCodecInfo
-import android.media.MediaCodecList
-import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.media.MediaRecorder
-import android.os.Build
 import android.os.PowerManager
-import android.util.Log
 import androidx.annotation.StringRes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-private const val TAG = "RecorderPreferences"
 private const val WAV_HEADER_BYTES = 44L
-private const val MP4_CONTAINER_BASE_OVERHEAD_BYTES = 1536L
-private const val MP4_CONTAINER_BYTES_PER_AAC_ACCESS_UNIT = 8L
-private const val AAC_SAMPLES_PER_ACCESS_UNIT = 1024L
 private const val WAV_MAX_EXPORT_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
-private const val MUXED_MAX_EXPORT_BYTES = (4L * 1024L * 1024L * 1024L) - (8L * 1024L * 1024L)
-private const val MAX_PERSISTENT_PCM_BUFFER_BYTES = Int.MAX_VALUE.toLong()
 private const val CAPABILITY_WARM_THREAD_NAME = "timetravel-capability-warm"
 
 private val STANDARD_SAMPLE_RATES =
     intArrayOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
-private val AAC_SAMPLE_RATES =
-    setOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
 private val codecSupportCache = ConcurrentHashMap<CodecSupportKey, Boolean>()
 private val inputConfigCache = ConcurrentHashMap<InputConfigKey, Boolean>()
 private val sampleRatesCache = ConcurrentHashMap<SampleRatesKey, List<Int>>()
 private val sourceModesCache = ConcurrentHashMap<SourceModesKey, List<AudioSourceMode>>()
 private val channelModesCache = ConcurrentHashMap<ChannelModesKey, List<ChannelMode>>()
-private val codecCapabilityCache = ConcurrentHashMap<ExportCodec, CodecCapability>()
 private val capabilityWarmLock = Any()
 private val capabilityWarmExecutor = Executors.newSingleThreadExecutor { runnable ->
     Thread(runnable, CAPABILITY_WARM_THREAD_NAME).apply {
@@ -56,14 +41,6 @@ private val capabilityWarmScheduled = AtomicBoolean(false)
 
 @Volatile
 private var capabilityCacheWarm = false
-
-private data class CodecCapability(
-    val bitrateRangeKbps: IntRange?,
-    val advertisedSampleRates: List<Int>,
-    val maxChannelCount: Int,
-    val supportedAacProfiles: Set<Int>,
-    val hasEncoder: Boolean,
-)
 
 private data class CodecSupportKey(
     val format: ExportFormat,
@@ -87,6 +64,7 @@ private data class SampleRatesKey(
     val format: ExportFormat,
     val codec: ExportCodec,
     val channelMode: ChannelMode,
+    val sampleFormat: PcmSampleFormat,
     val hasBuiltInMic: Boolean,
 )
 
@@ -94,6 +72,7 @@ private data class SourceModesKey(
     val routeMode: InputRouteMode,
     val format: ExportFormat,
     val codec: ExportCodec,
+    val sampleFormat: PcmSampleFormat,
     val hasBuiltInMic: Boolean,
 )
 
@@ -102,6 +81,7 @@ private data class ChannelModesKey(
     val routeMode: InputRouteMode,
     val format: ExportFormat,
     val codec: ExportCodec,
+    val sampleFormat: PcmSampleFormat,
     val hasBuiltInMic: Boolean,
 )
 
@@ -115,10 +95,6 @@ private inline fun <K : Any, V : Any> ConcurrentHashMap<K, V>.cached(
     return existing ?: value
 }
 
-private const val LEGACY_RETENTION_TIME = "time"
-private const val LEGACY_EXPORT_MODE_RANGE = "range"
-private const val LEGACY_EXPORT_UNIT_SIZE = "size"
-
 enum class RetentionMode {
     SIZE,
     TIME,
@@ -131,136 +107,32 @@ enum class RetentionMode {
 
 enum class ExportFormat(
     @param:StringRes @field:StringRes val labelRes: Int,
-    val muxerOutputFormat: Int? = null,
-    val minApi: Int = Build.VERSION_CODES.JELLY_BEAN_MR2,
 ) {
     WAV(R.string.format_wav),
-    M4A(R.string.format_m4a, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4),
-    THREE_GPP(R.string.format_3gp, MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP, Build.VERSION_CODES.O),
-    OGG(R.string.format_ogg, MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG, Build.VERSION_CODES.Q),
-    WEBM(R.string.format_webm, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM, Build.VERSION_CODES.LOLLIPOP),
-    AAC_ADTS(R.string.format_aac_adts),
-    AMR_NB_FILE(R.string.codec_amr_nb),
-    AMR_WB_FILE(R.string.codec_amr_wb),
-    MPEG_2_TS(R.string.format_mpeg_2_ts),
     ;
 
     val prefValue: String get() = name.lowercase()
-
-    val extension: String get() = when (this) {
-        THREE_GPP -> EXTENSION_3GP
-        AAC_ADTS -> EXTENSION_AAC
-        AMR_NB_FILE -> EXTENSION_AMR
-        AMR_WB_FILE -> EXTENSION_AWB
-        MPEG_2_TS -> EXTENSION_TS
-        else -> name.lowercase()
-    }
-
-    val outputMimeType: String get() = when (this) {
-        M4A -> MIME_AUDIO_MP4
-        THREE_GPP -> MIME_AUDIO_3GPP
-        AAC_ADTS -> MIME_AUDIO_AAC
-        AMR_NB_FILE -> MIME_AUDIO_AMR
-        AMR_WB_FILE -> MIME_AUDIO_AMR_WB
-        MPEG_2_TS -> MIME_VIDEO_MP2T
-        else -> "$MIME_AUDIO_FALLBACK_PREFIX${name.lowercase()}"
-    }
-
-    val isPcmContainer: Boolean
-        get() = this == WAV
-
-    val usesMuxer: Boolean
-        get() = muxerOutputFormat != null
-
-    val isRawAacAdts: Boolean
-        get() = this == AAC_ADTS
-
-    val isRawAmr: Boolean
-        get() = this == AMR_NB_FILE || this == AMR_WB_FILE
-
-    val isTransportStream: Boolean
-        get() = this == MPEG_2_TS
-
-    val isRuntimeSupported: Boolean
-        get() = Build.VERSION.SDK_INT >= minApi
+    val extension: String get() = "wav"
+    val outputMimeType: String get() = "audio/wav"
+    val isPcmContainer: Boolean get() = true
 
     companion object {
-        const val MIME_AUDIO_MP4 = "audio/mp4"
-        const val MIME_AUDIO_3GPP = "audio/3gpp"
-        const val MIME_AUDIO_AAC = "audio/aac"
-        const val MIME_AUDIO_AMR = "audio/amr"
-        const val MIME_AUDIO_AMR_WB = "audio/amr-wb"
-        const val MIME_VIDEO_MP2T = "video/mp2t"
-        const val MIME_AUDIO_FALLBACK_PREFIX = "audio/"
-
-        const val EXTENSION_3GP = "3gp"
-        const val EXTENSION_AAC = "aac"
-        const val EXTENSION_AMR = "amr"
-        const val EXTENSION_AWB = "awb"
-        const val EXTENSION_TS = "ts"
-
-        private val byPrefValue = entries.associateBy { it.prefValue }
-
-        fun fromPrefValue(value: String?): ExportFormat {
-            val v = value ?: return WAV
-            return byPrefValue[v] ?: WAV
-        }
+        fun fromPrefValue(value: String?): ExportFormat = WAV
     }
 }
 
 enum class ExportCodec(
     @param:StringRes @field:StringRes val labelRes: Int,
-    val encoderMimeType: String? = null,
-    val aacProfile: Int? = null,
 ) {
     PCM_16(R.string.codec_pcm_16),
-    AAC_LC(R.string.codec_aac_lc, MediaFormat.MIMETYPE_AUDIO_AAC, MediaCodecInfo.CodecProfileLevel.AACObjectLC),
-    AAC_ELD(R.string.codec_aac_eld, MediaFormat.MIMETYPE_AUDIO_AAC, MediaCodecInfo.CodecProfileLevel.AACObjectELD),
-    HE_AAC(R.string.codec_he_aac, MediaFormat.MIMETYPE_AUDIO_AAC, MediaCodecInfo.CodecProfileLevel.AACObjectHE),
-    HE_AAC_V2(
-        R.string.codec_he_aac_v2, MediaFormat.MIMETYPE_AUDIO_AAC,
-        MediaCodecInfo.CodecProfileLevel.AACObjectHE_PS,
-    ),
-    XHE_AAC(R.string.codec_xhe_aac, MediaFormat.MIMETYPE_AUDIO_AAC, MediaCodecInfo.CodecProfileLevel.AACObjectXHE),
-    AMR_WB(R.string.codec_amr_wb, MediaFormat.MIMETYPE_AUDIO_AMR_WB),
-    AMR_NB(R.string.codec_amr_nb, MediaFormat.MIMETYPE_AUDIO_AMR_NB),
-    OPUS(R.string.codec_opus, MediaFormat.MIMETYPE_AUDIO_OPUS),
-    VORBIS(R.string.codec_vorbis, MediaFormat.MIMETYPE_AUDIO_VORBIS),
-    FLAC(R.string.codec_flac, MediaFormat.MIMETYPE_AUDIO_FLAC),
     ;
 
     val prefValue: String get() = name.lowercase()
-
-    val isAacFamily: Boolean
-        get() = encoderMimeType == MediaFormat.MIMETYPE_AUDIO_AAC
-
-    val isPcm: Boolean
-        get() = this == PCM_16
-
-    val supportedFormats: Set<ExportFormat>
-        get() = when (this) {
-            PCM_16 -> setOf(ExportFormat.WAV)
-            AAC_LC -> setOf(ExportFormat.M4A, ExportFormat.THREE_GPP, ExportFormat.AAC_ADTS, ExportFormat.MPEG_2_TS)
-            AAC_ELD -> setOf(ExportFormat.M4A, ExportFormat.THREE_GPP)
-            HE_AAC, HE_AAC_V2, XHE_AAC -> setOf(ExportFormat.M4A, ExportFormat.THREE_GPP)
-            AMR_WB -> setOf(ExportFormat.THREE_GPP, ExportFormat.AMR_WB_FILE)
-            AMR_NB -> setOf(ExportFormat.THREE_GPP, ExportFormat.AMR_NB_FILE)
-            OPUS -> setOf(ExportFormat.OGG, ExportFormat.WEBM)
-            VORBIS -> setOf(ExportFormat.WEBM)
-            FLAC -> emptySet()
-        }
+    val isPcm: Boolean get() = true
+    val supportedFormats: Set<ExportFormat> get() = setOf(ExportFormat.WAV)
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
-
-        fun fromPrefValue(value: String?): ExportCodec {
-            val v = value ?: return PCM_16
-            return when (v) {
-                "aac" -> AAC_LC
-                "wav" -> PCM_16
-                else -> byPrefValue[v] ?: PCM_16
-            }
-        }
+        fun fromPrefValue(value: String?): ExportCodec = PCM_16
     }
 }
 
@@ -415,23 +287,18 @@ fun getRecorderPreferences(context: Context): SharedPreferences {
 }
 
 fun getConfiguredRetentionMode(context: Context): RetentionMode {
-    val prefs = getRecorderPreferences(context)
-    val stored = prefs.getInt(PrefKey.RETENTION_MODE, -1)
-    if (stored >= 0) return RetentionMode.fromStorage(stored)
-    return when (prefs.getString(PrefKey.RETENTION_MODE, null)) {
-        LEGACY_RETENTION_TIME -> RetentionMode.TIME
-        else -> RetentionMode.SIZE
-    }
+    return RetentionMode.fromStorage(
+        getRecorderPreferences(context).getInt(PrefKey.RETENTION_MODE, RetentionMode.SIZE.ordinal),
+    )
 }
 
 fun getConfiguredCustomExportMode(context: Context): CustomExportMode {
-    val prefs = getRecorderPreferences(context)
-    val stored = prefs.getInt(PrefKey.CUSTOM_EXPORT_MODE, -1)
-    if (stored >= 0) return CustomExportMode.fromStorage(stored)
-    return when (prefs.getString(PrefKey.CUSTOM_EXPORT_MODE, null)) {
-        LEGACY_EXPORT_MODE_RANGE -> CustomExportMode.RANGE
-        else -> TimeTravelConfig.DEFAULT_CUSTOM_EXPORT_MODE
-    }
+    return CustomExportMode.fromStorage(
+        getRecorderPreferences(context).getInt(
+            PrefKey.CUSTOM_EXPORT_MODE,
+            TimeTravelConfig.DEFAULT_CUSTOM_EXPORT_MODE.ordinal,
+        ),
+    )
 }
 
 fun setConfiguredCustomExportMode(context: Context, mode: CustomExportMode) {
@@ -439,21 +306,16 @@ fun setConfiguredCustomExportMode(context: Context, mode: CustomExportMode) {
 }
 
 fun getConfiguredCustomExportUnit(context: Context): CustomExportUnit {
-    val prefs = getRecorderPreferences(context)
-    val stored = prefs.getInt(PrefKey.CUSTOM_EXPORT_UNIT, -1)
-    if (stored >= 0) return CustomExportUnit.fromStorage(stored)
-    return when (prefs.getString(PrefKey.CUSTOM_EXPORT_UNIT, null)) {
-        LEGACY_EXPORT_UNIT_SIZE -> CustomExportUnit.SIZE
-        else -> TimeTravelConfig.DEFAULT_CUSTOM_EXPORT_UNIT
-    }
+    return CustomExportUnit.fromStorage(
+        getRecorderPreferences(context).getInt(
+            PrefKey.CUSTOM_EXPORT_UNIT,
+            TimeTravelConfig.DEFAULT_CUSTOM_EXPORT_UNIT.ordinal,
+        ),
+    )
 }
 
 fun setConfiguredCustomExportUnit(context: Context, unit: CustomExportUnit) {
     getRecorderPreferences(context).edit().putInt(PrefKey.CUSTOM_EXPORT_UNIT, unit.ordinal).apply()
-}
-
-fun isAggressiveRestartEnabled(context: Context): Boolean {
-    return getRecorderPreferences(context).getBoolean(PrefKey.AGGRESSIVE_RESTART_ENABLED, true)
 }
 
 fun isWakeLockEnabled(context: Context): Boolean {
@@ -483,10 +345,9 @@ fun setConfiguredThemeMode(
 }
 
 fun getConfiguredRetentionSeconds(context: Context): Long {
-    return max(
-        60L,
-        getRecorderPreferences(context).getLong(PrefKey.RETENTION_SECONDS, TimeTravelConfig.DEFAULT_RETENTION_SECONDS),
-    )
+    return getRecorderPreferences(context)
+        .getLong(PrefKey.RETENTION_SECONDS, TimeTravelConfig.DEFAULT_RETENTION_SECONDS)
+        .coerceAtLeast(1L)
 }
 
 fun getConfiguredRetentionSizeBytes(context: Context): Long {
@@ -496,15 +357,11 @@ fun getConfiguredRetentionSizeBytes(context: Context): Long {
 }
 
 fun getConfiguredOutputFormat(context: Context): ExportFormat {
-    return ExportFormat.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.OUTPUT_FORMAT, ExportFormat.WAV.prefValue),
-    )
+    return ExportFormat.WAV
 }
 
 fun getConfiguredOutputCodec(context: Context): ExportCodec {
-    return ExportCodec.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.OUTPUT_CODEC, ExportCodec.PCM_16.prefValue),
-    )
+    return ExportCodec.PCM_16
 }
 
 fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat {
@@ -518,33 +375,18 @@ fun isCodecCompatibleWithFormat(
     codec: ExportCodec,
 ): Boolean = format in codec.supportedFormats
 
-fun codecBitrateRangeKbps(codec: ExportCodec): IntRange? = codecCapability(codec).bitrateRangeKbps
-
 fun defaultCodecBitrateKbps(
     codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
-): Int? {
-    return when {
-        codec.isAacFamily -> aacBitrateForSampleRate(sampleRate, channelCount) / 1000
-        codec == ExportCodec.AMR_WB -> 24
-        codec == ExportCodec.AMR_NB -> 12
-        codec == ExportCodec.OPUS -> if (channelCount >= 2) 160 else 96
-        codec == ExportCodec.VORBIS -> if (channelCount >= 2) 192 else 112
-        else -> null
-    }
-}
+): Int? = null
 
 fun getConfiguredCodecBitrateKbps(
     context: Context,
     codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
-): Int? {
-    val range = codecBitrateRangeKbps(codec) ?: return defaultCodecBitrateKbps(codec, sampleRate, channelCount)
-    val fallback = defaultCodecBitrateKbps(codec, sampleRate, channelCount) ?: range.first
-    return fallback.coerceIn(range)
-}
+): Int? = null
 
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
     return AudioSourceMode.fromSourceValue(
@@ -577,13 +419,14 @@ fun getConfiguredSampleRate(
     format: ExportFormat = getConfiguredOutputFormat(context),
     codec: ExportCodec = getConfiguredOutputCodec(context),
     channelMode: ChannelMode = getConfiguredChannelMode(context),
+    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
 ): Int {
     val prefs = getRecorderPreferences(context)
     if (prefs.contains(PrefKey.SAMPLE_RATE)) {
         val requested = prefs.getInt(PrefKey.SAMPLE_RATE, 0)
         if (requested > 0) return requested
     }
-    return getPreferredSampleRate(context, sourceMode, routeMode, format, codec, channelMode)
+    return getPreferredSampleRate(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
 }
 
 fun getConfiguredMemorySizeBytes(
@@ -598,16 +441,11 @@ fun getConfiguredMemorySizeBytes(
     return when (getConfiguredRetentionMode(context)) {
         RetentionMode.SIZE -> {
             val configuredSizeBytes = getConfiguredRetentionSizeBytes(context)
-            val retentionSeconds = estimateExportDurationSeconds(
-                format = format,
-                codec = codec,
-                sampleRate = sampleRate,
-                channelCount = channelMode.channelCount,
-                sizeBytes = configuredSizeBytes,
-                bitrateKbps = bitrateKbps,
-                sampleFormat = sampleFormat,
-            )
-            bytesForRetentionSeconds(retentionSeconds, sampleRate, channelMode.channelCount, sampleFormat)
+            val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+            if (frameBytes <= 0L) 0L else {
+                val rawBudget = (configuredSizeBytes - WAV_HEADER_BYTES).coerceAtLeast(frameBytes)
+                (rawBudget / frameBytes) * frameBytes
+            }
         }
 
         RetentionMode.TIME -> bytesForRetentionSeconds(
@@ -615,66 +453,6 @@ fun getConfiguredMemorySizeBytes(
             channelMode.channelCount, sampleFormat,
         )
     }
-}
-
-fun getConfiguredWorkingMemorySizeBytes(
-    context: Context,
-    sampleRate: Int,
-    channelMode: ChannelMode = getConfiguredChannelMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    bitrateKbps: Int? = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
-    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
-): Long {
-    return minOf(
-        getConfiguredRingMemorySizeBytes(context, sampleRate, channelMode, format, codec, bitrateKbps, sampleFormat),
-        max(64L * 1024L * 1024L, Runtime.getRuntime().maxMemory() * 3L / 4L),
-    )
-}
-
-fun getConfiguredOneShotMemorySizeBytes(
-    context: Context,
-    sampleRate: Int,
-    channelMode: ChannelMode = getConfiguredChannelMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    bitrateKbps: Int? = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
-    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
-): Long {
-    val prefs = getRecorderPreferences(context)
-    if (!prefs.contains(PrefKey.ONE_SHOT_MEMORY_SIZE)) return 0L
-    return prefs.getLong(PrefKey.ONE_SHOT_MEMORY_SIZE, 0L).coerceAtLeast(0L)
-}
-
-fun getConfiguredRingMemorySizeBytes(
-    context: Context,
-    sampleRate: Int,
-    channelMode: ChannelMode = getConfiguredChannelMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    bitrateKbps: Int? = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
-    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
-): Long {
-    val prefs = getRecorderPreferences(context)
-    if (prefs.contains(PrefKey.RING_MEMORY_SIZE)) {
-        return prefs.getLong(PrefKey.RING_MEMORY_SIZE, 0L).coerceAtLeast(0L)
-    }
-    return getConfiguredMemorySizeBytes(context, sampleRate, channelMode, format, codec, bitrateKbps, sampleFormat)
-}
-
-fun getConfiguredPersistentPcmSizeBytes(
-    context: Context,
-    sampleRate: Int,
-    channelMode: ChannelMode = getConfiguredChannelMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    bitrateKbps: Int? = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
-    sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
-): Long {
-    return minOf(
-        getConfiguredRingMemorySizeBytes(context, sampleRate, channelMode, format, codec, bitrateKbps, sampleFormat),
-        MAX_PERSISTENT_PCM_BUFFER_BYTES,
-    )
 }
 
 fun bytesForRetentionSeconds(
@@ -760,25 +538,6 @@ fun formatDurationInput(seconds: Long): String {
     }
 }
 
-fun aacBitrateForSampleRate(
-    sampleRate: Int,
-    channelCount: Int = 1,
-    bitrateKbps: Int? = null,
-): Int {
-    bitrateKbps?.takeIf { it > 0 }?.let {
-        val range = codecBitrateRangeKbps(ExportCodec.AAC_LC) ?: 32..320
-        return it.coerceIn(range) * 1000
-    }
-    return when {
-        channelCount >= 2 && sampleRate >= 48_000 -> 192_000
-        channelCount >= 2 && sampleRate >= 24_000 -> 160_000
-        channelCount >= 2 -> 128_000
-        sampleRate >= 48_000 -> 128_000
-        sampleRate >= 24_000 -> 96_000
-        else -> 64_000
-    }
-}
-
 fun estimateExportSizeBytes(
     format: ExportFormat,
     codec: ExportCodec,
@@ -791,25 +550,13 @@ fun estimateExportSizeBytes(
     if (sampleRate <= 0 || channelCount <= 0 || durationSeconds <= 0L) {
         return 0L
     }
-
-    return when {
-        format.isPcmContainer -> {
-            val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
-            if (durationSeconds > Long.MAX_VALUE / bps) Long.MAX_VALUE
-            else WAV_HEADER_BYTES + durationSeconds * bps
-        }
-
-        else -> {
-            val audioBytes = durationSeconds *
-                codecBitrateBitsPerSecond(codec, sampleRate, channelCount, bitrateKbps) / 8L
-            if (format == ExportFormat.M4A && codec.isAacFamily) {
-                val accessUnits = ((durationSeconds * sampleRate.toLong()) +
-                    AAC_SAMPLES_PER_ACCESS_UNIT - 1L) / AAC_SAMPLES_PER_ACCESS_UNIT
-                audioBytes + MP4_CONTAINER_BASE_OVERHEAD_BYTES + accessUnits * MP4_CONTAINER_BYTES_PER_AAC_ACCESS_UNIT
-            } else {
-                audioBytes
-            }
-        }
+    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
+    val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
+    if (bps <= 0L) return 0L
+    return if (durationSeconds > (Long.MAX_VALUE - WAV_HEADER_BYTES) / bps) {
+        Long.MAX_VALUE
+    } else {
+        WAV_HEADER_BYTES + durationSeconds * bps
     }
 }
 
@@ -825,41 +572,13 @@ fun estimateExportDurationSeconds(
     if (sampleRate <= 0 || channelCount <= 0 || sizeBytes <= 0L) {
         return 0L
     }
-
-    return when {
-        format.isPcmContainer -> {
-            ((sizeBytes - WAV_HEADER_BYTES).coerceAtLeast(0L)) /
-                bytesPerSecond(sampleRate, channelCount, sampleFormat)
-        }
-
-        else -> {
-            val bitrateBytesPerSecond = codecBitrateBitsPerSecond(codec, sampleRate, channelCount, bitrateKbps) / 8L
-            if (bitrateBytesPerSecond <= 0L) {
-                0L
-            } else if (format == ExportFormat.M4A && codec.isAacFamily) {
-                // MP4 container bytes remain a close AAC-family heuristic.
-                val estimatedContainerlessBytes = (sizeBytes - MP4_CONTAINER_BASE_OVERHEAD_BYTES).coerceAtLeast(0L)
-                val denominator = bitrateBytesPerSecond +
-                    sampleRate.toLong() * MP4_CONTAINER_BYTES_PER_AAC_ACCESS_UNIT / AAC_SAMPLES_PER_ACCESS_UNIT
-                if (denominator <= 0L) 0L else estimatedContainerlessBytes / denominator
-            } else {
-                sizeBytes / bitrateBytesPerSecond
-            }
-        }
-    }
+    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
+    val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
+    if (bps <= 0L) return 0L
+    return ((sizeBytes - WAV_HEADER_BYTES).coerceAtLeast(0L)) / bps
 }
 
-fun exportFileSizeLimitBytes(format: ExportFormat): Long {
-    return when (format) {
-        ExportFormat.WAV -> WAV_MAX_EXPORT_BYTES
-        ExportFormat.AAC_ADTS,
-        ExportFormat.AMR_NB_FILE,
-        ExportFormat.AMR_WB_FILE,
-        ExportFormat.MPEG_2_TS,
-        -> 4L * 1024L * 1024L * 1024L
-        else -> MUXED_MAX_EXPORT_BYTES
-    }
-}
+fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_EXPORT_BYTES
 
 fun exportDurationLimitSeconds(
     format: ExportFormat,
@@ -887,6 +606,7 @@ fun supportedSampleRates(
     format: ExportFormat,
     codec: ExportCodec,
     channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<Int> {
     val key = SampleRatesKey(
         sourceMode = sourceMode,
@@ -894,26 +614,13 @@ fun supportedSampleRates(
         format = format,
         codec = codec,
         channelMode = channelMode,
+        sampleFormat = sampleFormat,
         hasBuiltInMic = hasBuiltInMicrophone(context),
     )
     return sampleRatesCache.cached(key) {
-        val constrainedRates = exactSupportedSampleRatesFor(format, codec)
-        val codecRates = codecCapability(codec).advertisedSampleRates
-        val advertisedRates = when {
-            constrainedRates == null -> codecRates
-            codecRates.isEmpty() -> constrainedRates.toList().sortedDescending()
-            else -> codecRates.filter { it in constrainedRates }
-        }
-        val detected = advertisedRates.filter { sampleRate ->
-            isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode) &&
+        standardSampleRates().filter { sampleRate ->
+            isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat) &&
                 isCodecSupported(format, codec, sampleRate, channelMode)
-        }
-        if (detected.isNotEmpty()) {
-            detected
-        } else if (routeMode == InputRouteMode.AUTO) {
-            advertisedRates.filter { sampleRate -> isCodecSupported(format, codec, sampleRate, channelMode) }
-        } else {
-            emptyList()
         }
     }
 }
@@ -925,8 +632,9 @@ fun getPreferredSampleRate(
     format: ExportFormat,
     codec: ExportCodec,
     channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Int {
-    val supported = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode)
+    val supported = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
     if (supported.isNotEmpty()) {
         return orderSampleRatesByPreference(supported, TimeTravelConfig.PREFERRED_DEFAULT_SAMPLE_RATE).first()
     }
@@ -946,8 +654,9 @@ fun resolveOperationalSampleRate(
     format: ExportFormat,
     codec: ExportCodec,
     channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Int {
-    val advertised = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode)
+    val advertised = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
     val operationalCandidates = buildList {
         addAll(advertised)
         addAll(standardSampleRates())
@@ -955,7 +664,7 @@ fun resolveOperationalSampleRate(
         .distinct()
         .filter { rate ->
             isCodecSupported(format, codec, rate, channelMode) &&
-                isInputConfigSupported(context, rate, sourceMode, routeMode, channelMode)
+                isInputConfigSupported(context, rate, sourceMode, routeMode, channelMode, sampleFormat)
         }
     return orderSampleRatesByPreference(operationalCandidates, requestedRate).firstOrNull() ?: 0
 }
@@ -965,17 +674,21 @@ fun supportedAudioSourceModes(
     routeMode: InputRouteMode,
     format: ExportFormat,
     codec: ExportCodec,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<AudioSourceMode> {
     val key = SourceModesKey(
         routeMode = routeMode,
         format = format,
         codec = codec,
+        sampleFormat = sampleFormat,
         hasBuiltInMic = hasBuiltInMicrophone(context),
     )
     val modes = sourceModesCache.cached(key) {
         AudioSourceMode.availableModes().filter { sourceMode ->
             ChannelMode.entries.any { channelMode ->
-                supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode).isNotEmpty()
+                supportedSampleRates(
+                    context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
+                ).isNotEmpty()
             }
         }
     }
@@ -988,17 +701,21 @@ fun supportedChannelModes(
     routeMode: InputRouteMode,
     format: ExportFormat,
     codec: ExportCodec,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): List<ChannelMode> {
     val key = ChannelModesKey(
         sourceMode = sourceMode,
         routeMode = routeMode,
         format = format,
         codec = codec,
+        sampleFormat = sampleFormat,
         hasBuiltInMic = hasBuiltInMicrophone(context),
     )
     val modes = channelModesCache.cached(key) {
         ChannelMode.entries.filter { channelMode ->
-            supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode).isNotEmpty()
+            supportedSampleRates(
+                context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
+            ).isNotEmpty()
         }
     }
     return if (modes.isNotEmpty()) modes else listOf(ChannelMode.MONO)
@@ -1094,51 +811,8 @@ fun isCodecSupported(
     channelMode: ChannelMode,
 ): Boolean {
     return codecSupportCache.cached(CodecSupportKey(format, codec, sampleRate, channelMode)) {
-        if (!isCodecCompatibleWithFormat(format, codec)) {
-            return@cached false
-        }
-        if (!isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)) {
-            return@cached false
-        }
-        when {
-            codec.isPcm -> format.isPcmContainer
-            else -> {
-                try {
-                    val mimeType = requireNotNull(codec.encoderMimeType)
-                    val bitrate = defaultCodecBitrateKbps(codec, sampleRate, channelMode.channelCount)
-                    val encoderFormat = buildEncoderFormat(codec, sampleRate, channelMode.channelCount, bitrate)
-                    MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                        .asSequence()
-                        .filter { it.isEncoder }
-                        .filter { info -> info.supportedTypes.any { type -> type.equals(mimeType, ignoreCase = true) } }
-                        .any { info ->
-                            val capabilities = runCatching { info.getCapabilitiesForType(mimeType) }
-                                .onFailure { Log.w(TAG, "getCapabilitiesForType failed for $mimeType", it) }
-                                .getOrNull() ?: return@any false
-                            val audioCapabilities = capabilities.audioCapabilities ?: return@any false
-                            if (channelMode.channelCount !in
-                                1..audioCapabilities.maxInputChannelCount.coerceAtLeast(1)
-                            ) {
-                                return@any false
-                            }
-                            if (!runCatching { audioCapabilities.isSampleRateSupported(sampleRate) }
-                                    .onFailure { Log.w(TAG, "isSampleRateSupported($sampleRate) failed", it) }
-                                    .getOrDefault(false)
-                            ) return@any false
-                            val requestedProfile = codec.aacProfile
-                            if (requestedProfile != null) {
-                                val supportedProfiles = capabilities.profileLevels.map { it.profile }.toSet()
-                                if (requestedProfile !in supportedProfiles &&
-                                    (supportedProfiles.isNotEmpty() || codec != ExportCodec.AAC_LC)
-                                ) return@any false
-                            }
-                            MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(encoderFormat) != null
-                        }
-                } catch (_: Throwable) {
-                    false
-                }
-            }
-        }
+        isCodecCompatibleWithFormat(format, codec) &&
+            isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
     }
 }
 
@@ -1162,7 +836,11 @@ fun warmRecorderCapabilityCache(context: Context) {
                 routes.forEach { route ->
                     AudioSourceMode.availableModes().forEach { source ->
                         ChannelMode.entries.forEach { channelMode ->
-                            supportedSampleRates(appContext, source, route, format, codec, channelMode)
+                            PcmSampleFormat.entries.forEach { sampleFormat ->
+                                supportedSampleRates(
+                                    appContext, source, route, format, codec, channelMode, sampleFormat,
+                                )
+                            }
                         }
                     }
                 }
@@ -1195,150 +873,13 @@ private fun bytesPerSecond(
     return sampleRate.toLong() * channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
 }
 
-fun codecBitrateBitsPerSecond(
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-    bitrateKbps: Int? = null,
-): Long {
-    return when {
-        codec.isPcm -> 0L
-        codec.isAacFamily -> aacBitrateForSampleRate(sampleRate, channelCount, bitrateKbps).toLong()
-        codec == ExportCodec.FLAC -> bytesPerSecond(sampleRate, channelCount) * 8L
-        else -> ((bitrateKbps ?: defaultCodecBitrateKbps(codec, sampleRate, channelCount) ?: 0) * 1000L)
-    }
-}
-
-fun buildEncoderFormat(
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-    bitrateKbps: Int? = null,
-): MediaFormat {
-    require(!codec.isPcm) { "PCM uses raw WAV writer" }
-    val mimeType = requireNotNull(codec.encoderMimeType)
-    return MediaFormat.createAudioFormat(mimeType, sampleRate, channelCount).apply {
-        codec.aacProfile?.let { setInteger(MediaFormat.KEY_AAC_PROFILE, it) }
-        val bitrateBitsPerSecond = codecBitrateBitsPerSecond(codec, sampleRate, channelCount, bitrateKbps)
-        if (bitrateBitsPerSecond > 0) {
-            setInteger(MediaFormat.KEY_BIT_RATE, bitrateBitsPerSecond.toInt())
-        }
-        setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-    }
-}
-
 internal fun isExportConfigurationSupported(
     format: ExportFormat,
     codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
 ): Boolean {
-    if (sampleRate <= 0 || channelCount <= 0) return false
-    if (format.isPcmContainer && !codec.isPcm) return false
-    exactSupportedSampleRatesFor(format, codec)?.let { if (sampleRate !in it) return false }
-    if (codec == ExportCodec.AMR_NB || codec == ExportCodec.AMR_WB) return channelCount == 1
-    return true
-}
-
-private fun exactSupportedSampleRatesFor(
-    format: ExportFormat,
-    codec: ExportCodec,
-): Set<Int>? {
-    return when {
-        format.isRawAacAdts || format.isTransportStream -> AAC_SAMPLE_RATES
-        codec == ExportCodec.AMR_NB -> setOf(8_000)
-        codec == ExportCodec.AMR_WB -> setOf(16_000)
-        else -> null
-    }
-}
-
-private fun codecCapability(codec: ExportCodec): CodecCapability {
-    return codecCapabilityCache.cached(codec) {
-        if (codec.isPcm) {
-            return@cached CodecCapability(
-                bitrateRangeKbps = null,
-                advertisedSampleRates = standardSampleRates(),
-                maxChannelCount = ChannelMode.entries.maxOf { it.channelCount },
-                supportedAacProfiles = emptySet(),
-                hasEncoder = true,
-            )
-        }
-        val mimeType = codec.encoderMimeType
-            ?: return@cached CodecCapability(null, emptyList(), 0, emptySet(), false)
-        val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-        var bitrateRange: IntRange? = null
-        val sampleRates = linkedSetOf<Int>()
-        var maxChannelCount = 0
-        val supportedAacProfiles = linkedSetOf<Int>()
-        var hasEncoder = false
-        codecList.codecInfos
-            .asSequence()
-            .filter { it.isEncoder }
-            .filter { info -> info.supportedTypes.any { it.equals(mimeType, ignoreCase = true) } }
-            .forEach { info ->
-                hasEncoder = true
-                val capabilities =
-                    runCatching { info.getCapabilitiesForType(mimeType) }
-                        .onFailure { Log.w(TAG, "codecCapability: getCapabilitiesForType($mimeType) failed", it) }
-                        .getOrNull()
-                        ?: return@forEach
-                val audioCapabilities = capabilities.audioCapabilities ?: return@forEach
-                val range = audioCapabilities.getBitrateRange()
-                val normalized = range?.let { (it.lower.coerceAtLeast(1) / 1000)..max(1, it.upper / 1000) }
-                val currentBitrateRange = bitrateRange
-                bitrateRange = if (currentBitrateRange == null) {
-                    normalized
-                } else {
-                    val low = minOf(
-                        currentBitrateRange.first,
-                        normalized?.first ?: currentBitrateRange.first,
-                    )
-                    val high = maxOf(
-                        currentBitrateRange.last,
-                        normalized?.last ?: currentBitrateRange.last,
-                    )
-                    low..high
-                }
-                maxChannelCount = maxOf(maxChannelCount, audioCapabilities.maxInputChannelCount.coerceAtLeast(1))
-                val probeRates = when {
-                    codec.isAacFamily -> AAC_SAMPLE_RATES.toIntArray()
-                    codec == ExportCodec.AMR_NB -> intArrayOf(8_000)
-                    codec == ExportCodec.AMR_WB -> intArrayOf(16_000)
-                    else -> STANDARD_SAMPLE_RATES
-                }
-                val discreteRates = audioCapabilities.supportedSampleRates
-                if (discreteRates != null) {
-                    discreteRates.filterTo(sampleRates) { it in probeRates }
-                } else {
-                    probeRates.forEach { rate ->
-                        if (audioCapabilities.isSampleRateSupported(rate)) {
-                            sampleRates += rate
-                        }
-                    }
-                }
-                if (codec.isAacFamily) {
-                    capabilities.profileLevels.forEach { supportedAacProfiles += it.profile }
-                }
-            }
-        val fallback = if (hasEncoder) when (codec) {
-            ExportCodec.AMR_NB -> listOf(8_000)
-            ExportCodec.AMR_WB -> listOf(16_000)
-            ExportCodec.AAC_LC, ExportCodec.AAC_ELD, ExportCodec.HE_AAC,
-            ExportCodec.HE_AAC_V2, ExportCodec.XHE_AAC -> AAC_SAMPLE_RATES.toList().sortedDescending()
-            else -> standardSampleRates()
-        } else emptyList()
-        val advertisedSampleRates =
-            sampleRates.toList()
-                .sortedDescending()
-                .ifEmpty { fallback }
-        CodecCapability(
-            bitrateRangeKbps = bitrateRange,
-            advertisedSampleRates = advertisedSampleRates,
-            maxChannelCount = maxChannelCount.coerceAtLeast(1),
-            supportedAacProfiles = supportedAacProfiles,
-            hasEncoder = hasEncoder,
-        )
-    }
+    return format == ExportFormat.WAV && codec == ExportCodec.PCM_16 && sampleRate > 0 && channelCount in 1..2
 }
 
 fun orderSampleRatesByPreference(

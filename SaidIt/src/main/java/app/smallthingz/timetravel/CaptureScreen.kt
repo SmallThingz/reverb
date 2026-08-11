@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,6 +53,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -63,6 +63,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -119,12 +120,15 @@ class NotifyFileReceiver(
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
         scope.launch(Dispatchers.IO) {
-            val saved = RecordingRepository.register(appContext, recording)
+            val saved = runCatching { RecordingRepository.register(appContext, recording) }
+                .getOrDefault(recording)
             if (
                 ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
             ) return@launch
-            NotificationManagerCompat.from(appContext).notify(43, buildCaptureNotification(appContext, saved))
+            runCatching {
+                NotificationManagerCompat.from(appContext).notify(43, buildCaptureNotification(appContext, saved))
+            }
         }
     }
 
@@ -185,7 +189,7 @@ fun CaptureScreen() {
     val snackbarHostState = remember { SnackbarHostState() }
 
     var service by remember { mutableStateOf<TimeTravelService?>(null) }
-    var isListening by remember { mutableStateOf(true) }
+    var isListening by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var memorizedSeconds by remember { mutableFloatStateOf(0f) }
@@ -236,18 +240,24 @@ fun CaptureScreen() {
     }
 
     DisposableEffect(lifecycleOwner) {
+        var bound = false
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> {
-                    context.bindService(
-                        Intent(context, TimeTravelService::class.java),
-                        connection,
-                        Context.BIND_AUTO_CREATE,
-                    )
+                    if (!bound) {
+                        bound = context.bindService(
+                            Intent(context, TimeTravelService::class.java),
+                            connection,
+                            Context.BIND_AUTO_CREATE,
+                        )
+                    }
                 }
 
                 Lifecycle.Event.ON_STOP -> {
-                    context.unbindService(connection)
+                    if (bound) {
+                        context.unbindService(connection)
+                        bound = false
+                    }
                     service = null
                 }
 
@@ -257,10 +267,9 @@ fun CaptureScreen() {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            try {
+            if (bound) {
                 context.unbindService(connection)
-            } catch (_: IllegalArgumentException) {
-                // Service was not bound
+                bound = false
             }
         }
     }
@@ -363,7 +372,7 @@ fun CaptureScreen() {
                     }
                 }
             }
-            val onExportFull = remember(service, isSaving) {
+            val onExportFull = remember(service, isSaving, memorizedSeconds, handler) {
                 {
                     val s = service
                     if (s != null && !isSaving) {
@@ -376,7 +385,7 @@ fun CaptureScreen() {
                     }
                 }
             }
-            val onExportCustom = remember(isSaving) {
+            val onExportCustom = remember(isSaving, memorizedSeconds) {
                 {
                     if (!isSaving) {
                         val secs = memorizedSeconds.coerceAtLeast(0f)
@@ -465,7 +474,7 @@ private fun MainCaptureContent(
     val displayedCurrentSeconds = memorizedSeconds.coerceAtLeast(0f).toInt()
     val displayedLimitSeconds =
         when (retentionMode) {
-            RetentionMode.TIME -> retentionSeconds.coerceAtLeast(0L).toInt()
+            RetentionMode.TIME -> retentionSeconds.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
             RetentionMode.SIZE -> totalMemorySeconds.coerceAtLeast(0f).toInt()
         }
 
@@ -530,8 +539,15 @@ private fun MainCaptureContent(
         if (overExportLimit) MaterialTheme.colorScheme.error
         else MaterialTheme.colorScheme.onSurfaceVariant
 
-    val exportBlocked = isSaving || isRecording
-    val clearEnabled = !isSaving && !isRecording
+    val serviceReady = service != null
+    val hasHistory = memorizedSeconds > 0f
+    val exportBlocked = !serviceReady || isSaving || isRecording || !hasHistory
+    val clearEnabled = serviceReady && !isSaving && !isRecording && hasHistory
+    val fillProgress = if (totalMemorySeconds > 0f) {
+        (memorizedSeconds / totalMemorySeconds).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
 
     Column(
         modifier = Modifier
@@ -539,34 +555,52 @@ private fun MainCaptureContent(
             .padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(16.dp))
 
-        Text(
-            text = timerText,
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = false,
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = summaryText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = summaryColor,
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = false,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+        ) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (isListening) R.string.buffer_status_buffering else R.string.buffer_status_paused,
+                        ),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = summaryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = summaryColor,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = timerText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                LinearProgressIndicator(
+                    progress = { fillProgress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
 
         Spacer(Modifier.weight(1f))
 
@@ -574,57 +608,56 @@ private fun MainCaptureContent(
             isListening = isListening,
             isRecording = false,
             isSaving = isSaving,
+            enabled = serviceReady,
             onClick = onListenToggle,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = stringResource(
+                if (isListening) R.string.tap_to_pause_buffer else R.string.tap_to_start_buffer,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         Spacer(Modifier.weight(1f))
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        FilledTonalButton(
+            onClick = onExportFull,
+            enabled = !exportBlocked,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilledTonalButton(
-                    onClick = onClearBuffer,
-                    enabled = clearEnabled,
-                    modifier = Modifier.size(52.dp),
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_delete),
-                        contentDescription = stringResource(R.string.clear_buffer),
-                        tint = if (clearEnabled) MaterialTheme.colorScheme.onSecondaryContainer
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                    )
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                FilledTonalButton(
-                    onClick = onExportFull,
-                    enabled = !exportBlocked,
-                    modifier = Modifier.weight(1f).height(52.dp),
-                ) {
-                    Text(stringResource(R.string.record_all_memory))
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                FilledTonalButton(
-                    onClick = onExportCustom,
-                    enabled = !exportBlocked,
-                    modifier = Modifier.weight(1f).height(52.dp),
-                ) {
-                    Text(stringResource(R.string.custom_time))
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
+            Text(stringResource(R.string.record_all_memory))
         }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilledTonalButton(
+                onClick = onExportCustom,
+                enabled = !exportBlocked,
+                modifier = Modifier.weight(1f).height(52.dp),
+            ) {
+                Text(stringResource(R.string.custom_time))
+            }
+            TextButton(
+                onClick = onClearBuffer,
+                enabled = clearEnabled,
+                modifier = Modifier.height(52.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete),
+                    contentDescription = null,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.clear_buffer))
+            }
+        }
+        Spacer(Modifier.height(20.dp))
     }
+
 }
 
 @Composable
@@ -670,6 +703,7 @@ private fun ListenCircle(
     isListening: Boolean,
     isRecording: Boolean,
     isSaving: Boolean,
+    enabled: Boolean = true,
     showRecordingIcon: Boolean = false,
     onClick: () -> Unit,
 ) {
@@ -728,12 +762,7 @@ private fun ListenCircle(
         else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f)
     }
 
-    val ringStrokeColor = when {
-        active -> MaterialTheme.colorScheme.primary.copy(alpha = if (isRecording) 0.63f else 0.17f)
-        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.17f)
-    }
-
-    val enabled = !isSaving
+    val interactionEnabled = enabled && !isSaving
     val density = LocalDensity.current
     val strokeWidthPx = with(density) { 2.dp.toPx() }
     val strokeStyle = remember(strokeWidthPx) { Stroke(strokeWidthPx) }
@@ -741,12 +770,12 @@ private fun ListenCircle(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(282.dp)
-            .graphicsLayer(alpha = if (enabled) 1f else 0.72f),
+            .size(220.dp)
+            .graphicsLayer(alpha = if (interactionEnabled) 1f else 0.72f),
     ) {
         Canvas(
             modifier = Modifier
-                .size(282.dp)
+                .size(220.dp)
                 .graphicsLayer(
                     scaleX = pulseScale,
                     scaleY = pulseScale,
@@ -772,7 +801,7 @@ private fun ListenCircle(
 
         Box(
             modifier = Modifier
-                .size(232.dp)
+                .size(178.dp)
                 .clip(CircleShape)
                 .drawBehind {
                     drawCircle(fillColor)
@@ -785,7 +814,7 @@ private fun ListenCircle(
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
-                    enabled = enabled,
+                    enabled = interactionEnabled,
                     onClick = onClick,
                 ),
             contentAlignment = Alignment.Center,
@@ -801,9 +830,9 @@ private fun ListenCircle(
                         if (active) R.string.buffer_active_summary else R.string.buffer_inactive_summary,
                     ),
                     tint = contentColor,
-                    modifier = Modifier.size(64.dp),
+                    modifier = Modifier.size(46.dp),
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = stringResource(
                         if (active) R.string.buffer_active_summary else R.string.buffer_inactive_summary,
@@ -968,15 +997,17 @@ private fun ExportRangeDialog(
     var unitMode by remember { mutableStateOf(getConfiguredCustomExportUnit(context)) }
 
     var startTimeText by remember { mutableStateOf("0:00") }
-    var endTimeText by remember(currentBufferSeconds) {
+    var endTimeText by remember {
         mutableStateOf(formatDurationInput(currentBufferSeconds.toInt()))
     }
     var startSizeText by remember { mutableStateOf(formatSizeInputMib(0L)) }
-    var endSizeText by remember(currentBufferBytes) { mutableStateOf(formatSizeInputMib(currentBufferBytes)) }
-    var pastTimeText by remember(currentBufferSeconds) {
-        mutableStateOf(formatDurationInput(currentBufferSeconds.toInt().coerceAtLeast(1)))
+    var endSizeText by remember { mutableStateOf(formatSizeInputMib(currentBufferBytes)) }
+    var pastTimeText by remember {
+        val defaultSeconds = currentBufferSeconds.toInt().coerceAtLeast(1)
+        val preferredSeconds = prefs.getInt(PrefKey.CUSTOM_EXPORT_PAST_SECONDS, defaultSeconds).coerceAtLeast(1)
+        mutableStateOf(formatDurationInput(preferredSeconds))
     }
-    var pastSizeText by remember(currentBufferBytes) {
+    var pastSizeText by remember {
         mutableStateOf(
             prefs.getString(PrefKey.CUSTOM_EXPORT_PAST_SIZE_MIB, formatSizeInputMib(currentBufferBytes))
                 ?: formatSizeInputMib(currentBufferBytes),
@@ -995,6 +1026,7 @@ private fun ExportRangeDialog(
         val maxDurationSeconds = exportDurationLimitSeconds(
             exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
             exportConfig.channelCount, exportConfig.bitrateKbps,
+            exportConfig.sampleFormat,
         ).toFloat().coerceAtLeast(1f)
         val boundedEnd = endSeconds.coerceAtLeast(startSeconds)
         val requestedDuration = boundedEnd - startSeconds
@@ -1357,7 +1389,6 @@ private fun startExport(
             duration = SnackbarDuration.Indefinite,
         )
         if (result == SnackbarResult.ActionPerformed) {
-            setSaving(false)
             s.cancelCurrentExport()
         }
     }
@@ -1378,7 +1409,7 @@ private fun handleExport(
     val exportConfig = currentExportConfig(context, service)
     val maxDuration = exportDurationLimitSeconds(
         exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-        exportConfig.channelCount, exportConfig.bitrateKbps,
+        exportConfig.channelCount, exportConfig.bitrateKbps, exportConfig.sampleFormat,
     ).toFloat().coerceAtLeast(1f)
     if (bufferSeconds <= maxDuration) {
         onRange(ExportRange(0f, bufferSeconds, null))
@@ -1417,10 +1448,12 @@ private class SaveResultReceiver(
         setSaving(false)
         val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
         onError(text)
+        scope.launch { snackbarHostState.currentSnackbarData?.dismiss() }
     }
 
     override fun fileCancelled() {
         setSaving(false)
+        scope.launch { snackbarHostState.currentSnackbarData?.dismiss() }
     }
 }
 
@@ -1467,7 +1500,8 @@ private fun sizeBytesToExportSeconds(sizeBytes: Long, context: Context): Float {
 
 private fun parseSizeInputMib(value: String): Long? {
     val mib = value.trim().replace(',', '.').toDoubleOrNull() ?: return null
-    if (mib < 0.0) return null
+    if (!mib.isFinite() || mib < 0.0) return null
+    if (mib >= Long.MAX_VALUE / MIB) return null
     return (mib * MIB).roundToLong()
 }
 

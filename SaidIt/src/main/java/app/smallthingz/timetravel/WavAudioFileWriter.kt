@@ -39,6 +39,13 @@ internal class WavAudioFileWriter(
         offset: Int,
         count: Int,
     ) {
+        require(offset >= 0 && count >= 0 && offset <= bytes.size - count) {
+            "Invalid WAV write range offset=$offset count=$count size=${bytes.size}"
+        }
+        if (count == 0) return
+        if (totalSampleBytesWritten > MAX_SAMPLE_BYTES - count.toLong()) {
+            throw IOException("WAV file exceeds RIFF size limit")
+        }
         val buf = ByteBuffer.wrap(bytes, offset, count)
         while (buf.hasRemaining()) {
             val n = channel.write(buf)
@@ -80,11 +87,15 @@ internal class WavAudioFileWriter(
         headerBuffer.putInt((dataSize and 0xFFFF_FFFFL).toInt())
         headerBuffer.flip()
         channel.position(0L)
-        channel.write(headerBuffer)
+        while (headerBuffer.hasRemaining()) {
+            val written = channel.write(headerBuffer)
+            if (written <= 0) throw IOException("Failed to write WAV header")
+        }
     }
 
     private companion object {
         const val HEADER_SIZE = 44
+        const val MAX_SAMPLE_BYTES = 0xFFFF_FFFFL - 36L
         const val SUBCHUNK1_SIZE = 16
         private val RIFF_BYTES = byteArrayOf(0x52, 0x49, 0x46, 0x46)
         private val WAVE_BYTES = byteArrayOf(0x57, 0x41, 0x56, 0x45)

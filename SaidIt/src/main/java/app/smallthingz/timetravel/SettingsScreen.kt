@@ -93,7 +93,6 @@ data class SettingsSnapshot(
     var route: InputRouteMode? = null,
     var sampleRate: Int = 0,
     var exportDirectoryUri: String? = null,
-    var aggressiveRestartEnabled: Boolean = true,
     var wakeLockEnabled: Boolean = false,
 ) {
     fun copyFrom(other: SettingsSnapshot) {
@@ -109,7 +108,6 @@ data class SettingsSnapshot(
         route = other.route
         sampleRate = other.sampleRate
         exportDirectoryUri = other.exportDirectoryUri
-        aggressiveRestartEnabled = other.aggressiveRestartEnabled
         wakeLockEnabled = other.wakeLockEnabled
     }
 }
@@ -211,10 +209,12 @@ fun SettingsScreen(
         val gen = ++moveAvailabilityGeneration
         canMove = false
         scope.launch {
-            val result = RecordingRepository.syncAndCheckMovableRecordings(
-                context,
-                getOutputDirectoryId(context, selectedExportTreeUri),
-            )
+            val result = runCatching {
+                RecordingRepository.syncAndCheckMovableRecordings(
+                    context,
+                    getOutputDirectoryId(context, selectedExportTreeUri),
+                )
+            }.getOrDefault(false)
             if (gen == moveAvailabilityGeneration) canMove = result
         }
     }
@@ -222,7 +222,7 @@ fun SettingsScreen(
     fun refreshSampleRates(preferredRate: Int? = null) {
         availableSampleRates = supportedSampleRates(
             context, selectedSource, selectedRoute, selectedFormat, selectedCodec,
-            selectedChannelMode,
+            selectedChannelMode, selectedSampleFormat,
         )
         sampleRateUnsupported = availableSampleRates.isEmpty()
         if (availableSampleRates.isNotEmpty()) {
@@ -241,7 +241,7 @@ fun SettingsScreen(
         preferredRate: Int? = null,
     ) {
         availableChannelModes = supportedChannelModes(
-            context, selectedSource, selectedRoute, selectedFormat, selectedCodec,
+            context, selectedSource, selectedRoute, selectedFormat, selectedCodec, selectedSampleFormat,
         )
         val cm = preferredChannelMode?.takeIf { it in availableChannelModes } ?: availableChannelModes.first()
         selectedChannelMode = cm
@@ -255,7 +255,9 @@ fun SettingsScreen(
         preferredChannelMode: ChannelMode? = null,
         preferredRate: Int? = null,
     ) {
-        availableSourceModes = supportedAudioSourceModes(context, selectedRoute, selectedFormat, selectedCodec)
+        availableSourceModes = supportedAudioSourceModes(
+            context, selectedRoute, selectedFormat, selectedCodec, selectedSampleFormat,
+        )
         val s = preferredSource?.takeIf { it in availableSourceModes } ?: availableSourceModes.first()
         selectedSource = s
         sourceLabels = availableSourceModes.map { context.getString(it.labelRes) }
@@ -290,7 +292,6 @@ fun SettingsScreen(
         snapshot.route = selectedRoute
         snapshot.sampleRate = selectedSampleRate
         snapshot.exportDirectoryUri = selectedExportTreeUri?.toString()
-        snapshot.aggressiveRestartEnabled = currentSnapshot.aggressiveRestartEnabled
         snapshot.wakeLockEnabled = currentSnapshot.wakeLockEnabled
     }
 
@@ -445,6 +446,13 @@ fun SettingsScreen(
         retentionSizeError = null
         sampleRateUnsupported = false
 
+        if (service?.isRecordingActive() == true) {
+            if (showFeedback) {
+                Toast.makeText(context, R.string.settings_apply_blocked_recording, Toast.LENGTH_SHORT).show()
+            }
+            return false
+        }
+
         val format = selectedFormat
         val codec = selectedCodec
         val sampleFormat = selectedSampleFormat
@@ -452,6 +460,14 @@ fun SettingsScreen(
         val route = selectedRoute
         val source = selectedSource
         val sampleRate = selectedSampleRate
+
+        if (sampleRate <= 0 ||
+            !isCodecSupported(format, codec, sampleRate, channelMode) ||
+            !isInputConfigSupported(context, sampleRate, source, route, channelMode, sampleFormat)
+        ) {
+            sampleRateUnsupported = true
+            return false
+        }
 
         val retentionTime = if (activeRetentionMode == RetentionMode.TIME) {
             parseDurationInput(retentionTimeText.trim())
@@ -483,14 +499,11 @@ fun SettingsScreen(
             .putInt(PrefKey.RETENTION_MODE, activeRetentionMode.ordinal)
             .putLong(PrefKey.RETENTION_SECONDS, retentionTime.toLong())
             .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedSizeBytes)
-            .putString(PrefKey.OUTPUT_FORMAT, format.prefValue)
-            .putString(PrefKey.OUTPUT_CODEC, codec.prefValue)
             .putString(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.prefValue)
             .putInt(PrefKey.AUDIO_SOURCE, source.sourceValue)
             .putString(PrefKey.CHANNEL_MODE, channelMode.prefValue)
             .putString(PrefKey.INPUT_ROUTE, route.prefValue)
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
-            .putBoolean(PrefKey.AGGRESSIVE_RESTART_ENABLED, currentSnapshot.aggressiveRestartEnabled)
             .putBoolean(PrefKey.WAKE_LOCK_ENABLED, currentSnapshot.wakeLockEnabled)
             .apply()
         setConfiguredExportTreeUri(context, selectedExportTreeUri)
@@ -507,14 +520,10 @@ fun SettingsScreen(
                 if (showFeedback) {
                     Toast.makeText(context, R.string.settings_apply_blocked_recording, Toast.LENGTH_SHORT).show()
                 }
+                return false
             }
             TimeTravelService.ApplySettingsResult.APPLIED_NOW -> {
                 if (showFeedback) Toast.makeText(context, R.string.settings_saved, Toast.LENGTH_SHORT).show()
-            }
-            TimeTravelService.ApplySettingsResult.DEFERRED_UNTIL_RESTART -> {
-                if (showFeedback) {
-                    Toast.makeText(context, R.string.settings_saved_deferred_input, Toast.LENGTH_SHORT).show()
-                }
             }
         }
         return true
@@ -525,7 +534,7 @@ fun SettingsScreen(
 
         val configuredThemeMode = getConfiguredThemeMode(context)
         val configuredMode = getConfiguredRetentionMode(context)
-        val configuredTime = getConfiguredRetentionSeconds(context).toInt()
+        val configuredTime = getConfiguredRetentionSeconds(context).coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         val storedSizeBytes = prefs.getLong(PrefKey.AUDIO_MEMORY_SIZE, 512L * BYTES_IN_MEGABYTE)
         val configuredFormat = getConfiguredOutputFormat(context)
         val configuredCodec = getConfiguredOutputCodec(context)
@@ -537,12 +546,12 @@ fun SettingsScreen(
             PrefKey.SAMPLE_RATE,
             getPreferredSampleRate(
                 context, configuredSourceVal, configuredRouteVal,
-                configuredFormat, configuredCodec, configuredChannelModeVal,
+                configuredFormat, configuredCodec, configuredChannelModeVal, configuredSampleFormatVal,
             ),
         ).takeIf { it > 0 }
             ?: getPreferredSampleRate(
                 context, configuredSourceVal, configuredRouteVal,
-                configuredFormat, configuredCodec, configuredChannelModeVal,
+                configuredFormat, configuredCodec, configuredChannelModeVal, configuredSampleFormatVal,
             )
         val configuredExportTreeUriVal = getConfiguredExportTreeUri(context)
 
@@ -596,10 +605,7 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
-        currentSnapshot = currentSnapshot.copy(
-            aggressiveRestartEnabled = isAggressiveRestartEnabled(context),
-            wakeLockEnabled = isWakeLockEnabled(context),
-        )
+        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = isWakeLockEnabled(context))
 
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
@@ -611,10 +617,16 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
         if (treeUri == null) return@rememberLauncherForActivityResult
-        context.contentResolver.takePersistableUriPermission(
-            treeUri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-        )
+        val permissionTaken = runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }.isSuccess
+        if (!permissionTaken) {
+            Toast.makeText(context, R.string.cant_access_folder, Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
         selectedExportTreeUri = treeUri
         exportPathText = describeOutputDirectory(context, treeUri)
         saveCurrentToSnapshot(currentSnapshot)
@@ -693,7 +705,12 @@ fun SettingsScreen(
         if (!persistSettings(showFeedback = false)) return
         canMove = false
         scope.launch {
-            val result = RecordingRepository.moveAllToConfiguredDirectory(context)
+            val result = runCatching { RecordingRepository.moveAllToConfiguredDirectory(context) }
+                .getOrElse {
+                    Toast.makeText(context, R.string.move_recordings_failed, Toast.LENGTH_SHORT).show()
+                    refreshMoveRecordingsAvailability()
+                    return@launch
+                }
             val message = when {
                 result.moved == 0 && result.removedMissing == 0 -> context.getString(R.string.move_recordings_none)
                 result.removedMissing > 0 -> {
@@ -755,7 +772,15 @@ fun SettingsScreen(
                             val s = service
                             val rateChanged = currentSnapshot.sampleRate != originalSnapshot.sampleRate
                             val formatChanged = currentSnapshot.sampleFormat != originalSnapshot.sampleFormat
-                            if ((rateChanged || formatChanged) && s != null && s.hasBufferedAudio()) {
+                            val channelChanged = currentSnapshot.channelMode != originalSnapshot.channelMode
+                            val retentionChanged = currentSnapshot.retentionMode != originalSnapshot.retentionMode ||
+                                when (currentSnapshot.retentionMode) {
+                                    RetentionMode.TIME -> currentSnapshot.retentionTime != originalSnapshot.retentionTime
+                                    RetentionMode.SIZE -> currentSnapshot.retentionSizeMb != originalSnapshot.retentionSizeMb
+                                }
+                            if ((rateChanged || formatChanged || channelChanged || retentionChanged) &&
+                                s != null && s.hasBufferedAudio()
+                            ) {
                                 showBufferResetWarning = true
                             } else {
                                 if (persistSettings(showFeedback = false)) onBack()
@@ -925,6 +950,7 @@ fun SettingsScreen(
                                 selectedSampleFormat = PcmSampleFormat.entries.first {
                                     context.getString(it.labelRes) == label
                                 }
+                                refreshSourceModes(selectedSource, selectedChannelMode, selectedSampleRate)
                                 refreshRetentionFields(preserveActiveInputs = true)
                                 saveCurrentToSnapshot(currentSnapshot)
                                 pushUndoState()
@@ -971,6 +997,14 @@ fun SettingsScreen(
                         },
                     )
                 }
+            }
+            if (sampleRateUnsupported) {
+                Text(
+                    text = stringResource(R.string.unsupported_config_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -1055,16 +1089,6 @@ fun SettingsScreen(
             HorizontalDivider(Modifier.padding(vertical = 24.dp))
 
             SectionTitle(stringResource(R.string.background_persistence_title))
-            SwitchRow(
-                label = stringResource(R.string.aggressive_restart_label),
-                summary = stringResource(R.string.aggressive_restart_summary),
-                checked = currentSnapshot.aggressiveRestartEnabled,
-                onCheckedChange = {
-                    currentSnapshot = currentSnapshot.copy(aggressiveRestartEnabled = it)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-            )
             SwitchRow(
                 label = stringResource(R.string.wake_lock_label),
                 summary = stringResource(R.string.wake_lock_summary),
@@ -1282,7 +1306,7 @@ private fun rawMegabytesToBytes(memoryInMegabytes: Double): Long {
 }
 
 private fun parseRetentionSizeMib(value: String): Double? {
-    return value.trim().replace(',', '.').toDoubleOrNull()
+    return value.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
 }
 
 private fun formatRetentionSizeMib(value: Double): String {

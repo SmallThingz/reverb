@@ -3,11 +3,18 @@ package app.smallthingz.timetravel
 import android.content.Context
 import android.os.SystemClock
 import java.io.Closeable
+import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
+import java.util.zip.CRC32
 
+/**
+ * Disk-backed circular PCM history.
+ *
+ * Audio bytes are the source of truth. Only a small metadata record is kept in memory, so
+ * retention is not constrained by the Java heap or by MappedByteBuffer's Int-sized offsets.
+ */
 internal class PersistentAudioRingStore(
     context: Context,
 ) : Closeable {
@@ -23,46 +30,180 @@ internal class PersistentAudioRingStore(
     private val dataFile = File(directory, TimeTravelConfig.BUFFER_PCM_FILE_NAME)
 
     private var metaAccess: RandomAccessFile? = null
-    private var metaChannel: FileChannel? = null
-    private var metaMap: MappedByteBuffer? = null
-
     private var dataAccess: RandomAccessFile? = null
-    private var dataChannel: FileChannel? = null
-    private var dataMap: MappedByteBuffer? = null
+    private var loaded = false
+    private var closed = false
 
-    private var mappedCapacityBytes = -1
-    private var mappedSampleRate = -1
-    private var mappedChannelCount = -1
-    private var mappedBytesPerSample = -1
-    private var lastForcedAtUptimeMillis = 0L
-    private val ioScratch = ByteArray(IO_CHUNK_SIZE)
-
-    data class RestoreSummary(
-        val restoredBytes: Int,
-        val lastWriteAtMillis: Long,
-    )
+    private var metadataGeneration = 0L
+    private var storageGeneration = 0L
+    private var capacityBytes = 0L
+    private var totalWrittenBytes = 0L
+    private var filledBytes = 0L
+    private var lastWriteAtMillis = 0L
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var bytesPerSample = 0
+    private var lastMetadataWriteAtUptimeMillis = 0L
 
     data class Snapshot(
-        val capacityBytes: Int,
+        val capacityBytes: Long,
         val sampleRate: Int,
         val channelCount: Int,
         val bytesPerSample: Int,
-        val filledBytes: Int,
+        val filledBytes: Long,
         val lastWriteAtMillis: Long,
     )
 
+    fun interface Consumer {
+        fun consume(array: ByteArray, offset: Int, count: Int): Int
+    }
+
+    @Synchronized
+    fun configure(
+        requestedCapacityBytes: Long,
+        requestedSampleRate: Int,
+        requestedChannelCount: Int,
+        sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    ) {
+        ensureLoadedLocked()
+        val frameBytes = requestedChannelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+        val normalizedCapacity = if (frameBytes > 0L) {
+            (requestedCapacityBytes.coerceAtLeast(0L) / frameBytes) * frameBytes
+        } else {
+            0L
+        }
+        if (normalizedCapacity <= 0L || requestedSampleRate <= 0 || requestedChannelCount <= 0) {
+            resetLocked(
+                capacity = 0L,
+                rate = 0,
+                channels = 0,
+                sampleBytes = 0,
+                forceToDisk = true,
+            )
+            return
+        }
+
+        val unchanged =
+            capacityBytes == normalizedCapacity &&
+                sampleRate == requestedSampleRate &&
+                channelCount == requestedChannelCount &&
+                bytesPerSample == sampleFormat.bytesPerSample
+        if (unchanged) return
+
+        // Alpha storage format: incompatible sizing or PCM settings intentionally reset history.
+        resetLocked(
+            capacity = normalizedCapacity,
+            rate = requestedSampleRate,
+            channels = requestedChannelCount,
+            sampleBytes = sampleFormat.bytesPerSample,
+            forceToDisk = true,
+        )
+    }
+
+    @Synchronized
+    fun append(
+        array: ByteArray,
+        offset: Int,
+        count: Int,
+        requestedCapacityBytes: Long,
+        requestedSampleRate: Int,
+        requestedChannelCount: Int,
+        sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    ) {
+        require(offset >= 0 && count >= 0 && offset <= array.size - count) {
+            "Invalid PCM range offset=$offset count=$count size=${array.size}"
+        }
+        if (count == 0) return
+
+        configure(
+            requestedCapacityBytes,
+            requestedSampleRate,
+            requestedChannelCount,
+            sampleFormat,
+        )
+        if (capacityBytes <= 0L) return
+
+        val access = dataAccessLocked()
+        var sourceOffset = offset
+        var remaining = count
+
+        while (remaining > 0) {
+            val writePosition = totalWrittenBytes % capacityBytes
+            val chunk = minOf(remaining.toLong(), capacityBytes - writePosition).toInt()
+            access.seek(writePosition)
+            access.write(array, sourceOffset, chunk)
+            sourceOffset += chunk
+            remaining -= chunk
+            totalWrittenBytes += chunk.toLong()
+        }
+        filledBytes = minOf(capacityBytes, filledBytes + count.toLong())
+        lastWriteAtMillis = System.currentTimeMillis()
+        maybeCheckpointLocked()
+    }
+
+    /**
+     * Streams one logical range from oldest to newest without pinning the store lock while the
+     * consumer writes. Returns false if live capture overwrites any unread part of the range.
+     */
+    fun read(
+        skipBytes: Long,
+        maxBytes: Long,
+        consumer: Consumer,
+    ): Boolean {
+        val normalizedSkip = skipBytes.coerceAtLeast(0L)
+        val normalizedMax = maxBytes.coerceAtLeast(0L)
+        if (normalizedMax <= 0L) return false
+
+        val plan = synchronized(this) {
+            ensureLoadedLocked()
+            if (capacityBytes <= 0L || filledBytes <= 0L) return false
+            if (normalizedSkip > filledBytes || normalizedMax > filledBytes - normalizedSkip) return false
+            val oldestAbsolute = totalWrittenBytes - filledBytes
+            ReadPlan(
+                storageGeneration = storageGeneration,
+                capacityBytes = capacityBytes,
+                startAbsolute = oldestAbsolute + normalizedSkip,
+                endAbsolute = oldestAbsolute + normalizedSkip + normalizedMax,
+            )
+        }
+
+        val scratch = ByteArray(IO_CHUNK_SIZE)
+        var nextAbsolute = plan.startAbsolute
+        while (nextAbsolute < plan.endAbsolute) {
+            val count = synchronized(this) {
+                ensureLoadedLocked()
+                if (storageGeneration != plan.storageGeneration || capacityBytes != plan.capacityBytes) {
+                    return false
+                }
+                val currentOldest = totalWrittenBytes - filledBytes
+                if (nextAbsolute < currentOldest) {
+                    return false
+                }
+                val physicalOffset = nextAbsolute % plan.capacityBytes
+                val wanted = minOf(
+                    scratch.size.toLong(),
+                    plan.endAbsolute - nextAbsolute,
+                    plan.capacityBytes - physicalOffset,
+                ).toInt()
+                val access = dataAccessLocked()
+                try {
+                    access.seek(physicalOffset)
+                    access.readFully(scratch, 0, wanted)
+                } catch (_: EOFException) {
+                    return false
+                }
+                wanted
+            }
+            if (consumer.consume(scratch, 0, count) != count) return false
+            nextAbsolute += count.toLong()
+        }
+        return true
+    }
+
     @Synchronized
     fun peekSnapshot(): Snapshot? {
-        ensureMetaMapped()
-        val meta = metaMap ?: return null
-        val capacityBytes = meta.readCapacityBytes()
-        val sampleRate = meta.readSampleRate()
-        val channelCount = meta.readChannelCount()
-        val bytesPerSample = meta.readBytesPerSample().takeIf { it > 0 } ?: 2
-        val filledBytes = meta.readFilledBytes()
-        if (capacityBytes <= 0 || sampleRate <= 0 || channelCount <= 0 ||
-            filledBytes <= 0 || filledBytes > capacityBytes
-        ) {
+        ensureLoadedLocked()
+        if (capacityBytes <= 0L || filledBytes <= 0L || sampleRate <= 0 || channelCount <= 0) {
             return null
         }
         return Snapshot(
@@ -71,559 +212,263 @@ internal class PersistentAudioRingStore(
             channelCount = channelCount,
             bytesPerSample = bytesPerSample,
             filledBytes = filledBytes,
-            lastWriteAtMillis = meta.readLastWriteAtMillis(),
+            lastWriteAtMillis = lastWriteAtMillis,
         )
-    }
-
-    fun restoreInto(
-        audioMemory: AudioMemory,
-        capacityBytes: Long,
-        sampleRate: Int,
-        channelCount: Int,
-        sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-    ): RestoreSummary {
-        if (capacityBytes <= 0L || sampleRate <= 0 || channelCount <= 0) {
-            clear()
-            return RestoreSummary(0, 0L)
-        }
-
-        val restoredBytes: ByteArray
-        val lastWriteAtMillis: Long
-        synchronized(this) {
-            ensureMapped(capacityBytes.toInt(), sampleRate, channelCount, sampleFormat.bytesPerSample)
-            val meta = metaMap ?: return RestoreSummary(0, 0L)
-            val filledBytes = meta.readFilledBytes().coerceIn(0, mappedCapacityBytes)
-            if (filledBytes <= 0) {
-                return RestoreSummary(0, 0L)
-            }
-            lastWriteAtMillis = meta.readLastWriteAtMillis()
-            restoredBytes = readNewestBytes(filledBytes)
-        }
-
-        audioMemory.write(restoredBytes, 0, restoredBytes.size)
-        return RestoreSummary(restoredBytes.size, lastWriteAtMillis)
-    }
-
-    @Synchronized
-    fun snapshotBytes(): ByteArray {
-        ensureMetaMapped()
-        val meta = metaMap ?: return ByteArray(0)
-        val capacityBytes = meta.readCapacityBytes()
-        val sampleRate = meta.readSampleRate()
-        val channelCount = meta.readChannelCount()
-        val filledBytes = meta.readFilledBytes()
-        if (capacityBytes <= 0 || sampleRate <= 0 || channelCount <= 0 ||
-            filledBytes <= 0 || filledBytes > capacityBytes
-        ) {
-            return ByteArray(0)
-        }
-        val bytesPerSample = meta.readBytesPerSample().takeIf { it > 0 } ?: 2
-        ensureMapped(capacityBytes, sampleRate, channelCount, bytesPerSample)
-        return readNewestBytes(filledBytes)
-    }
-
-    @Synchronized
-    fun append(
-        array: ByteArray,
-        offset: Int,
-        count: Int,
-        capacityBytes: Long,
-        sampleRate: Int,
-        channelCount: Int,
-        sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-    ) {
-        if (count <= 0 || capacityBytes <= 0L) return
-        val aligned = alignToPageSize(capacityBytes.toInt())
-        if (dataMap == null ||
-            mappedCapacityBytes != aligned ||
-            mappedSampleRate != sampleRate ||
-            mappedChannelCount != channelCount ||
-            mappedBytesPerSample != sampleFormat.bytesPerSample
-        ) {
-            ensureMapped(capacityBytes.toInt(), sampleRate, channelCount, sampleFormat.bytesPerSample)
-        }
-        val meta = metaMap ?: return
-        val dv = dataMap ?: return
-        var writePosition = meta.readWritePosition()
-        var remaining = count
-        var readOffset = offset
-
-        while (remaining > 0) {
-            val chunkSize = minOf(remaining, mappedCapacityBytes - writePosition)
-            dv.position(writePosition)
-            dv.put(array, readOffset, chunkSize)
-            readOffset += chunkSize
-            remaining -= chunkSize
-            writePosition += chunkSize
-            if (writePosition >= mappedCapacityBytes) {
-                writePosition = 0
-            }
-        }
-
-        val newFilled = minOf(mappedCapacityBytes, meta.readFilledBytes() + count)
-        meta.writeWritePosition(writePosition)
-        meta.writeFilledBytes(newFilled)
-        meta.writeLastWriteAtMillis(System.currentTimeMillis())
-        val now = SystemClock.uptimeMillis()
-        if (now - lastForcedAtUptimeMillis >= FORCE_INTERVAL_MS) {
-            metaMap?.force()
-            dataMap?.force()
-            lastForcedAtUptimeMillis = now
-        }
     }
 
     @Synchronized
     fun hasData(): Boolean {
-        ensureMetaMapped()
-        val meta = metaMap ?: return false
-        val capacityBytes = meta.readCapacityBytes()
-        val sampleRate = meta.readSampleRate()
-        val channelCount = meta.readChannelCount()
-        val filledBytes = meta.readFilledBytes()
-        return capacityBytes > 0 && sampleRate > 0 && channelCount > 0 &&
-            filledBytes > 0 && filledBytes <= capacityBytes
+        ensureLoadedLocked()
+        return capacityBytes > 0L && filledBytes > 0L && sampleRate > 0 && channelCount > 0
     }
 
     @Synchronized
     fun countFilledBytes(): Long {
-        ensureMetaMapped()
-        val meta = metaMap ?: return 0L
-        val capacityBytes = meta.readCapacityBytes()
-        val filledBytes = meta.readFilledBytes()
-        if (capacityBytes <= 0 || filledBytes <= 0 || filledBytes > capacityBytes) {
-            return 0L
-        }
-        return filledBytes.toLong()
+        ensureLoadedLocked()
+        return filledBytes.coerceIn(0L, capacityBytes.coerceAtLeast(0L))
     }
 
     @Synchronized
     fun checkpoint() {
-        force()
+        ensureLoadedLocked()
+        checkpointLocked(forceToDisk = true)
     }
 
     @Synchronized
     fun clear() {
-        ensureMetaMapped()
-        val meta = metaMap
-        if (meta != null) {
-            meta.writeWritePosition(0)
-            meta.writeFilledBytes(0)
-            meta.writeLastWriteAtMillis(0L)
-            force()
-        }
+        ensureLoadedLocked()
+        if (capacityBytes <= 0L && filledBytes == 0L) return
+        totalWrittenBytes = 0L
+        filledBytes = 0L
+        lastWriteAtMillis = 0L
+        storageGeneration++
+        runCatching { dataAccessLocked().setLength(0L) }
+        checkpointLocked(forceToDisk = true)
     }
 
     @Synchronized
     override fun close() {
-        force()
-        metaMap = null
-        dataMap = null
-        runCatching { metaChannel?.close() }
-        runCatching { dataChannel?.close() }
-        runCatching { metaAccess?.close() }
-        runCatching { dataAccess?.close() }
-        metaChannel = null
-        dataChannel = null
-        metaAccess = null
-        dataAccess = null
-        mappedCapacityBytes = -1
-        mappedSampleRate = -1
-        mappedChannelCount = -1
-        mappedBytesPerSample = -1
+        if (closed) return
+        if (loaded) {
+            runCatching { checkpointLocked(forceToDisk = true) }
+            runCatching { dataAccess?.close() }
+            runCatching { metaAccess?.close() }
+            dataAccess = null
+            metaAccess = null
+            loaded = false
+        }
+        closed = true
     }
 
     @Synchronized
-    private fun ensureMapped(
-        capacityBytes: Int,
-        sampleRate: Int,
-        channelCount: Int,
-        bytesPerSample: Int,
-        keepExisting: Boolean = true,
-    ) {
-        if (capacityBytes <= 0 || sampleRate <= 0 || channelCount <= 0 || bytesPerSample <= 0) {
-            clear()
+    internal fun testStorageFiles(): Pair<File, File> = metaFile to dataFile
+
+    private fun ensureLoadedLocked() {
+        check(!closed) { "PersistentAudioRingStore is closed" }
+        if (loaded) return
+        val openedMeta = RandomAccessFile(metaFile, "rw")
+        val openedData = try {
+            RandomAccessFile(dataFile, "rw")
+        } catch (error: Throwable) {
+            runCatching { openedMeta.close() }
+            throw error
+        }
+        metaAccess = openedMeta
+        dataAccess = openedData
+        loaded = true
+
+        val first = readMetadataSlotLocked(0)
+        val second = readMetadataSlotLocked(1)
+        val restored = listOfNotNull(first, second).maxByOrNull { it.generation }
+        if (restored == null) {
+            metadataGeneration = 0L
             return
         }
+        metadataGeneration = restored.generation
+        capacityBytes = restored.capacityBytes.coerceAtLeast(0L)
+        totalWrittenBytes = restored.totalWrittenBytes.coerceAtLeast(0L)
+        filledBytes = restored.filledBytes.coerceIn(0L, capacityBytes)
+        lastWriteAtMillis = restored.lastWriteAtMillis.coerceAtLeast(0L)
+        sampleRate = restored.sampleRate.coerceAtLeast(0)
+        channelCount = restored.channelCount.coerceAtLeast(0)
+        bytesPerSample = restored.bytesPerSample.coerceAtLeast(0)
 
-        ensureMetaMapped()
-        val alignedCapacityBytes = alignToPageSize(capacityBytes)
-
-        val meta = metaMap ?: return
-
-        // Fresh process: map the existing file first so resize has data to read.
-        if (dataMap == null) {
-            val existingCapacity = meta.readCapacityBytes()
-            if (existingCapacity > 0) {
-                remap(
-                    existingCapacity,
-                    meta.readSampleRate(),
-                    meta.readChannelCount(),
-                    meta.readBytesPerSample(),
-                    clearContents = false,
-                )
+        if (capacityBytes <= 0L || sampleRate <= 0 || channelCount <= 0 || bytesPerSample <= 0) {
+            capacityBytes = 0L
+            totalWrittenBytes = 0L
+            filledBytes = 0L
+            lastWriteAtMillis = 0L
+            sampleRate = 0
+            channelCount = 0
+            bytesPerSample = 0
+        } else if (totalWrittenBytes < filledBytes) {
+            totalWrittenBytes = 0L
+            filledBytes = 0L
+            lastWriteAtMillis = 0L
+        } else {
+            val expectedStoredBytes = minOf(totalWrittenBytes, capacityBytes)
+            val actualStoredBytes = runCatching { dataAccessLocked().length() }.getOrDefault(0L)
+            if (actualStoredBytes < expectedStoredBytes) {
+                totalWrittenBytes = 0L
+                filledBytes = 0L
+                lastWriteAtMillis = 0L
             }
         }
-
-        val needsRemap =
-            dataMap == null ||
-                mappedCapacityBytes != alignedCapacityBytes ||
-                mappedSampleRate != sampleRate ||
-                mappedChannelCount != channelCount ||
-                mappedBytesPerSample != bytesPerSample ||
-                meta.readCapacityBytes() != alignedCapacityBytes ||
-                meta.readSampleRate() != sampleRate ||
-                meta.readChannelCount() != channelCount ||
-                meta.readBytesPerSample() != bytesPerSample
-
-        if (!needsRemap) {
-            return
-        }
-
-        if (!keepExisting) {
-            remap(alignedCapacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = true)
-            return
-        }
-
-        val sameFormat = meta.readSampleRate() == sampleRate &&
-            meta.readChannelCount() == channelCount &&
-            meta.readBytesPerSample() == bytesPerSample
-        val sameCapacity = meta.readCapacityBytes() == alignedCapacityBytes
-        if (sameFormat && sameCapacity) {
-            remap(alignedCapacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = false)
-            return
-        }
-
-        resizePreservingNewest(alignedCapacityBytes, sampleRate, channelCount, bytesPerSample, sameFormat)
     }
 
-    private fun resizePreservingNewest(
-        capacityBytes: Int,
-        sampleRate: Int,
-        channelCount: Int,
-        bytesPerSample: Int,
-        sameFormat: Boolean,
+    private fun resetLocked(
+        capacity: Long,
+        rate: Int,
+        channels: Int,
+        sampleBytes: Int,
+        forceToDisk: Boolean,
     ) {
-        val existingMeta = metaMap
-        val oldCapacityBytes = mappedCapacityBytes
-        if (oldCapacityBytes <= 0) {
-            remap(capacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = true)
-            return
-        }
-        val oldFilledBytes = existingMeta?.readFilledBytes()?.coerceIn(0, oldCapacityBytes) ?: 0
-        val oldWritePosition = existingMeta?.readWritePosition()?.coerceIn(0, oldCapacityBytes) ?: 0
+        capacityBytes = capacity
+        totalWrittenBytes = 0L
+        filledBytes = 0L
+        lastWriteAtMillis = 0L
+        sampleRate = rate
+        channelCount = channels
+        bytesPerSample = sampleBytes
+        storageGeneration++
+        runCatching { dataAccessLocked().setLength(0L) }
+        checkpointLocked(forceToDisk)
+    }
 
-        if (sameFormat && capacityBytes > oldCapacityBytes &&
-            canGrowWithoutCopy(oldCapacityBytes, oldFilledBytes, oldWritePosition)
-        ) {
-            remap(capacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = false)
-            if (oldFilledBytes == oldCapacityBytes && oldWritePosition == 0) {
-                metaMap?.writeWritePosition(oldCapacityBytes)
-            }
-            return
+    private fun maybeCheckpointLocked() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastMetadataWriteAtUptimeMillis >= METADATA_INTERVAL_MS) {
+            checkpointLocked(forceToDisk = false)
+            lastMetadataWriteAtUptimeMillis = now
         }
+    }
 
-        if (sameFormat && capacityBytes > oldCapacityBytes &&
-            oldFilledBytes == oldCapacityBytes && oldWritePosition > 0
-        ) {
-            growWrappedRingWithSmallestCopy(
-                capacityBytes,
-                sampleRate,
-                channelCount,
-                bytesPerSample,
-                oldCapacityBytes,
-                oldWritePosition,
+    private fun checkpointLocked(forceToDisk: Boolean) {
+        metadataGeneration++
+        val metadata = Metadata(
+            generation = metadataGeneration,
+            capacityBytes = capacityBytes,
+            totalWrittenBytes = totalWrittenBytes,
+            filledBytes = filledBytes,
+            lastWriteAtMillis = lastWriteAtMillis,
+            sampleRate = sampleRate,
+            channelCount = channelCount,
+            bytesPerSample = bytesPerSample,
+        )
+        writeMetadataSlotLocked((metadataGeneration and 1L).toInt(), metadata)
+        if (forceToDisk) {
+            dataAccess?.fd?.sync()
+            metaAccess?.fd?.sync()
+        }
+    }
+
+    private fun readMetadataSlotLocked(slot: Int): Metadata? {
+        val access = metaAccess ?: return null
+        val offset = slot.toLong() * META_SLOT_BYTES
+        if (access.length() < offset + META_SLOT_BYTES) return null
+        val bytes = ByteArray(META_SLOT_BYTES)
+        return try {
+            access.seek(offset)
+            access.readFully(bytes)
+            val storedCrc = readInt(bytes, META_CRC_OFFSET)
+            val computed = crc32(bytes, 0, META_CRC_OFFSET)
+            if (storedCrc != computed) return null
+            if (readInt(bytes, 0) != META_MAGIC || readInt(bytes, 4) != META_VERSION) return null
+            Metadata(
+                generation = readLong(bytes, 8),
+                capacityBytes = readLong(bytes, 16),
+                totalWrittenBytes = readLong(bytes, 24),
+                filledBytes = readLong(bytes, 32),
+                lastWriteAtMillis = readLong(bytes, 40),
+                sampleRate = readInt(bytes, 48),
+                channelCount = readInt(bytes, 52),
+                bytesPerSample = readInt(bytes, 56),
             )
-            return
+        } catch (_: IOException) {
+            null
         }
-
-        val saved = if (sameFormat) {
-            readNewestBytes(minOf(metaMap?.readFilledBytes() ?: 0, capacityBytes))
-        } else {
-            ByteArray(0)
-        }
-        remap(capacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = true)
-        if (saved.isEmpty()) return
-
-        val meta = metaMap ?: return
-        val dv = dataMap ?: return
-        var remaining = saved.size
-        var readOffset = 0
-        var writePosition = 0
-        while (remaining > 0) {
-            val chunkSize = minOf(remaining, mappedCapacityBytes - writePosition)
-            dv.position(writePosition)
-            dv.put(saved, readOffset, chunkSize)
-            readOffset += chunkSize
-            remaining -= chunkSize
-            writePosition += chunkSize
-            if (writePosition >= mappedCapacityBytes) writePosition = 0
-        }
-        meta.writeWritePosition(writePosition)
-        meta.writeFilledBytes(saved.size)
-        meta.writeLastWriteAtMillis(System.currentTimeMillis())
-        force()
     }
 
-    private fun canGrowWithoutCopy(
-        oldCapacityBytes: Int,
-        oldFilledBytes: Int,
-        oldWritePosition: Int,
-    ): Boolean {
-        if (oldCapacityBytes <= 0 || oldFilledBytes <= 0) return true
-        // If the ring has not wrapped, logical order is already [0, filled).
-        if (oldFilledBytes < oldCapacityBytes) return true
-        // If a full ring wrapped exactly to zero, logical order is still [0, oldCapacity).
-        return oldWritePosition == 0
+    private fun writeMetadataSlotLocked(slot: Int, metadata: Metadata) {
+        val access = metaAccess ?: return
+        val bytes = ByteArray(META_SLOT_BYTES)
+        writeInt(bytes, 0, META_MAGIC)
+        writeInt(bytes, 4, META_VERSION)
+        writeLong(bytes, 8, metadata.generation)
+        writeLong(bytes, 16, metadata.capacityBytes)
+        writeLong(bytes, 24, metadata.totalWrittenBytes)
+        writeLong(bytes, 32, metadata.filledBytes)
+        writeLong(bytes, 40, metadata.lastWriteAtMillis)
+        writeInt(bytes, 48, metadata.sampleRate)
+        writeInt(bytes, 52, metadata.channelCount)
+        writeInt(bytes, 56, metadata.bytesPerSample)
+        writeInt(bytes, META_CRC_OFFSET, crc32(bytes, 0, META_CRC_OFFSET))
+        access.seek(slot.toLong() * META_SLOT_BYTES)
+        access.write(bytes)
     }
 
-    private fun growWrappedRingWithSmallestCopy(
-        newCapacityBytes: Int,
-        sampleRate: Int,
-        channelCount: Int,
-        bytesPerSample: Int,
-        oldCapacityBytes: Int,
-        oldWritePosition: Int,
-    ) {
-        val oldStartPosition = oldWritePosition
-        val headLength = oldCapacityBytes - oldStartPosition
-        val tailLength = oldWritePosition
-        val growthBytes = newCapacityBytes - oldCapacityBytes
-        remap(newCapacityBytes, sampleRate, channelCount, bytesPerSample, clearContents = false)
-        val meta = metaMap ?: return
+    private fun dataAccessLocked(): RandomAccessFile {
+        return dataAccess ?: RandomAccessFile(dataFile, "rw").also { dataAccess = it }
+    }
 
-        if (headLength <= tailLength) {
-            copyWithinMappedFile(
-                sourceOffset = oldStartPosition,
-                targetOffset = oldStartPosition + growthBytes,
-                count = headLength,
-            )
-            meta.writeWritePosition(oldWritePosition)
-        } else {
-            val afterOldEnd = minOf(tailLength, growthBytes)
-            copyWithinMappedFile(sourceOffset = 0, targetOffset = oldCapacityBytes, count = afterOldEnd)
-            val remainingTail = tailLength - afterOldEnd
-            if (remainingTail > 0) {
-                copyWithinMappedFile(sourceOffset = afterOldEnd, targetOffset = 0, count = remainingTail)
+    private data class Metadata(
+        val generation: Long,
+        val capacityBytes: Long,
+        val totalWrittenBytes: Long,
+        val filledBytes: Long,
+        val lastWriteAtMillis: Long,
+        val sampleRate: Int,
+        val channelCount: Int,
+        val bytesPerSample: Int,
+    )
+
+    private data class ReadPlan(
+        val storageGeneration: Long,
+        val capacityBytes: Long,
+        val startAbsolute: Long,
+        val endAbsolute: Long,
+    )
+
+    companion object {
+        private const val META_MAGIC = 0x54545242 // TTRB
+        private const val META_VERSION = 2
+        private const val META_SLOT_BYTES = 64
+        private const val META_CRC_OFFSET = 60
+        private const val IO_CHUNK_SIZE = 64 * 1024
+        private const val METADATA_INTERVAL_MS = 500L
+
+        private fun crc32(bytes: ByteArray, offset: Int, count: Int): Int {
+            val crc = CRC32()
+            crc.update(bytes, offset, count)
+            return crc.value.toInt()
+        }
+
+        private fun readInt(bytes: ByteArray, offset: Int): Int {
+            return (bytes[offset].toInt() and 0xff) or
+                ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                ((bytes[offset + 3].toInt() and 0xff) shl 24)
+        }
+
+        private fun writeInt(bytes: ByteArray, offset: Int, value: Int) {
+            bytes[offset] = value.toByte()
+            bytes[offset + 1] = (value ushr 8).toByte()
+            bytes[offset + 2] = (value ushr 16).toByte()
+            bytes[offset + 3] = (value ushr 24).toByte()
+        }
+
+        private fun readLong(bytes: ByteArray, offset: Int): Long {
+            var value = 0L
+            for (index in 0 until 8) {
+                value = value or ((bytes[offset + index].toLong() and 0xffL) shl (index * 8))
             }
-            meta.writeWritePosition(tailLength - afterOldEnd)
+            return value
         }
-        meta.writeFilledBytes(oldCapacityBytes)
-        meta.writeLastWriteAtMillis(System.currentTimeMillis())
-        force()
-    }
 
-    private fun copyWithinMappedFile(
-        sourceOffset: Int,
-        targetOffset: Int,
-        count: Int,
-    ) {
-        val dv = dataMap ?: return
-        if (count <= 0 || sourceOffset == targetOffset) return
-        val scratch = ioScratch
-        if (targetOffset > sourceOffset && targetOffset < sourceOffset + count) {
-            var remaining = count
-            while (remaining > 0) {
-                val chunkSize = minOf(remaining, scratch.size)
-                val chunkSource = sourceOffset + remaining - chunkSize
-                val chunkTarget = targetOffset + remaining - chunkSize
-                dv.position(chunkSource)
-                dv.get(scratch, 0, chunkSize)
-                dv.position(chunkTarget)
-                dv.put(scratch, 0, chunkSize)
-                remaining -= chunkSize
+        private fun writeLong(bytes: ByteArray, offset: Int, value: Long) {
+            for (index in 0 until 8) {
+                bytes[offset + index] = (value ushr (index * 8)).toByte()
             }
-        } else {
-            var copied = 0
-            while (copied < count) {
-                val chunkSize = minOf(count - copied, scratch.size)
-                dv.position(sourceOffset + copied)
-                dv.get(scratch, 0, chunkSize)
-                dv.position(targetOffset + copied)
-                dv.put(scratch, 0, chunkSize)
-                copied += chunkSize
-            }
-        }
-    }
-
-    private fun readNewestBytes(count: Int): ByteArray {
-        val meta = metaMap ?: return ByteArray(0)
-        val dv = dataMap ?: return ByteArray(0)
-        val filledBytes = meta.readFilledBytes().coerceIn(0, mappedCapacityBytes)
-        val take = count.coerceIn(0, filledBytes)
-        if (take <= 0) return ByteArray(0)
-        val result = ByteArray(take)
-        val wp = meta.readWritePosition()
-        val readStart = (wp % mappedCapacityBytes).let { if (it < 0) it + mappedCapacityBytes else it }
-        var readPosition = (readStart - take).let { if (it < 0) it + mappedCapacityBytes else it }
-        var remaining = take
-        var writeOffset = 0
-        while (remaining > 0) {
-            val chunkSize = minOf(remaining, ioScratch.size, mappedCapacityBytes - readPosition)
-            dv.position(readPosition)
-            dv.get(ioScratch, 0, chunkSize)
-            System.arraycopy(ioScratch, 0, result, writeOffset, chunkSize)
-            writeOffset += chunkSize
-            remaining -= chunkSize
-            readPosition += chunkSize
-            if (readPosition >= mappedCapacityBytes) readPosition = 0
-        }
-        return result
-    }
-
-    private fun remap(
-        capacityBytes: Int,
-        sampleRate: Int,
-        channelCount: Int,
-        bytesPerSample: Int,
-        clearContents: Boolean,
-    ) {
-        dataMap = null
-        runCatching { dataChannel?.close() }
-        runCatching { dataAccess?.close() }
-        dataChannel = null
-        dataAccess = null
-
-        try {
-            dataAccess = RandomAccessFile(dataFile, "rwd").also { it.setLength(capacityBytes.toLong()) }
-            dataChannel = requireNotNull(dataAccess).channel
-            dataMap = requireNotNull(dataChannel).map(FileChannel.MapMode.READ_WRITE, 0, capacityBytes.toLong())
-        } catch (e: Exception) {
-            runCatching { dataAccess?.close() }
-            dataAccess = null
-            dataChannel = null
-            dataMap = null
-            throw e
-        }
-
-        mappedCapacityBytes = capacityBytes
-        mappedSampleRate = sampleRate
-        mappedChannelCount = channelCount
-        mappedBytesPerSample = bytesPerSample
-
-        val meta = requireNotNull(metaMap)
-        meta.writeMagic()
-        meta.writeVersion()
-        meta.writeCapacityBytes(capacityBytes)
-        meta.writeSampleRate(sampleRate)
-        meta.writeChannelCount(channelCount)
-        meta.writeBytesPerSample(bytesPerSample)
-        if (clearContents) {
-            meta.writeWritePosition(0)
-            meta.writeFilledBytes(0)
-            meta.writeLastWriteAtMillis(0L)
-        }
-        force()
-    }
-
-    private fun ensureMetaMapped() {
-        if (metaMap != null) return
-        val access = RandomAccessFile(metaFile, "rwd")
-        try {
-            access.setLength(META_FILE_BYTES.toLong())
-            val channel = access.channel
-            val mapped = channel.map(FileChannel.MapMode.READ_WRITE, 0, META_FILE_BYTES.toLong())
-            metaAccess = access
-            metaChannel = channel
-            metaMap = mapped
-        } catch (e: Exception) {
-            runCatching { access.close() }
-            throw e
-        }
-        if (metaMap?.readMagic() != MAGIC || metaMap?.readVersion() != VERSION) {
-            metaMap?.writeMagic()
-            metaMap?.writeVersion()
-            metaMap?.writeCapacityBytes(0)
-            metaMap?.writeSampleRate(0)
-            metaMap?.writeChannelCount(0)
-            metaMap?.writeBytesPerSample(0)
-            metaMap?.writeWritePosition(0)
-            metaMap?.writeFilledBytes(0)
-            metaMap?.writeLastWriteAtMillis(0L)
-            force()
-        }
-    }
-
-    private fun force() {
-        metaMap?.force()
-        dataMap?.force()
-        lastForcedAtUptimeMillis = SystemClock.uptimeMillis()
-    }
-
-    private fun MappedByteBuffer.readMagic(): Int = getInt(OFFSET_MAGIC)
-    private fun MappedByteBuffer.writeMagic() {
-        putInt(OFFSET_MAGIC, MAGIC)
-    }
-
-    private fun MappedByteBuffer.readVersion(): Int = getInt(OFFSET_VERSION)
-    private fun MappedByteBuffer.writeVersion() {
-        putInt(OFFSET_VERSION, VERSION)
-    }
-
-    private fun MappedByteBuffer.readCapacityBytes(): Int = getInt(OFFSET_CAPACITY_BYTES)
-    private fun MappedByteBuffer.writeCapacityBytes(value: Int) {
-        putInt(OFFSET_CAPACITY_BYTES, value)
-    }
-
-    private fun MappedByteBuffer.readSampleRate(): Int = getInt(OFFSET_SAMPLE_RATE)
-    private fun MappedByteBuffer.writeSampleRate(value: Int) {
-        putInt(OFFSET_SAMPLE_RATE, value)
-    }
-
-    private fun MappedByteBuffer.readChannelCount(): Int = getInt(OFFSET_CHANNEL_COUNT)
-    private fun MappedByteBuffer.writeChannelCount(value: Int) {
-        putInt(OFFSET_CHANNEL_COUNT, value)
-    }
-
-    private fun MappedByteBuffer.readBytesPerSample(): Int = getInt(OFFSET_BYTES_PER_SAMPLE)
-    private fun MappedByteBuffer.writeBytesPerSample(value: Int) {
-        putInt(OFFSET_BYTES_PER_SAMPLE, value)
-    }
-
-    private fun MappedByteBuffer.readWritePosition(): Int = getInt(OFFSET_WRITE_POSITION)
-    private fun MappedByteBuffer.writeWritePosition(value: Int) {
-        putInt(OFFSET_WRITE_POSITION, value)
-    }
-
-    private fun MappedByteBuffer.readFilledBytes(): Int = getInt(OFFSET_FILLED_BYTES)
-    private fun MappedByteBuffer.writeFilledBytes(value: Int) {
-        putInt(OFFSET_FILLED_BYTES, value)
-    }
-
-    private fun MappedByteBuffer.readLastWriteAtMillis(): Long = getLong(OFFSET_LAST_WRITE_AT_MILLIS)
-    private fun MappedByteBuffer.writeLastWriteAtMillis(value: Long) {
-        putLong(OFFSET_LAST_WRITE_AT_MILLIS, value)
-    }
-
-    private companion object {
-        // Fixed mmap metadata header shared by the tiny meta file and the large PCM ring file.
-        // Values stay intentionally primitive/offset-based so restore can recover after process death
-        // without needing any schema object allocation or parsing.
-        const val META_FILE_BYTES = 512
-        const val IO_CHUNK_SIZE = 64 * 1024
-        // This cache is best-effort resilience, not the canonical live history store.
-        // Batching force calls cuts background CPU and I/O substantially.
-        const val FORCE_INTERVAL_MS = 2_000L
-
-        const val MAGIC = 0x54544246
-        const val VERSION = 1
-
-        const val OFFSET_MAGIC = 0
-        const val OFFSET_VERSION = 4
-        const val OFFSET_CAPACITY_BYTES = 8
-        const val OFFSET_SAMPLE_RATE = 12
-        const val OFFSET_CHANNEL_COUNT = 16
-        const val OFFSET_WRITE_POSITION = 20
-        const val OFFSET_FILLED_BYTES = 24
-        const val OFFSET_LAST_WRITE_AT_MILLIS = 32
-        const val OFFSET_BYTES_PER_SAMPLE = 40
-
-        fun alignToPageSize(bytes: Int): Int {
-            val pageSize = 4096
-            if (bytes <= pageSize) return pageSize
-            val remainder = bytes % pageSize
-            if (remainder == 0) return bytes
-            val aligned = bytes.toLong() + pageSize - remainder
-            return if (aligned > Int.MAX_VALUE) Int.MAX_VALUE else aligned.toInt()
         }
     }
 }

@@ -44,28 +44,39 @@ import androidx.compose.ui.unit.dp
 private const val TAB_CAPTURE = 0
 private const val TAB_FILES = 1
 private const val URI_SCHEME_PACKAGE = "package"
-private const val STATE_PERMISSIONS_REQUESTED = "permissions_requested"
+private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
+private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
 
-    private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-            if (grants.isNotEmpty() && grants.values.all { it }) {
+    private val microphonePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
                 permissionsGranted = true
+                showPermissionDenied = false
+                scheduleRecorderCapabilityCacheWarm(applicationContext)
+                maybeRequestNotificationPermission()
             } else {
                 showPermissionDenied = true
             }
         }
 
-    private var permissionsRequested = false
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> Unit }
+
+    private var microphonePermissionRequested = false
+    private var notificationPermissionRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyPhonePortraitOnly()
         super.onCreate(savedInstanceState)
-        permissionsRequested = savedInstanceState?.getBoolean(STATE_PERMISSIONS_REQUESTED) ?: false
+        microphonePermissionRequested =
+            savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
+        notificationPermissionRequested =
+            savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
         themeMode = getConfiguredThemeMode(this)
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
@@ -88,11 +99,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        scheduleRecorderCapabilityCacheWarm(applicationContext)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean(STATE_PERMISSIONS_REQUESTED, permissionsRequested)
+        outState.putBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED, microphonePermissionRequested)
+        outState.putBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED, notificationPermissionRequested)
         super.onSaveInstanceState(outState)
     }
 
@@ -101,58 +112,27 @@ class MainActivity : ComponentActivity() {
         if (hasRequiredPermissions()) {
             permissionsGranted = true
             showPermissionDenied = false
+            scheduleRecorderCapabilityCacheWarm(applicationContext)
+            maybeRequestNotificationPermission()
             return
         }
-        if (permissionsRequested) return
-        permissionsRequested = true
-        permissionLauncher.launch(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (Build.VERSION.SDK_INT >= 34) {
-                    arrayOf(
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.FOREGROUND_SERVICE,
-                        Manifest.permission.FOREGROUND_SERVICE_MICROPHONE,
-                        Manifest.permission.POST_NOTIFICATIONS,
-                    )
-                } else {
-                    arrayOf(
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.FOREGROUND_SERVICE,
-                        Manifest.permission.POST_NOTIFICATIONS,
-                    )
-                }
-            } else {
-                arrayOf(
-                    Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                )
-            },
-        )
+        if (microphonePermissionRequested) {
+            showPermissionDenied = true
+            return
+        }
+        microphonePermissionRequested = true
+        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (Build.VERSION.SDK_INT >= 34) {
-                arrayOf(
-                    Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                    Manifest.permission.FOREGROUND_SERVICE_MICROPHONE,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                )
-            } else {
-                arrayOf(
-                    Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                )
-            }
-        } else {
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.FOREGROUND_SERVICE,
-            )
-        }
-        return permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun applyPhonePortraitOnly() {

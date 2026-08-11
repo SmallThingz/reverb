@@ -45,24 +45,8 @@
     <string name="background_persistence_title">پس‌زمینه</string>
     <string name="format_label">قالب</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">کدک</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">نرخ نمونه‌برداری</string>
     <string name="audio_source_label">منبع</string>
     <string name="channel_mode_label">کانال‌ها</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">پیش‌فرض</string>
     <string name="move_recordings">انتقال ضبط‌های موجود</string>
     <string name="move_recordings_none">ضبطی برای انتقال وجود ندارد.</string>
-    <string name="aggressive_restart_label">راه‌اندازی دوباره تهاجمی</string>
-    <string name="aggressive_restart_summary">اگر بافر باید باقی بماند، پس از بستن برنامه یا پایان توسط سیستم، سرویس ضبط را دوباره زمان‌بندی می‌کند.</string>
     <string name="wake_lock_label">بیدار نگه داشتن CPU</string>
     <string name="wake_lock_summary">در زمان بافر زنده یک wake lock جزئی نگه می‌دارد. بیشترین پایداری و بیشترین مصرف باتری.</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">تنظیمات باتری</string>
     <string name="settings_saved">ذخیره شد.</string>
     <string name="settings_saved_next_start">ذخیره شد. از دفعه بعد شروع می‌شود.</string>
-    <string name="settings_saved_deferred_input">ذخیره شد. تغییرات ورودی دفعه بعد اعمال می‌شوند.</string>
     <string name="settings_apply_blocked_recording">اول ضبط را متوقف کنید.</string>
     <string name="unsupported_config_message">پشتیبانی نمی‌شود.</string>
     <string name="audio_input_init_failed">راه‌اندازی میکروفن ممکن نشد.</string>

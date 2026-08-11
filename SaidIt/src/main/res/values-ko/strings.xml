@@ -45,24 +45,8 @@
     <string name="background_persistence_title">백그라운드</string>
     <string name="format_label">형식</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">코덱</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">샘플 레이트</string>
     <string name="audio_source_label">소스</string>
     <string name="channel_mode_label">채널</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">기본값</string>
     <string name="move_recordings">기존 녹음 이동</string>
     <string name="move_recordings_none">이동할 녹음이 없습니다.</string>
-    <string name="aggressive_restart_label">적극적 재시작</string>
-    <string name="aggressive_restart_summary">버퍼를 유지해야 할 때 작업 스와이프나 시스템 종료 후 녹음 서비스를 다시 예약합니다.</string>
     <string name="wake_lock_label">CPU 깨우기 유지</string>
     <string name="wake_lock_summary">실시간 버퍼링 동안 부분 웨이크 락을 유지합니다. 생존성은 가장 높지만 배터리 소모도 가장 큽니다.</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">배터리 설정</string>
     <string name="settings_saved">저장되었습니다.</string>
     <string name="settings_saved_next_start">저장되었습니다. 다음 실행부터 적용됩니다.</string>
-    <string name="settings_saved_deferred_input">저장되었습니다. 입력 변경은 다음 실행부터 적용됩니다.</string>
     <string name="settings_apply_blocked_recording">먼저 녹음을 중지하세요.</string>
     <string name="unsupported_config_message">지원되지 않습니다.</string>
     <string name="audio_input_init_failed">마이크를 시작할 수 없습니다.</string>

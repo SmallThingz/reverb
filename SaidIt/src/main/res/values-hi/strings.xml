@@ -45,24 +45,8 @@
     <string name="background_persistence_title">बैकग्राउंड</string>
     <string name="format_label">फ़ॉर्मेट</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">कोडेक</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">सैंपल दर</string>
     <string name="audio_source_label">स्रोत</string>
     <string name="channel_mode_label">चैनल</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">डिफ़ॉल्ट</string>
     <string name="move_recordings">मौजूदा रिकॉर्डिंग्स ले जाएँ</string>
     <string name="move_recordings_none">ले जाने के लिए कोई रिकॉर्डिंग नहीं है।</string>
-    <string name="aggressive_restart_label">आक्रामक रीस्टार्ट</string>
-    <string name="aggressive_restart_summary">जब बफ़र बचा रहना चाहिए तब टास्क स्वाइप या सिस्टम किल के बाद रिकॉर्डर सेवा को फिर से शेड्यूल करें।</string>
     <string name="wake_lock_label">CPU जागृत रखें</string>
     <string name="wake_lock_summary">लाइव बफ़रिंग के दौरान आंशिक wake lock रखता है। सबसे अधिक टिकाऊ, सबसे अधिक बैटरी खर्च।</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">बैटरी सेटिंग्स</string>
     <string name="settings_saved">सहेजा गया।</string>
     <string name="settings_saved_next_start">सहेजा गया। अगली बार शुरू होगा।</string>
-    <string name="settings_saved_deferred_input">सहेजा गया। इनपुट परिवर्तन अगली बार लागू होंगे।</string>
     <string name="settings_apply_blocked_recording">पहले रिकॉर्डिंग रोकें।</string>
     <string name="unsupported_config_message">समर्थित नहीं है।</string>
     <string name="audio_input_init_failed">माइक्रोफ़ोन शुरू नहीं किया जा सका।</string>

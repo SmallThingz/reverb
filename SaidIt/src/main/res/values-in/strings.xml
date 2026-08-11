@@ -45,24 +45,8 @@
     <string name="background_persistence_title">Latar belakang</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">Codec</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">Laju sampel</string>
     <string name="audio_source_label">Sumber</string>
     <string name="channel_mode_label">Kanal</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">Bawaan</string>
     <string name="move_recordings">Pindahkan rekaman yang ada</string>
     <string name="move_recordings_none">Tidak ada rekaman untuk dipindahkan.</string>
-    <string name="aggressive_restart_label">Mulai ulang agresif</string>
-    <string name="aggressive_restart_summary">Jadwalkan ulang layanan perekam setelah tugas disapu atau sistem mematikan aplikasi jika buffer harus bertahan.</string>
     <string name="wake_lock_label">Jaga CPU tetap aktif</string>
     <string name="wake_lock_summary">Menahan wake lock parsial saat buffering langsung. Kelangsungan hidup tertinggi, biaya baterai tertinggi.</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">Pengaturan baterai</string>
     <string name="settings_saved">Tersimpan.</string>
     <string name="settings_saved_next_start">Tersimpan. Akan dimulai lain kali.</string>
-    <string name="settings_saved_deferred_input">Tersimpan. Perubahan input diterapkan lain kali.</string>
     <string name="settings_apply_blocked_recording">Hentikan perekaman dulu.</string>
     <string name="unsupported_config_message">Tidak didukung.</string>
     <string name="audio_input_init_failed">Mikrofon tidak dapat dimulai.</string>

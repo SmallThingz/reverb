@@ -45,24 +45,8 @@
     <string name="background_persistence_title">Arka plan</string>
     <string name="format_label">Biçim</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">Kodek</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">Örnekleme hızı</string>
     <string name="audio_source_label">Kaynak</string>
     <string name="channel_mode_label">Kanallar</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">Varsayılan</string>
     <string name="move_recordings">Mevcut kayıtları taşı</string>
     <string name="move_recordings_none">Taşınacak kayıt yok.</string>
-    <string name="aggressive_restart_label">Agresif yeniden başlatma</string>
-    <string name="aggressive_restart_summary">Arabellek korunacaksa görev kaydırma veya sistem sonlandırmasından sonra kayıt hizmetini yeniden planla.</string>
     <string name="wake_lock_label">CPU uyanık kalsın</string>
     <string name="wake_lock_summary">Canlı arabelleğe alma sırasında kısmi uyandırma kilidi tutar. En yüksek dayanıklılık, en yüksek pil maliyeti.</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">Pil ayarları</string>
     <string name="settings_saved">Kaydedildi.</string>
     <string name="settings_saved_next_start">Kaydedildi. Bir sonraki açılışta başlar.</string>
-    <string name="settings_saved_deferred_input">Kaydedildi. Giriş değişiklikleri bir sonraki açılışta uygulanır.</string>
     <string name="settings_apply_blocked_recording">Önce kaydı durdurun.</string>
     <string name="unsupported_config_message">Desteklenmiyor.</string>
     <string name="audio_input_init_failed">Mikrofon başlatılamadı.</string>

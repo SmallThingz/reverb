@@ -27,6 +27,15 @@ enum class RecordingStorageType {
     DOCUMENT,
 }
 
+internal fun resolveRecordingStorageType(recording: RecordingEntity): RecordingStorageType? {
+    return RecordingStorageType.entries.firstOrNull { it.name == recording.storageType }
+        ?: when {
+            recording.id.startsWith("content://", ignoreCase = true) -> RecordingStorageType.DOCUMENT
+            recording.id.isNotBlank() -> RecordingStorageType.FILE
+            else -> null
+        }
+}
+
 data class RecordingOutputTarget(
     val id: String,
     val displayName: String,
@@ -84,7 +93,9 @@ fun describeOutputDirectory(
     if (treeUri == null) {
         return "${context.getString(R.string.app_storage_label)}/${TimeTravelConfig.APP_STORAGE_FOLDER_NAME}"
     }
-    val name = DocumentFile.fromTreeUri(context, treeUri)?.name
+    val name = runCatching { DocumentFile.fromTreeUri(context, treeUri)?.name }
+        .onFailure { Log.w(TAG, "Unable to describe output directory $treeUri", it) }
+        .getOrNull()
     return name ?: treeUri.toString()
 }
 
@@ -92,7 +103,7 @@ fun buildRecordingUri(
     context: Context,
     recording: RecordingEntity,
 ): Uri {
-    return when (RecordingStorageType.valueOf(recording.storageType)) {
+    return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
             val file = File(recording.id)
             runCatching { FileProvider.getUriForFile(context, "${context.packageName}.provider", file) }
@@ -100,6 +111,7 @@ fun buildRecordingUri(
         }
 
         RecordingStorageType.DOCUMENT -> Uri.parse(recording.id)
+        null -> Uri.EMPTY
     }
 }
 
@@ -331,6 +343,7 @@ fun buildCodecSummary(
     sampleRate: Int,
     channelCount: Int,
     bitrateKbps: Int? = null,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): String {
     val channelLabel = if (channelCount >= 2) {
         context.getString(R.string.channel_mode_stereo)
@@ -340,7 +353,7 @@ fun buildCodecSummary(
     val resolvedBitrateKbps = defaultCodecBitrateKbps(codec, sampleRate, channelCount)
         ?.let { bitrateKbps ?: it }
     return buildString {
-        append(context.getString(codec.labelRes))
+        append(context.getString(if (format.isPcmContainer) sampleFormat.labelRes else codec.labelRes))
         append(TimeTravelConfig.CODEC_SUMMARY_SEPARATOR)
         append(context.getString(format.labelRes))
         append(TimeTravelConfig.CODEC_SUMMARY_SEPARATOR)
@@ -359,9 +372,10 @@ fun describeRecordingLocation(
     context: Context,
     recording: RecordingEntity,
 ): String {
-    return when (RecordingStorageType.valueOf(recording.storageType)) {
+    return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> describeFileRecordingLocation(context, File(recording.id))
         RecordingStorageType.DOCUMENT -> describeDocumentRecordingLocation(context, recording)
+        null -> recording.directoryId
     }
 }
 
@@ -417,7 +431,9 @@ fun resolveRecordingDurationMillis(
     }
 
     if (displayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) {
-        return context.contentResolver.openInputStream(uri)?.use(::readWavDurationMillis) ?: 0L
+        return runCatching {
+            context.contentResolver.openInputStream(uri)?.use(::readWavDurationMillis) ?: 0L
+        }.onFailure { Log.w(TAG, "Unable to inspect WAV duration for $uri", it) }.getOrDefault(0L)
     }
     return 0L
 }
@@ -478,7 +494,22 @@ fun resolveOutputTargetSize(
 ): Long {
     return when (target.storageType) {
         RecordingStorageType.FILE -> target.file?.length() ?: 0L
-        RecordingStorageType.DOCUMENT -> DocumentFile.fromSingleUri(context, requireNotNull(target.uri))?.length() ?: 0L
+        RecordingStorageType.DOCUMENT -> {
+            val uri = requireNotNull(target.uri)
+            val documentSize = runCatching { DocumentFile.fromSingleUri(context, uri)?.length() ?: 0L }
+                .onFailure { Log.w(TAG, "Document size query failed for $uri", it) }
+                .getOrDefault(0L)
+            if (documentSize > 0L) {
+                documentSize
+            } else {
+                runCatching {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                        descriptor.statSize.coerceAtLeast(0L)
+                    } ?: 0L
+                }.onFailure { Log.w(TAG, "Unable to resolve output size for $uri", it) }
+                    .getOrDefault(0L)
+            }
+        }
     }
 }
 
@@ -505,9 +536,12 @@ fun recordingExists(
     context: Context,
     recording: RecordingEntity,
 ): Boolean {
-    return when (RecordingStorageType.valueOf(recording.storageType)) {
+    return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> File(recording.id).isFile
-        RecordingStorageType.DOCUMENT -> DocumentFile.fromSingleUri(context, Uri.parse(recording.id))?.exists() == true
+        RecordingStorageType.DOCUMENT -> runCatching {
+            DocumentFile.fromSingleUri(context, Uri.parse(recording.id))?.exists() == true
+        }.onFailure { Log.w(TAG, "Unable to inspect recording ${recording.id}", it) }.getOrDefault(false)
+        null -> false
     }
 }
 
@@ -515,16 +549,17 @@ fun deleteRecordingAsset(
     context: Context,
     recording: RecordingEntity,
 ): Boolean {
-    return when (RecordingStorageType.valueOf(recording.storageType)) {
+    return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
             val file = File(recording.id)
             !file.exists() || file.delete()
         }
 
-        RecordingStorageType.DOCUMENT -> {
+        RecordingStorageType.DOCUMENT -> runCatching {
             val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id))
             document == null || !document.exists() || document.delete()
-        }
+        }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
+        null -> true
     }
 }
 
@@ -537,16 +572,16 @@ fun renameRecordingAsset(
     var sanitized = sanitizeBaseName(requestedBaseName)
     if (sanitized.isBlank()) return null
     if (extension.isNotBlank()) {
-        val lastExtension = sanitized.substringAfterLast('.', "")
-        if (lastExtension.isNotBlank()) {
-            sanitized = sanitized.substringBeforeLast('.')
+        if (sanitized.endsWith(".$extension", ignoreCase = true)) {
+            sanitized = sanitized.dropLast(extension.length + 1)
         }
         sanitized = "$sanitized.$extension"
     }
     if (sanitized == recording.displayName) return null
-    return when (RecordingStorageType.valueOf(recording.storageType)) {
+    return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> renameFileRecording(recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
+        null -> null
     }
 }
 
@@ -554,28 +589,29 @@ fun copyRecordingToConfiguredDirectory(
     context: Context,
     recording: RecordingEntity,
 ): RecordingEntity? {
-    val target = createOutputTarget(
-        context = context,
-        requestedDisplayName = recording.displayName,
-        mimeType = recording.mimeType,
-        startedAtMillis = recording.startedAtMillis,
-    )
-
+    var target: RecordingOutputTarget? = null
     return try {
-        val input = when (RecordingStorageType.valueOf(recording.storageType)) {
+        val resolvedTarget = createOutputTarget(
+            context = context,
+            requestedDisplayName = recording.displayName,
+            mimeType = recording.mimeType,
+            startedAtMillis = recording.startedAtMillis,
+        ).also { target = it }
+        val input = when (resolveRecordingStorageType(recording)) {
             RecordingStorageType.FILE -> FileInputStream(File(recording.id))
             RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(Uri.parse(recording.id))
+            null -> throw IOException("Unknown recording storage type: ${recording.storageType}")
         } ?: throw IOException("Unable to open source recording")
         input.use { source ->
-            when (target.storageType) {
+            when (resolvedTarget.storageType) {
                 RecordingStorageType.FILE -> {
-                    FileOutputStream(requireNotNull(target.file)).use { output ->
+                    FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
                         source.copyTo(output)
                     }
                 }
 
                 RecordingStorageType.DOCUMENT -> {
-                    context.contentResolver.openOutputStream(requireNotNull(target.uri), "w")?.use { output ->
+                    context.contentResolver.openOutputStream(requireNotNull(resolvedTarget.uri), "w")?.use { output ->
                         source.copyTo(output)
                     } ?: throw IOException("Unable to open target output stream")
                 }
@@ -583,22 +619,23 @@ fun copyRecordingToConfiguredDirectory(
         }
 
         recording.copy(
-            id = target.id,
-            displayName = target.displayName,
-            sizeBytes = resolveOutputTargetSize(context, target),
-            storageType = target.storageType.name,
-            directoryId = target.directoryId,
+            id = resolvedTarget.id,
+            displayName = resolvedTarget.displayName,
+            sizeBytes = resolveOutputTargetSize(context, resolvedTarget),
+            storageType = resolvedTarget.storageType.name,
+            directoryId = resolvedTarget.directoryId,
         )
-    } catch (e: IOException) {
-        Log.w(TAG, "exportToTarget failed for ${target.displayName}", e)
+    } catch (e: Exception) {
+        Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
         runCatching {
-            when (target.storageType) {
-                RecordingStorageType.FILE -> target.file?.delete()
+            when (target?.storageType) {
+                RecordingStorageType.FILE -> target?.file?.delete()
                 RecordingStorageType.DOCUMENT -> {
-                    DocumentFile.fromSingleUri(context, requireNotNull(target.uri))?.delete()
+                    target?.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
                 }
+                null -> Unit
             }
-        }.onFailure { Log.w(TAG, "Failed to clean up partial export for ${target.displayName}", it) }
+        }.onFailure { Log.w(TAG, "Failed to clean up partial export for ${target?.displayName}", it) }
         null
     }
 }
@@ -627,27 +664,29 @@ fun listCurrentOutputDirectoryRecordings(context: Context): List<RecordingEntity
             ?.toList()
             .orEmpty()
     } else {
-        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
-        tree.listFiles()
-            .asSequence()
-            .filter { it.isFile && it.length() > 0L }
-            .filter { file -> file.name?.substringAfterLast('.', "")?.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
-            .mapNotNull { file ->
-                val uri = file.uri
-                val name = file.name ?: return@mapNotNull null
-                RecordingEntity(
-                    id = uri.toString(),
-                    displayName = name,
-                    mimeType = file.type ?: guessMimeType(name),
-                    startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
-                    durationMillis = resolveRecordingDurationMillis(context, uri, name),
-                    sizeBytes = file.length(),
-                    codecSummary = resolveRecordingCodecInfo(context, uri, name),
-                    storageType = RecordingStorageType.DOCUMENT.name,
-                    directoryId = treeUri.toString(),
-                )
-            }
-            .toList()
+        runCatching {
+            val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@runCatching emptyList()
+            tree.listFiles()
+                .asSequence()
+                .filter { it.isFile && it.length() > 0L }
+                .filter { file -> file.name?.substringAfterLast('.', "")?.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
+                .mapNotNull { file ->
+                    val uri = file.uri
+                    val name = file.name ?: return@mapNotNull null
+                    RecordingEntity(
+                        id = uri.toString(),
+                        displayName = name,
+                        mimeType = file.type ?: guessMimeType(name),
+                        startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
+                        durationMillis = resolveRecordingDurationMillis(context, uri, name),
+                        sizeBytes = file.length(),
+                        codecSummary = resolveRecordingCodecInfo(context, uri, name),
+                        storageType = RecordingStorageType.DOCUMENT.name,
+                        directoryId = treeUri.toString(),
+                    )
+                }
+                .toList()
+        }.onFailure { Log.w(TAG, "Unable to list configured output directory $treeUri", it) }.getOrDefault(emptyList())
     }
 }
 
@@ -704,21 +743,23 @@ private fun renameDocumentRecording(
     recording: RecordingEntity,
     displayName: String,
 ): RecordingEntity? {
-    val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id)) ?: return null
-    val tree = DocumentFile.fromTreeUri(context, Uri.parse(recording.directoryId)) ?: return null
-    val uniqueName = findAvailableDisplayName(displayName) { candidate ->
-        candidate != document.name && tree.findFile(candidate) != null
-    }
-    if (uniqueName == document.name) {
-        return recording
-    }
-    if (!document.renameTo(uniqueName)) {
-        return null
-    }
-    return recording.copy(
-        id = document.uri.toString(),
-        displayName = document.name ?: uniqueName,
-    )
+    return runCatching {
+        val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id)) ?: return@runCatching null
+        val tree = DocumentFile.fromTreeUri(context, Uri.parse(recording.directoryId)) ?: return@runCatching null
+        val uniqueName = findAvailableDisplayName(displayName) { candidate ->
+            candidate != document.name && tree.findFile(candidate) != null
+        }
+        if (uniqueName == document.name) {
+            return@runCatching recording
+        }
+        if (!document.renameTo(uniqueName)) {
+            return@runCatching null
+        }
+        recording.copy(
+            id = document.uri.toString(),
+            displayName = document.name ?: uniqueName,
+        )
+    }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
 }
 
 private fun createDocumentOutputTarget(

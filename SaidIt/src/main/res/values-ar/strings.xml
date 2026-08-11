@@ -45,24 +45,8 @@
     <string name="background_persistence_title">الخلفية</string>
     <string name="format_label">التنسيق</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_label">الترميز</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_lc">AAC-LC</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
     <string name="sample_rate_label">معدل العينة</string>
     <string name="audio_source_label">المصدر</string>
     <string name="channel_mode_label">القنوات</string>
@@ -86,8 +70,6 @@
     <string name="default_folder">افتراضي</string>
     <string name="move_recordings">نقل التسجيلات الموجودة</string>
     <string name="move_recordings_none">لا توجد تسجيلات لنقلها.</string>
-    <string name="aggressive_restart_label">إعادة تشغيل قوية</string>
-    <string name="aggressive_restart_summary">أعد جدولة خدمة التسجيل بعد سحب المهمة أو إنهائها من النظام كلما كان يجب أن يبقى المخزن المؤقت.</string>
     <string name="wake_lock_label">إبقاء المعالج مستيقظًا</string>
     <string name="wake_lock_summary">يحافظ على wake lock جزئي أثناء التخزين الحي. أعلى بقاء وأعلى استهلاك للبطارية.</string>
 
@@ -96,7 +78,6 @@
     <string name="battery_optimization_button">إعدادات البطارية</string>
     <string name="settings_saved">تم الحفظ.</string>
     <string name="settings_saved_next_start">تم الحفظ. يبدأ في المرة القادمة.</string>
-    <string name="settings_saved_deferred_input">تم الحفظ. تُطبَّق تغييرات الإدخال في المرة القادمة.</string>
     <string name="settings_apply_blocked_recording">أوقف التسجيل أولاً.</string>
     <string name="unsupported_config_message">غير مدعوم.</string>
     <string name="audio_input_init_failed">تعذر تشغيل الميكروفون.</string>

@@ -73,7 +73,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private sealed class ListItem {
     data class Header(val dateLabel: String) : ListItem()
@@ -109,12 +108,14 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
         isRefreshing = true
         scope.launch {
             try {
-                val stored = withContext(Dispatchers.IO) { RecordingRepository.refresh(context) }
+                val stored = RecordingRepository.refresh(context)
                 recordings = stored
                 val storedIds = stored.mapTo(mutableSetOf()) { it.id }
                 pendingDeletions.keys.toList().forEach { id ->
                     if (id !in storedIds) pendingDeletions.remove(id)
                 }
+            } catch (_: Exception) {
+                Toast.makeText(context, R.string.recordings_refresh_failed, Toast.LENGTH_SHORT).show()
             } finally {
                 isRefreshing = false
             }
@@ -123,20 +124,22 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
 
     LaunchedEffect(Unit) { refresh() }
 
-    fun finalizeDeletions() {
+    suspend fun finalizeDeletions() {
         val pending = pendingDeletions.values.toList()
         if (pending.isEmpty()) return
-        scope.launch {
-            pendingDeletions.clear()
-            var deleted = 0
-            pending.forEach { recording ->
-                if (RecordingRepository.delete(context, recording)) deleted++
-            }
-            val stored = withContext(Dispatchers.IO) { RecordingRepository.refresh(context) }
-            recordings = stored
-            if (deleted == 0) {
-                Toast.makeText(context, R.string.recording_delete_failed, Toast.LENGTH_SHORT).show()
-            }
+        pending.forEach { pendingDeletions.remove(it.id) }
+        var deleted = 0
+        var failed = false
+        pending.forEach { recording ->
+            val didDelete = runCatching { RecordingRepository.delete(context, recording) }
+                .getOrElse { failed = true; false }
+            if (didDelete) deleted++
+        }
+        runCatching { RecordingRepository.refresh(context) }
+            .onSuccess { recordings = it }
+            .onFailure { failed = true }
+        if (failed || deleted == 0) {
+            Toast.makeText(context, R.string.recording_delete_failed, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -144,7 +147,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                scope.launch { refresh() }
+                refresh()
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
                 scope.launch { finalizeDeletions() }
@@ -157,7 +160,9 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
                 val pending = pendingDeletions.values.toList()
                 pendingDeletions.clear()
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                    pending.forEach { RecordingRepository.delete(context.applicationContext, it) }
+                    pending.forEach {
+                        runCatching { RecordingRepository.delete(context.applicationContext, it) }
+                    }
                 }
             }
         }
@@ -520,12 +525,12 @@ private fun RenameRecordingDialog(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var name by remember {
+    var name by remember(recording.id, recording.displayName) {
         val baseName = recording.displayName.substringBeforeLast('.', recording.displayName)
         mutableStateOf(if (baseName.isEmpty()) recording.displayName else baseName)
     }
-    var error by remember { mutableStateOf<String?>(null) }
-    var isRenaming by remember { mutableStateOf(false) }
+    var error by remember(recording.id) { mutableStateOf<String?>(null) }
+    var isRenaming by remember(recording.id) { mutableStateOf(false) }
     val illegalChars = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
 
     fun validateAndRename(trimmed: String) {
@@ -547,6 +552,8 @@ private fun RenameRecordingDialog(
                 } else {
                     onRenamed()
                 }
+            } catch (_: Exception) {
+                error = context.getString(R.string.rename_recording_failed)
             } finally {
                 isRenaming = false
             }

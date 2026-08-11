@@ -40,12 +40,6 @@
     <string name="storage_settings_title">Archiviazione</string>
     <string name="background_persistence_title">Background</string>
     <string name="codec_label">Codec</string>
-    <string name="codec_aac_lc">AAC-LC / M4A</string>
-    <string name="codec_he_aac">HE-AAC</string>
-    <string name="codec_he_aac_v2">HE-AAC v2</string>
-    <string name="codec_xhe_aac">xHE-AAC</string>
-    <string name="codec_amr_wb">AMR-WB</string>
-    <string name="codec_amr_nb">AMR-NB</string>
     <string name="sample_rate_label">Frequenza</string>
     <string name="audio_source_label">Sorgente</string>
     <string name="channel_mode_label">Canali</string>
@@ -69,8 +63,6 @@
     <string name="default_folder">Predefinito</string>
     <string name="move_recordings">Sposta esistenti</string>
     <string name="move_recordings_none">Nessuna registrazione da spostare.</string>
-    <string name="aggressive_restart_label">Riavvio aggressivo</string>
-    <string name="aggressive_restart_summary">Riprogramma il servizio di registrazione dopo la chiusura dell\'attività o l\'uccisione del sistema ogni volta che il buffer dovrebbe sopravvivere.</string>
     <string name="wake_lock_label">Mantieni la CPU attiva</string>
     <string name="wake_lock_summary">Mantiene un wakelock parziale durante il buffer dal vivo. Massima sopravvivenza, massimo costo della batteria.</string>
     <string name="battery_optimization_status_ok">Ottimizzazione batteria: senza restrizioni</string>
@@ -78,7 +70,6 @@
     <string name="battery_optimization_button">Impostazioni batteria</string>
     <string name="settings_saved">Salvato.</string>
     <string name="settings_saved_next_start">Salvato. Inizia la prossima volta.</string>
-    <string name="settings_saved_deferred_input">Salvato. Le modifiche all\'ingresso si applicano la prossima volta.</string>
     <string name="settings_apply_blocked_recording">Interrompi prima la registrazione.</string>
     <string name="unsupported_config_message">Non supportato.</string>
     <string name="audio_input_init_failed">Impossibile avviare il microfono.</string>
@@ -125,16 +116,6 @@
     <string name="custom_export_size_invalid">Usa un valore in MiB come 12.0.</string>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
-    <string name="format_m4a">M4A</string>
-    <string name="format_3gp">3GP</string>
-    <string name="format_ogg">Ogg</string>
-    <string name="format_webm">WebM</string>
-    <string name="format_aac_adts">AAC ADTS</string>
-    <string name="format_mpeg_2_ts">MPEG-TS</string>
     <string name="codec_pcm_16">PCM</string>
-    <string name="codec_aac_eld">AAC-ELD</string>
-    <string name="codec_opus">Opus</string>
-    <string name="codec_vorbis">Vorbis</string>
-    <string name="codec_flac">FLAC</string>
 
 </resources>

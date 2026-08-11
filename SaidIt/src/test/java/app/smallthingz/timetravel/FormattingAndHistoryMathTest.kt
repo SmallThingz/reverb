@@ -187,9 +187,10 @@ class FormattingAndHistoryMathTest {
         assertTrue(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 44_100, 1))
         assertTrue(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 48_000, 2))
         assertTrue(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 8_000, 1))
-
-        assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.AAC_LC, 44_100, 1))
-        assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.AMR_NB, 8_000, 1))
+        assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 0, 1))
+        assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 44_100, 3))
+        assertEquals(listOf(ExportFormat.WAV), supportedFormats())
+        assertEquals(listOf(ExportCodec.PCM_16), supportedCodecs(ExportFormat.WAV))
     }
 
     @Test
@@ -219,26 +220,6 @@ class FormattingAndHistoryMathTest {
         )
         assertTrue(limit > 0L)
         assertTrue(limit < Long.MAX_VALUE / 2)
-    }
-
-    @Test
-    fun audioMemory_readTraversesAcrossChunksInOrder() {
-        val memory = AudioMemory()
-        memory.allocate(960_000)
-        val source = ByteArray(600_000) { (it % 251).toByte() }
-        memory.write(source, 0, source.size)
-
-        val collected = ArrayList<Byte>()
-        memory.read(120_000, 300_000) { array, offset, count ->
-            repeat(count) { index ->
-                collected += array[offset + index]
-            }
-            count
-        }
-
-        assertEquals(300_000, collected.size)
-        assertEquals(source[120_000], collected.first())
-        assertEquals(source[419_999], collected.last())
     }
 
     @Test
@@ -272,78 +253,6 @@ class FormattingAndHistoryMathTest {
         assertEquals(null, parseDurationInput("1:99"))
         assertEquals(null, parseDurationInput("1:2:99"))
         assertEquals(null, parseDurationInput("-5"))
-    }
-
-    @Test
-    fun audioMemory_allocateReducesSizeCorrectly() {
-        val memory = AudioMemory()
-        memory.allocate(960_000L)
-        assertTrue(memory.allocatedMemorySize >= 960_000L)
-
-        memory.allocate(480_000L)
-        assertTrue(memory.allocatedMemorySize <= 960_000L)
-        assertTrue(memory.allocatedMemorySize >= 480_000L)
-    }
-
-    @Test
-    fun audioMemory_clearRecyclesBuffers() {
-        val memory = AudioMemory()
-        memory.allocate(960_000L)
-        val source = ByteArray(600_000) { 42 }
-        memory.write(source, 0, source.size)
-        assertEquals(600_000L, memory.countFilled())
-
-        memory.clear()
-        assertEquals(0L, memory.countFilled())
-
-        memory.write(source, 0, source.size)
-        assertEquals(600_000L, memory.countFilled())
-    }
-
-    @Test
-    fun audioMemory_writeSilentlyDropsWhenOutOfCapacity() {
-        val memory = AudioMemory()
-        // Not allocated — write has no buffers
-        val data = ByteArray(100) { 1 }
-        memory.write(data, 0, data.size)
-        assertEquals(0L, memory.countFilled())
-    }
-
-    @Test
-    fun audioMemory_readWithSkipReadsCorrectWindow() {
-        val memory = AudioMemory()
-        memory.allocate(960_000L)
-        val source = ByteArray(480_000) { (it % 256).toByte() }
-        memory.write(source, 0, source.size)
-
-        val collected = ArrayList<Byte>()
-        memory.read(0, 480_000) { array, offset, count ->
-            repeat(count) { i -> collected += array[offset + i] }
-            count
-        }
-        assertEquals(480_000, collected.size)
-        assertEquals(source[0], collected.first())
-        assertEquals(source[479_999], collected.last())
-    }
-
-    @Test
-    fun audioMemory_readExhaustiveSequential() {
-        val memory = AudioMemory()
-        memory.allocate(960_000L)
-        val source = ByteArray(720_000) { (it % 256).toByte() }
-        memory.write(source, 0, source.size)
-
-        // Read near-end — should wrap across chunks
-        val collected = ArrayList<Byte>()
-        val skip = 600_000L
-        val take = 100_000L
-        memory.read(skip, take) { array, offset, count ->
-            repeat(count) { i -> collected += array[offset + i] }
-            count
-        }
-        assertEquals(take, collected.size.toLong())
-        assertEquals(source[skip.toInt()], collected.first())
-        assertEquals(source[(skip + take - 1).toInt()], collected.last())
     }
 
     @Test
