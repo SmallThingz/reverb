@@ -33,7 +33,6 @@ internal class AudioVisualizationAnalyzer {
 
     private var smoothedActivity = 0f
     private var noiseFloor = INITIAL_NOISE_FLOOR
-    private var sequence = 0L
 
     fun reset() {
         real.fill(0f)
@@ -43,7 +42,6 @@ internal class AudioVisualizationAnalyzer {
         waveformCounts.fill(0)
         smoothedActivity = 0f
         noiseFloor = INITIAL_NOISE_FLOOR
-        sequence = 0L
     }
 
     fun analyze(
@@ -143,11 +141,9 @@ internal class AudioVisualizationAnalyzer {
                 smoothedBins[outputIndex] * BIN_SMOOTHING + shaped * (1f - BIN_SMOOTHING)
         }
 
-        sequence++
         return ReverbService.VisualizationFrame(
             activity = smoothedActivity,
             bins = smoothedBins.copyOf(),
-            sequence = sequence,
         )
     }
 
@@ -224,7 +220,7 @@ internal class AudioVisualizationAnalyzer {
     }
 
     companion object {
-        const val OUTPUT_BINS = 64
+        const val OUTPUT_BINS = 16
         private const val FFT_SIZE = 512
         private const val FFT_BITS = 9
         private const val RMS_SENSITIVITY = 13.5f

@@ -19,6 +19,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 
 import androidx.core.app.NotificationCompat
@@ -117,6 +118,7 @@ class ReverbService : Service() {
     private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
     private val visualizationDispatchScheduled = AtomicBoolean(false)
     private var visualizationFaulted = false
+    private var lastVisualizationAnalysisNanos = 0L
 
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
@@ -1100,7 +1102,7 @@ class ReverbService : Service() {
                 .coerceIn(bufferSizeInSeconds * 0.5f, bufferSizeInSeconds * 0.9f)
             val normalDelayMillis = (delaySeconds * 1000f).toLong()
             val delayMillis = if (visualizationCallback != null) {
-                minOf(normalDelayMillis, VISUALIZATION_FRAME_INTERVAL_MILLIS)
+                minOf(normalDelayMillis, VISUALIZATION_CAPTURE_INTERVAL_MILLIS)
             } else {
                 normalDelayMillis
             }
@@ -1192,6 +1194,7 @@ class ReverbService : Service() {
             if (visualizationCallback === callback) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
+                lastVisualizationAnalysisNanos = 0L
             }
         }
     }
@@ -1199,6 +1202,12 @@ class ReverbService : Service() {
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
         val callback = visualizationCallback ?: return
         if (visualizationFaulted) return
+        val nowNanos = SystemClock.elapsedRealtimeNanos()
+        if (
+            lastVisualizationAnalysisNanos != 0L &&
+            nowNanos - lastVisualizationAnalysisNanos < VISUALIZATION_ANALYSIS_INTERVAL_NANOS
+        ) return
+        lastVisualizationAnalysisNanos = nowNanos
         val frame = try {
             visualizationAnalyzer.analyze(
                 array = array,
@@ -1581,13 +1590,11 @@ class ReverbService : Service() {
     data class VisualizationFrame(
         val activity: Float,
         val bins: FloatArray,
-        val sequence: Long,
     ) {
         companion object {
             val EMPTY = VisualizationFrame(
                 activity = 0f,
                 bins = FloatArray(AudioVisualizationAnalyzer.OUTPUT_BINS),
-                sequence = 0L,
             )
         }
     }
@@ -1631,7 +1638,8 @@ class ReverbService : Service() {
         const val FOREGROUND_NOTIFICATION_ID = 458
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
         const val CAPTURE_SCRATCH_BYTES = 64 * 1024
-        const val VISUALIZATION_FRAME_INTERVAL_MILLIS = 40L
+        const val VISUALIZATION_CAPTURE_INTERVAL_MILLIS = 100L
+        const val VISUALIZATION_ANALYSIS_INTERVAL_NANOS = 90_000_000L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
         val nextExportTokenId = AtomicLong(1L)
