@@ -16,12 +16,7 @@ import android.content.ClipboardManager
 import android.os.IBinder
 import android.os.Build
 import android.widget.Toast
-import androidx.compose.animation.core.EaseInOutCubic
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -77,15 +72,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -107,10 +101,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import kotlin.math.sin
 
 private const val MIB: Double = 1024.0 * 1024.0
+private const val BLOB_POINT_COUNT = 64
 
 class NotifyFileReceiver(
     private val context: Context,
@@ -194,6 +192,7 @@ fun CaptureScreen() {
     var memorizedSeconds by remember { mutableFloatStateOf(0f) }
     var totalMemorySeconds by remember { mutableFloatStateOf(0f) }
     var recordedSeconds by remember { mutableFloatStateOf(0f) }
+    var visualizationFrame by remember { mutableStateOf(ReverbService.VisualizationFrame.EMPTY) }
 
     var showClearDialog by remember { mutableStateOf(false) }
     var showExportRangeDialog by remember { mutableStateOf(false) }
@@ -238,19 +237,26 @@ fun CaptureScreen() {
         }
     }
 
+    val visualizationCallback = remember {
+        ReverbService.VisualizationCallback { frame ->
+            visualizationFrame = frame
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         var bound = false
+        fun bindIfNeeded() {
+            if (!bound && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                bound = context.bindService(
+                    Intent(context, ReverbService::class.java),
+                    connection,
+                    Context.BIND_AUTO_CREATE,
+                )
+            }
+        }
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> {
-                    if (!bound) {
-                        bound = context.bindService(
-                            Intent(context, ReverbService::class.java),
-                            connection,
-                            Context.BIND_AUTO_CREATE,
-                        )
-                    }
-                }
+                Lifecycle.Event.ON_START -> bindIfNeeded()
 
                 Lifecycle.Event.ON_STOP -> {
                     if (bound) {
@@ -264,12 +270,64 @@ fun CaptureScreen() {
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        bindIfNeeded()
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (bound) {
                 context.unbindService(connection)
                 bound = false
             }
+        }
+    }
+
+    DisposableEffect(service, lifecycleOwner, visualizationCallback, view) {
+        val recorderService = service
+        var registered = false
+        var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        var windowFocused = view.hasWindowFocus()
+
+        fun updateRegistration() {
+            val visible = resumed && windowFocused
+            if (visible && !registered) {
+                recorderService?.setVisualizationCallback(visualizationCallback)
+                registered = recorderService != null
+            } else if (!visible && registered) {
+                recorderService?.setVisualizationCallback(null)
+                registered = false
+                visualizationFrame = ReverbService.VisualizationFrame.EMPTY
+            }
+        }
+
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    resumed = true
+                    updateRegistration()
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    resumed = false
+                    updateRegistration()
+                }
+                else -> Unit
+            }
+        }
+        val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+            windowFocused = hasFocus
+            updateRegistration()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        view.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
+        updateRegistration()
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            if (view.viewTreeObserver.isAlive) {
+                view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
+            }
+            if (registered) {
+                recorderService?.setVisualizationCallback(null)
+            }
+            visualizationFrame = ReverbService.VisualizationFrame.EMPTY
         }
     }
 
@@ -337,6 +395,7 @@ fun CaptureScreen() {
             RecordingOverlay(
                 recordedSeconds = recordedSeconds,
                 isSaving = isSaving,
+                visualizationFrame = visualizationFrame,
                 onStopRecording = onStopRecording,
             )
         } else {
@@ -403,6 +462,7 @@ fun CaptureScreen() {
                 isRecording = isRecording,
                 isSaving = isSaving,
                 service = service,
+                visualizationFrame = visualizationFrame,
                 onListenToggle = onListenToggle,
                 onClearBuffer = onClearBuffer,
                 onExportFull = onExportFull,
@@ -461,6 +521,7 @@ private fun MainCaptureContent(
     isRecording: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
+    visualizationFrame: ReverbService.VisualizationFrame,
     onListenToggle: () -> Unit,
     onClearBuffer: () -> Unit,
     onExportFull: () -> Unit,
@@ -589,11 +650,12 @@ private fun MainCaptureContent(
 
         Spacer(Modifier.weight(1f))
 
-        ListenCircle(
+        AudioBlobControl(
             isListening = isListening,
             isRecording = false,
             isSaving = isSaving,
             enabled = serviceReady,
+            visualizationFrame = visualizationFrame,
             onClick = onListenToggle,
         )
 
@@ -664,6 +726,7 @@ private fun CaptureActionButton(
 private fun RecordingOverlay(
     recordedSeconds: Float,
     isSaving: Boolean,
+    visualizationFrame: ReverbService.VisualizationFrame,
     onStopRecording: () -> Unit,
 ) {
     Box(
@@ -683,10 +746,11 @@ private fun RecordingOverlay(
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(34.dp))
-            ListenCircle(
+            AudioBlobControl(
                 isListening = true,
                 isRecording = true,
                 isSaving = isSaving,
+                visualizationFrame = visualizationFrame,
                 onClick = onStopRecording,
             )
         }
@@ -694,10 +758,11 @@ private fun RecordingOverlay(
 }
 
 @Composable
-private fun ListenCircle(
+private fun AudioBlobControl(
     isListening: Boolean,
     isRecording: Boolean,
     isSaving: Boolean,
+    visualizationFrame: ReverbService.VisualizationFrame,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -710,47 +775,28 @@ private fun ListenCircle(
         animationSpec = tween(110),
         label = "pressScale",
     )
+    val activity = if (active && !isSaving) visualizationFrame.activity.coerceIn(0f, 1f) else 0f
+    val blobX = remember { FloatArray(BLOB_POINT_COUNT) }
+    val blobY = remember { FloatArray(BLOB_POINT_COUNT) }
+    val blobPath = remember { Path() }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = when {
-            !active -> 1f
-            isRecording -> 1.08f
-            else -> 1.055f
-        },
-        animationSpec = infiniteRepeatable<Float>(
-            animation = tween<Float>(
-                durationMillis = if (isRecording) 1800 else if (active) 3000 else 1,
-                easing = EaseInOutCubic,
-            ),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseScale",
-    )
-
-    val ringColor = when {
-        isSaving -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        isRecording -> MaterialTheme.colorScheme.error.copy(alpha = 0.20f)
-        active -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
-    }
-    val fillColor = when {
-        isSaving -> MaterialTheme.colorScheme.surfaceContainerHigh
-        isRecording -> MaterialTheme.colorScheme.error
-        active -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.surfaceContainerHighest
-    }
+    val primary = MaterialTheme.colorScheme.primary
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val error = MaterialTheme.colorScheme.error
+    val errorContainer = MaterialTheme.colorScheme.errorContainer
+    val surfaceHigh = MaterialTheme.colorScheme.surfaceContainerHighest
     val contentColor = when {
-        isRecording -> MaterialTheme.colorScheme.surface
+        isRecording -> MaterialTheme.colorScheme.onError
+        active -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val blobHighlight = when {
+        isRecording -> MaterialTheme.colorScheme.onError
         active -> MaterialTheme.colorScheme.onPrimary
         else -> MaterialTheme.colorScheme.onSurface
     }
     val interactionEnabled = enabled && !isSaving
-    val innerStrokeColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
-    val density = LocalDensity.current
-    val strokeWidthPx = with(density) { 2.dp.toPx() }
-    val strokeStyle = remember(strokeWidthPx) { Stroke(strokeWidthPx) }
     val actionIcon = when {
         isRecording -> R.drawable.ic_stop
         isListening -> R.drawable.ic_player_pause
@@ -765,46 +811,125 @@ private fun ListenCircle(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(210.dp)
-            .graphicsLayer(alpha = if (interactionEnabled) 1f else 0.62f),
+            .size(232.dp)
+            .graphicsLayer(
+                alpha = if (interactionEnabled) 1f else 0.58f,
+                scaleX = pressScale,
+                scaleY = pressScale,
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = interactionEnabled,
+                onClick = onClick,
+            ),
     ) {
         Canvas(
-            modifier = Modifier
-                .size(202.dp)
-                .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale),
+            modifier = Modifier.size(232.dp),
         ) {
+            val minSize = size.minDimension
+            val baseRadius = minSize * 0.285f + activity * minSize * 0.035f
+            val visualBins = if (active && !isSaving) visualizationFrame.bins else ReverbService.VisualizationFrame.EMPTY.bins
+            val phase = visualizationFrame.sequence * 0.045f
+            val pointCount = BLOB_POINT_COUNT
+
+            for (index in 0 until pointCount) {
+                val angle = (index.toFloat() / pointCount) * (PI.toFloat() * 2f) - PI.toFloat() / 2f
+                val p = index.toFloat() / pointCount
+                val mirrored = if (p <= 0.5f) p * 2f else (1f - p) * 2f
+                val binIndex = (mirrored * (visualBins.size - 1)).roundToInt().coerceIn(0, visualBins.lastIndex)
+                val spike = if (active) {
+                    visualBins[binIndex] * minSize * 0.105f * (0.72f + activity * 0.7f)
+                } else {
+                    0f
+                }
+                val idle = if (active) {
+                    sin(angle * 3f + phase) * minSize * 0.006f +
+                        sin(angle * 5f - phase * 0.7f) * minSize * 0.003f
+                } else {
+                    0f
+                }
+                val radius = baseRadius + spike + idle
+                blobX[index] = center.x + cos(angle) * radius
+                blobY[index] = center.y + sin(angle) * radius
+            }
+
+            blobPath.reset()
+            val firstMidX = (blobX[0] + blobX[1]) * 0.5f
+            val firstMidY = (blobY[0] + blobY[1]) * 0.5f
+            blobPath.moveTo(firstMidX, firstMidY)
+            for (index in 1..pointCount) {
+                val current = index % pointCount
+                val next = (index + 1) % pointCount
+                blobPath.quadraticBezierTo(
+                    blobX[current],
+                    blobY[current],
+                    (blobX[current] + blobX[next]) * 0.5f,
+                    (blobY[current] + blobY[next]) * 0.5f,
+                )
+            }
+            blobPath.close()
+
+            val accent = if (isRecording) error else primary
+            val softAccent = if (isRecording) errorContainer else primaryContainer
+            val tailAccent = if (isRecording) error else tertiary
+            val idleFill = if (active) softAccent else surfaceHigh
+
             drawCircle(
-                color = ringColor,
-                radius = size.minDimension / 2f - 2.dp.toPx(),
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.28f + activity * 0.18f),
+                        tailAccent.copy(alpha = 0.10f + activity * 0.08f),
+                        Color.Transparent,
+                    ),
+                    center = center,
+                    radius = baseRadius * (1.9f + activity * 0.2f),
+                ),
+                radius = baseRadius * (1.9f + activity * 0.2f),
                 center = center,
-                style = Stroke(width = 2.dp.toPx()),
+            )
+
+            drawPath(
+                path = blobPath,
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        blobHighlight.copy(alpha = if (active) 0.78f else 0.34f),
+                        idleFill,
+                        accent,
+                        tailAccent,
+                    ),
+                    center = Offset(
+                        x = center.x - baseRadius * 0.28f,
+                        y = center.y - baseRadius * 0.34f,
+                    ),
+                    radius = baseRadius * 1.65f,
+                ),
+            )
+
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        blobHighlight.copy(alpha = 0.42f + activity * 0.18f),
+                        softAccent.copy(alpha = 0.16f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(
+                        x = center.x - baseRadius * 0.20f,
+                        y = center.y - baseRadius * 0.24f,
+                    ),
+                    radius = baseRadius * 0.88f,
+                ),
+                radius = baseRadius * 0.82f,
+                center = center,
             )
         }
 
-        Box(
-            modifier = Modifier
-                .size(158.dp)
-                .clip(CircleShape)
-                .drawBehind {
-                    drawCircle(fillColor)
-                    drawCircle(innerStrokeColor, style = strokeStyle)
-                }
-                .graphicsLayer(scaleX = pressScale, scaleY = pressScale)
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    enabled = interactionEnabled,
-                    onClick = onClick,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = painterResource(actionIcon),
-                contentDescription = actionDescription,
-                tint = contentColor,
-                modifier = Modifier.size(if (isRecording) 42.dp else 48.dp),
-            )
-        }
+        Icon(
+            painter = painterResource(actionIcon),
+            contentDescription = actionDescription,
+            tint = contentColor,
+            modifier = Modifier.size(if (isRecording) 40.dp else 44.dp),
+        )
     }
 }
 

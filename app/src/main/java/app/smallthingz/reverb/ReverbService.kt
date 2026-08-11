@@ -105,11 +105,18 @@ class ReverbService : Service() {
     @Volatile
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
+    @Volatile
+    private var visualizationCallback: VisualizationCallback? = null
+
     private val captureScratch = ByteArray(CAPTURE_SCRATCH_BYTES)
     private val captureBuffer = ByteBuffer.allocateDirect(CAPTURE_SCRATCH_BYTES)
         .order(ByteOrder.nativeOrder())
+    private val visualizationAnalyzer = AudioVisualizationAnalyzer()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
+    private val visualizationDispatchScheduled = AtomicBoolean(false)
+    private var visualizationFaulted = false
 
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
@@ -144,6 +151,7 @@ class ReverbService : Service() {
     }
 
     override fun onDestroy() {
+        visualizationCallback = null
         activeExportToken?.cancelled?.set(true)
         activeExportFuture?.cancel(true)
         flushAndPersistBeforeShutdown()
@@ -172,7 +180,10 @@ class ReverbService : Service() {
 
     override fun onBind(intent: Intent): IBinder = BackgroundRecorderBinder()
 
-    override fun onUnbind(intent: Intent): Boolean = true
+    override fun onUnbind(intent: Intent): Boolean {
+        setVisualizationCallback(null)
+        return true
+    }
 
     override fun dump(
         fd: FileDescriptor,
@@ -1058,6 +1069,7 @@ class ReverbService : Service() {
             captureBuffer.position(0)
             captureBuffer.limit(read)
             captureBuffer.get(captureScratch, 0, read)
+            publishVisualization(captureScratch, 0, read)
             persistentAudioRingStore.append(
                 array = captureScratch,
                 offset = 0,
@@ -1086,7 +1098,13 @@ class ReverbService : Service() {
             val bufferSizeInSeconds = currentRecord.bufferSizeInFrames / maxOf(sampleRate, 1).toFloat()
             val delaySeconds = (bufferSizeInSeconds - 1f)
                 .coerceIn(bufferSizeInSeconds * 0.5f, bufferSizeInSeconds * 0.9f)
-            audioHandler.postDelayed(audioReader, (delaySeconds * 1000f).toLong())
+            val normalDelayMillis = (delaySeconds * 1000f).toLong()
+            val delayMillis = if (visualizationCallback != null) {
+                minOf(normalDelayMillis, VISUALIZATION_FRAME_INTERVAL_MILLIS)
+            } else {
+                normalDelayMillis
+            }
+            audioHandler.postDelayed(audioReader, delayMillis)
         }
         return read
     }
@@ -1160,6 +1178,63 @@ class ReverbService : Service() {
                     configuredBytes * bytesToSeconds,
                     recordedBytes * bytesToSeconds,
                 )
+            }
+        }
+    }
+
+    fun setVisualizationCallback(callback: VisualizationCallback?) {
+        visualizationCallback = callback
+        if (callback == null) {
+            pendingVisualizationFrame.set(null)
+        }
+        if (!::audioHandler.isInitialized) return
+        audioHandler.post {
+            if (visualizationCallback === callback) {
+                visualizationAnalyzer.reset()
+                visualizationFaulted = false
+            }
+        }
+    }
+
+    private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
+        val callback = visualizationCallback ?: return
+        if (visualizationFaulted) return
+        val frame = try {
+            visualizationAnalyzer.analyze(
+                array = array,
+                offset = offset,
+                count = count,
+                sampleFormat = pcmSampleFormat,
+                channelCount = channelMode.channelCount,
+                sampleRate = sampleRate,
+            )
+        } catch (error: Exception) {
+            visualizationFaulted = true
+            Log.w(TAG, "Audio visualization disabled until the UI reconnects", error)
+            return
+        }
+        if (visualizationCallback !== callback) return
+        pendingVisualizationFrame.set(frame)
+        if (visualizationDispatchScheduled.compareAndSet(false, true)) {
+            mainHandler.post(visualizationDispatcher)
+        }
+    }
+
+    private val visualizationDispatcher = object : Runnable {
+        override fun run() {
+            val frame = pendingVisualizationFrame.getAndSet(null)
+            val callback = visualizationCallback
+            if (frame != null && callback != null) {
+                callback.frame(frame)
+            }
+
+            visualizationDispatchScheduled.set(false)
+            if (
+                pendingVisualizationFrame.get() != null &&
+                visualizationCallback != null &&
+                visualizationDispatchScheduled.compareAndSet(false, true)
+            ) {
+                mainHandler.post(this)
             }
         }
     }
@@ -1499,6 +1574,24 @@ class ReverbService : Service() {
         )
     }
 
+    fun interface VisualizationCallback {
+        fun frame(frame: VisualizationFrame)
+    }
+
+    data class VisualizationFrame(
+        val activity: Float,
+        val bins: FloatArray,
+        val sequence: Long,
+    ) {
+        companion object {
+            val EMPTY = VisualizationFrame(
+                activity = 0f,
+                bins = FloatArray(AudioVisualizationAnalyzer.OUTPUT_BINS),
+                sequence = 0L,
+            )
+        }
+    }
+
     data class RecorderConfigurationSnapshot(
         val format: ExportFormat,
         val codec: ExportCodec,
@@ -1538,6 +1631,7 @@ class ReverbService : Service() {
         const val FOREGROUND_NOTIFICATION_ID = 458
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
         const val CAPTURE_SCRATCH_BYTES = 64 * 1024
+        const val VISUALIZATION_FRAME_INTERVAL_MILLIS = 40L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
         val nextExportTokenId = AtomicLong(1L)
