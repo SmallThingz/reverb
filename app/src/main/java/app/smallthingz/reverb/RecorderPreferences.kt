@@ -23,8 +23,6 @@ private const val WAV_MAX_EXPORT_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
 
 private val STANDARD_SAMPLE_RATES =
     intArrayOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
-private val CAPABILITY_PROBE_SAMPLE_RATES =
-    intArrayOf(44_100, 48_000, 32_000, 96_000, 24_000, 16_000, 8_000, 88_200, 64_000, 22_050, 12_000, 11_025, 7_350)
 private val codecSupportCache = ConcurrentHashMap<CodecSupportKey, Boolean>()
 private val inputConfigCache = ConcurrentHashMap<InputConfigKey, Boolean>()
 
@@ -509,21 +507,6 @@ fun exportDurationLimitSeconds(
     )
 }
 
-fun supportedSampleRates(
-    context: Context,
-    sourceMode: AudioSourceMode,
-    routeMode: InputRouteMode,
-    format: ExportFormat,
-    codec: ExportCodec,
-    channelMode: ChannelMode,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): List<Int> {
-    return standardSampleRates().filter { sampleRate ->
-        isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat) &&
-            isCodecSupported(format, codec, sampleRate, channelMode)
-    }
-}
-
 fun resolveOperationalSampleRate(
     context: Context,
     requestedRate: Int,
@@ -540,50 +523,13 @@ fun resolveOperationalSampleRate(
     ) {
         return requestedRate
     }
-    val advertised = supportedSampleRates(context, sourceMode, routeMode, format, codec, channelMode, sampleFormat)
-    val operationalCandidates = buildList {
-        addAll(advertised)
-        addAll(standardSampleRates())
-    }
-        .distinct()
-        .filter { rate ->
-            isCodecSupported(format, codec, rate, channelMode) &&
-                isInputConfigSupported(context, rate, sourceMode, routeMode, channelMode, sampleFormat)
-        }
-    return orderSampleRatesByPreference(operationalCandidates, requestedRate).firstOrNull() ?: 0
-}
-
-fun supportedAudioSourceModes(
-    context: Context,
-    routeMode: InputRouteMode,
-    format: ExportFormat,
-    codec: ExportCodec,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): List<AudioSourceMode> {
-    val modes = AudioSourceMode.availableModes().filter { sourceMode ->
-        ChannelMode.entries.any { channelMode ->
-            hasAnySupportedSampleRate(
-                context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
-            )
-        }
-    }
-    return if (modes.isNotEmpty()) modes else listOf(AudioSourceMode.defaultMode())
-}
-
-fun supportedChannelModes(
-    context: Context,
-    sourceMode: AudioSourceMode,
-    routeMode: InputRouteMode,
-    format: ExportFormat,
-    codec: ExportCodec,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): List<ChannelMode> {
-    val modes = ChannelMode.entries.filter { channelMode ->
-        hasAnySupportedSampleRate(
-            context, sourceMode, routeMode, format, codec, channelMode, sampleFormat,
-        )
-    }
-    return if (modes.isNotEmpty()) modes else listOf(ChannelMode.MONO)
+    return orderSampleRatesByPreference(
+        standardSampleRates().filter { it != requestedRate },
+        requestedRate,
+    ).firstOrNull { rate ->
+        isCodecSupported(format, codec, rate, channelMode) &&
+            isInputConfigSupported(context, rate, sourceMode, routeMode, channelMode, sampleFormat)
+    } ?: 0
 }
 
 fun supportedInputRouteModes(context: Context): List<InputRouteMode> {
@@ -688,26 +634,6 @@ fun supportedFormats(): List<ExportFormat> {
 
 fun supportedCodecs(format: ExportFormat): List<ExportCodec> {
     return if (format == ExportFormat.WAV) listOf(ExportCodec.PCM_16) else emptyList()
-}
-
-private fun hasAnySupportedSampleRate(
-    context: Context,
-    sourceMode: AudioSourceMode,
-    routeMode: InputRouteMode,
-    format: ExportFormat,
-    codec: ExportCodec,
-    channelMode: ChannelMode,
-    sampleFormat: PcmSampleFormat,
-): Boolean {
-    for (sampleRate in CAPABILITY_PROBE_SAMPLE_RATES) {
-        if (
-            isCodecSupported(format, codec, sampleRate, channelMode) &&
-            isInputConfigSupported(context, sampleRate, sourceMode, routeMode, channelMode, sampleFormat)
-        ) {
-            return true
-        }
-    }
-    return false
 }
 
 private fun bytesPerSecond(

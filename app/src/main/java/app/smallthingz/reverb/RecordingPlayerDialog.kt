@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -39,8 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -51,7 +48,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import java.io.File
 
-private const val PROGRESS_UPDATE_INTERVAL_MS = 250L
+private const val PROGRESS_UPDATE_INTERVAL_MS = 100L
 private const val SEEK_JUMP_MS = 10_000
 
 @Composable
@@ -215,40 +212,22 @@ fun RecordingPlayerDialog(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val progress = if (duration > 0) {
-                        currentPosition.toFloat() / duration.toFloat()
-                    } else {
-                        0f
-                    }
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(10.dp)
-                            .clip(CircleShape),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    )
-                    Slider(
-                        value = currentPosition.toFloat(),
-                        onValueChange = { currentPosition = it.toInt(); isDragging = true },
-                        valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
-                        onValueChangeFinished = {
-                            if (prepared && !released) runCatching { mediaPlayer?.seekTo(currentPosition) }
-                            isDragging = false
-                        },
-                        enabled = prepared,
-                        colors = SliderDefaults.colors(
-                            activeTrackColor = Color.Transparent,
-                            inactiveTrackColor = Color.Transparent,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+                Slider(
+                    value = currentPosition.toFloat(),
+                    onValueChange = { currentPosition = it.toInt(); isDragging = true },
+                    valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
+                    onValueChangeFinished = {
+                        if (prepared && !released) runCatching { mediaPlayer?.seekTo(currentPosition) }
+                        isDragging = false
+                    },
+                    enabled = prepared,
+                    colors = SliderDefaults.colors(
+                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

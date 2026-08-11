@@ -16,12 +16,15 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,7 +35,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -63,11 +65,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -75,8 +78,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -162,7 +163,12 @@ private data class ExportUiConfig(
 )
 
 @Composable
-fun CaptureScreen() {
+fun CaptureScreen(
+    showLibraryButton: Boolean = false,
+    visualizerVisible: Boolean = true,
+    onOpenLibrary: () -> Unit = {},
+    onRecordingSaved: () -> Unit = {},
+) {
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -262,14 +268,14 @@ fun CaptureScreen() {
         }
     }
 
-    DisposableEffect(service, lifecycleOwner, visualizationCallback, view) {
+    DisposableEffect(service, lifecycleOwner, visualizationCallback, view, visualizerVisible) {
         val recorderService = service
         var registered = false
         var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         var windowFocused = view.hasWindowFocus()
 
         fun updateRegistration() {
-            val visible = resumed && windowFocused
+            val visible = resumed && windowFocused && visualizerVisible
             if (visible && !registered) {
                 recorderService?.setVisualizationCallback(visualizationCallback)
                 registered = recorderService != null
@@ -349,6 +355,7 @@ fun CaptureScreen() {
                     startExport(
                         context, service, range, scope, snackbarHostState,
                         setSaving = { isSaving = it }, onError = { errorMessage = it },
+                        onSaved = onRecordingSaved,
                     )
                 },
                 onDismiss = {
@@ -370,7 +377,7 @@ fun CaptureScreen() {
                         s.stopRecording(
                             SaveResultReceiver(
                                 context, scope, snackbarHostState,
-                                { isSaving = it }, { errorMessage = it },
+                                { isSaving = it }, { errorMessage = it }, onRecordingSaved,
                             ),
                         )
                     }
@@ -380,6 +387,7 @@ fun CaptureScreen() {
                 recordedSeconds = recordedSeconds,
                 isSaving = isSaving,
                 blobController = blobController,
+                visualizerVisible = visualizerVisible,
                 onStopRecording = onStopRecording,
             )
         } else {
@@ -410,6 +418,7 @@ fun CaptureScreen() {
                         startExport(
                             context, service, range, scope, snackbarHostState,
                             setSaving = { isSaving = it }, onError = { errorMessage = it },
+                            onSaved = onRecordingSaved,
                         )
                     }
                 }
@@ -450,6 +459,9 @@ fun CaptureScreen() {
                 onClearBuffer = onClearBuffer,
                 onExportFull = onExportFull,
                 onExportCustom = onExportCustom,
+                showLibraryButton = showLibraryButton,
+                visualizerVisible = visualizerVisible,
+                onOpenLibrary = onOpenLibrary,
             )
         }
 
@@ -477,6 +489,7 @@ fun CaptureScreen() {
                     startExport(
                         context, service, range, scope, snackbarHostState,
                         setSaving = { isSaving = it }, onError = { errorMessage = it },
+                        onSaved = onRecordingSaved,
                     )
                 }
             },
@@ -504,8 +517,12 @@ private fun MainCaptureContent(
     onClearBuffer: () -> Unit,
     onExportFull: () -> Unit,
     onExportCustom: () -> Unit,
+    showLibraryButton: Boolean,
+    visualizerVisible: Boolean,
+    onOpenLibrary: () -> Unit,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val retentionMode = getConfiguredRetentionMode(context)
 
     val displayedCurrentSeconds = memorizedSeconds.coerceAtLeast(0f).toInt()
@@ -536,12 +553,11 @@ private fun MainCaptureContent(
             RetentionMode.SIZE -> if (overExportLimit) exportLimitSummary else formatShortTimer(displayedCurrentSeconds.toFloat())
         }
     }
-    val summaryColor = if (overExportLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-
     val serviceReady = service != null
     val hasHistory = memorizedSeconds > 0f
     val exportBlocked = !serviceReady || isSaving || isRecording || !hasHistory
     val clearEnabled = serviceReady && !isSaving && !isRecording && hasHistory
+    val librarySwipeThreshold = with(density) { 36.dp.toPx() }
 
     Column(
         modifier = Modifier
@@ -549,56 +565,45 @@ private fun MainCaptureContent(
             .padding(horizontal = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .weight(1f),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isListening) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outlineVariant,
-                    ),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = timerText,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                softWrap = false,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = summaryText,
-                style = MaterialTheme.typography.bodySmall,
-                color = summaryColor,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
+            val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
+            AudioBlobControl(
+                isListening = isListening,
+                isRecording = false,
+                isSaving = isSaving,
+                enabled = serviceReady,
+                blobController = blobController,
+                primaryText = timerText,
+                secondaryText = summaryText,
+                showWarning = overExportLimit,
+                visualizerVisible = visualizerVisible,
+                modifier = Modifier.size(blobSize),
+                onClick = onListenToggle,
             )
         }
 
-        Spacer(Modifier.weight(1f))
-
-        AudioBlobControl(
-            isListening = isListening,
-            isRecording = false,
-            isSaving = isSaving,
-            enabled = serviceReady,
-            blobController = blobController,
-            onClick = onListenToggle,
-        )
-
-        Spacer(Modifier.weight(1f))
-
         Surface(
+            modifier = Modifier
+                .animateContentSize()
+                .pointerInput(showLibraryButton, onOpenLibrary) {
+                    if (!showLibraryButton) return@pointerInput
+                    var upwardDrag = 0f
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { _, amount ->
+                            if (amount < 0f) upwardDrag -= amount
+                        },
+                        onDragEnd = {
+                            if (upwardDrag >= librarySwipeThreshold) onOpenLibrary()
+                            upwardDrag = 0f
+                        },
+                        onDragCancel = { upwardDrag = 0f },
+                    )
+                },
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
@@ -608,7 +613,7 @@ private fun MainCaptureContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CaptureActionButton(
-                    icon = R.drawable.ic_export_all,
+                    icon = R.drawable.ic_save,
                     contentDescription = stringResource(R.string.record_all_memory),
                     enabled = !exportBlocked,
                     onClick = onExportFull,
@@ -626,6 +631,14 @@ private fun MainCaptureContent(
                     destructive = true,
                     onClick = onClearBuffer,
                 )
+                if (showLibraryButton) {
+                    CaptureActionButton(
+                        icon = R.drawable.ic_tab_files,
+                        contentDescription = stringResource(R.string.files_tab),
+                        enabled = !isSaving,
+                        onClick = onOpenLibrary,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(18.dp))
@@ -664,33 +677,27 @@ private fun RecordingOverlay(
     recordedSeconds: Float,
     isSaving: Boolean,
     blobController: AudioBlobController,
+    visualizerVisible: Boolean,
     onStopRecording: () -> Unit,
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            val timerText = remember(recordedSeconds) { formatShortTimer(recordedSeconds) }
-            Text(
-                text = timerText,
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontFamily = FontFamily.Monospace,
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.Medium,
-            )
-            Spacer(Modifier.height(34.dp))
-            AudioBlobControl(
-                isListening = true,
-                isRecording = true,
-                isSaving = isSaving,
-                blobController = blobController,
-                onClick = onStopRecording,
-            )
-        }
+        val timerText = remember(recordedSeconds) { formatShortTimer(recordedSeconds) }
+        val blobSize = minOf(maxWidth * 0.88f, maxHeight * 0.76f, 372.dp)
+        AudioBlobControl(
+            isListening = true,
+            isRecording = true,
+            isSaving = isSaving,
+            blobController = blobController,
+            primaryText = timerText,
+            visualizerVisible = visualizerVisible,
+            modifier = Modifier.size(blobSize),
+            onClick = onStopRecording,
+        )
     }
 }
 
@@ -701,6 +708,11 @@ private fun AudioBlobControl(
     isSaving: Boolean,
     blobController: AudioBlobController,
     enabled: Boolean = true,
+    primaryText: String? = null,
+    secondaryText: String? = null,
+    showWarning: Boolean = false,
+    visualizerVisible: Boolean = true,
+    modifier: Modifier = Modifier.size(236.dp),
     onClick: () -> Unit,
 ) {
     val active = isListening || isRecording
@@ -740,8 +752,7 @@ private fun AudioBlobControl(
 
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(236.dp)
+        modifier = modifier
             .graphicsLayer(
                 alpha = if (interactionEnabled) 1f else 0.56f,
                 scaleX = pressScale,
@@ -767,6 +778,7 @@ private fun AudioBlobControl(
                     recording = isRecording,
                     enabled = enabled,
                     saving = isSaving,
+                    visible = visualizerVisible,
                     primary = colors.primary.toArgb(),
                     tertiary = colors.tertiary.toArgb(),
                     paused = colors.surfaceContainerHighest.toArgb(),
@@ -776,12 +788,35 @@ private fun AudioBlobControl(
             modifier = Modifier.fillMaxSize(),
         )
 
-        Icon(
-            painter = painterResource(actionIcon),
-            contentDescription = actionDescription,
-            tint = contentColor,
-            modifier = Modifier.size(if (isRecording) 38.dp else 42.dp),
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                painter = painterResource(actionIcon),
+                contentDescription = actionDescription,
+                tint = contentColor,
+                modifier = Modifier.size(if (isRecording) 36.dp else 38.dp),
+            )
+            if (primaryText != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = primaryText,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = contentColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
+            if (secondaryText != null && active) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = secondaryText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (showWarning) colors.error else contentColor.copy(alpha = 0.76f),
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
@@ -1074,7 +1109,7 @@ private fun ExportRangeDialog(
         confirmButton = {
             TextButton(onClick = { submit() }) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_export_all),
+                    painter = painterResource(R.drawable.ic_save),
                     contentDescription = stringResource(R.string.export),
                     modifier = Modifier.size(22.dp),
                 )
@@ -1091,6 +1126,7 @@ private fun startExport(
     snackbarHostState: SnackbarHostState,
     setSaving: (Boolean) -> Unit,
     onError: (String) -> Unit = {},
+    onSaved: () -> Unit = {},
 ) {
     val s = service ?: return
     setSaving(true)
@@ -1107,7 +1143,7 @@ private fun startExport(
     s.dumpRecordingRange(
         range.startSeconds,
         range.endSeconds,
-        SaveResultReceiver(context, scope, snackbarHostState, setSaving, onError),
+        SaveResultReceiver(context, scope, snackbarHostState, setSaving, onError, onSaved),
         "",
     )
 }
@@ -1142,6 +1178,7 @@ private class SaveResultReceiver(
     private val snackbarHostState: SnackbarHostState,
     private val setSaving: (Boolean) -> Unit,
     private val onError: (String) -> Unit = {},
+    private val onSaved: () -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
@@ -1149,6 +1186,7 @@ private class SaveResultReceiver(
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             runCatching { RecordingRepository.register(appContext, recording) }
+                .onSuccess { onSaved() }
             snackbarHostState.showSnackbar(
                 message = appContext.getString(R.string.saved_snackbar),
                 duration = SnackbarDuration.Short,

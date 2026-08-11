@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -91,13 +90,18 @@ private sealed class ListItem {
 private val recordingCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 @Composable
-fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
+fun FilesScreen(
+    modifier: Modifier = Modifier.fillMaxSize(),
+    onSelectionActiveChange: (Boolean) -> Unit = {},
+    onRecordingCountChanged: (Int) -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var recordings by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var hasLoaded by remember { mutableStateOf(false) }
     var refreshGeneration by remember { mutableIntStateOf(0) }
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
@@ -118,6 +122,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
                 val stored = RecordingRepository.refresh(context)
                 if (generation != refreshGeneration) return@launch
                 recordings = stored
+                hasLoaded = true
                 val storedIds = stored.mapTo(mutableSetOf()) { it.id }
                 pendingDeletions.keys.toList().forEach { id ->
                     if (id !in storedIds) pendingDeletions.remove(id)
@@ -190,6 +195,9 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     val listItems by remember {
         derivedStateOf { buildListItems(context, visibleRecordings) }
     }
+    LaunchedEffect(hasLoaded, recordings.size) {
+        if (hasLoaded) onRecordingCountChanged(recordings.size)
+    }
 
     fun deleteSelected() {
         if (isDeleting) return
@@ -234,6 +242,7 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
     BackHandler(enabled = selectionActive) { clearSelection() }
 
     Scaffold(
+        modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (selectionActive) {
@@ -244,7 +253,6 @@ fun FilesScreen(onSelectionActiveChange: (Boolean) -> Unit = {}) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .statusBarsPadding()
                             .height(48.dp)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,

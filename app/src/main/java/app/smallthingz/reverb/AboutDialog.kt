@@ -7,19 +7,21 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,8 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 
-private const val GITHUB_REPO_URL = "https://github.com/SmallThingz/timetravel"
+private const val GITHUB_REPO_URL = "https://github.com/SmallThingz/reverb"
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutDialog(onDismiss: () -> Unit = {}) {
     val context = LocalContext.current
@@ -50,70 +53,75 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
     }
     val versionText = remember(versionName) { context.getString(R.string.about_version, versionName) }
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(18.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Surface(
+                modifier = Modifier.size(124.dp),
+                shape = RoundedCornerShape(34.dp),
+                color = Color(0xFF0D1324),
             ) {
-                Text(
-                    text = context.getString(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
+                Icon(
+                    painter = painterResource(R.drawable.ic_brand_mark),
+                    contentDescription = context.getString(R.string.app_name),
+                    tint = Color.Unspecified,
+                    modifier = Modifier.padding(16.dp),
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = context.getString(R.string.close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
-        },
-        text = {
-            Column(
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = context.getString(R.string.app_name),
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = versionText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(22.dp))
+            Surface(
+                onClick = { openGithub(context) },
                 modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
             ) {
-                Surface(
-                    modifier = Modifier.size(112.dp),
-                    shape = RoundedCornerShape(28.dp),
-                    color = Color(0xFF0D1324),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_brand_mark),
-                        contentDescription = context.getString(R.string.app_name),
-                        tint = Color.Unspecified,
-                        modifier = Modifier.padding(18.dp),
-                    )
-                }
-                Spacer(Modifier.size(16.dp))
-                Text(
-                    text = versionText,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.size(10.dp))
-                Surface(
-                    onClick = { openGithub(context) },
-                    modifier = Modifier.size(48.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                Row(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_github),
-                        contentDescription = context.getString(R.string.github_repo),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(13.dp),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
                     )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = context.getString(R.string.github_repo),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = "SmallThingz/reverb",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-        },
-        confirmButton = {},
-    )
+        }
+    }
 }
 
 private fun openGithub(context: Context) {

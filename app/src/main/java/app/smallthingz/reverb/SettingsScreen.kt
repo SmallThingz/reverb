@@ -22,13 +22,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,9 +70,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -113,6 +112,7 @@ data class SettingsSnapshot(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit = {},
@@ -127,8 +127,6 @@ fun SettingsScreen(
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
-    var capabilityUiReady by remember { mutableStateOf(false) }
-    var capabilityRefreshGeneration by remember { mutableIntStateOf(0) }
     var moveAvailabilityGeneration by remember { mutableIntStateOf(0) }
 
     // Selected values
@@ -161,7 +159,6 @@ fun SettingsScreen(
     // Errors
     var retentionTimeError by remember { mutableStateOf<String?>(null) }
     var retentionSizeError by remember { mutableStateOf<String?>(null) }
-    var sampleRateUnsupported by remember { mutableStateOf(false) }
     var computedExportLimitSeconds by remember { mutableStateOf(0L) }
     var computedExportSizeMb by remember { mutableStateOf(0.0) }
     var exportPathText by remember { mutableStateOf("") }
@@ -210,7 +207,7 @@ fun SettingsScreen(
         canMove = false
         scope.launch {
             val result = runCatching {
-                RecordingRepository.syncAndCheckMovableRecordings(
+                RecordingRepository.hasMovableKnownRecordings(
                     context,
                     getOutputDirectoryId(context, selectedExportTreeUri),
                 )
@@ -220,29 +217,25 @@ fun SettingsScreen(
     }
 
     fun refreshSampleRates(preferredRate: Int? = null) {
-        availableSampleRates = supportedSampleRates(
-            context, selectedSource, selectedRoute, selectedFormat, selectedCodec,
-            selectedChannelMode, selectedSampleFormat,
+        val preferred = preferredRate?.takeIf { it > 0 } ?: selectedSampleRate
+        availableSampleRates = orderSampleRatesByPreference(
+            buildList {
+                if (preferred > 0) add(preferred)
+                addAll(standardSampleRates())
+            }.distinct(),
+            preferred,
         )
-        sampleRateUnsupported = availableSampleRates.isEmpty()
-        if (availableSampleRates.isNotEmpty()) {
-            val rate = orderSampleRatesByPreference(availableSampleRates, preferredRate ?: selectedSampleRate).first()
-            selectedSampleRate = rate
-            sampleRateLabels = availableSampleRates.map { sampleRateLabel(it) }
-            selectedSampleRateLabel = sampleRateLabel(rate)
-        } else {
-            sampleRateLabels = emptyList()
-            selectedSampleRateLabel = ""
-        }
+        val rate = preferred.takeIf { it in availableSampleRates } ?: availableSampleRates.first()
+        selectedSampleRate = rate
+        sampleRateLabels = availableSampleRates.map { sampleRateLabel(it) }
+        selectedSampleRateLabel = sampleRateLabel(rate)
     }
 
     fun refreshChannelModes(
         preferredChannelMode: ChannelMode? = null,
         preferredRate: Int? = null,
     ) {
-        availableChannelModes = supportedChannelModes(
-            context, selectedSource, selectedRoute, selectedFormat, selectedCodec, selectedSampleFormat,
-        )
+        availableChannelModes = ChannelMode.entries
         val cm = preferredChannelMode?.takeIf { it in availableChannelModes } ?: availableChannelModes.first()
         selectedChannelMode = cm
         channelModeLabels = availableChannelModes.map { context.getString(it.labelRes) }
@@ -255,9 +248,7 @@ fun SettingsScreen(
         preferredChannelMode: ChannelMode? = null,
         preferredRate: Int? = null,
     ) {
-        availableSourceModes = supportedAudioSourceModes(
-            context, selectedRoute, selectedFormat, selectedCodec, selectedSampleFormat,
-        )
+        availableSourceModes = AudioSourceMode.availableModes()
         val s = preferredSource?.takeIf { it in availableSourceModes } ?: availableSourceModes.first()
         selectedSource = s
         sourceLabels = availableSourceModes.map { context.getString(it.labelRes) }
@@ -353,72 +344,11 @@ fun SettingsScreen(
         pushUndoState()
     }
 
-    fun applyResolvedCapabilityUi(preferred: SettingsSnapshot, resetOriginalSnapshot: Boolean) {
-        val shouldResetOriginalSnapshot = resetOriginalSnapshot && !hasUnsavedChanges
-
-        availableRouteModes = supportedInputRouteModes(context)
-        val selRoute = preferred.route?.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
-        selectedRoute = selRoute
-        selectedRouteLabel = context.getString(selRoute.labelRes)
-        routeLabels = availableRouteModes.map { context.getString(it.labelRes) }
-
-        refreshCodecOptions(
-            preferredCodec = preferred.codec,
-            preferredSource = preferred.source,
-            preferredChannelMode = preferred.channelMode,
-            preferredRate = preferred.sampleRate,
-        )
-        capabilityUiReady = true
-        refreshRetentionFields(preserveActiveInputs = true)
-        refreshMoveRecordingsAvailability()
-        saveCurrentToSnapshot(currentSnapshot)
-        if (shouldResetOriginalSnapshot) {
-            originalSnapshot.copyFrom(currentSnapshot)
-            hasUnsavedChanges = false
-        } else {
-            pushUndoState()
-        }
-    }
-
-    fun primeCapabilityPath(preferred: SettingsSnapshot, capabilityContext: Context) {
-        val formats = supportedFormats()
-        val format = preferred.format?.takeIf { it in formats } ?: formats.first()
-        val codecs = supportedCodecs(format)
-        val codec = preferred.codec?.takeIf { it in codecs } ?: codecs.first()
-        val sampleFormat = preferred.sampleFormat
-        val routes = supportedInputRouteModes(capabilityContext)
-        val route = preferred.route?.takeIf { it in routes } ?: routes.first()
-        val sources = supportedAudioSourceModes(capabilityContext, route, format, codec, sampleFormat)
-        val source = preferred.source?.takeIf { it in sources } ?: sources.first()
-        val channels = supportedChannelModes(capabilityContext, source, route, format, codec, sampleFormat)
-        val channel = preferred.channelMode?.takeIf { it in channels } ?: channels.first()
-        supportedSampleRates(capabilityContext, source, route, format, codec, channel, sampleFormat)
-    }
-
-    fun refreshCapabilityUiAsync(resetOriginalSnapshot: Boolean) {
-        val generation = ++capabilityRefreshGeneration
-        val preferred = SettingsSnapshot().also { saveCurrentToSnapshot(it) }
-        val appContext = context.applicationContext
-        scope.launch(Dispatchers.Default) {
-            val primed = runCatching { primeCapabilityPath(preferred, appContext) }.isSuccess
-            withContext(Dispatchers.Main) {
-                if (generation != capabilityRefreshGeneration) return@withContext
-                if (primed) {
-                    applyResolvedCapabilityUi(preferred, resetOriginalSnapshot)
-                } else {
-                    capabilityUiReady = true
-                    sampleRateUnsupported = true
-                }
-            }
-        }
-    }
-
     fun restorePreviousSettings() {
         if (!hasUnsavedChanges) return
         val prev = originalSnapshot
         retentionTimeError = null
         retentionSizeError = null
-        sampleRateUnsupported = false
 
         activeRetentionMode = prev.retentionMode
         retentionTimeSecondsValue = prev.retentionTime
@@ -443,14 +373,12 @@ fun SettingsScreen(
         selectedSampleRate = prev.sampleRate.takeIf { it > 0 } ?: selectedSampleRate
         selectedSampleRateLabel = sampleRateLabel(selectedSampleRate)
 
-        if (capabilityUiReady) {
-            refreshCodecOptions(
-                preferredCodec = prev.codec,
-                preferredSource = prev.source,
-                preferredChannelMode = prev.channelMode,
-                preferredRate = prev.sampleRate,
-            )
-        }
+        refreshCodecOptions(
+            preferredCodec = prev.codec,
+            preferredSource = prev.source,
+            preferredChannelMode = prev.channelMode,
+            preferredRate = prev.sampleRate,
+        )
 
         refreshRetentionFields()
         refreshExportDirectoryUi()
@@ -459,13 +387,11 @@ fun SettingsScreen(
 
         currentSnapshot = prev.copy()
         hasUnsavedChanges = false
-        if (!capabilityUiReady) refreshCapabilityUiAsync(false)
     }
 
     fun persistSettings(showFeedback: Boolean): Boolean {
         retentionTimeError = null
         retentionSizeError = null
-        sampleRateUnsupported = false
 
         if (service?.isRecordingActive() == true) {
             if (showFeedback) {
@@ -481,14 +407,6 @@ fun SettingsScreen(
         val route = selectedRoute
         val source = selectedSource
         val sampleRate = selectedSampleRate
-
-        if (sampleRate <= 0 ||
-            !isCodecSupported(format, codec, sampleRate, channelMode) ||
-            !isInputConfigSupported(context, sampleRate, source, route, channelMode, sampleFormat)
-        ) {
-            sampleRateUnsupported = true
-            return false
-        }
 
         val retentionTime = if (activeRetentionMode == RetentionMode.TIME) {
             parseDurationInput(retentionTimeText.trim())
@@ -509,6 +427,8 @@ fun SettingsScreen(
             retentionSizeError = context.getString(R.string.custom_memory_size_invalid)
             return false
         }
+
+        if (sampleRate <= 0 || !isCodecSupported(format, codec, sampleRate, channelMode)) return false
 
         val requestedSizeBytes = rawMegabytesToBytes(sizeMb)
 
@@ -617,10 +537,16 @@ fun SettingsScreen(
 
         currentSnapshot = currentSnapshot.copy(wakeLockEnabled = isWakeLockEnabled(context))
 
+        refreshCodecOptions(
+            preferredCodec = configuredCodec,
+            preferredSource = configuredSourceVal,
+            preferredChannelMode = configuredChannelModeVal,
+            preferredRate = configuredRateVal,
+        )
+        refreshRetentionFields(preserveActiveInputs = true)
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
         hasUnsavedChanges = false
-        refreshCapabilityUiAsync(resetOriginalSnapshot = true)
     }
 
     val exportDirectoryLauncher = rememberLauncherForActivityResult(
@@ -756,19 +682,11 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp,
-                shadowElevation = 1.dp,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 8.dp)
-                        .height(64.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(stringResource(R.string.settings_title))
+                },
+                navigationIcon = {
                     IconButton(onClick = {
                         if (hasUnsavedChanges) restorePreviousSettings() else onBack()
                     }) {
@@ -781,9 +699,8 @@ fun SettingsScreen(
                             ),
                         )
                     }
-                    Spacer(Modifier.weight(1f))
-                    Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.weight(1f))
+                },
+                actions = {
                     IconButton(
                         onClick = {
                             if (!hasUnsavedChanges) return@IconButton
@@ -813,8 +730,8 @@ fun SettingsScreen(
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                         )
                     }
-                }
-            }
+                },
+            )
         },
     ) { innerPadding ->
         val view = LocalView.current
@@ -928,10 +845,15 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedFormatLabel = label
                             selectedFormat = availableFormats.first { context.getString(it.labelRes) == label }
+                            refreshCodecOptions(
+                                preferredCodec = selectedCodec,
+                                preferredSource = selectedSource,
+                                preferredChannelMode = selectedChannelMode,
+                                preferredRate = selectedSampleRate,
+                            )
+                            refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
-                            capabilityUiReady = false
-                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -946,10 +868,10 @@ fun SettingsScreen(
                             selectedChannelMode = availableChannelModes.first {
                                 context.getString(it.labelRes) == label
                             }
+                            refreshSampleRates(selectedSampleRate)
+                            refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
-                            capabilityUiReady = false
-                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -970,10 +892,14 @@ fun SettingsScreen(
                                 selectedSampleFormat = PcmSampleFormat.entries.first {
                                     context.getString(it.labelRes) == label
                                 }
+                                refreshSourceModes(
+                                    preferredSource = selectedSource,
+                                    preferredChannelMode = selectedChannelMode,
+                                    preferredRate = selectedSampleRate,
+                                )
+                                refreshRetentionFields(preserveActiveInputs = true)
                                 saveCurrentToSnapshot(currentSnapshot)
                                 pushUndoState()
-                                capabilityUiReady = false
-                                refreshCapabilityUiAsync(false)
                             },
                             modifier = Modifier.weight(1f),
                         )
@@ -987,10 +913,14 @@ fun SettingsScreen(
                             onOptionSelected = { label ->
                                 selectedCodecLabel = label
                                 selectedCodec = availableCodecs.first { context.getString(it.labelRes) == label }
+                                refreshSourceModes(
+                                    preferredSource = selectedSource,
+                                    preferredChannelMode = selectedChannelMode,
+                                    preferredRate = selectedSampleRate,
+                                )
+                                refreshRetentionFields(preserveActiveInputs = true)
                                 saveCurrentToSnapshot(currentSnapshot)
                                 pushUndoState()
-                                capabilityUiReady = false
-                                refreshCapabilityUiAsync(false)
                             },
                             modifier = Modifier.weight(1f),
                         )
@@ -1010,22 +940,8 @@ fun SettingsScreen(
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
-                        enabled = !sampleRateUnsupported,
-                        error = if (sampleRateUnsupported) {
-                            stringResource(R.string.unsupported_config_message)
-                        } else {
-                            null
-                        },
                     )
                 }
-            }
-            if (sampleRateUnsupported) {
-                Text(
-                    text = stringResource(R.string.unsupported_config_message),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -1039,10 +955,10 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedSourceLabel = label
                             selectedSource = availableSourceModes.first { context.getString(it.labelRes) == label }
+                            refreshChannelModes(selectedChannelMode, selectedSampleRate)
+                            refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
-                            capabilityUiReady = false
-                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1055,10 +971,14 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedRouteLabel = label
                             selectedRoute = availableRouteModes.first { context.getString(it.labelRes) == label }
+                            refreshSourceModes(
+                                preferredSource = selectedSource,
+                                preferredChannelMode = selectedChannelMode,
+                                preferredRate = selectedSampleRate,
+                            )
+                            refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
-                            capabilityUiReady = false
-                            refreshCapabilityUiAsync(false)
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1168,7 +1088,6 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showBufferResetWarning = false
-                    service?.clearBuffer()
                     if (persistSettings(showFeedback = false)) onBack()
                 }) {
                     Text(stringResource(R.string.settings_buffer_reset_confirm))
@@ -1221,8 +1140,6 @@ private fun SettingsDropdown(
     options: List<String>,
     onOptionSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    error: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -1238,24 +1155,19 @@ private fun SettingsDropdown(
                     contentDescription = stringResource(R.string.open_options),
                 )
             },
-            enabled = enabled,
-            isError = error != null,
-            supportingText = error?.let { { Text(it) } },
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth(),
         )
-        if (enabled) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { expanded = true }
-            )
-        }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { expanded = true }
+        )
         DropdownMenu(
-            expanded = expanded && enabled,
+            expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
             options.forEach { option ->

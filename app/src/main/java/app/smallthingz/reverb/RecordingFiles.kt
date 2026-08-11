@@ -93,10 +93,13 @@ fun describeOutputDirectory(
     if (treeUri == null) {
         return "${context.getString(R.string.app_storage_label)}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}"
     }
-    val name = runCatching { DocumentFile.fromTreeUri(context, treeUri)?.name }
-        .onFailure { Log.w(TAG, "Unable to describe output directory $treeUri", it) }
-        .getOrNull()
-    return name ?: treeUri.toString()
+    val documentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+    return documentId
+        ?.substringAfterLast(':')
+        ?.trimEnd('/')
+        ?.substringAfterLast('/')
+        ?.takeIf { it.isNotBlank() }
+        ?: treeUri.toString()
 }
 
 fun buildRecordingUri(

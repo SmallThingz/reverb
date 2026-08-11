@@ -20,6 +20,21 @@ object RecordingRepository {
         }
     }
 
+    suspend fun countKnown(context: Context): Int {
+        return withContext(Dispatchers.IO) {
+            RecordingDatabase.getInstance(context).recordingDao().countAll()
+        }
+    }
+
+    suspend fun hasMovableKnownRecordings(
+        context: Context,
+        targetDirectoryId: String = getConfiguredOutputDirectoryId(context),
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            RecordingDatabase.getInstance(context).recordingDao().hasMovableRecordings(targetDirectoryId)
+        }
+    }
+
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
@@ -73,19 +88,6 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 pruneMissingLocked(context)
-            }
-        }
-    }
-
-    suspend fun syncAndCheckMovableRecordings(
-        context: Context,
-        targetDirectoryId: String = getConfiguredOutputDirectoryId(context),
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            mutex.withLock {
-                syncConfiguredDirectory(context)
-                pruneMissingLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
-                RecordingDatabase.getInstance(context).recordingDao().hasMovableRecordings(targetDirectoryId)
             }
         }
     }

@@ -25,10 +25,13 @@ internal class AudioBlobView(context: Context) : View(context) {
     private val currentBands = FloatArray(BAND_COUNT)
     private var targetActivity = 0f
     private var currentActivity = 0f
+    private var targetLife = COLLAPSED_LIFE
+    private var currentLife = COLLAPSED_LIFE
     private var active = false
     private var recording = false
     private var enabledState = true
     private var saving = false
+    private var renderingVisible = true
     private var aggregatedVisible = false
     private var windowFocused = false
     private var framePosted = false
@@ -90,11 +93,9 @@ internal class AudioBlobView(context: Context) : View(context) {
     fun clearFrame() {
         targetActivity = 0f
         targetBands.fill(0f)
-        if (!active) {
-            currentActivity = 0f
-            currentBands.fill(0f)
-            invalidate()
-        }
+        currentActivity = 0f
+        currentBands.fill(0f)
+        invalidate()
     }
 
     fun updateState(
@@ -102,17 +103,24 @@ internal class AudioBlobView(context: Context) : View(context) {
         recording: Boolean,
         enabled: Boolean,
         saving: Boolean,
+        visible: Boolean,
         primary: Int,
         tertiary: Int,
         paused: Int,
         error: Int,
     ) {
         val stateChanged = this.active != active || this.recording != recording ||
-            enabledState != enabled || this.saving != saving
+            enabledState != enabled || this.saving != saving || renderingVisible != visible
         this.active = active
         this.recording = recording
         enabledState = enabled
         this.saving = saving
+        renderingVisible = visible
+        targetLife = when {
+            !enabled -> DISABLED_LIFE
+            active && !saving -> 1f
+            else -> COLLAPSED_LIFE
+        }
         renderer.setPalette(primary, tertiary, paused, error)
         if (!active || saving) {
             targetActivity = 0f
@@ -120,8 +128,8 @@ internal class AudioBlobView(context: Context) : View(context) {
         }
         if (stateChanged) {
             ensureAnimationState()
-            invalidate()
         }
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -136,6 +144,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             timeSeconds = timeSeconds,
             activity = currentActivity,
             bands = currentBands,
+            life = currentLife,
             active = active && !saving,
             recording = recording,
         )
@@ -171,17 +180,24 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private fun shouldAnimate(): Boolean =
-        isAttachedToWindow && aggregatedVisible && windowFocused && active && enabledState && !saving
+        renderingVisible && isAttachedToWindow && aggregatedVisible && windowFocused && enabledState &&
+            (hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
 
     private fun ensureAnimationState() {
         if (shouldAnimate()) {
             postNextFrame(immediate = true)
         } else {
             stopFrames()
-            if (!active || saving) {
+            if (!renderingVisible) {
                 currentActivity = 0f
                 currentBands.fill(0f)
+                currentLife = COLLAPSED_LIFE
+            } else if (!active || saving) {
+                currentActivity = 0f
+                currentBands.fill(0f)
+                currentLife = targetLife
             }
+            invalidate()
         }
     }
 
@@ -205,6 +221,14 @@ internal class AudioBlobView(context: Context) : View(context) {
         return false
     }
 
+    private fun hasResidualAudio(): Boolean {
+        if (currentActivity > RESIDUAL_FRAME_THRESHOLD || targetActivity > RESIDUAL_FRAME_THRESHOLD) return true
+        for (index in currentBands.indices) {
+            if (currentBands[index] > RESIDUAL_BAND_THRESHOLD || targetBands[index] > RESIDUAL_BAND_THRESHOLD) return true
+        }
+        return false
+    }
+
     private fun stopFrames() {
         if (framePosted) {
             choreographer.removeFrameCallback(frameCallback)
@@ -224,6 +248,10 @@ internal class AudioBlobView(context: Context) : View(context) {
             val mix = (rate * normalized).coerceIn(0f, 0.8f)
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
+        val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f
+        val lifeMix = (lifeRate * normalized).coerceIn(0f, 0.65f)
+        currentLife += (targetLife - currentLife) * lifeMix
+        if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife
     }
 
     private interface Renderer {
@@ -238,6 +266,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             timeSeconds: Float,
             activity: Float,
             bands: FloatArray,
+            life: Float,
             active: Boolean,
             recording: Boolean,
         )
@@ -277,23 +306,30 @@ internal class AudioBlobView(context: Context) : View(context) {
             timeSeconds: Float,
             activity: Float,
             bands: FloatArray,
+            life: Float,
             active: Boolean,
             recording: Boolean,
         ) {
             if (width <= 0 || height <= 0) return
             shader.setFloatUniform("time", timeSeconds)
             shader.setFloatUniform("activity", activity)
+            shader.setFloatUniform("life", life)
             shader.setFloatUniform("active", if (active) 1f else 0f)
             shader.setFloatUniform("recording", if (recording) 1f else 0f)
             shader.setFloatUniform("bands0", bands[0], bands[1], bands[2], bands[3])
             shader.setFloatUniform("bands1", bands[4], bands[5], bands[6], bands[7])
-            canvas.drawPaint(paint)
+            canvas.drawCircle(
+                width * 0.5f,
+                height * 0.5f,
+                minOf(width, height) * 0.495f,
+                paint,
+            )
         }
     }
 
     private class FallbackRenderer : Renderer {
-        override val activeFrameDelayMillis = 50L
-        override val idleFrameDelayMillis = 84L
+        override val activeFrameDelayMillis = 33L
+        override val idleFrameDelayMillis = 66L
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val path = Path()
         private val x = FloatArray(FALLBACK_POINTS)
@@ -328,6 +364,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             timeSeconds: Float,
             activity: Float,
             bands: FloatArray,
+            life: Float,
             active: Boolean,
             recording: Boolean,
         ) {
@@ -335,7 +372,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             val minSize = minOf(width, height).toFloat()
             val cx = width * 0.5f
             val cy = height * 0.5f
-            val base = minSize * (0.265f + activity * 0.02f)
+            val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))
             for (index in 0 until FALLBACK_POINTS) {
                 val angle = index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f
                 val band = bands[index * BAND_COUNT / FALLBACK_POINTS]
@@ -343,7 +380,7 @@ internal class AudioBlobView(context: Context) : View(context) {
                     sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +
                         sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f
                 } else 0f
-                val radius = base + if (active) band * minSize * 0.042f + idle else 0f
+                val radius = base + if (active) band * minSize * 0.078f + idle else 0f
                 x[index] = cx + cos(angle) * radius
                 y[index] = cy + sin(angle) * radius
             }
@@ -377,13 +414,19 @@ internal class AudioBlobView(context: Context) : View(context) {
     companion object {
         private const val BAND_COUNT = 8
         private const val FALLBACK_POINTS = 40
-        private const val ACTIVE_FRAME_THRESHOLD = 0.035f
-        private const val ACTIVE_BAND_THRESHOLD = 0.055f
+        private const val ACTIVE_FRAME_THRESHOLD = 0.018f
+        private const val ACTIVE_BAND_THRESHOLD = 0.030f
+        private const val RESIDUAL_FRAME_THRESHOLD = 0.003f
+        private const val RESIDUAL_BAND_THRESHOLD = 0.006f
+        private const val COLLAPSED_LIFE = 0.18f
+        private const val DISABLED_LIFE = 0.10f
+        private const val LIFE_EPSILON = 0.006f
 
         private const val SHADER_SOURCE = """
             uniform float2 resolution;
             uniform float time;
             uniform float activity;
+            uniform float life;
             uniform float active;
             uniform float recording;
             uniform float4 bands0;
@@ -399,33 +442,28 @@ internal class AudioBlobView(context: Context) : View(context) {
                 float angle = atan(p.y, p.x);
                 float radius = length(p);
 
-                float low = (bands0.x + bands0.y) * 0.5;
-                float lowMid = (bands0.z + bands0.w) * 0.5;
-                float highMid = (bands1.x + bands1.y) * 0.5;
-                float high = (bands1.z + bands1.w) * 0.5;
+                float low = dot(bands0, float4(0.34, 0.30, 0.21, 0.15));
+                float high = dot(bands1, float4(0.34, 0.30, 0.21, 0.15));
                 float h3 = sin(angle * 3.0 + time * 0.78);
-                float h5 = sin(angle * 5.0 - time * 0.49 + 1.1);
-                float h7 = sin(angle * 7.0 + time * 0.34 + 2.2);
-                float h9 = sin(angle * 9.0 - time * 0.27 + 3.4);
-                float audioWave =
-                    h3 * low * 0.36 +
-                    h5 * lowMid * 0.29 +
-                    h7 * highMid * 0.21 +
-                    h9 * high * 0.14;
+                float h7 = sin(angle * 7.0 - time * 0.39 + 1.8);
+                float audioWave = h3 * low * 0.66 + h7 * high * 0.44;
 
-                float idle = h3 * 0.0055 + h5 * 0.0027;
-                float baseRadius = 0.265 + activity * 0.022;
-                float blobRadius = baseRadius + active * (idle + audioWave * (0.052 + activity * 0.018));
+                float idle = h3 * 0.0056 + h7 * 0.0024;
+                float liveRadius = 0.330 + activity * 0.018;
+                float baseRadius = mix(0.095, liveRadius, life);
+                float blobRadius = baseRadius + active * life *
+                    (idle + audioWave * (0.078 + activity * 0.020));
                 float distanceToEdge = radius - blobRadius;
 
                 float body = smoothstep(0.012, -0.006, distanceToEdge);
-                float glow = active * (1.0 - body) *
-                    smoothstep(0.13, 0.0, max(distanceToEdge, 0.0)) *
-                    (0.07 + activity * 0.10);
+                float glow = active * life * (1.0 - body) *
+                    smoothstep(0.024, 0.0, max(distanceToEdge, 0.0)) *
+                    (0.055 + activity * 0.12);
 
                 float gradientMix = clamp(0.46 + p.x * 0.9 - p.y * 0.55, 0.0, 1.0);
                 half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));
-                half4 bodyColor = mix(pausedColor, activeColor, half(active));
+                float colorLife = smoothstep(0.36, 0.86, life);
+                half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));
                 bodyColor = mix(bodyColor, errorColor, half(recording));
                 half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));
                 glowColor = mix(glowColor, errorColor, half(recording));
