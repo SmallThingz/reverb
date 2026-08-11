@@ -27,8 +27,6 @@ data class RecordingEntity(
 interface RecordingDao {
     suspend fun listAll(): List<RecordingEntity>
 
-    suspend fun countAll(): Int
-
     suspend fun listByDirectory(directoryId: String): List<RecordingEntity>
 
     suspend fun upsert(recording: RecordingEntity)
@@ -85,13 +83,6 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 null,
                 "$COLUMN_STARTED_AT_MILLIS DESC, $COLUMN_CREATED_AT_MILLIS DESC",
             ).use(::readRecordings)
-        }
-
-        override suspend fun countAll(): Int {
-            return readableDatabase.rawQuery(
-                "SELECT COUNT(*) FROM $TABLE_RECORDINGS",
-                null,
-            ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
         }
 
         override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> {

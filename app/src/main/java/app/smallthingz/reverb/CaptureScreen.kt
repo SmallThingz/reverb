@@ -13,13 +13,16 @@ import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
 import android.os.IBinder
 import android.os.Build
-import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -31,7 +34,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,11 +48,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,10 +64,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -79,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ActivityCompat
@@ -87,7 +83,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -115,12 +110,10 @@ class NotifyFileReceiver(
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
-        backgroundRecordingResultScope.launch(Dispatchers.Main) {
-            Toast.makeText(
-                appContext, message.ifBlank { appContext.getString(R.string.save_failed) },
-                Toast.LENGTH_LONG,
-            ).show()
-        }
+        AppFeedbackCenter.post(
+            message.ifBlank { appContext.getString(R.string.save_failed) },
+            FeedbackTone.ERROR,
+        )
     }
 }
 
@@ -162,6 +155,11 @@ private data class ExportUiConfig(
     val bitrateKbps: Int?,
 )
 
+private sealed interface CaptureSaveStatus {
+    data class Saving(val cancellable: Boolean) : CaptureSaveStatus
+    data class Saved(val recording: RecordingEntity) : CaptureSaveStatus
+}
+
 @Composable
 fun CaptureScreen(
     showLibraryButton: Boolean = false,
@@ -173,7 +171,6 @@ fun CaptureScreen(
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
     var isListening by remember { mutableStateOf(false) }
@@ -189,6 +186,7 @@ fun CaptureScreen(
     var clampWarningSeconds by remember { mutableFloatStateOf(0f) }
     var pendingExportRange by remember { mutableStateOf<ExportRange?>(null) } // Not saveable — non-serializable
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
 
     val stateCallback = remember {
         object : ReverbService.StateCallback {
@@ -353,8 +351,10 @@ fun CaptureScreen(
                     val range = pendingExportRange ?: return@ExportClampDialog
                     pendingExportRange = null
                     startExport(
-                        context, service, range, scope, snackbarHostState,
-                        setSaving = { isSaving = it }, onError = { errorMessage = it },
+                        context, service, range, scope,
+                        setSaving = { isSaving = it },
+                        onStatus = { saveStatus = it },
+                        onError = { errorMessage = it },
                         onSaved = onRecordingSaved,
                     )
                 },
@@ -374,10 +374,15 @@ fun CaptureScreen(
                     if (s != null && !isSaving) {
                         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                         isSaving = true
+                        saveStatus = CaptureSaveStatus.Saving(cancellable = false)
                         s.stopRecording(
                             SaveResultReceiver(
-                                context, scope, snackbarHostState,
-                                { isSaving = it }, { errorMessage = it }, onRecordingSaved,
+                                context = context,
+                                scope = scope,
+                                setSaving = { isSaving = it },
+                                onStatus = { saveStatus = it },
+                                onError = { errorMessage = it },
+                                onSaved = onRecordingSaved,
                             ),
                         )
                     }
@@ -416,8 +421,10 @@ fun CaptureScreen(
                         showExportClampDialog = true
                     } else {
                         startExport(
-                            context, service, range, scope, snackbarHostState,
-                            setSaving = { isSaving = it }, onError = { errorMessage = it },
+                            context, service, range, scope,
+                            setSaving = { isSaving = it },
+                            onStatus = { saveStatus = it },
+                            onError = { errorMessage = it },
                             onSaved = onRecordingSaved,
                         )
                     }
@@ -431,7 +438,10 @@ fun CaptureScreen(
                         if (secs > 0f) {
                             handleExport(context, s, secs, handler)
                         } else {
-                            Toast.makeText(context, R.string.nothing_to_export, Toast.LENGTH_SHORT).show()
+                            AppFeedbackCenter.post(
+                                context.getString(R.string.nothing_to_export),
+                                FeedbackTone.INFO,
+                            )
                         }
                     }
                 }
@@ -443,7 +453,10 @@ fun CaptureScreen(
                         if (secs > 0f) {
                             showExportRangeDialog = true
                         } else {
-                            Toast.makeText(context, R.string.nothing_to_export, Toast.LENGTH_SHORT).show()
+                            AppFeedbackCenter.post(
+                                context.getString(R.string.nothing_to_export),
+                                FeedbackTone.INFO,
+                            )
                         }
                     }
                 }
@@ -465,13 +478,24 @@ fun CaptureScreen(
             )
         }
 
-        SnackbarHost(
-            hostState = snackbarHostState,
+        CaptureSaveStatusCard(
+            status = saveStatus,
+            onCancel = {
+                service?.cancelCurrentExport()
+                saveStatus = null
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding(),
-        ) { data ->
-            Snackbar(snackbarData = data)
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 104.dp),
+        )
+    }
+
+    LaunchedEffect(saveStatus) {
+        val current = saveStatus
+        if (current is CaptureSaveStatus.Saved) {
+            delay(1_500L)
+            if (saveStatus == current) saveStatus = null
         }
     }
 
@@ -487,8 +511,10 @@ fun CaptureScreen(
                     showExportClampDialog = true
                 } else {
                     startExport(
-                        context, service, range, scope, snackbarHostState,
-                        setSaving = { isSaving = it }, onError = { errorMessage = it },
+                        context, service, range, scope,
+                        setSaving = { isSaving = it },
+                        onStatus = { saveStatus = it },
+                        onError = { errorMessage = it },
                         onSaved = onRecordingSaved,
                     )
                 }
@@ -522,7 +548,6 @@ private fun MainCaptureContent(
     onOpenLibrary: () -> Unit,
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val retentionMode = getConfiguredRetentionMode(context)
 
     val displayedCurrentSeconds = memorizedSeconds.coerceAtLeast(0f).toInt()
@@ -557,7 +582,6 @@ private fun MainCaptureContent(
     val hasHistory = memorizedSeconds > 0f
     val exportBlocked = !serviceReady || isSaving || isRecording || !hasHistory
     val clearEnabled = serviceReady && !isSaving && !isRecording && hasHistory
-    val librarySwipeThreshold = with(density) { 36.dp.toPx() }
 
     Column(
         modifier = Modifier
@@ -589,21 +613,7 @@ private fun MainCaptureContent(
 
         Surface(
             modifier = Modifier
-                .animateContentSize()
-                .pointerInput(showLibraryButton, onOpenLibrary) {
-                    if (!showLibraryButton) return@pointerInput
-                    var upwardDrag = 0f
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { _, amount ->
-                            if (amount < 0f) upwardDrag -= amount
-                        },
-                        onDragEnd = {
-                            if (upwardDrag >= librarySwipeThreshold) onOpenLibrary()
-                            upwardDrag = 0f
-                        },
-                        onDragCancel = { upwardDrag = 0f },
-                    )
-                },
+                .animateContentSize(),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
@@ -669,6 +679,37 @@ private fun CaptureActionButton(
             tint = tint,
             modifier = Modifier.size(25.dp),
         )
+    }
+}
+
+@Composable
+private fun CaptureSaveStatusCard(
+    status: CaptureSaveStatus?,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var renderedStatus by remember { mutableStateOf<CaptureSaveStatus?>(status) }
+    LaunchedEffect(status) {
+        if (status != null) renderedStatus = status
+    }
+
+    AnimatedVisibility(
+        visible = status != null,
+        modifier = modifier,
+        enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+    ) {
+        when (val current = renderedStatus) {
+            is CaptureSaveStatus.Saving -> SavingRecordingCard(
+                modifier = Modifier.fillMaxWidth(),
+                onCancel = if (current.cancellable) onCancel else null,
+            )
+            is CaptureSaveStatus.Saved -> RecordingEntityCard(
+                recording = current.recording,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            null -> Unit
+        }
     }
 }
 
@@ -799,7 +840,10 @@ private fun AudioBlobControl(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     text = primaryText,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontSize = 18.sp,
+                        lineHeight = 22.sp,
+                    ),
                     color = contentColor,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
@@ -810,7 +854,10 @@ private fun AudioBlobControl(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = secondaryText,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontSize = 14.sp,
+                        lineHeight = 18.sp,
+                    ),
                     color = if (showWarning) colors.error else contentColor.copy(alpha = 0.76f),
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -1123,27 +1170,25 @@ private fun startExport(
     service: ReverbService?,
     range: ExportRange,
     scope: CoroutineScope,
-    snackbarHostState: SnackbarHostState,
     setSaving: (Boolean) -> Unit,
+    onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit = {},
     onSaved: () -> Unit = {},
 ) {
-    val s = service ?: return
+    val recorder = service ?: return
     setSaving(true)
-    scope.launch(start = CoroutineStart.UNDISPATCHED) {
-        val result = snackbarHostState.showSnackbar(
-            message = context.getString(R.string.saving),
-            actionLabel = context.getString(R.string.cancel),
-            duration = SnackbarDuration.Indefinite,
-        )
-        if (result == SnackbarResult.ActionPerformed) {
-            s.cancelCurrentExport()
-        }
-    }
-    s.dumpRecordingRange(
+    onStatus(CaptureSaveStatus.Saving(cancellable = true))
+    recorder.dumpRecordingRange(
         range.startSeconds,
         range.endSeconds,
-        SaveResultReceiver(context, scope, snackbarHostState, setSaving, onError, onSaved),
+        SaveResultReceiver(
+            context = context,
+            scope = scope,
+            setSaving = setSaving,
+            onStatus = onStatus,
+            onError = onError,
+            onSaved = onSaved,
+        ),
         "",
     )
 }
@@ -1173,37 +1218,35 @@ private fun handleExport(
 }
 
 private class SaveResultReceiver(
-    private val context: Context,
+    context: Context,
     private val scope: CoroutineScope,
-    private val snackbarHostState: SnackbarHostState,
     private val setSaving: (Boolean) -> Unit,
+    private val onStatus: (CaptureSaveStatus?) -> Unit,
     private val onError: (String) -> Unit = {},
     private val onSaved: () -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
+
     override fun fileReady(recording: RecordingEntity) {
         setSaving(false)
         scope.launch {
-            snackbarHostState.currentSnackbarData?.dismiss()
-            runCatching { RecordingRepository.register(appContext, recording) }
-                .onSuccess { onSaved() }
-            snackbarHostState.showSnackbar(
-                message = appContext.getString(R.string.saved_snackbar),
-                duration = SnackbarDuration.Short,
-            )
+            val saved = runCatching { RecordingRepository.register(appContext, recording) }
+                .getOrDefault(recording)
+            onStatus(CaptureSaveStatus.Saved(saved))
+            onSaved()
         }
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
         setSaving(false)
+        onStatus(null)
         val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
         onError(text)
-        scope.launch { snackbarHostState.currentSnackbarData?.dismiss() }
     }
 
     override fun fileCancelled() {
         setSaving(false)
-        scope.launch { snackbarHostState.currentSnackbarData?.dismiss() }
+        onStatus(null)
     }
 }
 

@@ -35,8 +35,9 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var aggregatedVisible = false
     private var windowFocused = false
     private var framePosted = false
-    private var animationStartNanos = 0L
+    private var shaderTimeSeconds = 0f
     private var lastFrameNanos = 0L
+    private var lastAudioSignalNanos = 0L
     private val choreographer = Choreographer.getInstance()
 
     private val renderer: Renderer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -48,13 +49,13 @@ internal class AudioBlobView(context: Context) : View(context) {
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
         framePosted = false
         if (!shouldAnimate()) return@FrameCallback
-        if (animationStartNanos == 0L) animationStartNanos = frameTimeNanos
         val dtSeconds = if (lastFrameNanos == 0L) {
             1f / 30f
         } else {
             ((frameTimeNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         }
         lastFrameNanos = frameTimeNanos
+        shaderTimeSeconds += dtSeconds
         advance(dtSeconds)
         invalidate()
         postNextFrame()
@@ -81,6 +82,9 @@ internal class AudioBlobView(context: Context) : View(context) {
                 targetBands[band] = peak.coerceIn(0f, 1f)
             }
         }
+        if (targetActivity > SIGNAL_ACTIVITY_THRESHOLD || targetBands.any { it > SIGNAL_BAND_THRESHOLD }) {
+            lastAudioSignalNanos = System.nanoTime()
+        }
         if (!wasHot && hasHotAudio() && framePosted) {
             choreographer.removeFrameCallback(frameCallback)
             framePosted = false
@@ -95,6 +99,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         targetBands.fill(0f)
         currentActivity = 0f
         currentBands.fill(0f)
+        lastAudioSignalNanos = 0L
         invalidate()
     }
 
@@ -125,6 +130,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         if (!active || saving) {
             targetActivity = 0f
             targetBands.fill(0f)
+            lastAudioSignalNanos = 0L
         }
         if (stateChanged) {
             ensureAnimationState()
@@ -134,14 +140,11 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val timeSeconds = if (animationStartNanos == 0L) 0f else {
-            (lastFrameNanos - animationStartNanos) / 1_000_000_000f
-        }
         renderer.draw(
             canvas = canvas,
             width = width,
             height = height,
-            timeSeconds = timeSeconds,
+            timeSeconds = shaderTimeSeconds,
             activity = currentActivity,
             bands = currentBands,
             life = currentLife,
@@ -181,7 +184,7 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     private fun shouldAnimate(): Boolean =
         renderingVisible && isAttachedToWindow && aggregatedVisible && windowFocused && enabledState &&
-            (hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
+            (hasRecentAudioSignal() || hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
 
     private fun ensureAnimationState() {
         if (shouldAnimate()) {
@@ -229,13 +232,17 @@ internal class AudioBlobView(context: Context) : View(context) {
         return false
     }
 
+    private fun hasRecentAudioSignal(): Boolean {
+        if (!active || lastAudioSignalNanos == 0L) return false
+        return System.nanoTime() - lastAudioSignalNanos <= RECENT_AUDIO_HOLD_NANOS
+    }
+
     private fun stopFrames() {
         if (framePosted) {
             choreographer.removeFrameCallback(frameCallback)
             framePosted = false
         }
         lastFrameNanos = 0L
-        animationStartNanos = 0L
     }
 
     private fun advance(dtSeconds: Float) {
@@ -274,8 +281,8 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private class ShaderRenderer : Renderer {
-        override val activeFrameDelayMillis = 33L
-        override val idleFrameDelayMillis = 66L
+        override val activeFrameDelayMillis = 16L
+        override val idleFrameDelayMillis = 33L
         private val shader = RuntimeShader(SHADER_SOURCE)
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).also { it.shader = shader }
         private var primary = 0
@@ -328,8 +335,8 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private class FallbackRenderer : Renderer {
-        override val activeFrameDelayMillis = 33L
-        override val idleFrameDelayMillis = 66L
+        override val activeFrameDelayMillis = 16L
+        override val idleFrameDelayMillis = 33L
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val path = Path()
         private val x = FloatArray(FALLBACK_POINTS)
@@ -418,8 +425,11 @@ internal class AudioBlobView(context: Context) : View(context) {
         private const val ACTIVE_BAND_THRESHOLD = 0.030f
         private const val RESIDUAL_FRAME_THRESHOLD = 0.003f
         private const val RESIDUAL_BAND_THRESHOLD = 0.006f
-        private const val COLLAPSED_LIFE = 0.18f
-        private const val DISABLED_LIFE = 0.10f
+        private const val SIGNAL_ACTIVITY_THRESHOLD = 0.006f
+        private const val SIGNAL_BAND_THRESHOLD = 0.010f
+        private const val RECENT_AUDIO_HOLD_NANOS = 480_000_000L
+        private const val COLLAPSED_LIFE = 0.38f
+        private const val DISABLED_LIFE = 0.36f
         private const val LIFE_EPSILON = 0.006f
 
         private const val SHADER_SOURCE = """

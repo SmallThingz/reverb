@@ -2,12 +2,8 @@ package app.smallthingz.reverb
 
 import android.content.ActivityNotFoundException
 import android.content.Context
-import android.widget.Toast
 import java.util.Date
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,9 +35,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -50,22 +43,19 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -73,36 +63,38 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private sealed class ListItem {
     data class Header(val dateLabel: String) : ListItem()
-    data class Recording(
-        val recording: RecordingEntity,
-        val timestampLabel: String,
-        val fileName: String,
-        val durationLabel: String,
-        val sizeLabel: String,
-    ) : ListItem()
+    data class Recording(val recording: RecordingEntity) : ListItem()
 }
+
+private data class LibraryNotice(
+    val message: String,
+    val tone: FeedbackTone,
+    val canUndo: Boolean = false,
+)
 
 private val recordingCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 @Composable
 fun FilesScreen(
     modifier: Modifier = Modifier.fillMaxSize(),
+    initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
 
-    var recordings by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
+    var recordings by remember { mutableStateOf(initialRecordings) }
     var isRefreshing by remember { mutableStateOf(false) }
-    var hasLoaded by remember { mutableStateOf(false) }
-    var refreshGeneration by remember { mutableIntStateOf(0) }
+    var hasLoaded by remember { mutableStateOf(initialRecordings.isNotEmpty()) }
+    val refreshGeneration = remember { intArrayOf(0) }
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
     val pendingDeletions = remember { mutableStateMapOf<String, RecordingEntity>() }
@@ -113,14 +105,16 @@ fun FilesScreen(
     var infoRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var showPlayerDialog by remember { mutableStateOf(false) }
     var playerRecording by remember { mutableStateOf<RecordingEntity?>(null) }
+    var notice by remember { mutableStateOf<LibraryNotice?>(null) }
+    var deletionJob by remember { mutableStateOf<Job?>(null) }
 
-    fun refresh() {
-        val generation = ++refreshGeneration
-        isRefreshing = true
+    fun refresh(showSpinner: Boolean = true) {
+        val generation = ++refreshGeneration[0]
+        if (showSpinner) isRefreshing = true
         scope.launch {
             try {
                 val stored = RecordingRepository.refresh(context)
-                if (generation != refreshGeneration) return@launch
+                if (generation != refreshGeneration[0]) return@launch
                 recordings = stored
                 hasLoaded = true
                 val storedIds = stored.mapTo(mutableSetOf()) { it.id }
@@ -128,16 +122,29 @@ fun FilesScreen(
                     if (id !in storedIds) pendingDeletions.remove(id)
                 }
             } catch (_: Exception) {
-                if (generation == refreshGeneration) {
-                    Toast.makeText(context, R.string.recordings_refresh_failed, Toast.LENGTH_SHORT).show()
+                if (generation == refreshGeneration[0]) {
+                    notice = LibraryNotice(
+                        context.getString(R.string.recordings_refresh_failed),
+                        FeedbackTone.ERROR,
+                    )
                 }
             } finally {
-                if (generation == refreshGeneration) isRefreshing = false
+                if (generation == refreshGeneration[0]) isRefreshing = false
             }
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(Unit) {
+        if (!hasLoaded) {
+            recordings = runCatching { RecordingRepository.listKnown(context) }.getOrDefault(emptyList())
+            hasLoaded = true
+        }
+
+        // Guarantee a first frame from the local DB before any SAF/filesystem work.
+        withFrameNanos { }
+        delay(250L)
+        refresh(showSpinner = false)
+    }
 
     suspend fun finalizeDeletions() {
         val pending = pendingDeletions.values.toList()
@@ -154,7 +161,10 @@ fun FilesScreen(
             .onSuccess { recordings = it }
             .onFailure { failed = true }
         if (failed || deleted == 0) {
-            Toast.makeText(context, R.string.recording_delete_failed, Toast.LENGTH_SHORT).show()
+            notice = LibraryNotice(
+                context.getString(R.string.recording_delete_failed),
+                FeedbackTone.ERROR,
+            )
         }
     }
 
@@ -162,15 +172,21 @@ fun FilesScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                refresh()
+                refresh(showSpinner = false)
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
-                scope.launch { finalizeDeletions() }
+                deletionJob?.cancel()
+                deletionJob = scope.launch {
+                    notice = null
+                    finalizeDeletions()
+                    isDeleting = false
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            deletionJob?.cancel()
             if (pendingDeletions.isNotEmpty()) {
                 val pending = pendingDeletions.values.toList()
                 val appContext = context.applicationContext
@@ -206,22 +222,25 @@ fun FilesScreen(
         isDeleting = true
         selected.forEach { pendingDeletions[it.id] = it }
         clearSelection()
-        scope.launch {
-            val count = pendingDeletions.size
-            val message = if (count == 1) context.getString(R.string.recording_deleted)
-            else context.resources.getQuantityString(R.plurals.recordings_deleted, count, count)
-            val result = snackbarHostState.showSnackbar(
-                message = message,
-                actionLabel = context.getString(R.string.undo),
-                duration = SnackbarDuration.Long,
-            )
-            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                pendingDeletions.clear()
-            } else {
-                finalizeDeletions()
-            }
+        val count = pendingDeletions.size
+        val message = if (count == 1) context.getString(R.string.recording_deleted)
+        else context.resources.getQuantityString(R.plurals.recordings_deleted, count, count)
+        notice = LibraryNotice(message, FeedbackTone.INFO, canUndo = true)
+        deletionJob?.cancel()
+        deletionJob = scope.launch {
+            delay(4_500L)
+            notice = null
+            finalizeDeletions()
             isDeleting = false
         }
+    }
+
+    fun undoDelete() {
+        deletionJob?.cancel()
+        deletionJob = null
+        pendingDeletions.clear()
+        notice = null
+        isDeleting = false
     }
 
     fun renameSelected() {
@@ -243,7 +262,6 @@ fun FilesScreen(
 
     Scaffold(
         modifier = modifier,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (selectionActive) {
                 Surface(
@@ -292,67 +310,83 @@ fun FilesScreen(
             }
         },
     ) { innerPadding ->
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = { refresh() },
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            if (listItems.isEmpty() && !isRefreshing) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    EmptyState()
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp),
-                ) {
-                    items(listItems, key = { item ->
-                        when (item) {
-                            is ListItem.Header -> "header:${item.dateLabel}"
-                            is ListItem.Recording -> "recording:${item.recording.id}"
-                        }
-                    }) { item ->
-                        when (item) {
-                            is ListItem.Header -> HeaderItem(item.dateLabel)
-                            is ListItem.Recording -> {
-                                RecordingItem(
-                                    item = item,
-                                    isSelected = item.recording.id in selectedIds,
-                                    selectionActive = selectionActive,
-                                    onClick = {
-                                        if (selectionActive) {
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { refresh(showSpinner = true) },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (listItems.isEmpty() && !isRefreshing) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        EmptyState()
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                    ) {
+                        items(listItems, key = { item ->
+                            when (item) {
+                                is ListItem.Header -> "header:${item.dateLabel}"
+                                is ListItem.Recording -> "recording:${item.recording.id}"
+                            }
+                        }) { item ->
+                            when (item) {
+                                is ListItem.Header -> HeaderItem(item.dateLabel)
+                                is ListItem.Recording -> {
+                                    RecordingItem(
+                                        item = item,
+                                        isSelected = item.recording.id in selectedIds,
+                                        selectionActive = selectionActive,
+                                        onClick = {
+                                            if (selectionActive) {
+                                                if (selectedIds.containsKey(item.recording.id)) {
+                                                    selectedIds.remove(item.recording.id)
+                                                } else {
+                                                    selectedIds[item.recording.id] = item.recording
+                                                }
+                                            } else {
+                                                playerRecording = item.recording
+                                                showPlayerDialog = true
+                                            }
+                                        },
+                                        onLongClick = {
                                             if (selectedIds.containsKey(item.recording.id)) {
                                                 selectedIds.remove(item.recording.id)
                                             } else {
                                                 selectedIds[item.recording.id] = item.recording
                                             }
-                                        } else {
-                                            playerRecording = item.recording
-                                            showPlayerDialog = true
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (selectedIds.containsKey(item.recording.id)) {
-                                            selectedIds.remove(item.recording.id)
-                                        } else {
-                                            selectedIds[item.recording.id] = item.recording
-                                        }
-                                    },
-                                )
+                                        },
+                                    )
+                                }
                             }
                         }
+                        item { Spacer(Modifier.height(84.dp)) }
                     }
-                    item { Spacer(Modifier.height(24.dp)) }
                 }
+            }
+
+            notice?.let { current ->
+                FeedbackCard(
+                    message = current.message,
+                    tone = current.tone,
+                    actionLabel = if (current.canUndo) stringResource(R.string.undo) else null,
+                    onAction = if (current.canUndo) ::undoDelete else null,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
             }
         }
     }
@@ -405,9 +439,9 @@ fun FilesScreen(
                     try {
                         context.startActivity(buildOpenRecordingIntent(context, currentRecording))
                     } catch (_: ActivityNotFoundException) {
-                        Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
+                        notice = LibraryNotice(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     } catch (_: RuntimeException) {
-                        Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
+                        notice = LibraryNotice(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     }
                 },
             )
@@ -452,80 +486,16 @@ private fun RecordingItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    val bgColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
-        else MaterialTheme.colorScheme.surfaceContainerLow,
-        label = "bg",
-    )
-    Surface(
+    RecordingEntityCard(
+        recording = item.recording,
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 10.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = bgColor,
-        tonalElevation = if (isSelected) 2.dp else 0.5.dp,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .alpha(if (selectionActive && !isSelected) 0.75f else 1f)
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongClick,
-                )
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_audio_file),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.fileName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = item.durationLabel,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = item.timestampLabel,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = item.sizeLabel,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-            }
-        }
-    }
+        isSelected = isSelected,
+        selectionActive = selectionActive,
+        onClick = onClick,
+        onLongClick = onLongClick,
+    )
 }
 
 @Composable
@@ -713,17 +683,7 @@ private fun buildListItems(context: Context, recordings: List<RecordingEntity>):
             currentDateHeader = dateHeader
             items.add(ListItem.Header(dateHeader))
         }
-        items.add(
-            ListItem.Recording(
-                recording = recording,
-                timestampLabel = formatRecordingStartTimestamp(context, recording.startedAtMillis),
-                fileName = recording.displayName,
-                durationLabel = "${formatSavedRecordingDuration(context, recording.durationMillis)} \u2022 ${
-                    recording.codecSummary
-                }",
-                sizeLabel = formatShortFileSize(recording.sizeBytes),
-            ),
-        )
+        items.add(ListItem.Recording(recording))
     }
     return items
 }

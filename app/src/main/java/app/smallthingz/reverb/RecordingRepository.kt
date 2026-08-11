@@ -20,9 +20,14 @@ object RecordingRepository {
         }
     }
 
-    suspend fun countKnown(context: Context): Int {
+    /**
+     * Fast library snapshot for first paint. This intentionally does not touch
+     * storage providers or scan directories; refresh() reconciles those in the
+     * background after the sheet is already visible.
+     */
+    suspend fun listKnown(context: Context): List<RecordingEntity> {
         return withContext(Dispatchers.IO) {
-            RecordingDatabase.getInstance(context).recordingDao().countAll()
+            RecordingDatabase.getInstance(context).recordingDao().listAll()
         }
     }
 

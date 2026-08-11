@@ -92,6 +92,12 @@
     <string name="battery_optimization_status_ok">Battery optimization: unrestricted</string>
     <string name="battery_optimization_status_limited">Battery optimization: restricted</string>
     <string name="battery_optimization_button">Battery settings</string>
+    <string name="background_reliability_0_title">Battery optimization</string>
+    <string name="background_reliability_1_title">Foreground recorder</string>
+    <string name="background_reliability_1_summary">Microphone foreground service</string>
+    <string name="background_reliability_2_title">Sticky recovery</string>
+    <string name="background_reliability_2_summary">System restart with persisted recorder and ring state</string>
+    <string name="recorder_state_persist_failed">Couldn\'t persist recorder state.</string>
     <string name="settings_saved">Saved.</string>
     <string name="settings_saved_next_start">Saved. Starts next time.</string>
     <string name="settings_apply_blocked_recording">Stop recording first.</string>

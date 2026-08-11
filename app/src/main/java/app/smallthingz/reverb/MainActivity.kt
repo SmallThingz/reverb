@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -40,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -196,105 +198,135 @@ private fun MainScreen(
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var libraryCount by rememberSaveable { mutableIntStateOf(0) }
+    var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val context = LocalContext.current.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val librarySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    val edgeHeightPx = with(density) { 112.dp.toPx() }
-    val openSettingsDistancePx = with(density) { 72.dp.toPx() }
+    val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
-    fun refreshLibraryCount() {
+    fun refreshLibrarySnapshot() {
         scope.launch {
-            libraryCount = runCatching { RecordingRepository.countKnown(context) }
-                .getOrDefault(libraryCount)
+            runCatching { RecordingRepository.listKnown(context) }
+                .onSuccess { known ->
+                    librarySnapshot = known
+                    libraryCount = known.size
+                }
         }
     }
 
-    LaunchedEffect(Unit) { refreshLibraryCount() }
+    LaunchedEffect(Unit) { refreshLibrarySnapshot() }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshLibraryCount()
+            if (event == Lifecycle.Event.ON_RESUME) refreshLibrarySnapshot()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    AnimatedContent(
-        targetState = showSettings,
-        transitionSpec = {
-            if (targetState) {
-                slideInVertically { -it } togetherWith slideOutVertically { it / 8 }
+    Box(Modifier.fillMaxSize()) {
+        AnimatedContent(
+            targetState = showSettings,
+            transitionSpec = {
+                if (targetState) {
+                    slideInVertically(animationSpec = tween(220)) { -it } togetherWith
+                        slideOutVertically(animationSpec = tween(180)) { it / 10 }
+                } else {
+                    slideInVertically(animationSpec = tween(180)) { it / 10 } togetherWith
+                        slideOutVertically(animationSpec = tween(220)) { -it }
+                }
+            },
+            label = "settingsSheet",
+        ) { settingsVisible ->
+            if (settingsVisible) {
+                SettingsScreen(
+                    onBack = { showSettings = false },
+                    onThemeChanged = onThemeChanged,
+                )
             } else {
-                slideInVertically { it / 8 } togetherWith slideOutVertically { -it }
-            }
-        },
-        label = "settingsSheet",
-    ) { settingsVisible ->
-        if (settingsVisible) {
-            SettingsScreen(
-                onBack = { showSettings = false },
-                onThemeChanged = onThemeChanged,
-            )
-        } else {
-            Scaffold(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(permissionsGranted, showLibrary) {
-                        if (!permissionsGranted || showLibrary) return@pointerInput
-                        var dragStartY = 0f
-                        var draggedY = 0f
-                        detectVerticalDragGestures(
-                            onDragStart = { offset ->
-                                dragStartY = offset.y
-                                draggedY = 0f
-                            },
-                            onVerticalDrag = { _, amount ->
-                                if (dragStartY <= edgeHeightPx && amount > 0f) draggedY += amount
-                            },
-                            onDragEnd = {
-                                if (dragStartY <= edgeHeightPx && draggedY >= openSettingsDistancePx) {
-                                    showSettings = true
-                                }
-                                draggedY = 0f
-                            },
-                            onDragCancel = { draggedY = 0f },
+                Scaffold(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(permissionsGranted, showLibrary, showAboutDialog, libraryCount) {
+                            if (!permissionsGranted || showLibrary || showAboutDialog) return@pointerInput
+                            var dragStartY = 0f
+                            var downwardDrag = 0f
+                            var upwardDrag = 0f
+                            var triggered = false
+                            detectVerticalDragGestures(
+                                onDragStart = { offset ->
+                                    dragStartY = offset.y
+                                    downwardDrag = 0f
+                                    upwardDrag = 0f
+                                    triggered = false
+                                },
+                                onVerticalDrag = { _, amount ->
+                                    if (!triggered) {
+                                        val topRegionEnd = size.height * 0.48f
+                                        val bottomRegionStart = size.height * 0.52f
+                                        if (dragStartY <= topRegionEnd && amount > 0f) {
+                                            downwardDrag += amount
+                                            if (downwardDrag >= openPanelDistancePx) {
+                                                triggered = true
+                                                showSettings = true
+                                            }
+                                        } else if (dragStartY >= bottomRegionStart && amount < 0f) {
+                                            upwardDrag -= amount
+                                            if (libraryCount > 0 && upwardDrag >= openPanelDistancePx) {
+                                                triggered = true
+                                                showLibrary = true
+                                            }
+                                        }
+                                    }
+                                },
+                            )
+                        },
+                    topBar = {
+                        AppTopBar(
+                            onBrandClick = { showAboutDialog = true },
+                            onSettingsClick = { showSettings = true },
                         )
                     },
-                topBar = {
-                    AppTopBar(
-                        onBrandClick = { showAboutDialog = true },
-                        onSettingsClick = { showSettings = true },
-                    )
-                },
-            ) { innerPadding ->
-                Box(Modifier.fillMaxSize().padding(innerPadding)) {
-                    if (permissionsGranted) {
-                        CaptureScreen(
-                            showLibraryButton = libraryCount > 0,
-                            visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
-                            onOpenLibrary = { showLibrary = true },
-                            onRecordingSaved = { libraryCount = maxOf(1, libraryCount + 1) },
-                        )
-                    } else if (!showPermissionDenied) {
-                        Surface(Modifier.fillMaxSize()) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = stringResource(R.string.permission_required_message),
-                                    modifier = Modifier.padding(24.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                ) { innerPadding ->
+                    Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                        if (permissionsGranted) {
+                            CaptureScreen(
+                                showLibraryButton = libraryCount > 0,
+                                visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
+                                onOpenLibrary = { showLibrary = true },
+                                onRecordingSaved = { refreshLibrarySnapshot() },
+                            )
+                        } else if (!showPermissionDenied) {
+                            Surface(Modifier.fillMaxSize()) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = stringResource(R.string.permission_required_message),
+                                        modifier = Modifier.padding(24.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
+        AppFeedbackHost(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 18.dp)
+                .padding(bottom = if (showSettings) 20.dp else 104.dp),
+        )
     }
 
     if (showLibrary && libraryCount > 0) {
         ModalBottomSheet(
-            onDismissRequest = { showLibrary = false },
+            onDismissRequest = {
+                showLibrary = false
+                refreshLibrarySnapshot()
+            },
             sheetState = librarySheetState,
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             dragHandle = { BottomSheetDefaults.DragHandle() },
@@ -303,9 +335,13 @@ private fun MainScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.88f),
+                initialRecordings = librarySnapshot,
                 onRecordingCountChanged = { count ->
                     libraryCount = count
-                    if (count == 0) showLibrary = false
+                    if (count == 0) {
+                        librarySnapshot = emptyList()
+                        showLibrary = false
+                    }
                 },
             )
         }

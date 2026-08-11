@@ -216,16 +216,24 @@ class ReverbService : Service() {
     }
 
     fun enableListening() {
-        getRecorderPreferences(this).edit()
+        val persisted = getRecorderPreferences(this).edit()
             .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true)
-            .apply()
+            .commit()
+        if (!persisted) {
+            reportError(getString(R.string.recorder_state_persist_failed))
+            return
+        }
         innerStartListening()
     }
 
     fun disableListening() {
-        getRecorderPreferences(this).edit()
+        val persisted = getRecorderPreferences(this).edit()
             .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .apply()
+            .commit()
+        if (!persisted) {
+            reportError(getString(R.string.recorder_state_persist_failed))
+            return
+        }
         innerStopListening()
     }
 
@@ -397,10 +405,10 @@ class ReverbService : Service() {
     private fun failListeningStart() {
         getRecorderPreferences(this).edit()
             .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .apply()
+            .commit()
         state = STATE_READY
         updateWakeLockState()
-        showToast(getString(R.string.audio_input_init_failed))
+        reportError(getString(R.string.audio_input_init_failed))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -637,7 +645,7 @@ class ReverbService : Service() {
                         } catch (e: Exception) {
                             Log.e(TAG, "Unable to prepare export file", e)
                             val message = userFacingError(getString(R.string.cant_create_file_generic), e)
-                            showToast(message)
+                            reportError(message)
                             notifyReceiverFailure(receiver, message, e)
                             return@Callable Unit
                         }
@@ -705,7 +713,7 @@ class ReverbService : Service() {
                                 (outTarget?.displayName ?: newFileName),
                             e,
                         )
-                        showToast(message)
+                        reportError(message)
                         notifyReceiverFailure(receiver, message, e)
                         deleteOutputTarget(outTarget)
                     } finally {
@@ -825,7 +833,7 @@ class ReverbService : Service() {
                 deleteOutputTarget(recordingTarget)
                 recordingTarget = null
                 audioFileWriter = null
-                showToast(userFacingError(getString(R.string.cant_create_file_generic), e))
+                reportError(userFacingError(getString(R.string.cant_create_file_generic), e))
                 return@post
             }
 
@@ -985,7 +993,7 @@ class ReverbService : Service() {
         deleteOutputTarget(target)
         if (error != null) {
             val name = target?.displayName ?: getString(R.string.app_name)
-            showToast(userFacingError(getString(R.string.error_during_recording_into) + name, error))
+            reportError(userFacingError(getString(R.string.error_during_recording_into) + name, error))
         }
     }
 
@@ -1203,13 +1211,13 @@ class ReverbService : Service() {
         }
         getRecorderPreferences(this).edit()
             .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .apply()
+            .commit()
         state = STATE_READY
         audioHandler.removeCallbacks(audioReader)
         runCatching { persistentAudioRingStore.checkpoint() }
         releaseAudioRecord()
         updateWakeLockState()
-        showToast(if (error == null) message else userFacingError(message, error))
+        reportError(if (error == null) message else userFacingError(message, error))
         mainHandler.post {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -1383,7 +1391,7 @@ class ReverbService : Service() {
 
     fun consumePendingError(): String? = pendingError.getAndSet(null)
 
-    private fun showToast(message: String) {
+    private fun reportError(message: String) {
         pendingError.set(message)
     }
 

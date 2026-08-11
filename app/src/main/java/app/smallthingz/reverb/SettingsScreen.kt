@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -22,8 +21,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -61,13 +61,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.KeyboardOptions
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
@@ -127,7 +123,7 @@ fun SettingsScreen(
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
-    var moveAvailabilityGeneration by remember { mutableIntStateOf(0) }
+    val moveAvailabilityGeneration = remember { intArrayOf(0) }
 
     // Selected values
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
@@ -203,7 +199,7 @@ fun SettingsScreen(
     }
 
     fun refreshMoveRecordingsAvailability() {
-        val gen = ++moveAvailabilityGeneration
+        val gen = ++moveAvailabilityGeneration[0]
         canMove = false
         scope.launch {
             val result = runCatching {
@@ -212,7 +208,7 @@ fun SettingsScreen(
                     getOutputDirectoryId(context, selectedExportTreeUri),
                 )
             }.getOrDefault(false)
-            if (gen == moveAvailabilityGeneration) canMove = result
+            if (gen == moveAvailabilityGeneration[0]) canMove = result
         }
     }
 
@@ -382,21 +378,21 @@ fun SettingsScreen(
 
         refreshRetentionFields()
         refreshExportDirectoryUi()
-        refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
         currentSnapshot = prev.copy()
         hasUnsavedChanges = false
     }
 
-    fun persistSettings(showFeedback: Boolean): Boolean {
+    fun persistSettings(): Boolean {
         retentionTimeError = null
         retentionSizeError = null
 
         if (service?.isRecordingActive() == true) {
-            if (showFeedback) {
-                Toast.makeText(context, R.string.settings_apply_blocked_recording, Toast.LENGTH_SHORT).show()
-            }
+            AppFeedbackCenter.post(
+                context.getString(R.string.settings_apply_blocked_recording),
+                FeedbackTone.ERROR,
+            )
             return false
         }
 
@@ -455,7 +451,6 @@ fun SettingsScreen(
             saveCurrentToSnapshot(currentSnapshot)
             originalSnapshot.copyFrom(currentSnapshot)
             hasUnsavedChanges = false
-            if (showFeedback) Toast.makeText(context, R.string.settings_saved_next_start, Toast.LENGTH_SHORT).show()
             return true
         }
 
@@ -463,7 +458,6 @@ fun SettingsScreen(
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
         hasUnsavedChanges = false
-        if (showFeedback) Toast.makeText(context, R.string.settings_saved, Toast.LENGTH_SHORT).show()
         return true
     }
 
@@ -503,39 +497,9 @@ fun SettingsScreen(
         routeLabels = availableRouteModes.map { context.getString(it.labelRes) }
         selectedRouteLabel = context.getString(configuredRouteVal.labelRes)
 
-        availableCodecs = supportedCodecs(selectedFormat)
-        selectedCodec = configuredCodec.takeIf { it in availableCodecs } ?: availableCodecs.first()
-        codecLabels = availableCodecs.map { context.getString(it.labelRes) }
-        selectedCodecLabel = context.getString(selectedCodec.labelRes)
-
         selectedSampleFormat = configuredSampleFormatVal
         sampleFormatLabels = PcmSampleFormat.entries.map { context.getString(it.labelRes) }
         selectedSampleFormatLabel = context.getString(configuredSampleFormatVal.labelRes)
-
-        availableSourceModes = AudioSourceMode.availableModes()
-        selectedSource = configuredSourceVal
-        sourceLabels = availableSourceModes.map { context.getString(it.labelRes) }
-        selectedSourceLabel = context.getString(configuredSourceVal.labelRes)
-
-        availableChannelModes = ChannelMode.entries
-        selectedChannelMode = configuredChannelModeVal
-        channelModeLabels = availableChannelModes.map { context.getString(it.labelRes) }
-        selectedChannelModeLabel = context.getString(configuredChannelModeVal.labelRes)
-
-        availableSampleRates = orderSampleRatesByPreference(buildList {
-            add(configuredRateVal)
-            addAll(standardSampleRates())
-        }.filter { it > 0 }.distinct(), configuredRateVal)
-        selectedSampleRate = configuredRateVal
-        sampleRateLabels = availableSampleRates.map { sampleRateLabel(it) }
-        selectedSampleRateLabel = sampleRateLabel(configuredRateVal)
-
-        refreshRetentionFields()
-        refreshExportDirectoryUi()
-        refreshMoveRecordingsAvailability()
-        refreshBatteryOptimizationUi()
-
-        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = isWakeLockEnabled(context))
 
         refreshCodecOptions(
             preferredCodec = configuredCodec,
@@ -543,7 +507,12 @@ fun SettingsScreen(
             preferredChannelMode = configuredChannelModeVal,
             preferredRate = configuredRateVal,
         )
-        refreshRetentionFields(preserveActiveInputs = true)
+        refreshRetentionFields()
+        refreshExportDirectoryUi()
+        refreshMoveRecordingsAvailability()
+        refreshBatteryOptimizationUi()
+
+        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = isWakeLockEnabled(context))
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
         hasUnsavedChanges = false
@@ -560,7 +529,7 @@ fun SettingsScreen(
             )
         }.isSuccess
         if (!permissionTaken) {
-            Toast.makeText(context, R.string.cant_access_folder, Toast.LENGTH_SHORT).show()
+            AppFeedbackCenter.post(context.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
         selectedExportTreeUri = treeUri
@@ -588,7 +557,7 @@ fun SettingsScreen(
 
     DisposableEffect(Unit) {
         val intent = Intent(context, ReverbService::class.java)
-        val bound = context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        val bound = context.bindService(intent, connection, 0)
         onDispose {
             if (bound) {
                 context.unbindService(connection)
@@ -631,16 +600,16 @@ fun SettingsScreen(
             if (intent.resolveActivity(context.packageManager) == null) return@any false
             runCatching { context.startActivity(intent); true }.getOrDefault(false)
         }
-        if (!launched) Toast.makeText(context, R.string.no_app_available, Toast.LENGTH_SHORT).show()
+        if (!launched) AppFeedbackCenter.post(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
     }
 
     fun moveExistingRecordings() {
-        if (!persistSettings(showFeedback = false)) return
+        if (!persistSettings()) return
         canMove = false
         scope.launch {
             val result = runCatching { RecordingRepository.moveAllToConfiguredDirectory(context) }
                 .getOrElse {
-                    Toast.makeText(context, R.string.move_recordings_failed, Toast.LENGTH_SHORT).show()
+                    AppFeedbackCenter.post(context.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
                     refreshMoveRecordingsAvailability()
                     return@launch
                 }
@@ -659,7 +628,7 @@ fun SettingsScreen(
                 else -> context.resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved)
             }
             refreshMoveRecordingsAvailability()
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            AppFeedbackCenter.post(message, FeedbackTone.SUCCESS)
         }
     }
 
@@ -718,7 +687,7 @@ fun SettingsScreen(
                             ) {
                                 showBufferResetWarning = true
                             } else {
-                                if (persistSettings(showFeedback = false)) onBack()
+                                if (persistSettings()) onBack()
                             }
                         },
                         enabled = hasUnsavedChanges,
@@ -734,21 +703,28 @@ fun SettingsScreen(
             )
         },
     ) { innerPadding ->
-        val view = LocalView.current
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.surface)
-                .verticalScroll(rememberScrollState())
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        view.clearFocus()
-                        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                        imm.hideSoftInputFromWindow(view.windowToken, 0)
-                    }
-                },
+                .background(MaterialTheme.colorScheme.surface),
+            contentPadding = PaddingValues(bottom = 24.dp),
         ) {
+            item(key = "background-reliability") {
+                BackgroundReliabilitySection(
+                    batteryOptimizationRestricted = batteryOptimizationRestricted,
+                    wakeLockEnabled = currentSnapshot.wakeLockEnabled,
+                    onBatterySettingsClick = { openBatteryOptimizationSettings() },
+                    onWakeLockChanged = { enabled ->
+                        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = enabled)
+                        saveCurrentToSnapshot(currentSnapshot)
+                        pushUndoState()
+                    },
+                )
+            }
+
+            item(key = "theme") {
+                Column {
             SettingsDropdown(
                 label = stringResource(R.string.theme_title),
                 selectedValue = selectedThemeLabel,
@@ -764,7 +740,11 @@ fun SettingsScreen(
             )
 
             Spacer(Modifier.height(12.dp))
+                }
+            }
 
+            item(key = "retention") {
+                Column {
             SectionTitle(stringResource(R.string.retention_mode_title))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -831,7 +811,11 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(12.dp))
+                }
+            }
 
+            item(key = "recording") {
+                Column {
             SectionTitle(stringResource(R.string.recording_settings_title))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -984,7 +968,14 @@ fun SettingsScreen(
                     )
                 }
             }
+                }
+            }
 
+            item(key = "storage") {
+                Column {
+            LaunchedEffect(selectedExportTreeUri) {
+                refreshMoveRecordingsAvailability()
+            }
             SectionTitle(stringResource(R.string.storage_settings_title))
             Surface(
                 modifier = Modifier
@@ -1035,48 +1026,8 @@ fun SettingsScreen(
                     }
                 }
             }
-
-            Spacer(Modifier.height(12.dp))
-
-            SectionTitle(stringResource(R.string.background_persistence_title))
-            SwitchRow(
-                label = stringResource(R.string.wake_lock_label),
-                summary = stringResource(R.string.wake_lock_summary),
-                checked = currentSnapshot.wakeLockEnabled,
-                onCheckedChange = {
-                    currentSnapshot = currentSnapshot.copy(wakeLockEnabled = it)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-            )
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(
-                            if (batteryOptimizationRestricted) R.string.battery_optimization_status_limited
-                            else R.string.battery_optimization_status_ok,
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (batteryOptimizationRestricted) {
-                        TextButton(onClick = { openBatteryOptimizationSettings() }) {
-                            Text(stringResource(R.string.battery_optimization_button))
-                        }
-                    }
                 }
             }
-
         }
     }
 
@@ -1088,7 +1039,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showBufferResetWarning = false
-                    if (persistSettings(showFeedback = false)) onBack()
+                    if (persistSettings()) onBack()
                 }) {
                     Text(stringResource(R.string.settings_buffer_reset_confirm))
                 }
@@ -1119,6 +1070,130 @@ fun SettingsScreen(
             },
             text = { Text(stringResource(R.string.settings_buffer_reset_warning_body)) },
         )
+    }
+}
+
+@Composable
+private fun BackgroundReliabilitySection(
+    batteryOptimizationRestricted: Boolean,
+    wakeLockEnabled: Boolean,
+    onBatterySettingsClick: () -> Unit,
+    onWakeLockChanged: (Boolean) -> Unit,
+) {
+    Column {
+        SectionTitle(stringResource(R.string.background_persistence_title))
+        ReliabilityRow(
+            step = "0",
+            title = stringResource(R.string.background_reliability_0_title),
+            summary = stringResource(
+                if (batteryOptimizationRestricted) R.string.battery_optimization_status_limited
+                else R.string.battery_optimization_status_ok,
+            ),
+            trailing = if (batteryOptimizationRestricted) {
+                {
+                    TextButton(onClick = onBatterySettingsClick) {
+                        Text(stringResource(R.string.battery_optimization_button))
+                    }
+                }
+            } else {
+                {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_check),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            },
+        )
+        ReliabilityRow(
+            step = "1",
+            title = stringResource(R.string.background_reliability_1_title),
+            summary = stringResource(R.string.background_reliability_1_summary),
+            trailing = {
+                Icon(
+                    painter = painterResource(R.drawable.ic_check),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+        )
+        ReliabilityRow(
+            step = "2",
+            title = stringResource(R.string.background_reliability_2_title),
+            summary = stringResource(R.string.background_reliability_2_summary),
+            trailing = {
+                Icon(
+                    painter = painterResource(R.drawable.ic_check),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+        )
+        ReliabilityRow(
+            step = "3",
+            title = stringResource(R.string.wake_lock_label),
+            summary = stringResource(R.string.wake_lock_summary),
+            trailing = {
+                Switch(
+                    checked = wakeLockEnabled,
+                    onCheckedChange = onWakeLockChanged,
+                )
+            },
+        )
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ReliabilityRow(
+    step: String,
+    title: String,
+    summary: String,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(32.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = step,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp, end = 8.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            trailing?.invoke()
+        }
     }
 }
 
@@ -1214,42 +1289,6 @@ private fun SettingsTextField(
         shape = RoundedCornerShape(18.dp),
         modifier = modifier,
     )
-}
-
-@Composable
-private fun SwitchRow(
-    label: String,
-    summary: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onCheckedChange(!checked) },
-            ) {
-                Text(label, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
-        }
-    }
 }
 
 private fun bytesToMegabytes(bytes: Long): Double {
