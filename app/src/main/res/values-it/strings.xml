@@ -31,8 +31,7 @@
     <string name="recording_settings_title">Audio</string>
     <string name="storage_settings_title">Archiviazione</string>
     <string name="background_persistence_title">Background</string>
-    <string name="codec_label">Codec</string>
-    <string name="sample_rate_label">Frequenza</string>
+<string name="sample_rate_label">Frequenza</string>
     <string name="audio_source_label">Sorgente</string>
     <string name="channel_mode_label">Canali</string>
     <string name="channel_mode_mono">Mono</string>
@@ -97,5 +96,4 @@
     </plurals>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_pcm_16">PCM</string>
 </resources>

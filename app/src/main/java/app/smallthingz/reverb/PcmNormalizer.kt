@@ -37,23 +37,57 @@ internal object PcmNormalizer {
         require(payloadByteOffset >= 0L && payloadByteOffset <= payloadBytes - sourceByteCountLong) {
             "Chunk segment outside payload"
         }
+
+        if (
+            targetFrameCount == sourceFrameCount &&
+            targetChannelCount == sourceChannelCount &&
+            targetSampleFormat == sourceSampleFormat
+        ) {
+            return copyVerifiedSegment(
+                file = file,
+                payloadDataOffset = payloadDataOffset,
+                payloadBytes = payloadBytes,
+                expectedPayloadChecksum = expectedPayloadChecksum,
+                segmentByteOffset = payloadByteOffset,
+                segmentByteCount = sourceByteCountLong,
+                consumer = consumer,
+            )
+        }
+
         val sourceBytes = ByteArray(sourceByteCountLong.toInt())
         val crc = CRC32()
         val scratch = ByteArray(CRC_SCRATCH_BYTES)
         RandomAccessFile(file, "r").use { input ->
             input.seek(payloadDataOffset)
             var remaining = payloadBytes
+            var payloadOffset = 0L
             while (remaining > 0L) {
                 val count = minOf(scratch.size.toLong(), remaining).toInt()
                 input.readFully(scratch, 0, count)
                 crc.update(scratch, 0, count)
+
+                val blockStart = payloadOffset
+                val blockEnd = blockStart + count.toLong()
+                val segmentEnd = payloadByteOffset + sourceByteCountLong
+                val copyStart = maxOf(blockStart, payloadByteOffset)
+                val copyEnd = minOf(blockEnd, segmentEnd)
+                if (copyEnd > copyStart) {
+                    val sourceOffset = (copyStart - blockStart).toInt()
+                    val destinationOffset = (copyStart - payloadByteOffset).toInt()
+                    val copyCount = (copyEnd - copyStart).toInt()
+                    scratch.copyInto(
+                        destination = sourceBytes,
+                        destinationOffset = destinationOffset,
+                        startIndex = sourceOffset,
+                        endIndex = sourceOffset + copyCount,
+                    )
+                }
+                payloadOffset = blockEnd
                 remaining -= count.toLong()
             }
             if (crc.value.toInt() != expectedPayloadChecksum) {
                 throw java.io.IOException("PCM chunk checksum mismatch: ${file.name}")
             }
-            input.seek(payloadDataOffset + payloadByteOffset)
-            input.readFully(sourceBytes)
         }
 
         val sourceFrames = sourceFrameCount.toInt()
@@ -104,6 +138,63 @@ internal object PcmNormalizer {
             producedBytes += outputOffset.toLong()
         }
         return producedBytes
+    }
+
+    private fun copyVerifiedSegment(
+        file: java.io.File,
+        payloadDataOffset: Long,
+        payloadBytes: Long,
+        expectedPayloadChecksum: Int,
+        segmentByteOffset: Long,
+        segmentByteCount: Long,
+        consumer: PersistentAudioChunkStore.Consumer,
+    ): Long {
+        require(segmentByteCount <= Int.MAX_VALUE.toLong()) { "PCM segment too large" }
+        val crc = CRC32()
+        val scratch = ByteArray(CRC_SCRATCH_BYTES)
+        val segmentBytes = ByteArray(segmentByteCount.toInt())
+        val segmentEnd = segmentByteOffset + segmentByteCount
+        RandomAccessFile(file, "r").use { input ->
+            input.seek(payloadDataOffset)
+            var remaining = payloadBytes
+            var payloadOffset = 0L
+            while (remaining > 0L) {
+                val count = minOf(scratch.size.toLong(), remaining).toInt()
+                input.readFully(scratch, 0, count)
+                crc.update(scratch, 0, count)
+
+                val blockStart = payloadOffset
+                val blockEnd = blockStart + count.toLong()
+                val copyStart = maxOf(blockStart, segmentByteOffset)
+                val copyEnd = minOf(blockEnd, segmentEnd)
+                if (copyEnd > copyStart) {
+                    val sourceOffset = (copyStart - blockStart).toInt()
+                    val destinationOffset = (copyStart - segmentByteOffset).toInt()
+                    val copyCount = (copyEnd - copyStart).toInt()
+                    scratch.copyInto(
+                        destination = segmentBytes,
+                        destinationOffset = destinationOffset,
+                        startIndex = sourceOffset,
+                        endIndex = sourceOffset + copyCount,
+                    )
+                }
+                payloadOffset = blockEnd
+                remaining -= count.toLong()
+            }
+        }
+        if (crc.value.toInt() != expectedPayloadChecksum) {
+            throw java.io.IOException("PCM chunk checksum mismatch: ${file.name}")
+        }
+
+        var offset = 0
+        while (offset < segmentBytes.size) {
+            val count = minOf(OUTPUT_BUFFER_BYTES, segmentBytes.size - offset)
+            if (consumer.consume(segmentBytes, offset, count) != count) {
+                throw java.io.IOException("PCM consumer rejected output")
+            }
+            offset += count
+        }
+        return segmentByteCount
     }
 
     private fun decode(

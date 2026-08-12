@@ -33,8 +33,6 @@
     <string name="background_persistence_title">الخلفية</string>
     <string name="format_label">التنسيق</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">الترميز</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">معدل العينة</string>
     <string name="audio_source_label">المصدر</string>
     <string name="channel_mode_label">القنوات</string>

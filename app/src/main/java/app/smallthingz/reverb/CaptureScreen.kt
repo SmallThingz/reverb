@@ -98,8 +98,14 @@ class NotifyFileReceiver(
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
         backgroundRecordingResultScope.launch {
-            val saved = runCatching { RecordingRepository.register(appContext, recording) }
-                .getOrDefault(recording)
+            val registration = runCatching { RecordingRepository.register(appContext, recording) }
+            val saved = registration.getOrElse {
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.library_update_failed),
+                    FeedbackTone.ERROR,
+                )
+                recording
+            }
             if (
                 ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
@@ -153,7 +159,6 @@ private data class ExportUiConfig(
     val sampleFormat: PcmSampleFormat,
     val sampleRate: Int,
     val channelCount: Int,
-    val bitrateKbps: Int?,
 )
 
 private sealed interface CaptureSaveStatus {
@@ -623,7 +628,7 @@ private fun MainCaptureContent(
         estimateExportSizeBytes(
             exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
             exportConfig.channelCount, displayedCurrentSeconds.toLong(),
-            exportConfig.bitrateKbps, exportConfig.sampleFormat,
+            exportConfig.sampleFormat,
         )
     }
     val exportLimitBytes = remember(exportConfig.format) { exportFileSizeLimitBytes(exportConfig.format) }
@@ -1042,7 +1047,6 @@ private fun ExportRangeDialog(
             exportConfig.codec,
             exportConfig.sampleRate,
             exportConfig.channelCount,
-            exportConfig.bitrateKbps,
             exportConfig.sampleFormat,
         ).toFloat().coerceAtLeast(1f)
         val boundedEnd = endSeconds.coerceAtLeast(startSeconds)
@@ -1235,7 +1239,7 @@ private fun handleExport(
     val exportConfig = currentExportConfig(context, service)
     val maxDuration = exportDurationLimitSeconds(
         exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-        exportConfig.channelCount, exportConfig.bitrateKbps, exportConfig.sampleFormat,
+        exportConfig.channelCount, exportConfig.sampleFormat,
     ).toFloat().coerceAtLeast(1f)
     if (bufferSeconds <= maxDuration) {
         onRange(ExportRange(0f, bufferSeconds, null))
@@ -1263,13 +1267,20 @@ private class SaveResultReceiver(
     override fun fileReady(recording: RecordingEntity) {
         setSaving(false)
         backgroundRecordingResultScope.launch {
-            val saved = runCatching { RecordingRepository.register(appContext, recording) }
-                .getOrDefault(recording)
-            scope.launch {
-                onStatus(CaptureSaveStatus.Saved(saved))
-                onSaved()
+            runCatching { RecordingRepository.register(appContext, recording) }
+                .onSuccess { saved ->
+                    scope.launch {
+                        onStatus(CaptureSaveStatus.Saved(saved))
+                        onSaved()
+                    }
+                }
+                .onFailure {
+                    scope.launch {
+                        onStatus(null)
+                        onError(appContext.getString(R.string.library_update_failed))
+                    }
+                }
             }
-        }
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
@@ -1298,6 +1309,5 @@ private fun currentExportConfig(context: Context, recorder: ReverbService?): Exp
         sampleFormat = sampleFormat,
         sampleRate = sampleRate,
         channelCount = channelMode.channelCount,
-        bitrateKbps = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
     )
 }

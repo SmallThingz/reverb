@@ -33,8 +33,6 @@
     <string name="background_persistence_title">Arka plan</string>
     <string name="format_label">Biçim</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">Kodek</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">Örnekleme hızı</string>
     <string name="audio_source_label">Kaynak</string>
     <string name="channel_mode_label">Kanallar</string>

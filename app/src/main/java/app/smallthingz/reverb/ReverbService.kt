@@ -118,6 +118,7 @@ class ReverbService : Service() {
     private val pendingError = AtomicReference<String?>(null)
 
     override fun onCreate() {
+        super.onCreate()
         persistentAudioChunkStore = PersistentAudioChunkStore(this)
         createNotificationChannel()
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
@@ -317,9 +318,6 @@ class ReverbService : Service() {
             context = this,
             sampleRate = sampleRate,
             channelMode = channelMode,
-            format = outputFormat,
-            codec = outputCodec,
-            bitrateKbps = null,
             sampleFormat = pcmSampleFormat,
         )
     }
@@ -425,6 +423,7 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         audioHandler.removeCallbacks(audioReader)
         releaseAudioRecord()
+        if (state != STATE_LISTENING || !isListeningEnabled()) return
         // Binding the paused UI should not probe microphone hardware. Resolve the
         // requested configuration only when capture is actually about to start.
         try {
@@ -534,10 +533,6 @@ class ReverbService : Service() {
         receiver: AudioFileReceiver,
         newFileName: String,
     ) {
-        if (!canExportBufferedAudio()) {
-            notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
-            return
-        }
         val exportToken = beginExport(receiver) ?: run {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
             return
@@ -577,10 +572,6 @@ class ReverbService : Service() {
         receiver: AudioFileReceiver,
         newFileName: String,
     ) {
-        if (!canExportBufferedAudio()) {
-            notifyReceiverFailure(receiver, getString(R.string.nothing_to_export))
-            return
-        }
         val exportToken = beginExport(receiver) ?: run {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
             return
@@ -784,10 +775,8 @@ class ReverbService : Service() {
                             buildCodecSummary(
                                 this@ReverbService,
                                 exportFormat,
-                                exportCodec,
                                 exportSampleRate,
                                 exportChannelMode.channelCount,
-                                null,
                                 exportSampleFormat,
                             ),
                             knownSizeBytes = expectedOutputBytes,

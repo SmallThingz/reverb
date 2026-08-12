@@ -33,8 +33,6 @@
     <string name="background_persistence_title">बैकग्राउंड</string>
     <string name="format_label">फ़ॉर्मेट</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">कोडेक</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">सैंपल दर</string>
     <string name="audio_source_label">स्रोत</string>
     <string name="channel_mode_label">चैनल</string>

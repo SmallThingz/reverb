@@ -31,8 +31,7 @@
     <string name="recording_settings_title">Áudio</string>
     <string name="storage_settings_title">Armazenamento</string>
     <string name="background_persistence_title">Segundo plano</string>
-    <string name="codec_label">Codec</string>
-    <string name="sample_rate_label">Taxa</string>
+<string name="sample_rate_label">Taxa</string>
     <string name="audio_source_label">Fonte</string>
     <string name="channel_mode_label">Canais</string>
     <string name="channel_mode_mono">Mono</string>
@@ -97,5 +96,4 @@
     </plurals>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_pcm_16">PCM</string>
 </resources>

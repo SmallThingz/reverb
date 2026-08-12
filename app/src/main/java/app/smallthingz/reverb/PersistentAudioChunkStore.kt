@@ -84,9 +84,11 @@ internal class PersistentAudioChunkStore(
 
         val normalizedRetention = requestedRetentionValue.coerceAtLeast(0L)
         val validFormat = requestedSampleRate > 0 && requestedChannelCount in 1..MAX_CHANNEL_COUNT
+        val normalizedSampleRate = if (validFormat) requestedSampleRate else 0
+        val normalizedChannelCount = if (validFormat) requestedChannelCount else 0
         val formatChanged =
-            configuredSampleRate != requestedSampleRate ||
-                configuredChannelCount != requestedChannelCount ||
+            configuredSampleRate != normalizedSampleRate ||
+                configuredChannelCount != normalizedChannelCount ||
                 configuredSampleFormat != sampleFormat
 
         if (formatChanged) {
@@ -95,8 +97,8 @@ internal class PersistentAudioChunkStore(
 
         retentionMode = requestedRetentionMode
         retentionValue = normalizedRetention
-        configuredSampleRate = if (validFormat) requestedSampleRate else 0
-        configuredChannelCount = if (validFormat) requestedChannelCount else 0
+        configuredSampleRate = normalizedSampleRate
+        configuredChannelCount = normalizedChannelCount
         configuredSampleFormat = sampleFormat
 
         if (activeRecord != null && retentionExceededLocked()) {
@@ -196,7 +198,7 @@ internal class PersistentAudioChunkStore(
     @Synchronized
     fun hasData(): Boolean {
         ensureLoadedLocked()
-        return chunks.any { it.sampleFrames > 0L }
+        return retainedPayloadBytes > 0L
     }
 
     @Synchronized
@@ -564,6 +566,9 @@ internal class PersistentAudioChunkStore(
         lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
             newest.createdAtMillis + (newest.durationSeconds * 1000.0).toLong()
         } ?: 0L
+        // Recovery has produced a complete in-memory timeline at this point. Mark it
+        // loaded before checkpointing so a checkpoint failure cannot make a later call
+        // reconstruct the same files into an already-populated deque.
         loaded = true
         writeIndexLocked()
     }
@@ -1151,12 +1156,12 @@ internal class PersistentAudioChunkStore(
 
         val target = if ((indexGeneration and 1L) == 0L) indexA else indexB
         val temp = File(rootDirectory, target.name + ".tmp")
-        FileOutputStream(temp).use { output ->
-            output.write(bytes)
-            output.flush()
-            output.fd.sync()
-        }
         try {
+            FileOutputStream(temp).use { output ->
+                output.write(bytes)
+                output.flush()
+                output.fd.sync()
+            }
             try {
                 Files.move(
                     temp.toPath(),
@@ -1187,7 +1192,19 @@ internal class PersistentAudioChunkStore(
         ) {
             return null
         }
-        val bytes = runCatching { FileInputStream(file).use { it.readBytes() } }.getOrNull() ?: return null
+        val bytes = runCatching {
+            val size = fileLength.toInt()
+            ByteArray(size).also { buffer ->
+                FileInputStream(file).use { input ->
+                    var offset = 0
+                    while (offset < size) {
+                        val count = input.read(buffer, offset, size - offset)
+                        if (count < 0) throw IOException("Unexpected EOF reading ${file.name}")
+                        offset += count
+                    }
+                }
+            }
+        }.getOrNull() ?: return null
         if (bytes.size < INDEX_HEADER_BYTES + INDEX_CRC_BYTES) return null
         if (readIntLE(bytes, 0) != INDEX_MAGIC || readIntLE(bytes, 4) != INDEX_VERSION) return null
         val count = readIntLE(bytes, 20)

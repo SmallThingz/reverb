@@ -19,6 +19,7 @@
     <string name="export_limit_dialog_message">Current length is too large. Only exporting last %1$s.</string>
     <string name="saving">Saving…</string>
     <string name="save_failed">Couldn\'t save recording.</string>
+    <string name="library_update_failed">Recording was saved, but the library couldn\'t be updated.</string>
     <string name="error">Error</string>
     <string name="nothing_to_export">Nothing to export.</string>
     <string name="export_in_progress">An export is already in progress.</string>
@@ -45,8 +46,6 @@
     <string name="background_persistence_title">Background</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">Codec</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_format_label">Bit depth</string>
     <string name="sample_format_pcm_8">8-bit integer</string>
     <string name="sample_format_pcm_16">16-bit integer</string>

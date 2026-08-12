@@ -160,7 +160,6 @@ fun SettingsScreen(
     // Pre-computed label lists
     val themeLabels = remember { AppThemeMode.entries.map { context.getString(it.labelRes) } }
     var formatLabels by remember { mutableStateOf(availableFormats.map { context.getString(it.labelRes) }) }
-    var codecLabels by remember { mutableStateOf(availableCodecs.map { context.getString(it.labelRes) }) }
     var sampleFormatLabels by remember {
         mutableStateOf(PcmSampleFormat.entries.map { context.getString(it.labelRes) })
     }
@@ -172,11 +171,6 @@ fun SettingsScreen(
     // Selection labels
     var selectedThemeLabel by remember { mutableStateOf(context.getString(AppThemeMode.SYSTEM.labelRes)) }
     var selectedFormatLabel by remember { mutableStateOf(context.getString(supportedFormats().first().labelRes)) }
-    var selectedCodecLabel by remember {
-        mutableStateOf(
-            context.getString(supportedCodecs(supportedFormats().first()).first().labelRes),
-        )
-    }
     var selectedSampleFormatLabel by remember { mutableStateOf(context.getString(PcmSampleFormat.PCM_16.labelRes)) }
     var selectedSourceLabel by remember {
         mutableStateOf(context.getString(AudioSourceMode.availableModes().first().labelRes))
@@ -260,8 +254,6 @@ fun SettingsScreen(
         availableCodecs = supportedCodecs(selectedFormat)
         val codec = preferredCodec?.takeIf { it in availableCodecs } ?: availableCodecs.first()
         selectedCodec = codec
-        codecLabels = availableCodecs.map { context.getString(it.labelRes) }
-        selectedCodecLabel = context.getString(codec.labelRes)
         refreshSourceModes(preferredSource, preferredChannelMode, preferredRate)
     }
 
@@ -305,7 +297,7 @@ fun SettingsScreen(
         val chCount = selectedChannelMode.channelCount
         val exportLimitBytes = exportFileSizeLimitBytes(selectedFormat)
         val exportLimitDurationSeconds = estimateExportDurationSeconds(
-            selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, null, selectedSampleFormat,
+            selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, selectedSampleFormat,
         )
         computedExportLimitSeconds = exportLimitDurationSeconds
         val estimatedSizeMb = bytesToMegabytes(
@@ -357,7 +349,6 @@ fun SettingsScreen(
         selectedFormat = prev.format ?: availableFormats.first()
         selectedFormatLabel = context.getString((prev.format ?: availableFormats.first()).labelRes)
         selectedCodec = prev.codec ?: availableCodecs.first()
-        selectedCodecLabel = context.getString((prev.codec ?: availableCodecs.first()).labelRes)
         selectedRoute = prev.route ?: availableRouteModes.first()
         selectedRouteLabel = context.getString((prev.route ?: availableRouteModes.first()).labelRes)
         selectedSampleFormat = prev.sampleFormat
@@ -647,13 +638,7 @@ fun SettingsScreen(
         onBack()
     }
 
-    val estimatePrefixVal = remember(selectedFormat) {
-        if (selectedFormat.isPcmContainer) {
-            ReverbConfig.ESTIMATE_EXACT_PREFIX
-        } else {
-            ReverbConfig.ESTIMATE_APPROX_PREFIX
-        }
-    }
+    val estimatePrefixVal = ReverbConfig.ESTIMATE_EXACT_PREFIX
 
     Scaffold(
         topBar = {
@@ -851,50 +836,27 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (selectedFormat.isPcmContainer) {
-                    if (sampleFormatLabels.size > 1) {
-                        SettingsDropdown(
-                            label = stringResource(R.string.sample_format_label),
-                            selectedValue = selectedSampleFormatLabel,
-                            options = sampleFormatLabels,
-                            onOptionSelected = { label ->
-                                selectedSampleFormatLabel = label
-                                selectedSampleFormat = PcmSampleFormat.entries.first {
-                                    context.getString(it.labelRes) == label
-                                }
-                                refreshSourceModes(
-                                    preferredSource = selectedSource,
-                                    preferredChannelMode = selectedChannelMode,
-                                    preferredRate = selectedSampleRate,
-                                )
-                                refreshRetentionFields(preserveActiveInputs = true)
-                                saveCurrentToSnapshot(currentSnapshot)
-                                pushUndoState()
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                } else {
-                    if (codecLabels.size > 1) {
-                        SettingsDropdown(
-                            label = stringResource(R.string.codec_label),
-                            selectedValue = selectedCodecLabel,
-                            options = codecLabels,
-                            onOptionSelected = { label ->
-                                selectedCodecLabel = label
-                                selectedCodec = availableCodecs.first { context.getString(it.labelRes) == label }
-                                refreshSourceModes(
-                                    preferredSource = selectedSource,
-                                    preferredChannelMode = selectedChannelMode,
-                                    preferredRate = selectedSampleRate,
-                                )
-                                refreshRetentionFields(preserveActiveInputs = true)
-                                saveCurrentToSnapshot(currentSnapshot)
-                                pushUndoState()
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                if (sampleFormatLabels.size > 1) {
+                    SettingsDropdown(
+                        label = stringResource(R.string.sample_format_label),
+                        selectedValue = selectedSampleFormatLabel,
+                        options = sampleFormatLabels,
+                        onOptionSelected = { label ->
+                            selectedSampleFormatLabel = label
+                            selectedSampleFormat = PcmSampleFormat.entries.first {
+                                context.getString(it.labelRes) == label
+                            }
+                            refreshSourceModes(
+                                preferredSource = selectedSource,
+                                preferredChannelMode = selectedChannelMode,
+                                preferredRate = selectedSampleRate,
+                            )
+                            refreshRetentionFields(preserveActiveInputs = true)
+                            saveCurrentToSnapshot(currentSnapshot)
+                            pushUndoState()
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 if (sampleRateLabels.size > 1) {
                     SettingsDropdown(
@@ -1186,7 +1148,7 @@ private fun SettingsTextField(
             }
         },
         singleLine = true,
-        prefix = if (prefix != null) {{ Text(prefix) }} else null,
+        prefix = if (prefix != null) { { Text(prefix) } } else null,
         keyboardOptions = keyboardOptions,
         shape = RoundedCornerShape(18.dp),
         modifier = modifier,

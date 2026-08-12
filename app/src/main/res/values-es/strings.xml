@@ -33,8 +33,6 @@
     <string name="background_persistence_title">Segundo plano</string>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">Códec</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">Frecuencia</string>
     <string name="audio_source_label">Fuente</string>
     <string name="channel_mode_label">Canales</string>

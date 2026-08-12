@@ -33,8 +33,6 @@
     <string name="background_persistence_title">Фон</string>
     <string name="format_label">Формат</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">Кодек</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">Частота</string>
     <string name="audio_source_label">Источник</string>
     <string name="channel_mode_label">Каналы</string>

@@ -116,10 +116,16 @@ class MainActivity : ComponentActivity() {
                 } else if (permissionsGranted && showBatteryOptimizationPrompt) {
                     BatteryOptimizationPromptDialog(
                         onAllow = {
+                            batteryOptimizationPromptPending = false
+                            markBatteryOptimizationStartupPromptHandled(this)
                             showBatteryOptimizationPrompt = false
                             openBatteryOptimizationSettings()
                         },
-                        onDismiss = { showBatteryOptimizationPrompt = false },
+                        onDismiss = {
+                            batteryOptimizationPromptPending = false
+                            markBatteryOptimizationStartupPromptHandled(this)
+                            showBatteryOptimizationPrompt = false
+                        },
                     )
                 }
                 MainScreen(
@@ -169,9 +175,10 @@ class MainActivity : ComponentActivity() {
 
     private fun maybeShowBatteryOptimizationPrompt() {
         if (!batteryOptimizationPromptPending || !permissionsGranted) return
-        batteryOptimizationPromptPending = false
-        markBatteryOptimizationStartupPromptHandled(this)
-        if (!isIgnoringBatteryOptimizations(this)) {
+        if (isIgnoringBatteryOptimizations(this)) {
+            batteryOptimizationPromptPending = false
+            markBatteryOptimizationStartupPromptHandled(this)
+        } else {
             showBatteryOptimizationPrompt = true
         }
     }

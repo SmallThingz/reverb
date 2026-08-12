@@ -33,8 +33,6 @@
     <string name="background_persistence_title">Arrière-plan</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
-    <string name="codec_label">Codec</string>
-    <string name="codec_pcm_16">PCM</string>
     <string name="sample_rate_label">Fréquence</string>
     <string name="audio_source_label">Source</string>
     <string name="channel_mode_label">Canaux</string>

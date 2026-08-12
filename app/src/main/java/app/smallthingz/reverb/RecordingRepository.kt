@@ -64,8 +64,7 @@ object RecordingRepository {
                         updated != recording -> updates += updated
                     }
                 }
-                if (updates.isNotEmpty()) dao.upsertAll(updates)
-                if (expiredIds.isNotEmpty()) dao.deleteByIds(expiredIds)
+                dao.applyChanges(updates, expiredIds)
                 movable
             }
         }
@@ -119,15 +118,6 @@ object RecordingRepository {
         }
     }
 
-    suspend fun forget(context: Context, recordingId: String) {
-        withContext(Dispatchers.IO) {
-            mutex.withLock {
-                RecordingDatabase.getInstance(context).recordingDao().deleteById(recordingId)
-                schedulePersistedPermissionCleanup(context)
-            }
-        }
-    }
-
     suspend fun rename(
         context: Context,
         recording: RecordingEntity,
@@ -137,19 +127,21 @@ object RecordingRepository {
             mutex.withLock {
                 val renamed = renameRecordingAsset(context, recording, requestedBaseName) ?: return@withLock null
                 if (renamed == recording) return@withLock recording
-                RecordingDatabase.getInstance(context).recordingDao().applyChanges(
-                    upserts = listOf(renamed),
-                    deleteIds = listOf(recording.id),
-                )
+                try {
+                    RecordingDatabase.getInstance(context).recordingDao().applyChanges(
+                        upserts = listOf(renamed),
+                        deleteIds = listOf(recording.id),
+                    )
+                } catch (error: Exception) {
+                    // Keep the catalog and physical asset on the same name when the
+                    // database commit fails. Recovery can still rediscover the renamed
+                    // asset if a provider refuses the rollback.
+                    runCatching {
+                        renameRecordingAsset(context, renamed, recording.displayName)
+                    }
+                    throw error
+                }
                 renamed
-            }
-        }
-    }
-
-    suspend fun pruneMissing(context: Context): Int {
-        return withContext(Dispatchers.IO) {
-            mutex.withLock {
-                pruneMissingLocked(context)
             }
         }
     }
@@ -166,7 +158,7 @@ object RecordingRepository {
                 val targetDirectoryId = getConfiguredOutputDirectoryId(context)
                 val missingDeletes = mutableListOf<String>()
                 val stateUpdates = mutableListOf<RecordingEntity>()
-                val copied = mutableListOf<Pair<RecordingEntity, RecordingEntity>>()
+                val moveCandidates = mutableListOf<RecordingEntity>()
                 var skipped = 0
                 val nowMillis = System.currentTimeMillis()
 
@@ -195,32 +187,40 @@ object RecordingRepository {
                         return@forEach
                     }
 
-                    val movedRecording = copyRecordingToConfiguredDirectory(context, present)
-                    if (movedRecording != null) {
-                        copied += present to movedRecording
-                    } else if (present != recording) {
-                        stateUpdates += present
+                    moveCandidates += present
+                }
+
+                // Commit non-move reconciliation before copying. Moves themselves are
+                // committed one at a time so peak duplicate disk usage is bounded by a
+                // single recording rather than the entire library.
+                dao.applyChanges(stateUpdates, missingDeletes)
+
+                var moved = 0
+                moveCandidates.forEach { source ->
+                    val target = copyRecordingToConfiguredDirectory(context, source)
+                    if (target == null) {
+                        skipped++
+                        return@forEach
                     }
+                    try {
+                        dao.applyChanges(
+                            upserts = listOf(target),
+                            deleteIds = listOf(source.id),
+                        )
+                    } catch (error: Exception) {
+                        deleteRecordingAsset(context, target)
+                        throw error
+                    }
+
+                    // Commit the catalog switch before deleting a source. If source cleanup
+                    // fails, the verified target remains authoritative and the worst case is
+                    // an unindexed duplicate, never a catalog row pointing at deleted audio.
+                    deleteRecordingAsset(context, source)
+                    moved++
                 }
 
-                val updates = copied.map { it.second }
-                val movedDeletes = copied.map { it.first.id }
-                val deletes = missingDeletes + movedDeletes
-                val allUpdates = stateUpdates + updates
-                try {
-                    dao.applyChanges(allUpdates, deletes)
-                } catch (error: Exception) {
-                    copied.forEach { (_, target) -> deleteRecordingAsset(context, target) }
-                    throw error
-                }
-
-                // Commit the catalog switch before deleting a source. If source cleanup
-                // fails, the verified target remains authoritative and the worst case is
-                // an unindexed duplicate, never a catalog row pointing at deleted audio.
-                copied.forEach { (source, _) -> deleteRecordingAsset(context, source) }
-
-                MoveResult(moved = movedDeletes.size, skipped = skipped, removedMissing = missingDeletes.size).also {
-                    if (movedDeletes.isNotEmpty() || missingDeletes.isNotEmpty()) {
+                MoveResult(moved = moved, skipped = skipped, removedMissing = missingDeletes.size).also {
+                    if (moved > 0 || missingDeletes.isNotEmpty()) {
                         schedulePersistedPermissionCleanup(context)
                     }
                 }
@@ -236,10 +236,13 @@ object RecordingRepository {
         existing.associateByTo(existingById) { it.id }
         val imported = listCurrentOutputDirectoryRecordings(context, existingById)
         val nowMillis = System.currentTimeMillis()
-        val importedPresent = imported.map { mergeObservedRecording(existingById[it.id], it, nowMillis) }
-        val importedIds = HashSet<String>(importedPresent.size)
-        importedPresent.mapTo(importedIds) { it.id }
-        val importedUpdates = importedPresent.filter { existingById[it.id] != it }
+        val importedIds = HashSet<String>(imported.size)
+        val importedUpdates = ArrayList<RecordingEntity>()
+        imported.forEach { observed ->
+            val merged = mergeObservedRecording(existingById[observed.id], observed, nowMillis)
+            importedIds += merged.id
+            if (existingById[merged.id] != merged) importedUpdates += merged
+        }
         val updates = mutableListOf<RecordingEntity>()
         val staleIds = mutableListOf<String>()
 
@@ -260,15 +263,7 @@ object RecordingRepository {
                 }
             }
 
-        if (importedUpdates.isNotEmpty()) {
-            dao.upsertAll(importedUpdates)
-        }
-        if (updates.isNotEmpty()) {
-            dao.upsertAll(updates)
-        }
-        if (staleIds.isNotEmpty()) {
-            dao.deleteByIds(staleIds)
-        }
+        dao.applyChanges(importedUpdates + updates, staleIds)
     }
 
     private suspend fun pruneMissingLocked(
@@ -292,12 +287,7 @@ object RecordingRepository {
                 updated != recording -> updates += updated
             }
         }
-        if (updates.isNotEmpty()) {
-            dao.upsertAll(updates)
-        }
-        if (missingIds.isNotEmpty()) {
-            dao.deleteByIds(missingIds)
-        }
+        dao.applyChanges(updates, missingIds)
         return missingIds.size
     }
 

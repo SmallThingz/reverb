@@ -17,10 +17,13 @@ import java.io.IOException
 import java.io.InputStream
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 
 private val TAG = "RecordingFiles"
 private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
+private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 
 
 enum class RecordingStorageType {
@@ -144,50 +147,79 @@ fun formatRecordingDateHeader(context: Context, startedAtMillis: Long): String {
     return dateFormat.format(date)
 }
 
-fun resolveRecordingCodecInfo(file: File): String {
+private data class RecordingMediaMetadata(
+    val durationMillis: Long,
+    val codecSummary: String,
+)
+
+private data class RetrievedMediaMetadata(
+    val durationMillis: Long?,
+    val bitrate: Int?,
+    val sampleRate: Int?,
+)
+
+private fun inspectRecordingMedia(file: File): RecordingMediaMetadata {
     val retriever = MediaMetadataRetriever()
-    return runCatching {
+    val metadata = runCatching {
         retriever.setDataSource(file.absolutePath)
-        resolveRecordingCodecInfo(
-            extension = file.extension,
+        RetrievedMediaMetadata(
+            durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
             bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
             sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
         )
-    }.getOrElse { e ->
-        Log.w(TAG, "resolveRecordingCodecInfo(file=$file) failed, using filename fallback", e)
-        resolveRecordingCodecInfo(
+    }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $file", it) }
+        .getOrNull()
+    runCatching { retriever.release() }
+
+    val duration = metadata?.durationMillis?.takeIf { it > 0L }
+        ?: if (file.extension.equals(ExportFormat.WAV.extension, ignoreCase = true)) {
+            readWavDurationMillis(file)
+        } else {
+            0L
+        }
+    return RecordingMediaMetadata(
+        durationMillis = duration,
+        codecSummary = resolveRecordingCodecInfo(
             extension = file.extension,
-            bitrate = null,
-            sampleRate = null,
-        )
-    }.also {
-        runCatching { retriever.release() }
-    }
+            bitrate = metadata?.bitrate,
+            sampleRate = metadata?.sampleRate,
+        ),
+    )
 }
 
-fun resolveRecordingCodecInfo(
+private fun inspectRecordingMedia(
     context: Context,
     uri: Uri,
     displayName: String,
-): String {
+): RecordingMediaMetadata {
     val retriever = MediaMetadataRetriever()
-    return runCatching {
+    val metadata = runCatching {
         retriever.setDataSource(context, uri)
-        resolveRecordingCodecInfo(
-            extension = displayName.substringAfterLast('.', ""),
+        RetrievedMediaMetadata(
+            durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
             bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
             sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
         )
-    }.getOrElse { e ->
-        Log.w(TAG, "resolveRecordingCodecInfo(uri=$uri) failed, using filename fallback", e)
-        resolveRecordingCodecInfo(
+    }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $uri", it) }
+        .getOrNull()
+    runCatching { retriever.release() }
+
+    val duration = metadata?.durationMillis?.takeIf { it > 0L }
+        ?: if (displayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use(::readWavDurationMillis) ?: 0L
+            }.onFailure { Log.w(TAG, "Unable to inspect WAV duration for $uri", it) }.getOrDefault(0L)
+        } else {
+            0L
+        }
+    return RecordingMediaMetadata(
+        durationMillis = duration,
+        codecSummary = resolveRecordingCodecInfo(
             extension = displayName.substringAfterLast('.', ""),
-            bitrate = null,
-            sampleRate = null,
-        )
-    }.also {
-        runCatching { retriever.release() }
-    }
+            bitrate = metadata?.bitrate,
+            sampleRate = metadata?.sampleRate,
+        ),
+    )
 }
 
 fun buildPlayerCodecSummary(codecSummary: String): String {
@@ -337,10 +369,8 @@ private fun appendRelativePath(
 fun buildCodecSummary(
     context: Context,
     format: ExportFormat,
-    codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
-    bitrateKbps: Int? = null,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): String {
     val channelLabel = if (channelCount >= 2) {
@@ -348,21 +378,14 @@ fun buildCodecSummary(
     } else {
         context.getString(R.string.channel_mode_mono)
     }
-    val resolvedBitrateKbps = defaultCodecBitrateKbps(codec, sampleRate, channelCount)
-        ?.let { bitrateKbps ?: it }
     return buildString {
-        append(context.getString(if (format.isPcmContainer) sampleFormat.labelRes else codec.labelRes))
+        append(context.getString(sampleFormat.labelRes))
         append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
         append(context.getString(format.labelRes))
         append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
         append(sampleRateLabel(sampleRate))
         append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
         append(channelLabel)
-        resolvedBitrateKbps?.let {
-            append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
-            append(it)
-            append(" kbps")
-        }
     }
 }
 
@@ -389,51 +412,6 @@ fun resolveRecordingStartTimeMillis(
 ): Long {
     parseRecordingStartTimeMillis(displayName.substringBeforeLast('.', displayName))?.let { return it }
     return fallbackMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
-}
-
-fun resolveRecordingDurationMillis(file: File): Long {
-    val retriever = MediaMetadataRetriever()
-    val metadataDuration = runCatching {
-        retriever.setDataSource(file.absolutePath)
-        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-    }.onFailure { Log.w(TAG, "resolveRecordingDurationMillis(file=$file) failed", it) }.getOrNull().also {
-        runCatching { retriever.release() }
-    }
-
-    if (metadataDuration != null && metadataDuration > 0L) {
-        return metadataDuration
-    }
-
-    if (file.extension.equals(ExportFormat.WAV.extension, ignoreCase = true)) {
-        return readWavDurationMillis(file)
-    }
-
-    return 0L
-}
-
-fun resolveRecordingDurationMillis(
-    context: Context,
-    uri: Uri,
-    displayName: String,
-): Long {
-    val retriever = MediaMetadataRetriever()
-    val metadataDuration = runCatching {
-        retriever.setDataSource(context, uri)
-        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-    }.onFailure { Log.w(TAG, "resolveRecordingDurationMillis(uri=$uri) failed", it) }.getOrNull().also {
-        runCatching { retriever.release() }
-    }
-
-    if (metadataDuration != null && metadataDuration > 0L) {
-        return metadataDuration
-    }
-
-    if (displayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) {
-        return runCatching {
-            context.contentResolver.openInputStream(uri)?.use(::readWavDurationMillis) ?: 0L
-        }.onFailure { Log.w(TAG, "Unable to inspect WAV duration for $uri", it) }.getOrDefault(0L)
-    }
-    return 0L
 }
 
 fun createOutputTarget(
@@ -549,8 +527,16 @@ internal fun recordingAssetState(
 ): RecordingAssetState {
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> try {
-            val file = File(recording.id)
-            if (file.isFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+            val attributes = Files.readAttributes(
+                File(recording.id).toPath(),
+                BasicFileAttributes::class.java,
+            )
+            if (attributes.isRegularFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+        } catch (_: NoSuchFileException) {
+            RecordingAssetState.MISSING
+        } catch (error: IOException) {
+            Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
+            RecordingAssetState.UNAVAILABLE
         } catch (error: SecurityException) {
             Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
             RecordingAssetState.UNAVAILABLE
@@ -639,7 +625,9 @@ fun copyRecordingToConfiguredDirectory(
             startedAtMillis = recording.startedAtMillis,
         ).also { target = it }
         val sourceSize = when (resolveRecordingStorageType(recording)) {
-            RecordingStorageType.FILE -> File(recording.id).length().takeIf { it > 0L }
+            RecordingStorageType.FILE -> runCatching { Files.size(File(recording.id).toPath()) }
+                .getOrNull()
+                ?.takeIf { it > 0L }
             RecordingStorageType.DOCUMENT -> {
                 val uri = Uri.parse(recording.id)
                 runCatching {
@@ -649,7 +637,7 @@ fun copyRecordingToConfiguredDirectory(
                 }.getOrNull() ?: DocumentFile.fromSingleUri(context, uri)?.length()?.takeIf { it > 0L }
             }
             null -> null
-        } ?: recording.sizeBytes.takeIf { it > 0L }
+        }
         val input = when (resolveRecordingStorageType(recording)) {
             RecordingStorageType.FILE -> FileInputStream(File(recording.id))
             RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(Uri.parse(recording.id))
@@ -660,14 +648,14 @@ fun copyRecordingToConfiguredDirectory(
             when (resolvedTarget.storageType) {
                 RecordingStorageType.FILE -> {
                     FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
-                        copiedBytes = source.copyTo(output)
+                        copiedBytes = source.copyTo(output, FILE_COPY_BUFFER_BYTES)
                         output.fd.sync()
                     }
                 }
 
                 RecordingStorageType.DOCUMENT -> {
                     context.contentResolver.openOutputStream(requireNotNull(resolvedTarget.uri), "w")?.use { output ->
-                        copiedBytes = source.copyTo(output)
+                        copiedBytes = source.copyTo(output, FILE_COPY_BUFFER_BYTES)
                         output.flush()
                     } ?: throw IOException("Unable to open target output stream")
                 }
@@ -718,32 +706,40 @@ fun listCurrentOutputDirectoryRecordings(
     val treeUri = getConfiguredExportTreeUri(context)
     return if (treeUri == null) {
         val directory = getSavedRecordingsDirectory(context)
-        directory.listFiles()
-            ?.asSequence()
-            ?.filter { it.isFile && it.length() > 0L && !it.isHidden }
-            ?.filter { it.extension.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
-            ?.map { file ->
+        val files = directory.listFiles() ?: if (!directory.exists()) {
+            emptyArray()
+        } else {
+            throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
+        }
+        files.asSequence()
+            .filter { it.isFile && it.length() > 0L && !it.isHidden }
+            .filter { it.extension.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
+            .mapNotNull { file ->
                 val id = file.absolutePath
                 val size = file.length()
                 val existing = knownRecordings[id]
-                if (existing != null && existing.displayName == file.name && existing.sizeBytes == size) {
+                if (
+                    existing != null && existing.durationMillis > 0L &&
+                    existing.displayName == file.name && existing.sizeBytes == size
+                ) {
                     existing
                 } else {
+                    val media = inspectRecordingMedia(file)
+                    if (media.durationMillis <= 0L) return@mapNotNull null
                     RecordingEntity(
                         id = id,
                         displayName = file.name,
                         mimeType = guessMimeType(file.name),
                         startedAtMillis = resolveRecordingStartTimeMillis(file),
-                        durationMillis = resolveRecordingDurationMillis(file),
+                        durationMillis = media.durationMillis,
                         sizeBytes = size,
-                        codecSummary = resolveRecordingCodecInfo(file),
+                        codecSummary = media.codecSummary,
                         storageType = RecordingStorageType.FILE.name,
                         directoryId = directory.absolutePath,
                     )
                 }
             }
-            ?.toList()
-            .orEmpty()
+            .toList()
     } else {
         runCatching {
             val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@runCatching emptyList()
@@ -760,19 +756,21 @@ fun listCurrentOutputDirectoryRecordings(
                     val size = file.length().coerceAtLeast(0L)
                     val existing = knownRecordings[id]
                     if (
-                        existing != null && existing.displayName == name &&
+                        existing != null && existing.durationMillis > 0L && existing.displayName == name &&
                         (size == 0L || existing.sizeBytes == size)
                     ) {
                         existing
                     } else {
+                        val media = inspectRecordingMedia(context, uri, name)
+                        if (media.durationMillis <= 0L) return@mapNotNull null
                         RecordingEntity(
                             id = id,
                             displayName = name,
                             mimeType = file.type ?: guessMimeType(name),
                             startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
-                            durationMillis = resolveRecordingDurationMillis(context, uri, name),
+                            durationMillis = media.durationMillis,
                             sizeBytes = size,
-                            codecSummary = resolveRecordingCodecInfo(context, uri, name),
+                            codecSummary = media.codecSummary,
                             storageType = RecordingStorageType.DOCUMENT.name,
                             directoryId = treeUri.toString(),
                         )
@@ -1013,7 +1011,7 @@ private fun countOutputTargetBytes(
         RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(requireNotNull(target.uri))
     } ?: throw IOException("Unable to reopen copied recording")
     input.use { source ->
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        val buffer = ByteArray(FILE_COPY_BUFFER_BYTES)
         var total = 0L
         val readLimit = if (expectedBytes == Long.MAX_VALUE) Long.MAX_VALUE else expectedBytes + 1L
         while (total < readLimit) {

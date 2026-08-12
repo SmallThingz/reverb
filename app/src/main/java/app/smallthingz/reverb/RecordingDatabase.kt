@@ -31,11 +31,7 @@ interface RecordingDao {
 
     suspend fun upsert(recording: RecordingEntity)
 
-    suspend fun upsertAll(recordings: List<RecordingEntity>)
-
     suspend fun deleteById(id: String)
-
-    suspend fun deleteByIds(ids: List<String>)
 
     suspend fun applyChanges(
         upserts: List<RecordingEntity>,
@@ -72,6 +68,11 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         db.recreateSchema()
     }
 
+    override fun onOpen(db: SQLiteDatabase) {
+        super.onOpen(db)
+        if (!db.isReadOnly) db.createIndexes()
+    }
+
     fun recordingDao(): RecordingDao = dao
 
     private inner class DaoImpl : RecordingDao {
@@ -103,33 +104,8 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             writableDatabase.upsertRecording(recording)
         }
 
-        override suspend fun upsertAll(recordings: List<RecordingEntity>) {
-            if (recordings.isEmpty()) return
-            writableDatabase.beginTransaction()
-            try {
-                recordings.forEach { recording ->
-                    writableDatabase.upsertRecording(recording)
-                }
-                writableDatabase.setTransactionSuccessful()
-            } finally {
-                writableDatabase.endTransaction()
-            }
-        }
-
         override suspend fun deleteById(id: String) {
             writableDatabase.delete(TABLE_RECORDINGS, "$COLUMN_ID = ?", arrayOf(id))
-        }
-
-        override suspend fun deleteByIds(ids: List<String>) {
-            if (ids.isEmpty()) return
-            val db = writableDatabase
-            db.beginTransaction()
-            try {
-                db.deleteIds(ids)
-                db.setTransactionSuccessful()
-            } finally {
-                db.endTransaction()
-            }
         }
 
         override suspend fun applyChanges(
@@ -219,6 +195,23 @@ private fun SQLiteDatabase.createSchema() {
             ${RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS} INTEGER
         )
         """.trimIndent(),
+    )
+    createIndexes()
+}
+
+private fun SQLiteDatabase.createIndexes() {
+    execSQL(
+        "CREATE INDEX IF NOT EXISTS recordings_started_created_idx ON " +
+            "${RecordingDatabase.TABLE_RECORDINGS} (" +
+            "${RecordingDatabase.COLUMN_STARTED_AT_MILLIS} DESC, " +
+            "${RecordingDatabase.COLUMN_CREATED_AT_MILLIS} DESC)",
+    )
+    execSQL(
+        "CREATE INDEX IF NOT EXISTS recordings_directory_started_created_idx ON " +
+            "${RecordingDatabase.TABLE_RECORDINGS} (" +
+            "${RecordingDatabase.COLUMN_DIRECTORY_ID}, " +
+            "${RecordingDatabase.COLUMN_STARTED_AT_MILLIS} DESC, " +
+            "${RecordingDatabase.COLUMN_CREATED_AT_MILLIS} DESC)",
     )
 }
 

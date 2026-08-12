@@ -22,16 +22,10 @@ private const val WAV_HEADER_BYTES = 44L
 private const val WAV_MAX_FILE_BYTES = 0xFFFF_FFFFL
 
 private val STANDARD_SAMPLE_RATES =
-    intArrayOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
-private val codecSupportCache = ConcurrentHashMap<CodecSupportKey, Boolean>()
+    listOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
+private val SUPPORTED_EXPORT_FORMATS = listOf(ExportFormat.WAV)
+private val SUPPORTED_WAV_CODECS = listOf(ExportCodec.PCM_16)
 private val inputConfigCache = ConcurrentHashMap<InputConfigKey, Boolean>()
-
-private data class CodecSupportKey(
-    val format: ExportFormat,
-    val codec: ExportCodec,
-    val sampleRate: Int,
-    val channelMode: ChannelMode,
-)
 
 private data class InputConfigKey(
     val sampleRate: Int,
@@ -40,16 +34,6 @@ private data class InputConfigKey(
     val channelMode: ChannelMode,
     val sampleFormat: PcmSampleFormat,
 )
-
-private inline fun <K : Any, V : Any> ConcurrentHashMap<K, V>.cached(
-    key: K,
-    producer: () -> V,
-): V {
-    this[key]?.let { return it }
-    val value = producer()
-    val existing = putIfAbsent(key, value)
-    return existing ?: value
-}
 
 enum class RetentionMode {
     SIZE,
@@ -70,26 +54,13 @@ enum class ExportFormat(
     val prefValue: String get() = name.lowercase()
     val extension: String get() = "wav"
     val outputMimeType: String get() = "audio/wav"
-    val isPcmContainer: Boolean get() = true
-
-    companion object {
-        fun fromPrefValue(value: String?): ExportFormat = WAV
-    }
 }
 
-enum class ExportCodec(
-    @param:StringRes @field:StringRes val labelRes: Int,
-) {
-    PCM_16(R.string.codec_pcm_16),
+enum class ExportCodec {
+    PCM_16,
     ;
 
     val prefValue: String get() = name.lowercase()
-    val isPcm: Boolean get() = true
-    val supportedFormats: Set<ExportFormat> get() = setOf(ExportFormat.WAV)
-
-    companion object {
-        fun fromPrefValue(value: String?): ExportCodec = PCM_16
-    }
 }
 
 private const val WAVE_FORMAT_PCM: Short = 1
@@ -292,20 +263,7 @@ fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat {
 fun isCodecCompatibleWithFormat(
     format: ExportFormat,
     codec: ExportCodec,
-): Boolean = format in codec.supportedFormats
-
-fun defaultCodecBitrateKbps(
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-): Int? = null
-
-fun getConfiguredCodecBitrateKbps(
-    context: Context,
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-): Int? = null
+): Boolean = format == ExportFormat.WAV && codec == ExportCodec.PCM_16
 
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
     return AudioSourceMode.fromSourceValue(
@@ -344,9 +302,6 @@ fun getConfiguredMemorySizeBytes(
     context: Context,
     sampleRate: Int,
     channelMode: ChannelMode = getConfiguredChannelMode(context),
-    format: ExportFormat = getConfiguredOutputFormat(context),
-    codec: ExportCodec = getConfiguredOutputCodec(context),
-    bitrateKbps: Int? = getConfiguredCodecBitrateKbps(context, codec, sampleRate, channelMode.channelCount),
     sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
 ): Long {
     return when (getConfiguredRetentionMode(context)) {
@@ -455,7 +410,6 @@ fun estimateExportSizeBytes(
     sampleRate: Int,
     channelCount: Int,
     durationSeconds: Long,
-    bitrateKbps: Int? = null,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
     if (sampleRate <= 0 || channelCount <= 0 || durationSeconds <= 0L) {
@@ -477,7 +431,6 @@ fun estimateExportDurationSeconds(
     sampleRate: Int,
     channelCount: Int,
     sizeBytes: Long,
-    bitrateKbps: Int? = null,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
     if (sampleRate <= 0 || channelCount <= 0 || sizeBytes <= 0L) {
@@ -500,7 +453,6 @@ fun exportDurationLimitSeconds(
     codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
-    bitrateKbps: Int? = null,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
     return estimateExportDurationSeconds(
@@ -509,7 +461,6 @@ fun exportDurationLimitSeconds(
         sampleRate = sampleRate,
         channelCount = channelCount,
         sizeBytes = exportFileSizeLimitBytes(format),
-        bitrateKbps = bitrateKbps,
         sampleFormat = sampleFormat,
     )
 }
@@ -548,7 +499,7 @@ fun supportedInputRouteModes(context: Context): List<InputRouteMode> {
     }
 }
 
-fun standardSampleRates(): List<Int> = STANDARD_SAMPLE_RATES.toList()
+fun standardSampleRates(): List<Int> = STANDARD_SAMPLE_RATES
 
 fun sampleRateLabel(sampleRate: Int): String {
     if (sampleRate % 1000 == 0) return "${sampleRate / 1000} kHz"
@@ -629,18 +580,16 @@ fun isCodecSupported(
     sampleRate: Int,
     channelMode: ChannelMode,
 ): Boolean {
-    return codecSupportCache.cached(CodecSupportKey(format, codec, sampleRate, channelMode)) {
-        isCodecCompatibleWithFormat(format, codec) &&
-            isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
-    }
+    return isCodecCompatibleWithFormat(format, codec) &&
+        isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
 }
 
 fun supportedFormats(): List<ExportFormat> {
-    return listOf(ExportFormat.WAV)
+    return SUPPORTED_EXPORT_FORMATS
 }
 
 fun supportedCodecs(format: ExportFormat): List<ExportCodec> {
-    return if (format == ExportFormat.WAV) listOf(ExportCodec.PCM_16) else emptyList()
+    return if (format == ExportFormat.WAV) SUPPORTED_WAV_CODECS else emptyList()
 }
 
 private fun bytesPerSecond(
