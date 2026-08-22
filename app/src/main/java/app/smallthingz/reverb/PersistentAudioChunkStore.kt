@@ -24,12 +24,14 @@ import kotlin.math.roundToLong
  */
 internal class PersistentAudioChunkStore(
     context: Context,
+    cacheFolderName: String = ReverbConfig.BUFFER_CACHE_FOLDER_NAME,
+    legacyCacheFolderName: String? = ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME,
 ) : Closeable {
-    private val rootDirectory = File(context.noBackupFilesDir, ReverbConfig.BUFFER_CACHE_FOLDER_NAME)
+    private val rootDirectory = File(context.noBackupFilesDir, cacheFolderName)
     private val chunksDirectory = File(rootDirectory, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
     private val indexA = File(rootDirectory, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
     private val indexB = File(rootDirectory, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
-    private val legacyDirectory = File(context.noBackupFilesDir, ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME)
+    private val legacyDirectory = legacyCacheFolderName?.let { File(context.noBackupFilesDir, it) }
 
     private val chunks = ArrayDeque<ChunkRecord>()
     private val liveChunkIds = HashSet<UInt>()
@@ -546,8 +548,10 @@ internal class PersistentAudioChunkStore(
         }
 
         // Alpha builds intentionally discard obsolete private storage instead of migrating it.
-        if (legacyDirectory != rootDirectory && legacyDirectory.exists()) {
-            runCatching { legacyDirectory.deleteRecursively() }
+        legacyDirectory?.let { legacy ->
+            if (legacy != rootDirectory && legacy.exists()) {
+                runCatching { legacy.deleteRecursively() }
+            }
         }
         runCatching { File(rootDirectory, indexA.name + ".tmp").delete() }
         runCatching { File(rootDirectory, indexB.name + ".tmp").delete() }

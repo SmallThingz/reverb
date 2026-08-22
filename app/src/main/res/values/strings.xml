@@ -6,6 +6,10 @@
     <string name="cant_create_file_generic">Couldn\'t create file.</string>
     <string name="clear_buffer">Clear</string>
     <string name="clear_history_title">Discard history?</string>
+    <string name="clear_one_shot_title">Discard one-shot?</string>
+    <string name="clear_loop_title">Discard loop?</string>
+    <string name="buffer_one_shot">One-shot</string>
+    <string name="buffer_loop">Looping</string>
     <string name="files_tab">Files</string>
     <string name="open_options">Open options</string>
     <string name="record_all_memory">Export full</string>

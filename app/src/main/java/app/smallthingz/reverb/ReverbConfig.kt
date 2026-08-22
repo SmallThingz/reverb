@@ -4,6 +4,7 @@ object ReverbConfig {
 
     const val APP_STORAGE_FOLDER_NAME = "Reverb"
     const val BUFFER_CACHE_FOLDER_NAME = "reverb"
+    const val ONE_SHOT_BUFFER_CACHE_FOLDER_NAME = "reverb-one-shot"
     const val BUFFER_CHUNKS_FOLDER_NAME = "chunks"
     const val BUFFER_INDEX_A_FILE_NAME = "index.a"
     const val BUFFER_INDEX_B_FILE_NAME = "index.b"

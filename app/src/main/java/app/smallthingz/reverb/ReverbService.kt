@@ -111,7 +111,8 @@ class ReverbService : Service() {
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
     private lateinit var exportWorkExecutor: ExecutorService
-    private lateinit var persistentAudioChunkStore: PersistentAudioChunkStore
+    private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
+    private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
     @Volatile private var wakeLock: PowerManager.WakeLock? = null
 
@@ -119,7 +120,12 @@ class ReverbService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        persistentAudioChunkStore = PersistentAudioChunkStore(this)
+        loopingAudioChunkStore = PersistentAudioChunkStore(this)
+        oneShotAudioChunkStore = PersistentAudioChunkStore(
+            this,
+            cacheFolderName = ReverbConfig.ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
+            legacyCacheFolderName = null,
+        )
         createNotificationChannel()
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
@@ -197,8 +203,13 @@ class ReverbService : Service() {
             super.dump(fd, writer, args)
             return
         }
-        val persisted = if (::persistentAudioChunkStore.isInitialized) {
-            runCatching { persistentAudioChunkStore.peekSnapshot() }.getOrNull()
+        val persisted = if (::loopingAudioChunkStore.isInitialized) {
+            runCatching { loopingAudioChunkStore.peekSnapshot() }.getOrNull()
+        } else {
+            null
+        }
+        val oneShot = if (::oneShotAudioChunkStore.isInitialized) {
+            runCatching { oneShotAudioChunkStore.peekSnapshot() }.getOrNull()
         } else {
             null
         }
@@ -216,6 +227,10 @@ class ReverbService : Service() {
                 "chunks=${persisted?.chunkCount ?: 0} sampleRate=${persisted?.currentSampleRate ?: 0} " +
                 "channelCount=${persisted?.currentChannelCount ?: 0} " +
                 "lastWrite=${persisted?.lastWriteAtMillis ?: 0}",
+        )
+        writer.println(
+            "  oneShot filled=${oneShot?.filledBytes ?: 0} duration=${oneShot?.durationSeconds ?: 0.0} " +
+                "chunks=${oneShot?.chunkCount ?: 0}",
         )
         writer.println("  rawHistoryDirectory=${ReverbConfig.BUFFER_CACHE_FOLDER_NAME}/${ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME}")
     }
@@ -467,7 +482,7 @@ class ReverbService : Service() {
             state = STATE_READY
             updateWakeLockState()
             try {
-                persistentAudioChunkStore.sealActiveChunk()
+                sealActiveChunks()
             } catch (error: Exception) {
                 reportPersistentStoreFailure("seal while stopping", error)
             } finally {
@@ -532,6 +547,7 @@ class ReverbService : Service() {
         memorySeconds: Float,
         receiver: AudioFileReceiver,
         newFileName: String,
+        bufferSlot: BufferSlot = BufferSlot.LOOPING,
     ) {
         val exportToken = beginExport(receiver) ?: run {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
@@ -544,11 +560,12 @@ class ReverbService : Service() {
                 flushAudioRecord()
                 if (!isExportPending(exportToken)) return@post
 
-                val totalDuration = availableBufferedDurationSeconds()
+                val store = chunkStore(bufferSlot)
+                val totalDuration = availableBufferedDurationSeconds(bufferSlot)
                 val requestedDuration = memorySeconds.toDouble().coerceAtLeast(0.0)
                 val end = totalDuration
                 val start = maxOf(0.0, end - requestedDuration)
-                val lease = acquireExportRange(start, end)
+                val lease = acquireExportRange(store, start, end)
                 if (lease == null) {
                     clearExportState(exportToken)
                     finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
@@ -571,6 +588,7 @@ class ReverbService : Service() {
         endOffsetSeconds: Float,
         receiver: AudioFileReceiver,
         newFileName: String,
+        bufferSlot: BufferSlot = BufferSlot.LOOPING,
     ) {
         val exportToken = beginExport(receiver) ?: run {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
@@ -583,10 +601,11 @@ class ReverbService : Service() {
                 flushAudioRecord()
                 if (!isExportPending(exportToken)) return@post
 
-                val totalDuration = availableBufferedDurationSeconds()
+                val store = chunkStore(bufferSlot)
+                val totalDuration = availableBufferedDurationSeconds(bufferSlot)
                 val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
                 val boundedEnd = endOffsetSeconds.toDouble().coerceIn(boundedStart, totalDuration)
-                val lease = acquireExportRange(boundedStart, boundedEnd)
+                val lease = acquireExportRange(store, boundedStart, boundedEnd)
                 if (lease == null) {
                     clearExportState(exportToken)
                     finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
@@ -604,13 +623,16 @@ class ReverbService : Service() {
         }
     }
 
-    fun acquireTimelineSnapshot(callback: (TimelineSnapshot?) -> Unit) {
+    fun acquireTimelineSnapshot(
+        bufferSlot: BufferSlot = BufferSlot.LOOPING,
+        callback: (TimelineSnapshot?) -> Unit,
+    ) {
         if (!audioHandler.post {
             val snapshot = try {
                 flushAudioRecord()
-                val duration = availableBufferedDurationSeconds()
+                val duration = availableBufferedDurationSeconds(bufferSlot)
                 if (duration > 0.0) {
-                    persistentAudioChunkStore.acquireRange(0.0, duration)?.let(::TimelineSnapshot)
+                    chunkStore(bufferSlot).acquireRange(0.0, duration)?.let(::TimelineSnapshot)
                 } else {
                     null
                 }
@@ -662,6 +684,7 @@ class ReverbService : Service() {
     }
 
     private fun acquireExportRange(
+        store: PersistentAudioChunkStore,
         requestedStartSeconds: Double,
         requestedEndSeconds: Double,
     ): PersistentAudioChunkStore.RangeLease? {
@@ -669,7 +692,7 @@ class ReverbService : Service() {
         val maxDuration = exportPayloadLimitBytes(outputFormat).toDouble() / targetBytesPerSecond
         val end = requestedEndSeconds.coerceAtLeast(requestedStartSeconds)
         val start = maxOf(requestedStartSeconds, end - maxDuration)
-        return persistentAudioChunkStore.acquireRange(start, end)
+        return store.acquireRange(start, end)
     }
 
     fun cancelCurrentExport(): Boolean {
@@ -930,7 +953,7 @@ class ReverbService : Service() {
 
         if (restartInput) {
             audioHandler.removeCallbacks(audioReader)
-            persistentAudioChunkStore.sealActiveChunk()
+            sealActiveChunks()
             releaseAudioRecord()
             startAudioInputOnAudioThread()
         } else {
@@ -1031,16 +1054,58 @@ class ReverbService : Service() {
         return value - value % alignment
     }
 
-    private fun availableBufferedSampleBytes(): Long {
-        return if (::persistentAudioChunkStore.isInitialized) persistentAudioChunkStore.countFilledBytes() else 0L
+    private fun chunkStore(bufferSlot: BufferSlot): PersistentAudioChunkStore {
+        return when (bufferSlot) {
+            BufferSlot.ONE_SHOT -> oneShotAudioChunkStore
+            BufferSlot.LOOPING -> loopingAudioChunkStore
+        }
     }
 
-    private fun availableBufferedDurationSeconds(): Double {
-        return if (::persistentAudioChunkStore.isInitialized) persistentAudioChunkStore.durationSeconds() else 0.0
+    private fun availableBufferedSampleBytes(bufferSlot: BufferSlot = BufferSlot.LOOPING): Long {
+        if (!::loopingAudioChunkStore.isInitialized || !::oneShotAudioChunkStore.isInitialized) return 0L
+        return chunkStore(bufferSlot).countFilledBytes()
+    }
+
+    private fun availableBufferedDurationSeconds(bufferSlot: BufferSlot = BufferSlot.LOOPING): Double {
+        if (!::loopingAudioChunkStore.isInitialized || !::oneShotAudioChunkStore.isInitialized) return 0.0
+        return chunkStore(bufferSlot).durationSeconds()
     }
 
     private fun canExportBufferedAudio(): Boolean {
         return availableBufferedDurationSeconds() > 0.0 || state == STATE_LISTENING || state == STATE_PAUSED
+    }
+
+    private fun appendCapturedAudio(array: ByteArray, offset: Int, count: Int) {
+        forEachAudioStore { store -> store.append(array, offset, count) }
+    }
+
+    private fun sealActiveChunks() {
+        forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
+    }
+
+    private fun checkpointAudioStores(operation: String) {
+        try {
+            forEachAudioStore(PersistentAudioChunkStore::checkpoint)
+        } catch (error: Exception) {
+            reportPersistentStoreFailure(operation, error)
+        }
+    }
+
+    private inline fun forEachAudioStore(action: (PersistentAudioChunkStore) -> Unit) {
+        var firstFailure: Exception? = null
+
+        try {
+            action(loopingAudioChunkStore)
+        } catch (error: Exception) {
+            firstFailure = error
+        }
+        try {
+            action(oneShotAudioChunkStore)
+        } catch (error: Exception) {
+            firstFailure?.addSuppressed(error) ?: run { firstFailure = error }
+        }
+
+        firstFailure?.let { throw it }
     }
 
     private fun flushAudioRecord() {
@@ -1076,11 +1141,7 @@ class ReverbService : Service() {
             captureBuffer.limit(alignedRead)
             captureBuffer.get(captureScratch, 0, alignedRead)
             publishVisualization(captureScratch, 0, alignedRead)
-            persistentAudioChunkStore.append(
-                array = captureScratch,
-                offset = 0,
-                count = alignedRead,
-            )
+            appendCapturedAudio(captureScratch, 0, alignedRead)
         }
 
         if (state != STATE_LISTENING) return read
@@ -1096,7 +1157,7 @@ class ReverbService : Service() {
     private fun restartAudioRecordOnAudioThread(): Boolean {
         check(audioHandler.looper == Looper.myLooper())
         audioHandler.removeCallbacks(audioReader)
-        persistentAudioChunkStore.sealActiveChunk()
+        sealActiveChunks()
         releaseAudioRecord()
         if (state != STATE_LISTENING) return false
         val record = createAudioRecord() ?: return false
@@ -1137,7 +1198,7 @@ class ReverbService : Service() {
             .commit()
         state = STATE_READY
         audioHandler.removeCallbacks(audioReader)
-        runCatching { persistentAudioChunkStore.sealActiveChunk() }
+        runCatching { sealActiveChunks() }
         releaseAudioRecord()
         updateWakeLockState()
         reportError(if (error == null) message else userFacingError(message, error))
@@ -1150,21 +1211,25 @@ class ReverbService : Service() {
     fun getState(callback: StateCallback) {
         audioHandler.post {
             try {
-                val memorizedSeconds = availableBufferedDurationSeconds().toFloat()
-                val memorizedBytes = persistentAudioChunkStore.countFilledBytes()
+                val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
+                val oneShotBytes = availableBufferedSampleBytes(BufferSlot.ONE_SHOT)
+                val loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat()
+                val loopingBytes = availableBufferedSampleBytes(BufferSlot.LOOPING)
                 val listening = state == STATE_LISTENING
                 mainHandler.post {
                     callback.state(
                         listening,
-                        memorizedSeconds,
-                        memorizedBytes,
+                        oneShotSeconds,
+                        oneShotBytes,
+                        loopingSeconds,
+                        loopingBytes,
                     )
                 }
             } catch (error: Exception) {
                 reportPersistentStoreFailure("read recorder state", error)
                 val listening = state == STATE_LISTENING
                 mainHandler.post {
-                    callback.state(listening, 0f, 0L)
+                    callback.state(listening, 0f, 0L, 0f, 0L)
                 }
             }
         }
@@ -1246,10 +1311,10 @@ class ReverbService : Service() {
         )
     }
 
-    fun clearBuffer() {
+    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING) {
         audioHandler.post {
             try {
-                persistentAudioChunkStore.clear()
+                chunkStore(bufferSlot).clear()
             } catch (error: Exception) {
                 reportPersistentStoreFailure("clear history", error)
             }
@@ -1295,7 +1360,7 @@ class ReverbService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        audioHandler.post { checkpointPersistentStore("task-removed checkpoint") }
+        audioHandler.post { checkpointAudioStores("task-removed checkpoint") }
     }
 
     private fun buildNotification(): Notification {
@@ -1323,11 +1388,7 @@ class ReverbService : Service() {
     }
 
     private fun checkpointPersistentStore(operation: String) {
-        try {
-            persistentAudioChunkStore.checkpoint()
-        } catch (error: Exception) {
-            reportPersistentStoreFailure(operation, error)
-        }
+        checkpointAudioStores(operation)
     }
 
     private fun userFacingError(message: String, error: Throwable): String {
@@ -1341,37 +1402,54 @@ class ReverbService : Service() {
             RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
             RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
         }
-        persistentAudioChunkStore.configure(
+        loopingAudioChunkStore.configure(
             requestedRetentionMode = mode,
             requestedRetentionValue = retentionValue,
             requestedSampleRate = sampleRate,
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
         )
-        if (persistentAudioChunkStore.hasData() && !isListeningEnabled() && state == STATE_READY) {
+        oneShotAudioChunkStore.configure(
+            requestedRetentionMode = RetentionMode.SIZE,
+            requestedRetentionValue = Long.MAX_VALUE,
+            requestedSampleRate = sampleRate,
+            requestedChannelCount = channelMode.channelCount,
+            sampleFormat = pcmSampleFormat,
+        )
+        if (
+            (loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()) &&
+            !isListeningEnabled() &&
+            state == STATE_READY
+        ) {
             state = STATE_PAUSED
         }
     }
 
     private fun flushAndPersistBeforeShutdown() {
         if (!::audioHandler.isInitialized) {
-            runCatching { persistentAudioChunkStore.close() }
+            runCatching { loopingAudioChunkStore.close() }
+            runCatching { oneShotAudioChunkStore.close() }
             return
         }
         val storeCloseOwnedByAudioThread = runOnAudioThreadAndWait {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             try {
-                persistentAudioChunkStore.sealActiveChunk()
+                sealActiveChunks()
             } catch (error: Exception) {
                 reportPersistentStoreFailure("seal during shutdown", error)
             } finally {
                 releaseAudioRecord()
-                persistentAudioChunkStore.close()
+                try {
+                    forEachAudioStore(PersistentAudioChunkStore::close)
+                } catch (error: Exception) {
+                    reportPersistentStoreFailure("close during shutdown", error)
+                }
             }
         }
         if (!storeCloseOwnedByAudioThread) {
-            runCatching { persistentAudioChunkStore.close() }
+            runCatching { loopingAudioChunkStore.close() }
+            runCatching { oneShotAudioChunkStore.close() }
         }
     }
 
@@ -1424,7 +1502,7 @@ class ReverbService : Service() {
                 when (action) {
                     ACTION_DEBUG_ENABLE_LISTENING -> mainHandler.post { enableListening() }
                     ACTION_DEBUG_DISABLE_LISTENING -> mainHandler.post { disableListening() }
-                    ACTION_DEBUG_CLEAR_BUFFER -> persistentAudioChunkStore.clear()
+                    ACTION_DEBUG_CLEAR_BUFFER -> loopingAudioChunkStore.clear()
                     ACTION_DEBUG_INJECT_BUFFER -> injectDebugBuffer(seconds)
                     ACTION_DEBUG_FORCE_APP_STORAGE_EXPORTS -> {
                         setConfiguredExportTreeUri(this@ReverbService, null)
@@ -1433,7 +1511,7 @@ class ReverbService : Service() {
                     ACTION_DEBUG_EXPORT_FULL -> exportDebug(FULL_BUFFER_SECONDS)
                     ACTION_DEBUG_EXPORT_SECONDS -> exportDebug(seconds)
                     ACTION_DEBUG_APPLY_SETTINGS -> applyConfiguredPreferencesOnAudioThread()
-                    ACTION_DEBUG_CHECKPOINT -> persistentAudioChunkStore.checkpoint()
+                    ACTION_DEBUG_CHECKPOINT -> checkpointAudioStores("debug checkpoint")
                     ACTION_DEBUG_LOG_STATE -> logDebugState()
                     ACTION_DEBUG_DUMP_REPORT -> writeDebugReport("manual-dump")
                 }
@@ -1478,16 +1556,12 @@ class ReverbService : Service() {
         while (remaining > 0L) {
             val count = alignDown(minOf(chunk.size.toLong(), remaining), frameBytes).toInt()
             if (count <= 0) break
-            persistentAudioChunkStore.append(
-                array = chunk,
-                offset = 0,
-                count = count,
-            )
+            appendCapturedAudio(chunk, 0, count)
             remaining -= count.toLong()
         }
         state = STATE_PAUSED
         updateWakeLockState()
-        persistentAudioChunkStore.checkpoint()
+        checkpointAudioStores("debug inject checkpoint")
         Log.d(
             TAG,
             "injectDebugBuffer seconds=$seconds logical=$logicalRetentionBytes " +
@@ -1497,20 +1571,23 @@ class ReverbService : Service() {
     }
 
     private fun logDebugState() {
-        val persisted = persistentAudioChunkStore.peekSnapshot()
+        val persisted = loopingAudioChunkStore.peekSnapshot()
+        val oneShot = oneShotAudioChunkStore.peekSnapshot()
         Log.d(
             TAG,
             "debug-state state=$state " +
                 "sampleRate=$sampleRate channels=${channelMode.channelCount} codec=${outputCodec.prefValue} " +
                 "format=${outputFormat.prefValue} logicalRetention=${cachedRetentionSampleBytes} " +
                 "persistedFilled=${persisted?.filledBytes ?: 0} persistedDuration=${persisted?.durationSeconds ?: 0.0} " +
-                "chunks=${persisted?.chunkCount ?: 0}",
+                "chunks=${persisted?.chunkCount ?: 0} oneShotFilled=${oneShot?.filledBytes ?: 0} " +
+                "oneShotDuration=${oneShot?.durationSeconds ?: 0.0}",
         )
     }
 
     private fun writeDebugReport(reason: String) {
         val reportFile = resolveDebugReportFile()
-        val persisted = persistentAudioChunkStore.peekSnapshot()
+        val persisted = loopingAudioChunkStore.peekSnapshot()
+        val oneShot = oneShotAudioChunkStore.peekSnapshot()
         val status =
             buildString {
                 append("reason=").append(reason)
@@ -1523,6 +1600,9 @@ class ReverbService : Service() {
                 append(" persistedDuration=").append(persisted?.durationSeconds ?: 0.0)
                 append(" persistedChunks=").append(persisted?.chunkCount ?: 0)
                 append(" persistedLastWrite=").append(persisted?.lastWriteAtMillis ?: 0)
+                append(" oneShotFilled=").append(oneShot?.filledBytes ?: 0)
+                append(" oneShotDuration=").append(oneShot?.durationSeconds ?: 0.0)
+                append(" oneShotChunks=").append(oneShot?.chunkCount ?: 0)
                 append(" exportDir=").append(describeConfiguredOutputDirectory(this@ReverbService))
             }
         reportFile.appendText(status + "\n---\n")
@@ -1591,6 +1671,11 @@ class ReverbService : Service() {
         fun fileCancelled() = Unit
     }
 
+    enum class BufferSlot {
+        ONE_SHOT,
+        LOOPING,
+    }
+
     class TimelineSnapshot internal constructor(
         private val lease: PersistentAudioChunkStore.RangeLease,
     ) : java.io.Closeable {
@@ -1608,8 +1693,10 @@ class ReverbService : Service() {
     interface StateCallback {
         fun state(
             listeningEnabled: Boolean,
-            memorized: Float,
-            memorizedBytes: Long,
+            oneShotSeconds: Float,
+            oneShotBytes: Long,
+            loopingSeconds: Float,
+            loopingBytes: Long,
         )
     }
 
