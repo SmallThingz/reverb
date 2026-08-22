@@ -262,6 +262,7 @@ internal class PersistentAudioChunkStore(
         val segments = ArrayList<Segment>()
         var cursor = 0.0
         var startedAtMillis = 0L
+        var endedAtMillis = 0L
         var leaseDuration = 0.0
 
         for (record in chunks) {
@@ -297,6 +298,8 @@ internal class PersistentAudioChunkStore(
                 startedAtMillis = record.createdAtMillis +
                     (startFrame * 1000L / record.sampleRate.coerceAtLeast(1))
             }
+            endedAtMillis = record.createdAtMillis +
+                (endFrame * 1000L / record.sampleRate.coerceAtLeast(1))
             leaseDuration += frameCount.toDouble() / record.sampleRate.toDouble()
         }
 
@@ -305,6 +308,7 @@ internal class PersistentAudioChunkStore(
             store = this,
             segments = segments,
             startedAtMillis = startedAtMillis,
+            endedAtMillis = endedAtMillis,
             durationSeconds = leaseDuration,
         )
     }
@@ -361,6 +365,7 @@ internal class PersistentAudioChunkStore(
         private val store: PersistentAudioChunkStore,
         private val segments: List<Segment>,
         val startedAtMillis: Long,
+        val endedAtMillis: Long,
         val durationSeconds: Double,
     ) : Closeable {
         private var closedLease = false
@@ -380,6 +385,7 @@ internal class PersistentAudioChunkStore(
                 val selected = ArrayList<Segment>()
                 var cursor = 0.0
                 var selectedStartedAtMillis = 0L
+                var selectedEndedAtMillis = 0L
                 var selectedDuration = 0.0
                 for (segment in segments) {
                     val rate = segment.record.sampleRate
@@ -408,6 +414,8 @@ internal class PersistentAudioChunkStore(
                         selectedStartedAtMillis = segment.record.createdAtMillis +
                             (absoluteStartFrame * 1000L / rate)
                     }
+                    selectedEndedAtMillis = segment.record.createdAtMillis +
+                        ((absoluteStartFrame + childFrames) * 1000L / rate)
                     selectedDuration += childFrames.toDouble() / rate.toDouble()
                 }
                 if (selected.isEmpty()) return null
@@ -415,6 +423,7 @@ internal class PersistentAudioChunkStore(
                     store = store,
                     segments = selected,
                     startedAtMillis = selectedStartedAtMillis,
+                    endedAtMillis = selectedEndedAtMillis,
                     durationSeconds = selectedDuration,
                 )
             }

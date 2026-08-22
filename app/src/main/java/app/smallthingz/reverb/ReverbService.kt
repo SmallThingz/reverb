@@ -732,7 +732,8 @@ class ReverbService : Service() {
             return
         }
         val startedAtMillis = lease.startedAtMillis
-        val endedAtMillis = recordingEndTimestampMillis(startedAtMillis, lease.durationSeconds)
+        val endedAtMillis = lease.endedAtMillis.takeIf { it > 0L }
+            ?: recordingEndTimestampMillis(startedAtMillis, lease.durationSeconds)
         val exportFormat = exportConfig.format
         val exportCodec = exportConfig.codec
         val exportSampleRate = exportConfig.sampleRate
