@@ -3,6 +3,7 @@
 package app.smallthingz.reverb
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
@@ -15,6 +16,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.PowerManager
 import androidx.annotation.StringRes
+import androidx.core.content.edit
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -90,6 +92,7 @@ enum class PcmSampleFormat(
     }
 }
 
+@SuppressLint("InlinedApi")
 enum class AudioSourceMode(
     val sourceValue: Int,
     @param:StringRes @field:StringRes val labelRes: Int,
@@ -223,9 +226,9 @@ fun isBatteryOptimizationStartupPromptPending(context: Context): Boolean {
 }
 
 fun markBatteryOptimizationStartupPromptHandled(context: Context) {
-    getRecorderPreferences(context).edit()
-        .putBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, true)
-        .apply()
+    getRecorderPreferences(context).edit {
+        putBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, true)
+    }
 }
 
 fun getConfiguredThemeMode(context: Context): AppThemeMode {

@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.app.Activity
+import android.view.Window
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -117,8 +118,7 @@ private fun ReverbThemeBase(
             val window = (view.context as? Activity)?.window ?: return@SideEffect
             val insetsController = WindowCompat.getInsetsController(window, view)
             val surfaceColor = colorScheme.surface.toArgb()
-            window.statusBarColor = surfaceColor
-            window.navigationBarColor = surfaceColor
+            setLegacySystemBarColors(window, surfaceColor)
             insetsController.isAppearanceLightStatusBars = !darkTheme
             insetsController.isAppearanceLightNavigationBars = !darkTheme
         }
@@ -129,4 +129,10 @@ private fun ReverbThemeBase(
         typography = ReverbTypography,
         content = content,
     )
+}
+
+@Suppress("DEPRECATION")
+private fun setLegacySystemBarColors(window: Window, color: Int) {
+    window.statusBarColor = color
+    window.navigationBarColor = color
 }

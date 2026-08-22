@@ -52,6 +52,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -84,12 +85,13 @@ private val recordingCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers
 
 @Composable
 fun FilesScreen(
-    modifier: Modifier = Modifier.fillMaxSize(),
+    modifier: Modifier = Modifier,
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
 
     var recordings by remember { mutableStateOf(initialRecordings) }
@@ -127,7 +129,7 @@ fun FilesScreen(
             } catch (_: Exception) {
                 if (generation == refreshGeneration[0]) {
                     notice = LibraryNotice(
-                        context.getString(R.string.recordings_refresh_failed),
+                        resources.getString(R.string.recordings_refresh_failed),
                         FeedbackTone.ERROR,
                     )
                 }
@@ -181,7 +183,7 @@ fun FilesScreen(
         }
         if (failed || deleted == 0) {
             notice = LibraryNotice(
-                context.getString(R.string.recording_delete_failed),
+                resources.getString(R.string.recording_delete_failed),
                 FeedbackTone.ERROR,
             )
         }
@@ -244,8 +246,8 @@ fun FilesScreen(
         selected.forEach { pendingDeletions[it.id] = it }
         clearSelection()
         val count = pendingDeletions.size
-        val message = if (count == 1) context.getString(R.string.recording_deleted)
-        else context.resources.getQuantityString(R.plurals.recordings_deleted, count, count)
+        val message = if (count == 1) resources.getString(R.string.recording_deleted)
+        else resources.getQuantityString(R.plurals.recordings_deleted, count, count)
         notice = LibraryNotice(message, FeedbackTone.INFO, canUndo = true)
         deletionJob?.cancel()
         deletionJob = scope.launch {
@@ -460,9 +462,9 @@ fun FilesScreen(
                     try {
                         context.startActivity(buildOpenRecordingIntent(context, currentRecording))
                     } catch (_: ActivityNotFoundException) {
-                        notice = LibraryNotice(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
+                        notice = LibraryNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     } catch (_: RuntimeException) {
-                        notice = LibraryNotice(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
+                        notice = LibraryNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     }
                 },
             )
@@ -526,6 +528,7 @@ private fun RenameRecordingDialog(
     onRenamed: () -> Unit,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var name by remember(recording.id, recording.displayName) {
         val baseName = recording.displayName.substringBeforeLast('.', recording.displayName)
@@ -538,11 +541,11 @@ private fun RenameRecordingDialog(
     fun validateAndRename(trimmed: String) {
         if (isRenaming) return
         if (trimmed.isBlank()) {
-            error = context.getString(R.string.rename_recording_invalid)
+            error = resources.getString(R.string.rename_recording_invalid)
             return
         }
         if (trimmed.any { it in illegalChars }) {
-            error = context.getString(R.string.rename_recording_illegal_chars)
+            error = resources.getString(R.string.rename_recording_illegal_chars)
             return
         }
         isRenaming = true
@@ -550,14 +553,14 @@ private fun RenameRecordingDialog(
             try {
                 val renamed = RecordingRepository.rename(context, recording, trimmed)
                 if (renamed == null) {
-                    error = context.getString(R.string.rename_recording_failed)
+                    error = resources.getString(R.string.rename_recording_failed)
                 } else {
                     onRenamed()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                error = context.getString(R.string.rename_recording_failed)
+                error = resources.getString(R.string.rename_recording_failed)
             } finally {
                 isRenaming = false
             }

@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.view.Gravity
 import androidx.compose.animation.AnimatedVisibility
@@ -41,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.net.toUri
 
 private const val GITHUB_REPO_URL = "https://github.com/SmallThingz/reverb"
 private const val GITHUB_REPO_LABEL = "SmallThingz/reverb"
@@ -55,6 +56,7 @@ private const val GITHUB_REPO_LABEL = "SmallThingz/reverb"
 @Composable
 fun AboutDialog(onDismiss: () -> Unit = {}) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val versionName = remember {
         val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.packageManager.getPackageInfo(
@@ -67,7 +69,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
         }
         info.versionName.orEmpty()
     }
-    val versionText = remember(versionName) { context.getString(R.string.about_version, versionName) }
+    val versionText = resources.getString(R.string.about_version, versionName)
     val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
     var dismissing by remember { mutableStateOf(false) }
     var linkError by remember { mutableStateOf<String?>(null) }
@@ -133,7 +135,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_brand_mark),
-                                contentDescription = context.getString(R.string.app_name),
+                                contentDescription = resources.getString(R.string.app_name),
                                 tint = Color.Unspecified,
                                 modifier = Modifier.padding(12.dp),
                             )
@@ -142,7 +144,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
 
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        text = context.getString(R.string.app_name),
+                        text = resources.getString(R.string.app_name),
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -156,7 +158,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
 
                     Surface(
                         onClick = {
-                            linkError = if (openGithub(context)) null else context.getString(R.string.no_app_available)
+                            linkError = if (openGithub(context)) null else resources.getString(R.string.no_app_available)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(20.dp),
@@ -175,7 +177,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = context.getString(R.string.github_repo),
+                                    text = resources.getString(R.string.github_repo),
                                     style = MaterialTheme.typography.titleSmall,
                                 )
                                 Text(
@@ -201,7 +203,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
 
 private fun openGithub(context: Context): Boolean {
     return try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_REPO_URL)))
+        context.startActivity(Intent(Intent.ACTION_VIEW, GITHUB_REPO_URL.toUri()))
         true
     } catch (_: ActivityNotFoundException) {
         false

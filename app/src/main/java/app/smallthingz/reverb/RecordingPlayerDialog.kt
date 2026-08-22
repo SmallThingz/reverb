@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.media.AudioAttributes
 import android.media.MediaPlayer
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -118,7 +118,7 @@ fun RecordingPlayerDialog(
         try {
             when (resolveRecordingStorageType(recording)) {
                 RecordingStorageType.FILE -> player.setDataSource(File(recording.id).absolutePath)
-                RecordingStorageType.DOCUMENT -> player.setDataSource(context, Uri.parse(recording.id))
+                RecordingStorageType.DOCUMENT -> player.setDataSource(context, recording.id.toUri())
                 null -> throw IllegalArgumentException("Unknown recording storage type")
             }
             player.prepareAsync()

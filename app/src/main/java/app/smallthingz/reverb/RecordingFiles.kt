@@ -4,12 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -60,20 +63,20 @@ fun getSavedRecordingsDirectory(context: Context): File {
 
 fun getConfiguredExportTreeUri(context: Context): Uri? {
     val raw = getRecorderPreferences(context).getString(PrefKey.EXPORT_DIRECTORY_URI, null) ?: return null
-    return raw.takeIf { it.isNotBlank() }?.let(Uri::parse)
+    return raw.takeIf { it.isNotBlank() }?.toUri()
 }
 
 fun setConfiguredExportTreeUri(
     context: Context,
     treeUri: Uri?,
 ) {
-    val editor = getRecorderPreferences(context).edit()
-    if (treeUri != null) {
-        editor.putString(PrefKey.EXPORT_DIRECTORY_URI, treeUri.toString())
-    } else {
-        editor.remove(PrefKey.EXPORT_DIRECTORY_URI)
+    getRecorderPreferences(context).edit {
+        if (treeUri != null) {
+            putString(PrefKey.EXPORT_DIRECTORY_URI, treeUri.toString())
+        } else {
+            remove(PrefKey.EXPORT_DIRECTORY_URI)
+        }
     }
-    editor.apply()
 }
 
 fun getConfiguredOutputDirectoryId(context: Context): String {
@@ -117,7 +120,7 @@ fun buildRecordingUri(
             FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         }
 
-        RecordingStorageType.DOCUMENT -> Uri.parse(recording.id)
+        RecordingStorageType.DOCUMENT -> recording.id.toUri()
         null -> throw IllegalArgumentException("Unknown recording storage type: ${recording.storageType}")
     }
 }
@@ -165,7 +168,9 @@ private fun inspectRecordingMedia(file: File): RecordingMediaMetadata {
         RetrievedMediaMetadata(
             durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
             bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
-            sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
+            sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+            } else null,
         )
     }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $file", it) }
         .getOrNull()
@@ -198,7 +203,9 @@ private fun inspectRecordingMedia(
         RetrievedMediaMetadata(
             durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
             bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
-            sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull(),
+            sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+            } else null,
         )
     }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $uri", it) }
         .getOrNull()
@@ -291,7 +298,7 @@ private fun describeDocumentRecordingLocation(
     context: Context,
     recording: RecordingEntity,
 ): String {
-    val documentUri = Uri.parse(recording.id)
+    val documentUri = recording.id.toUri()
     val directoryUri = recording.directoryId.takeIf { it.isNotBlank() }?.let(Uri::parse)
 
     describeDocumentIdPath(context, runCatching {
@@ -551,7 +558,7 @@ internal fun recordingAssetState(
         }
 
         RecordingStorageType.DOCUMENT -> {
-            val uri = runCatching { Uri.parse(recording.id) }.getOrNull()
+            val uri = runCatching { recording.id.toUri() }.getOrNull()
                 ?: return RecordingAssetState.MISSING
             try {
                 context.contentResolver.query(
@@ -591,7 +598,7 @@ fun deleteRecordingAsset(
         }
 
         RecordingStorageType.DOCUMENT -> runCatching {
-            val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id))
+            val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
             document?.delete() == true || recordingAssetState(context, recording) == RecordingAssetState.MISSING
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
         null -> true
@@ -637,7 +644,7 @@ fun copyRecordingToConfiguredDirectory(
                 .getOrNull()
                 ?.takeIf { it > 0L }
             RecordingStorageType.DOCUMENT -> {
-                val uri = Uri.parse(recording.id)
+                val uri = recording.id.toUri()
                 runCatching {
                     context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
                         descriptor.statSize.takeIf { it > 0L }
@@ -648,7 +655,7 @@ fun copyRecordingToConfiguredDirectory(
         }
         val input = when (resolveRecordingStorageType(recording)) {
             RecordingStorageType.FILE -> FileInputStream(File(recording.id))
-            RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(Uri.parse(recording.id))
+            RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(recording.id.toUri())
             null -> throw IOException("Unknown recording storage type: ${recording.storageType}")
         } ?: throw IOException("Unable to open source recording")
         var copiedBytes = 0L
@@ -696,9 +703,9 @@ fun copyRecordingToConfiguredDirectory(
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
         runCatching {
             when (target?.storageType) {
-                RecordingStorageType.FILE -> target?.file?.delete()
+                RecordingStorageType.FILE -> target.file?.delete()
                 RecordingStorageType.DOCUMENT -> {
-                    target?.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
+                    target.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
                 }
                 null -> Unit
             }
@@ -861,8 +868,8 @@ private fun renameDocumentRecording(
     displayName: String,
 ): RecordingEntity? {
     return runCatching {
-        val document = DocumentFile.fromSingleUri(context, Uri.parse(recording.id)) ?: return@runCatching null
-        val tree = DocumentFile.fromTreeUri(context, Uri.parse(recording.directoryId)) ?: return@runCatching null
+        val document = DocumentFile.fromSingleUri(context, recording.id.toUri()) ?: return@runCatching null
+        val tree = DocumentFile.fromTreeUri(context, recording.directoryId.toUri()) ?: return@runCatching null
         val uniqueName = findAvailableDisplayName(displayName) { candidate ->
             candidate != document.name && tree.findFile(candidate) != null
         }

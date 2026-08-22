@@ -18,7 +18,6 @@ local.properties
 .kotlin/
 lint-baseline.xml
 */lint-baseline.xml
-app/lint.xml
 
 # Local tooling
 .codex

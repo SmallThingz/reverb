@@ -23,6 +23,7 @@ import android.os.SystemClock
 import android.util.Log
 
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileDescriptor
@@ -425,9 +426,9 @@ class ReverbService : Service() {
     }
 
     private fun failListeningStart() {
-        getRecorderPreferences(this).edit()
-            .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .commit()
+        getRecorderPreferences(this).edit(commit = true) {
+            putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+        }
         state = STATE_READY
         updateWakeLockState()
         reportError(getString(R.string.audio_input_init_failed))
@@ -1201,9 +1202,9 @@ class ReverbService : Service() {
 
     private fun failListeningOnAudioThread(message: String, error: Throwable?) {
         check(audioHandler.looper == Looper.myLooper())
-        getRecorderPreferences(this).edit()
-            .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .commit()
+        getRecorderPreferences(this).edit(commit = true) {
+            putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+        }
         state = STATE_READY
         audioHandler.removeCallbacks(audioReader)
         runCatching { sealActiveChunks() }
@@ -1334,6 +1335,7 @@ class ReverbService : Service() {
             get() = this@ReverbService
     }
 
+    @SuppressLint("InlinedApi")
     override fun onStartCommand(
         intent: Intent?,
         flags: Int,
@@ -1634,7 +1636,6 @@ class ReverbService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val notificationManager = getSystemService(NotificationManager::class.java) ?: return
         notificationManager.createNotificationChannel(
             NotificationChannel(
@@ -1645,6 +1646,7 @@ class ReverbService : Service() {
         )
     }
 
+    @SuppressLint("WakelockTimeout")
     private fun updateWakeLockState() {
         if (!isWakeLockEnabled(this)) {
             releaseWakeLock()

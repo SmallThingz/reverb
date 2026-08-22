@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -183,13 +185,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("BatteryLife")
     private fun openBatteryOptimizationSettings() {
         val intents = listOf(
             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
+                data = "package:$packageName".toUri()
             },
             Intent("android.settings.VIEW_ADVANCED_POWER_USAGE_DETAIL").apply {
-                data = Uri.parse("package:$packageName")
+                data = "package:$packageName".toUri()
                 putExtra("package_name", packageName)
                 putExtra("packageName", packageName)
             },
@@ -200,7 +203,6 @@ class MainActivity : ComponentActivity() {
             Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS),
         )
         val launched = intents.any { intent ->
-            if (intent.resolveActivity(packageManager) == null) return@any false
             runCatching {
                 startActivity(intent)
                 true

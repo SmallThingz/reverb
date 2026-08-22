@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MissingTranslation">
     <string name="app_name" translatable="false">Reverb</string>
     <string name="recording_saved">Saved</string>
     <string name="error_during_writing_history_into">Error writing audio history: </string>
     <string name="cant_create_file_generic">Couldn\'t create file.</string>
     <string name="clear_buffer">Clear</string>
-    <string name="clear_history_title">Discard history?</string>
     <string name="clear_one_shot_title">Discard one-shot?</string>
     <string name="clear_loop_title">Discard loop?</string>
     <string name="buffer_one_shot">One-shot</string>

@@ -70,6 +70,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -129,15 +130,13 @@ class NotifyFileReceiver(
 }
 
 fun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(
-                ReverbService.NOTIFICATION_CHANNEL_ID,
-                context.getString(R.string.app_name),
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ),
-        )
-    }
+    context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+        NotificationChannel(
+            ReverbService.NOTIFICATION_CHANNEL_ID,
+            context.getString(R.string.app_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ),
+    )
     val intent = buildOpenRecordingIntent(context, recording)
     val pendingIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE)
     return NotificationCompat.Builder(context, ReverbService.NOTIFICATION_CHANNEL_ID)
@@ -183,6 +182,7 @@ fun CaptureScreen(
     onRecordingSaved: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -270,7 +270,7 @@ fun CaptureScreen(
                 if (isSaving) {
                     isSaving = false
                     saveStatus = null
-                    errorMessage = context.getString(R.string.save_failed)
+                    errorMessage = resources.getString(R.string.save_failed)
                 }
                 service = null
             }
@@ -480,7 +480,7 @@ fun CaptureScreen(
                         if (snapshot == null || snapshot.durationSeconds <= 0.0) {
                             snapshot?.close()
                             AppFeedbackCenter.post(
-                                context.getString(R.string.nothing_to_export),
+                                resources.getString(R.string.nothing_to_export),
                                 FeedbackTone.INFO,
                             )
                             return@acquireTimelineSnapshot
@@ -539,14 +539,14 @@ fun CaptureScreen(
                                 } else {
                                     snapshot?.close()
                                     AppFeedbackCenter.post(
-                                        context.getString(R.string.nothing_to_export),
+                                        resources.getString(R.string.nothing_to_export),
                                         FeedbackTone.INFO,
                                     )
                                 }
                             }
                         } else {
                             AppFeedbackCenter.post(
-                                context.getString(R.string.nothing_to_export),
+                                resources.getString(R.string.nothing_to_export),
                                 FeedbackTone.INFO,
                             )
                         }
@@ -654,6 +654,7 @@ private fun MainCaptureContent(
     onOpenLibrary: () -> Unit,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val retentionMode = getConfiguredRetentionMode(context)
     val selectedMetrics = when (selectedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
@@ -684,7 +685,10 @@ private fun MainCaptureContent(
         selectedBuffer, retentionMode, overExportLimit, currentBytes,
         displayedCurrentSeconds, exportLimitBytes, context,
     ) {
-        val exportLimitSummary = context.getString(R.string.export_limit_summary, formatShortFileSize(exportLimitBytes))
+        val exportLimitSummary = resources.getString(
+            R.string.export_limit_summary,
+            formatShortFileSize(exportLimitBytes),
+        )
         when {
             overExportLimit -> exportLimitSummary
             selectedBuffer == ReverbService.BufferSlot.ONE_SHOT -> formatShortFileSize(currentBytes)
@@ -930,13 +934,13 @@ private fun AudioBlobControl(
     isListening: Boolean,
     isSaving: Boolean,
     blobController: AudioBlobController,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     primaryText: String? = null,
     secondaryText: String? = null,
     showWarning: Boolean = false,
     visualizerVisible: Boolean = true,
-    modifier: Modifier = Modifier.size(236.dp),
-    onClick: () -> Unit,
 ) {
     val active = isListening
     val interactionSource = remember { MutableInteractionSource() }
@@ -1175,6 +1179,7 @@ private fun ExportRangeDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val availableSeconds = remember { currentBufferSeconds.coerceAtLeast(0f) }
     val maxSeconds = availableSeconds.coerceAtLeast(1f)
     var rangeStart by remember { mutableFloatStateOf(0f) }
@@ -1212,12 +1217,12 @@ private fun ExportRangeDialog(
         val parsedStart = parseDurationInput(startText)?.toFloat()
         val parsedEnd = parseDurationInput(endText)?.toFloat()
         startError = if (parsedStart == null || parsedStart < 0f || parsedStart >= availableSeconds) {
-            context.getString(R.string.custom_export_range_invalid)
+            resources.getString(R.string.custom_export_range_invalid)
         } else null
         endError = if (parsedEnd == null || parsedEnd <= 0f || parsedEnd > availableSeconds ||
             (parsedStart != null && parsedEnd <= parsedStart)
         ) {
-            context.getString(R.string.custom_export_range_invalid)
+            resources.getString(R.string.custom_export_range_invalid)
         } else null
         if (startError == null && endError == null && parsedStart != null && parsedEnd != null) {
             rangeStart = parsedStart

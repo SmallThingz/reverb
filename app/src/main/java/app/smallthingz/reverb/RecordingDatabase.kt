@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.Cursor
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 
 data class RecordingEntity(
     val id: String,
@@ -114,15 +115,11 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         ) {
             if (upserts.isEmpty() && deleteIds.isEmpty()) return
             val db = writableDatabase
-            db.beginTransaction()
-            try {
+            db.transaction {
                 upserts.forEach { recording ->
                     db.upsertRecording(recording)
                 }
                 db.deleteIds(deleteIds)
-                db.setTransactionSuccessful()
-            } finally {
-                db.endTransaction()
             }
         }
     }

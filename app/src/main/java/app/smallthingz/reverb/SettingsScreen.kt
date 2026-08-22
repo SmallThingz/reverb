@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.ComponentName
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
@@ -42,6 +43,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,12 +55,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
@@ -115,6 +120,7 @@ fun SettingsScreen(
     onThemeChanged: (AppThemeMode) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
 
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
@@ -137,9 +143,9 @@ fun SettingsScreen(
 
     var activeRetentionMode by remember { mutableStateOf(RetentionMode.TIME) }
     var oneShotRetentionTimeSecondsValue by remember { mutableIntStateOf(0) }
-    var oneShotRetentionSizeMbValue by remember { mutableStateOf(0.0) }
+    var oneShotRetentionSizeMbValue by remember { mutableDoubleStateOf(0.0) }
     var loopingRetentionTimeSecondsValue by remember { mutableIntStateOf(0) }
-    var loopingRetentionSizeMbValue by remember { mutableStateOf(0.0) }
+    var loopingRetentionSizeMbValue by remember { mutableDoubleStateOf(0.0) }
     var selectedExportTreeUri by remember { mutableStateOf<Uri?>(null) }
 
     // Available options lists (recomputed on changes)
@@ -161,33 +167,33 @@ fun SettingsScreen(
     var oneShotRetentionSizeError by remember { mutableStateOf<String?>(null) }
     var loopingRetentionTimeError by remember { mutableStateOf<String?>(null) }
     var loopingRetentionSizeError by remember { mutableStateOf<String?>(null) }
-    var computedExportLimitSeconds by remember { mutableStateOf(0L) }
-    var oneShotComputedSizeMb by remember { mutableStateOf(0.0) }
-    var loopingComputedSizeMb by remember { mutableStateOf(0.0) }
+    var computedExportLimitSeconds by remember { mutableLongStateOf(0L) }
+    var oneShotComputedSizeMb by remember { mutableDoubleStateOf(0.0) }
+    var loopingComputedSizeMb by remember { mutableDoubleStateOf(0.0) }
     var exportPathText by remember { mutableStateOf("") }
     var canMove by remember { mutableStateOf(false) }
     var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
 
     // Pre-computed label lists
-    val themeLabels = remember { AppThemeMode.entries.map { context.getString(it.labelRes) } }
-    var formatLabels by remember { mutableStateOf(availableFormats.map { context.getString(it.labelRes) }) }
+    val themeLabels = remember { AppThemeMode.entries.map { resources.getString(it.labelRes) } }
+    var formatLabels by remember { mutableStateOf(availableFormats.map { resources.getString(it.labelRes) }) }
     var sampleFormatLabels by remember {
-        mutableStateOf(PcmSampleFormat.entries.map { context.getString(it.labelRes) })
+        mutableStateOf(PcmSampleFormat.entries.map { resources.getString(it.labelRes) })
     }
-    var sourceLabels by remember { mutableStateOf(availableSourceModes.map { context.getString(it.labelRes) }) }
-    var channelModeLabels by remember { mutableStateOf(ChannelMode.entries.map { context.getString(it.labelRes) }) }
-    var routeLabels by remember { mutableStateOf(InputRouteMode.entries.map { context.getString(it.labelRes) }) }
+    var sourceLabels by remember { mutableStateOf(availableSourceModes.map { resources.getString(it.labelRes) }) }
+    var channelModeLabels by remember { mutableStateOf(ChannelMode.entries.map { resources.getString(it.labelRes) }) }
+    var routeLabels by remember { mutableStateOf(InputRouteMode.entries.map { resources.getString(it.labelRes) }) }
     var sampleRateLabels by remember { mutableStateOf(emptyList<String>()) }
 
     // Selection labels
-    var selectedThemeLabel by remember { mutableStateOf(context.getString(AppThemeMode.SYSTEM.labelRes)) }
-    var selectedFormatLabel by remember { mutableStateOf(context.getString(supportedFormats().first().labelRes)) }
-    var selectedSampleFormatLabel by remember { mutableStateOf(context.getString(PcmSampleFormat.PCM_16.labelRes)) }
+    var selectedThemeLabel by remember { mutableStateOf(resources.getString(AppThemeMode.SYSTEM.labelRes)) }
+    var selectedFormatLabel by remember { mutableStateOf(resources.getString(supportedFormats().first().labelRes)) }
+    var selectedSampleFormatLabel by remember { mutableStateOf(resources.getString(PcmSampleFormat.PCM_16.labelRes)) }
     var selectedSourceLabel by remember {
-        mutableStateOf(context.getString(AudioSourceMode.availableModes().first().labelRes))
+        mutableStateOf(resources.getString(AudioSourceMode.availableModes().first().labelRes))
     }
-    var selectedChannelModeLabel by remember { mutableStateOf(context.getString(ChannelMode.MONO.labelRes)) }
-    var selectedRouteLabel by remember { mutableStateOf(context.getString(InputRouteMode.AUTO.labelRes)) }
+    var selectedChannelModeLabel by remember { mutableStateOf(resources.getString(ChannelMode.MONO.labelRes)) }
+    var selectedRouteLabel by remember { mutableStateOf(resources.getString(InputRouteMode.AUTO.labelRes)) }
     var selectedSampleRateLabel by remember { mutableStateOf(sampleRateLabel(48_000)) }
 
     fun refreshExportDirectoryUi() {
@@ -238,8 +244,8 @@ fun SettingsScreen(
         availableChannelModes = ChannelMode.entries
         val cm = preferredChannelMode?.takeIf { it in availableChannelModes } ?: availableChannelModes.first()
         selectedChannelMode = cm
-        channelModeLabels = availableChannelModes.map { context.getString(it.labelRes) }
-        selectedChannelModeLabel = context.getString(cm.labelRes)
+        channelModeLabels = availableChannelModes.map { resources.getString(it.labelRes) }
+        selectedChannelModeLabel = resources.getString(cm.labelRes)
         refreshSampleRates(preferredRate)
     }
 
@@ -251,8 +257,8 @@ fun SettingsScreen(
         availableSourceModes = AudioSourceMode.availableModes()
         val s = preferredSource?.takeIf { it in availableSourceModes } ?: availableSourceModes.first()
         selectedSource = s
-        sourceLabels = availableSourceModes.map { context.getString(it.labelRes) }
-        selectedSourceLabel = context.getString(s.labelRes)
+        sourceLabels = availableSourceModes.map { resources.getString(it.labelRes) }
+        selectedSourceLabel = resources.getString(s.labelRes)
         refreshChannelModes(preferredChannelMode, preferredRate)
     }
 
@@ -389,19 +395,19 @@ fun SettingsScreen(
         }
 
         selectedTheme = prev.themeMode
-        selectedThemeLabel = context.getString(prev.themeMode.labelRes)
+        selectedThemeLabel = resources.getString(prev.themeMode.labelRes)
         onThemeChanged(prev.themeMode)
         selectedFormat = prev.format ?: availableFormats.first()
-        selectedFormatLabel = context.getString((prev.format ?: availableFormats.first()).labelRes)
+        selectedFormatLabel = resources.getString((prev.format ?: availableFormats.first()).labelRes)
         selectedCodec = prev.codec ?: availableCodecs.first()
         selectedRoute = prev.route ?: availableRouteModes.first()
-        selectedRouteLabel = context.getString((prev.route ?: availableRouteModes.first()).labelRes)
+        selectedRouteLabel = resources.getString((prev.route ?: availableRouteModes.first()).labelRes)
         selectedSampleFormat = prev.sampleFormat
-        selectedSampleFormatLabel = context.getString(selectedSampleFormat.labelRes)
+        selectedSampleFormatLabel = resources.getString(selectedSampleFormat.labelRes)
         selectedSource = prev.source ?: availableSourceModes.first()
-        selectedSourceLabel = context.getString(selectedSource.labelRes)
+        selectedSourceLabel = resources.getString(selectedSource.labelRes)
         selectedChannelMode = prev.channelMode ?: ChannelMode.MONO
-        selectedChannelModeLabel = context.getString(selectedChannelMode.labelRes)
+        selectedChannelModeLabel = resources.getString(selectedChannelMode.labelRes)
         selectedSampleRate = prev.sampleRate.takeIf { it > 0 } ?: selectedSampleRate
         selectedSampleRateLabel = sampleRateLabel(selectedSampleRate)
 
@@ -440,7 +446,7 @@ fun SettingsScreen(
             oneShotRetentionTimeSecondsValue
         }
         if (oneShotRetentionTime == null || oneShotRetentionTime <= 0) {
-            oneShotRetentionTimeError = context.getString(R.string.retention_time_invalid)
+            oneShotRetentionTimeError = resources.getString(R.string.retention_time_invalid)
             return false
         }
 
@@ -450,7 +456,7 @@ fun SettingsScreen(
             loopingRetentionTimeSecondsValue
         }
         if (loopingRetentionTime == null || loopingRetentionTime <= 0) {
-            loopingRetentionTimeError = context.getString(R.string.retention_time_invalid)
+            loopingRetentionTimeError = resources.getString(R.string.retention_time_invalid)
             return false
         }
 
@@ -460,7 +466,7 @@ fun SettingsScreen(
             oneShotRetentionSizeMbValue
         }
         if (oneShotSizeMb == null || oneShotSizeMb <= 0.0) {
-            oneShotRetentionSizeError = context.getString(R.string.custom_memory_size_invalid)
+            oneShotRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
             return false
         }
 
@@ -470,7 +476,7 @@ fun SettingsScreen(
             loopingRetentionSizeMbValue
         }
         if (loopingSizeMb == null || loopingSizeMb <= 0.0) {
-            loopingRetentionSizeError = context.getString(R.string.custom_memory_size_invalid)
+            loopingRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
             return false
         }
 
@@ -503,7 +509,7 @@ fun SettingsScreen(
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
         if (!settingsEditor.commit()) {
-            AppFeedbackCenter.post(context.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }
         RecordingRepository.releasePendingDirectoryAndCleanup(context, selectedExportTreeUri)
@@ -550,21 +556,21 @@ fun SettingsScreen(
         selectedExportTreeUri = configuredExportTreeUriVal
 
         selectedTheme = configuredThemeMode
-        selectedThemeLabel = context.getString(configuredThemeMode.labelRes)
+        selectedThemeLabel = resources.getString(configuredThemeMode.labelRes)
 
         availableFormats = supportedFormats()
         selectedFormat = configuredFormat.takeIf { it in availableFormats } ?: availableFormats.first()
-        formatLabels = availableFormats.map { context.getString(it.labelRes) }
-        selectedFormatLabel = context.getString(selectedFormat.labelRes)
+        formatLabels = availableFormats.map { resources.getString(it.labelRes) }
+        selectedFormatLabel = resources.getString(selectedFormat.labelRes)
 
         availableRouteModes = InputRouteMode.entries
         selectedRoute = configuredRouteVal
-        routeLabels = availableRouteModes.map { context.getString(it.labelRes) }
-        selectedRouteLabel = context.getString(configuredRouteVal.labelRes)
+        routeLabels = availableRouteModes.map { resources.getString(it.labelRes) }
+        selectedRouteLabel = resources.getString(configuredRouteVal.labelRes)
 
         selectedSampleFormat = configuredSampleFormatVal
-        sampleFormatLabels = PcmSampleFormat.entries.map { context.getString(it.labelRes) }
-        selectedSampleFormatLabel = context.getString(configuredSampleFormatVal.labelRes)
+        sampleFormatLabels = PcmSampleFormat.entries.map { resources.getString(it.labelRes) }
+        selectedSampleFormatLabel = resources.getString(configuredSampleFormatVal.labelRes)
 
         refreshCodecOptions(
             preferredCodec = configuredCodec,
@@ -596,7 +602,7 @@ fun SettingsScreen(
         }.isSuccess
         if (!permissionTaken) {
             RecordingRepository.releasePendingDirectoryAndCleanup(context, treeUri)
-            AppFeedbackCenter.post(context.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
         val previousTreeUri = selectedExportTreeUri
@@ -650,15 +656,16 @@ fun SettingsScreen(
         }
     }
 
+    @SuppressLint("BatteryLife")
     fun openBatteryOptimizationSettings() {
         val intents = buildList {
             if (!isIgnoringBatteryOptimizations(context)) {
                 add(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:${context.packageName}")
+                    data = "package:${context.packageName}".toUri()
                 })
             }
             add(Intent("android.settings.VIEW_ADVANCED_POWER_USAGE_DETAIL").apply {
-                data = Uri.parse("package:${context.packageName}")
+                data = "package:${context.packageName}".toUri()
                 putExtra("package_name", context.packageName)
                 putExtra("packageName", context.packageName)
             })
@@ -669,10 +676,9 @@ fun SettingsScreen(
             add(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS))
         }
         val launched = intents.any { intent ->
-            if (intent.resolveActivity(context.packageManager) == null) return@any false
             runCatching { context.startActivity(intent); true }.getOrDefault(false)
         }
-        if (!launched) AppFeedbackCenter.post(context.getString(R.string.no_app_available), FeedbackTone.ERROR)
+        if (!launched) AppFeedbackCenter.post(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
     }
 
     fun moveExistingRecordings() {
@@ -684,23 +690,23 @@ fun SettingsScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                AppFeedbackCenter.post(context.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(resources.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
                 refreshMoveRecordingsAvailability()
                 return@launch
             }
             val message = when {
-                result.moved == 0 && result.removedMissing == 0 -> context.getString(R.string.move_recordings_none)
+                result.moved == 0 && result.removedMissing == 0 -> resources.getString(R.string.move_recordings_none)
                 result.removedMissing > 0 -> {
-                    val movedMessage = context.resources.getQuantityString(
+                    val movedMessage = resources.getQuantityString(
                         R.plurals.move_recordings_done, result.moved, result.moved,
                     )
-                    val removedMessage = context.resources.getQuantityString(
+                    val removedMessage = resources.getQuantityString(
                         R.plurals.move_recordings_removed_missing,
                         result.removedMissing, result.removedMissing,
                     )
                     "$movedMessage $removedMessage"
                 }
-                else -> context.resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved)
+                else -> resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved)
             }
             refreshMoveRecordingsAvailability()
             AppFeedbackCenter.post(message, FeedbackTone.SUCCESS)
@@ -780,7 +786,7 @@ fun SettingsScreen(
                 options = themeLabels,
                 onOptionSelected = { label ->
                     selectedThemeLabel = label
-                    selectedTheme = AppThemeMode.entries.first { context.getString(it.labelRes) == label }
+                    selectedTheme = AppThemeMode.entries.first { resources.getString(it.labelRes) == label }
                     onThemeChanged(selectedTheme)
                     saveCurrentToSnapshot(currentSnapshot)
                     pushUndoState()
@@ -880,7 +886,7 @@ fun SettingsScreen(
                         options = formatLabels,
                         onOptionSelected = { label ->
                             selectedFormatLabel = label
-                            selectedFormat = availableFormats.first { context.getString(it.labelRes) == label }
+                            selectedFormat = availableFormats.first { resources.getString(it.labelRes) == label }
                             refreshCodecOptions(
                                 preferredCodec = selectedCodec,
                                 preferredSource = selectedSource,
@@ -902,7 +908,7 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedChannelModeLabel = label
                             selectedChannelMode = availableChannelModes.first {
-                                context.getString(it.labelRes) == label
+                                resources.getString(it.labelRes) == label
                             }
                             refreshSampleRates(selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
@@ -925,7 +931,7 @@ fun SettingsScreen(
                         onOptionSelected = { label ->
                             selectedSampleFormatLabel = label
                             selectedSampleFormat = PcmSampleFormat.entries.first {
-                                context.getString(it.labelRes) == label
+                                resources.getString(it.labelRes) == label
                             }
                             refreshSourceModes(
                                 preferredSource = selectedSource,
@@ -967,7 +973,7 @@ fun SettingsScreen(
                         options = sourceLabels,
                         onOptionSelected = { label ->
                             selectedSourceLabel = label
-                            selectedSource = availableSourceModes.first { context.getString(it.labelRes) == label }
+                            selectedSource = availableSourceModes.first { resources.getString(it.labelRes) == label }
                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
@@ -983,7 +989,7 @@ fun SettingsScreen(
                         options = routeLabels,
                         onOptionSelected = { label ->
                             selectedRouteLabel = label
-                            selectedRoute = availableRouteModes.first { context.getString(it.labelRes) == label }
+                            selectedRoute = availableRouteModes.first { resources.getString(it.labelRes) == label }
                             refreshSourceModes(
                                 preferredSource = selectedSource,
                                 preferredChannelMode = selectedChannelMode,
@@ -1272,11 +1278,11 @@ private fun SettingsTextField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
     error: String? = null,
     prefix: String? = null,
     supportingText: @Composable (() -> Unit)? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-    modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
         value = value,
