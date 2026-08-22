@@ -75,8 +75,10 @@ private val retentionSizeFormatter =
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     var retentionMode: RetentionMode = RetentionMode.TIME,
-    var retentionTime: Int = 0,
-    var retentionSizeMb: Double = 0.0,
+    var oneShotRetentionTime: Int = 0,
+    var oneShotRetentionSizeMb: Double = 0.0,
+    var loopingRetentionTime: Int = 0,
+    var loopingRetentionSizeMb: Double = 0.0,
     var format: ExportFormat? = null,
     var codec: ExportCodec? = null,
     var sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
@@ -90,8 +92,10 @@ data class SettingsSnapshot(
     fun copyFrom(other: SettingsSnapshot) {
         themeMode = other.themeMode
         retentionMode = other.retentionMode
-        retentionTime = other.retentionTime
-        retentionSizeMb = other.retentionSizeMb
+        oneShotRetentionTime = other.oneShotRetentionTime
+        oneShotRetentionSizeMb = other.oneShotRetentionSizeMb
+        loopingRetentionTime = other.loopingRetentionTime
+        loopingRetentionSizeMb = other.loopingRetentionSizeMb
         format = other.format
         codec = other.codec
         sampleFormat = other.sampleFormat
@@ -132,8 +136,10 @@ fun SettingsScreen(
     var selectedSampleRate by remember { mutableIntStateOf(48_000) }
 
     var activeRetentionMode by remember { mutableStateOf(RetentionMode.TIME) }
-    var retentionTimeSecondsValue by remember { mutableIntStateOf(0) }
-    var retentionSizeMbValue by remember { mutableStateOf(0.0) }
+    var oneShotRetentionTimeSecondsValue by remember { mutableIntStateOf(0) }
+    var oneShotRetentionSizeMbValue by remember { mutableStateOf(0.0) }
+    var loopingRetentionTimeSecondsValue by remember { mutableIntStateOf(0) }
+    var loopingRetentionSizeMbValue by remember { mutableStateOf(0.0) }
     var selectedExportTreeUri by remember { mutableStateOf<Uri?>(null) }
 
     // Available options lists (recomputed on changes)
@@ -145,14 +151,19 @@ fun SettingsScreen(
     var availableSampleRates by remember { mutableStateOf(standardSampleRates()) }
 
     // Text inputs
-    var retentionTimeText by remember { mutableStateOf("") }
-    var retentionSizeText by remember { mutableStateOf("") }
+    var oneShotRetentionTimeText by remember { mutableStateOf("") }
+    var oneShotRetentionSizeText by remember { mutableStateOf("") }
+    var loopingRetentionTimeText by remember { mutableStateOf("") }
+    var loopingRetentionSizeText by remember { mutableStateOf("") }
 
     // Errors
-    var retentionTimeError by remember { mutableStateOf<String?>(null) }
-    var retentionSizeError by remember { mutableStateOf<String?>(null) }
+    var oneShotRetentionTimeError by remember { mutableStateOf<String?>(null) }
+    var oneShotRetentionSizeError by remember { mutableStateOf<String?>(null) }
+    var loopingRetentionTimeError by remember { mutableStateOf<String?>(null) }
+    var loopingRetentionSizeError by remember { mutableStateOf<String?>(null) }
     var computedExportLimitSeconds by remember { mutableStateOf(0L) }
-    var computedExportSizeMb by remember { mutableStateOf(0.0) }
+    var oneShotComputedSizeMb by remember { mutableStateOf(0.0) }
+    var loopingComputedSizeMb by remember { mutableStateOf(0.0) }
     var exportPathText by remember { mutableStateOf("") }
     var canMove by remember { mutableStateOf(false) }
     var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
@@ -260,8 +271,10 @@ fun SettingsScreen(
     fun saveCurrentToSnapshot(snapshot: SettingsSnapshot) {
         snapshot.themeMode = selectedTheme
         snapshot.retentionMode = activeRetentionMode
-        snapshot.retentionTime = retentionTimeSecondsValue
-        snapshot.retentionSizeMb = retentionSizeMbValue
+        snapshot.oneShotRetentionTime = oneShotRetentionTimeSecondsValue
+        snapshot.oneShotRetentionSizeMb = oneShotRetentionSizeMbValue
+        snapshot.loopingRetentionTime = loopingRetentionTimeSecondsValue
+        snapshot.loopingRetentionSizeMb = loopingRetentionSizeMbValue
         snapshot.format = selectedFormat
         snapshot.codec = selectedCodec
         snapshot.sampleFormat = selectedSampleFormat
@@ -279,10 +292,16 @@ fun SettingsScreen(
 
     fun updateRetentionValuesFromActiveInput() {
         when (activeRetentionMode) {
-            RetentionMode.TIME -> parseDurationInput(retentionTimeText.trim())?.let { retentionTimeSecondsValue = it }
-            RetentionMode.SIZE ->
-                parseRetentionSizeMib(retentionSizeText.trim())?.takeIf { it > 0.0 }
-                    ?.let { retentionSizeMbValue = it }
+            RetentionMode.TIME -> {
+                parseDurationInput(oneShotRetentionTimeText.trim())?.let { oneShotRetentionTimeSecondsValue = it }
+                parseDurationInput(loopingRetentionTimeText.trim())?.let { loopingRetentionTimeSecondsValue = it }
+            }
+            RetentionMode.SIZE -> {
+                parseRetentionSizeMib(oneShotRetentionSizeText.trim())?.takeIf { it > 0.0 }
+                    ?.let { oneShotRetentionSizeMbValue = it }
+                parseRetentionSizeMib(loopingRetentionSizeText.trim())?.takeIf { it > 0.0 }
+                    ?.let { loopingRetentionSizeMbValue = it }
+            }
         }
     }
 
@@ -290,8 +309,14 @@ fun SettingsScreen(
         val sr = selectedSampleRate
         if (sr <= 0) {
             computedExportLimitSeconds = 0
-            computedExportSizeMb = 0.0
-            if (!preserveActiveInputs) { retentionTimeText = ""; retentionSizeText = "" }
+            oneShotComputedSizeMb = 0.0
+            loopingComputedSizeMb = 0.0
+            if (!preserveActiveInputs) {
+                oneShotRetentionTimeText = ""
+                oneShotRetentionSizeText = ""
+                loopingRetentionTimeText = ""
+                loopingRetentionSizeText = ""
+            }
             return
         }
         val chCount = selectedChannelMode.channelCount
@@ -300,23 +325,39 @@ fun SettingsScreen(
             selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, selectedSampleFormat,
         )
         computedExportLimitSeconds = exportLimitDurationSeconds
-        val estimatedSizeMb = bytesToMegabytes(
+        oneShotComputedSizeMb = bytesToMegabytes(
             bytesForRetentionSeconds(
-                retentionTimeSecondsValue.toLong(), sr, chCount, selectedSampleFormat,
+                oneShotRetentionTimeSecondsValue.toLong(), sr, chCount, selectedSampleFormat,
             ),
         )
-        computedExportSizeMb = estimatedSizeMb
+        loopingComputedSizeMb = bytesToMegabytes(
+            bytesForRetentionSeconds(
+                loopingRetentionTimeSecondsValue.toLong(), sr, chCount, selectedSampleFormat,
+            ),
+        )
 
         if (activeRetentionMode == RetentionMode.TIME) {
-            if (!preserveActiveInputs) retentionTimeText = formatDurationInput(retentionTimeSecondsValue)
-            retentionSizeText = formatRetentionSizeMib(estimatedSizeMb)
+            if (!preserveActiveInputs) {
+                oneShotRetentionTimeText = formatDurationInput(oneShotRetentionTimeSecondsValue)
+                loopingRetentionTimeText = formatDurationInput(loopingRetentionTimeSecondsValue)
+            }
+            oneShotRetentionSizeText = formatRetentionSizeMib(oneShotComputedSizeMb)
+            loopingRetentionSizeText = formatRetentionSizeMib(loopingComputedSizeMb)
         } else {
-            retentionTimeText = formatDurationInput(
+            oneShotRetentionTimeText = formatDurationInput(
                 retentionSecondsForBytes(
-                    rawMegabytesToBytes(retentionSizeMbValue), sr, chCount, selectedSampleFormat,
+                    rawMegabytesToBytes(oneShotRetentionSizeMbValue), sr, chCount, selectedSampleFormat,
                 ),
             )
-            if (!preserveActiveInputs) retentionSizeText = formatRetentionSizeMib(retentionSizeMbValue)
+            loopingRetentionTimeText = formatDurationInput(
+                retentionSecondsForBytes(
+                    rawMegabytesToBytes(loopingRetentionSizeMbValue), sr, chCount, selectedSampleFormat,
+                ),
+            )
+            if (!preserveActiveInputs) {
+                oneShotRetentionSizeText = formatRetentionSizeMib(oneShotRetentionSizeMbValue)
+                loopingRetentionSizeText = formatRetentionSizeMib(loopingRetentionSizeMbValue)
+            }
         }
     }
 
@@ -332,12 +373,16 @@ fun SettingsScreen(
         if (!hasUnsavedChanges) return
         val prev = originalSnapshot
         val abandonedExportTreeUri = selectedExportTreeUri
-        retentionTimeError = null
-        retentionSizeError = null
+        oneShotRetentionTimeError = null
+        oneShotRetentionSizeError = null
+        loopingRetentionTimeError = null
+        loopingRetentionSizeError = null
 
         activeRetentionMode = prev.retentionMode
-        retentionTimeSecondsValue = prev.retentionTime
-        retentionSizeMbValue = prev.retentionSizeMb
+        oneShotRetentionTimeSecondsValue = prev.oneShotRetentionTime
+        oneShotRetentionSizeMbValue = prev.oneShotRetentionSizeMb
+        loopingRetentionTimeSecondsValue = prev.loopingRetentionTime
+        loopingRetentionSizeMbValue = prev.loopingRetentionSizeMb
         selectedExportTreeUri = prev.exportDirectoryUri?.let(Uri::parse)
         if (abandonedExportTreeUri != selectedExportTreeUri) {
             RecordingRepository.releasePendingDirectoryAndCleanup(context, abandonedExportTreeUri)
@@ -376,8 +421,10 @@ fun SettingsScreen(
     }
 
     fun persistSettings(): Boolean {
-        retentionTimeError = null
-        retentionSizeError = null
+        oneShotRetentionTimeError = null
+        oneShotRetentionSizeError = null
+        loopingRetentionTimeError = null
+        loopingRetentionSizeError = null
 
         val format = selectedFormat
         val codec = selectedCodec
@@ -387,37 +434,62 @@ fun SettingsScreen(
         val source = selectedSource
         val sampleRate = selectedSampleRate
 
-        val retentionTime = if (activeRetentionMode == RetentionMode.TIME) {
-            parseDurationInput(retentionTimeText.trim())
+        val oneShotRetentionTime = if (activeRetentionMode == RetentionMode.TIME) {
+            parseDurationInput(oneShotRetentionTimeText.trim())
         } else {
-            retentionTimeSecondsValue
+            oneShotRetentionTimeSecondsValue
         }
-        if (retentionTime == null || retentionTime <= 0) {
-            retentionTimeError = context.getString(R.string.retention_time_invalid)
+        if (oneShotRetentionTime == null || oneShotRetentionTime <= 0) {
+            oneShotRetentionTimeError = context.getString(R.string.retention_time_invalid)
             return false
         }
 
-        val sizeMb = if (activeRetentionMode == RetentionMode.SIZE) {
-            parseRetentionSizeMib(retentionSizeText.trim())
+        val loopingRetentionTime = if (activeRetentionMode == RetentionMode.TIME) {
+            parseDurationInput(loopingRetentionTimeText.trim())
         } else {
-            retentionSizeMbValue
+            loopingRetentionTimeSecondsValue
         }
-        if (sizeMb == null || sizeMb <= 0.0) {
-            retentionSizeError = context.getString(R.string.custom_memory_size_invalid)
+        if (loopingRetentionTime == null || loopingRetentionTime <= 0) {
+            loopingRetentionTimeError = context.getString(R.string.retention_time_invalid)
+            return false
+        }
+
+        val oneShotSizeMb = if (activeRetentionMode == RetentionMode.SIZE) {
+            parseRetentionSizeMib(oneShotRetentionSizeText.trim())
+        } else {
+            oneShotRetentionSizeMbValue
+        }
+        if (oneShotSizeMb == null || oneShotSizeMb <= 0.0) {
+            oneShotRetentionSizeError = context.getString(R.string.custom_memory_size_invalid)
+            return false
+        }
+
+        val loopingSizeMb = if (activeRetentionMode == RetentionMode.SIZE) {
+            parseRetentionSizeMib(loopingRetentionSizeText.trim())
+        } else {
+            loopingRetentionSizeMbValue
+        }
+        if (loopingSizeMb == null || loopingSizeMb <= 0.0) {
+            loopingRetentionSizeError = context.getString(R.string.custom_memory_size_invalid)
             return false
         }
 
         if (sampleRate <= 0 || !isCodecSupported(format, codec, sampleRate, channelMode)) return false
 
-        val requestedSizeBytes = rawMegabytesToBytes(sizeMb)
+        val requestedOneShotSizeBytes = rawMegabytesToBytes(oneShotSizeMb)
+        val requestedLoopingSizeBytes = rawMegabytesToBytes(loopingSizeMb)
 
-        retentionTimeSecondsValue = retentionTime
-        retentionSizeMbValue = sizeMb
+        oneShotRetentionTimeSecondsValue = oneShotRetentionTime
+        oneShotRetentionSizeMbValue = oneShotSizeMb
+        loopingRetentionTimeSecondsValue = loopingRetentionTime
+        loopingRetentionSizeMbValue = loopingSizeMb
 
         val settingsEditor = getRecorderPreferences(context).edit()
             .putInt(PrefKey.RETENTION_MODE, activeRetentionMode.ordinal)
-            .putLong(PrefKey.RETENTION_SECONDS, retentionTime.toLong())
-            .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedSizeBytes)
+            .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, oneShotRetentionTime.toLong())
+            .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, requestedOneShotSizeBytes)
+            .putLong(PrefKey.RETENTION_SECONDS, loopingRetentionTime.toLong())
+            .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedLoopingSizeBytes)
             .putString(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.prefValue)
             .putInt(PrefKey.AUDIO_SOURCE, source.sourceValue)
             .putString(PrefKey.CHANNEL_MODE, channelMode.prefValue)
@@ -455,8 +527,12 @@ fun SettingsScreen(
     fun bindUiFromPreferences() {
         val configuredThemeMode = getConfiguredThemeMode(context)
         val configuredMode = getConfiguredRetentionMode(context)
-        val configuredTime = getConfiguredRetentionSeconds(context).coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-        val storedSizeBytes = getConfiguredRetentionSizeBytes(context)
+        val configuredOneShotTime = getConfiguredOneShotRetentionSeconds(context)
+            .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+        val configuredLoopingTime = getConfiguredRetentionSeconds(context)
+            .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+        val storedOneShotSizeBytes = getConfiguredOneShotRetentionSizeBytes(context)
+        val storedLoopingSizeBytes = getConfiguredRetentionSizeBytes(context)
         val configuredFormat = getConfiguredOutputFormat(context)
         val configuredCodec = getConfiguredOutputCodec(context)
         val configuredSampleFormatVal = getConfiguredPcmSampleFormat(context)
@@ -467,8 +543,10 @@ fun SettingsScreen(
         val configuredExportTreeUriVal = getConfiguredExportTreeUri(context)
 
         activeRetentionMode = configuredMode
-        retentionTimeSecondsValue = configuredTime
-        retentionSizeMbValue = bytesToMegabytes(storedSizeBytes)
+        oneShotRetentionTimeSecondsValue = configuredOneShotTime
+        oneShotRetentionSizeMbValue = bytesToMegabytes(storedOneShotSizeBytes)
+        loopingRetentionTimeSecondsValue = configuredLoopingTime
+        loopingRetentionSizeMbValue = bytesToMegabytes(storedLoopingSizeBytes)
         selectedExportTreeUri = configuredExportTreeUriVal
 
         selectedTheme = configuredThemeMode
@@ -717,67 +795,70 @@ fun SettingsScreen(
             item(key = "retention") {
                 Column {
             SectionTitle(stringResource(R.string.retention_mode_title))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                SettingsTextField(
-                    label = stringResource(R.string.retention_time_label),
-                    value = retentionTimeText,
-                    onValueChange = { v ->
-                        retentionTimeText = v
-                        activateRetentionMode(RetentionMode.TIME)
-                        updateRetentionValuesFromActiveInput()
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
-                        pushUndoState()
-                    },
-                    error = retentionTimeError,
-                    prefix = if (activeRetentionMode == RetentionMode.TIME) null else estimatePrefixVal,
-                    supportingText = if (computedExportLimitSeconds > 0) {
-                        {
-                            Text(
-                                stringResource(
-                                    R.string.export_limit_label,
-                                    formatDurationInput(computedExportLimitSeconds),
-                                ),
-                            )
-                        }
-                    } else null,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                    modifier = Modifier
-                        .weight(1f)
-                        .alpha(if (activeRetentionMode == RetentionMode.TIME) 1f else 0.6f)
-                        .onFocusChanged { if (it.isFocused) activateRetentionMode(RetentionMode.TIME) },
-                )
-                SettingsTextField(
-                    label = stringResource(R.string.retention_size_label),
-                    value = retentionSizeText,
-                    onValueChange = { v ->
-                        retentionSizeText = v
-                        activateRetentionMode(RetentionMode.SIZE)
-                        updateRetentionValuesFromActiveInput()
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
-                        pushUndoState()
-                    },
-                    error = retentionSizeError,
-                    prefix = if (activeRetentionMode == RetentionMode.SIZE) null else estimatePrefixVal,
-                    supportingText = if (computedExportSizeMb > 0) {
-                        {
-                            Text(
-                                stringResource(
-                                    R.string.estimated_file_size_label,
-                                    String.format(Locale.US, "%.1f", computedExportSizeMb),
-                                ),
-                            )
-                        }
-                    } else null,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier
-                        .weight(1f)
-                        .alpha(if (activeRetentionMode == RetentionMode.SIZE) 1f else 0.6f)
-                        .onFocusChanged { if (it.isFocused) activateRetentionMode(RetentionMode.SIZE) },
+            BufferRetentionFields(
+                bufferLabel = stringResource(R.string.buffer_one_shot),
+                timeText = oneShotRetentionTimeText,
+                sizeText = oneShotRetentionSizeText,
+                timeError = oneShotRetentionTimeError,
+                sizeError = oneShotRetentionSizeError,
+                computedSizeMb = oneShotComputedSizeMb,
+                activeMode = activeRetentionMode,
+                estimatePrefix = estimatePrefixVal,
+                onTimeChange = { value ->
+                    oneShotRetentionTimeText = value
+                    activateRetentionMode(RetentionMode.TIME)
+                    updateRetentionValuesFromActiveInput()
+                    refreshRetentionFields(preserveActiveInputs = true)
+                    saveCurrentToSnapshot(currentSnapshot)
+                    pushUndoState()
+                },
+                onSizeChange = { value ->
+                    oneShotRetentionSizeText = value
+                    activateRetentionMode(RetentionMode.SIZE)
+                    updateRetentionValuesFromActiveInput()
+                    refreshRetentionFields(preserveActiveInputs = true)
+                    saveCurrentToSnapshot(currentSnapshot)
+                    pushUndoState()
+                },
+                onActivateMode = ::activateRetentionMode,
+            )
+            Spacer(Modifier.height(8.dp))
+            BufferRetentionFields(
+                bufferLabel = stringResource(R.string.buffer_loop),
+                timeText = loopingRetentionTimeText,
+                sizeText = loopingRetentionSizeText,
+                timeError = loopingRetentionTimeError,
+                sizeError = loopingRetentionSizeError,
+                computedSizeMb = loopingComputedSizeMb,
+                activeMode = activeRetentionMode,
+                estimatePrefix = estimatePrefixVal,
+                onTimeChange = { value ->
+                    loopingRetentionTimeText = value
+                    activateRetentionMode(RetentionMode.TIME)
+                    updateRetentionValuesFromActiveInput()
+                    refreshRetentionFields(preserveActiveInputs = true)
+                    saveCurrentToSnapshot(currentSnapshot)
+                    pushUndoState()
+                },
+                onSizeChange = { value ->
+                    loopingRetentionSizeText = value
+                    activateRetentionMode(RetentionMode.SIZE)
+                    updateRetentionValuesFromActiveInput()
+                    refreshRetentionFields(preserveActiveInputs = true)
+                    saveCurrentToSnapshot(currentSnapshot)
+                    pushUndoState()
+                },
+                onActivateMode = ::activateRetentionMode,
+            )
+            if (computedExportLimitSeconds > 0) {
+                Text(
+                    text = stringResource(
+                        R.string.export_limit_label,
+                        formatDurationInput(computedExportLimitSeconds),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
             }
 
@@ -1057,6 +1138,69 @@ private fun ReliabilityRow(
                 )
             }
             trailing?.invoke()
+        }
+    }
+}
+
+@Composable
+private fun BufferRetentionFields(
+    bufferLabel: String,
+    timeText: String,
+    sizeText: String,
+    timeError: String?,
+    sizeError: String?,
+    computedSizeMb: Double,
+    activeMode: RetentionMode,
+    estimatePrefix: String,
+    onTimeChange: (String) -> Unit,
+    onSizeChange: (String) -> Unit,
+    onActivateMode: (RetentionMode) -> Unit,
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Text(
+            text = bufferLabel,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SettingsTextField(
+                label = stringResource(R.string.retention_time_label),
+                value = timeText,
+                onValueChange = onTimeChange,
+                error = timeError,
+                prefix = if (activeMode == RetentionMode.TIME) null else estimatePrefix,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                modifier = Modifier
+                    .weight(1f)
+                    .alpha(if (activeMode == RetentionMode.TIME) 1f else 0.6f)
+                    .onFocusChanged { if (it.isFocused) onActivateMode(RetentionMode.TIME) },
+            )
+            SettingsTextField(
+                label = stringResource(R.string.retention_size_label),
+                value = sizeText,
+                onValueChange = onSizeChange,
+                error = sizeError,
+                prefix = if (activeMode == RetentionMode.SIZE) null else estimatePrefix,
+                supportingText = if (computedSizeMb > 0) {
+                    {
+                        Text(
+                            stringResource(
+                                R.string.estimated_file_size_label,
+                                String.format(Locale.US, "%.1f", computedSizeMb),
+                            ),
+                        )
+                    }
+                } else null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier
+                    .weight(1f)
+                    .alpha(if (activeMode == RetentionMode.SIZE) 1f else 0.6f)
+                    .onFocusChanged { if (it.isFocused) onActivateMode(RetentionMode.SIZE) },
+            )
         }
     }
 }

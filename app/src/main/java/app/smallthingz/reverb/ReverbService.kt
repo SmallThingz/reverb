@@ -125,6 +125,7 @@ class ReverbService : Service() {
             this,
             cacheFolderName = ReverbConfig.ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
             legacyCacheFolderName = null,
+            overwriteOldest = false,
         )
         createNotificationChannel()
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
@@ -731,6 +732,7 @@ class ReverbService : Service() {
             return
         }
         val startedAtMillis = lease.startedAtMillis
+        val endedAtMillis = recordingEndTimestampMillis(startedAtMillis, lease.durationSeconds)
         val exportFormat = exportConfig.format
         val exportCodec = exportConfig.codec
         val exportSampleRate = exportConfig.sampleRate
@@ -753,6 +755,7 @@ class ReverbService : Service() {
                                     startedAtMillis,
                                     exportFormat,
                                     exportCodec,
+                                    defaultNameTimestampMillis = endedAtMillis,
                                 )
                             } catch (e: Exception) {
                                 Log.e(TAG, "Unable to prepare export file", e)
@@ -1076,7 +1079,11 @@ class ReverbService : Service() {
     }
 
     private fun appendCapturedAudio(array: ByteArray, offset: Int, count: Int) {
-        forEachAudioStore { store -> store.append(array, offset, count) }
+        val oneShotBytes = oneShotAudioChunkStore.append(array, offset, count)
+        val loopingBytes = count - oneShotBytes
+        if (loopingBytes > 0) {
+            loopingAudioChunkStore.append(array, offset + oneShotBytes, loopingBytes)
+        }
     }
 
     private fun sealActiveChunks() {
@@ -1409,9 +1416,13 @@ class ReverbService : Service() {
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
         )
+        val oneShotRetentionValue = when (mode) {
+            RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(this)
+            RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(this)
+        }
         oneShotAudioChunkStore.configure(
-            requestedRetentionMode = RetentionMode.SIZE,
-            requestedRetentionValue = Long.MAX_VALUE,
+            requestedRetentionMode = mode,
+            requestedRetentionValue = oneShotRetentionValue,
             requestedSampleRate = sampleRate,
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,

@@ -414,15 +414,23 @@ fun resolveRecordingStartTimeMillis(
     return fallbackMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
 }
 
+fun recordingEndTimestampMillis(startedAtMillis: Long, durationSeconds: Double): Long {
+    if (!durationSeconds.isFinite() || durationSeconds <= 0.0) return startedAtMillis
+    val durationMillis = (durationSeconds * 1000.0).toLong().coerceAtLeast(0L)
+    return if (startedAtMillis > Long.MAX_VALUE - durationMillis) Long.MAX_VALUE
+    else startedAtMillis + durationMillis
+}
+
 fun createOutputTarget(
     context: Context,
     requestedName: String?,
     startedAtMillis: Long,
     format: ExportFormat,
     codec: ExportCodec,
+    defaultNameTimestampMillis: Long = startedAtMillis,
 ): RecordingOutputTarget {
     val baseName = sanitizeBaseName(
-        if (requestedName.isNullOrBlank()) startedAtMillis.toString() else requestedName.trim(),
+        if (requestedName.isNullOrBlank()) defaultNameTimestampMillis.toString() else requestedName.trim(),
     )
     val displayName = "$baseName.${format.extension}"
     val mimeType = format.outputMimeType

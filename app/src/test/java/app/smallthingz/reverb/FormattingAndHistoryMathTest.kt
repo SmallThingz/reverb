@@ -102,6 +102,29 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun recordingEndTimestampMillis_usesRangeEnd_andSaturatesOverflow() {
+        assertEquals(3_500L, recordingEndTimestampMillis(1_000L, 2.5))
+        assertEquals(1_000L, recordingEndTimestampMillis(1_000L, -1.0))
+        assertEquals(Long.MAX_VALUE, recordingEndTimestampMillis(Long.MAX_VALUE - 500L, 1.0))
+    }
+
+    @Test
+    fun oneShotWritableBytes_stopsAtCapacity_withoutOverwriting() {
+        assertEquals(
+            4L,
+            oneShotWritableBytes(RetentionMode.SIZE, 10L, 5L, 0.0, 48_000, 2),
+        )
+        assertEquals(
+            0L,
+            oneShotWritableBytes(RetentionMode.SIZE, 10L, 10L, 0.0, 48_000, 2),
+        )
+        assertEquals(
+            48_000L,
+            oneShotWritableBytes(RetentionMode.TIME, 2L, 0L, 1.5, 48_000, 2),
+        )
+    }
+
+    @Test
     fun wavSampleFormatBytes_roundTripCorrectly() {
         val stereo48k = { sr: Int, ch: Int, fmt: PcmSampleFormat ->
             val bytes = bytesForRetentionSeconds(100, sr, ch, fmt)

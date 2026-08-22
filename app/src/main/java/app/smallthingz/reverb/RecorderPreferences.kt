@@ -246,6 +246,18 @@ fun getConfiguredRetentionSizeBytes(context: Context): Long {
         .coerceAtLeast(1L)
 }
 
+fun getConfiguredOneShotRetentionSeconds(context: Context): Long {
+    return getRecorderPreferences(context)
+        .getLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, getConfiguredRetentionSeconds(context))
+        .coerceAtLeast(1L)
+}
+
+fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long {
+    return getRecorderPreferences(context)
+        .getLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, getConfiguredRetentionSizeBytes(context))
+        .coerceAtLeast(1L)
+}
+
 fun getConfiguredOutputFormat(context: Context): ExportFormat {
     return ExportFormat.WAV
 }

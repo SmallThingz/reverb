@@ -16,6 +16,27 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToLong
 
+internal fun oneShotWritableBytes(
+    retentionMode: RetentionMode,
+    retentionValue: Long,
+    retainedPayloadBytes: Long,
+    retainedDurationSeconds: Double,
+    sampleRate: Int,
+    frameBytes: Int,
+): Long {
+    if (retentionValue <= 0L || sampleRate <= 0 || frameBytes <= 0) return 0L
+    val remaining = when (retentionMode) {
+        RetentionMode.SIZE -> (retentionValue - retainedPayloadBytes).coerceAtLeast(0L)
+        RetentionMode.TIME -> {
+            val remainingSeconds = (retentionValue.toDouble() - retainedDurationSeconds).coerceAtLeast(0.0)
+            val remainingFrames = floor(remainingSeconds * sampleRate.toDouble()).toLong()
+            if (remainingFrames > Long.MAX_VALUE / frameBytes.toLong()) Long.MAX_VALUE
+            else remainingFrames * frameBytes.toLong()
+        }
+    }
+    return remaining - remaining % frameBytes.toLong()
+}
+
 /**
  * Disk-backed append-only PCM timeline.
  *
@@ -26,6 +47,7 @@ internal class PersistentAudioChunkStore(
     context: Context,
     cacheFolderName: String = ReverbConfig.BUFFER_CACHE_FOLDER_NAME,
     legacyCacheFolderName: String? = ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME,
+    private val overwriteOldest: Boolean = true,
 ) : Closeable {
     private val rootDirectory = File(context.noBackupFilesDir, cacheFolderName)
     private val chunksDirectory = File(rootDirectory, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
@@ -103,10 +125,10 @@ internal class PersistentAudioChunkStore(
         configuredChannelCount = normalizedChannelCount
         configuredSampleFormat = sampleFormat
 
-        if (activeRecord != null && retentionExceededLocked()) {
+        if (overwriteOldest && activeRecord != null && retentionExceededLocked()) {
             finalizeActiveLocked()
         }
-        val cleaned = cleanupRetentionLocked()
+        val cleaned = overwriteOldest && cleanupRetentionLocked()
         if (cleaned || formatChanged) {
             writeIndexLocked()
         }
@@ -117,15 +139,15 @@ internal class PersistentAudioChunkStore(
         array: ByteArray,
         offset: Int,
         count: Int,
-    ) {
+    ): Int {
         require(offset >= 0 && count >= 0 && offset <= array.size - count) {
             "Invalid PCM range offset=$offset count=$count size=${array.size}"
         }
-        if (count == 0) return
+        if (count == 0) return 0
         ensureLoadedLocked()
 
         val frameBytes = configuredFrameBytesLocked()
-        if (frameBytes <= 0 || retentionValue <= 0L) return
+        if (frameBytes <= 0 || retentionValue <= 0L) return 0
         require(count % frameBytes == 0) {
             "PCM append must be frame aligned: count=$count frameBytes=$frameBytes"
         }
@@ -133,14 +155,17 @@ internal class PersistentAudioChunkStore(
         var sourceOffset = offset
         var remaining = count
         while (remaining > 0) {
+            val storeAvailable = writableBytesLocked(frameBytes)
+            if (storeAvailable <= 0L) break
+
             var record = activeRecord
             if (record == null) {
                 record = createActiveChunkLocked()
-                if (record == null) return
+                if (record == null) break
             }
 
             val limit = chunkPayloadLimitLocked(frameBytes)
-            if (limit <= 0L) return
+            if (limit <= 0L) break
             val available = limit - record.payloadBytes
             if (available <= 0L) {
                 finalizeActiveLocked()
@@ -148,7 +173,7 @@ internal class PersistentAudioChunkStore(
                 continue
             }
 
-            val writeCount = minOf(remaining.toLong(), available).toInt()
+            val writeCount = minOf(remaining.toLong(), available, storeAvailable).toInt()
             val alignedWriteCount = writeCount - writeCount % frameBytes
             if (alignedWriteCount <= 0) {
                 finalizeActiveLocked()
@@ -173,13 +198,14 @@ internal class PersistentAudioChunkStore(
             // Keep the logical timeline inside its configured retention window as data
             // arrives. This is still O(1) in the common case and only performs a delete
             // when an old chunk actually expires.
-            cleanupRetentionLocked()
+            if (overwriteOldest) cleanupRetentionLocked()
 
             if (record.payloadBytes >= limit) {
                 finalizeActiveLocked()
-                cleanupRetentionLocked()
+                if (overwriteOldest) cleanupRetentionLocked()
             }
         }
+        return count - remaining
     }
 
     @Synchronized
@@ -847,6 +873,7 @@ internal class PersistentAudioChunkStore(
     }
 
     private fun cleanupRetentionLocked(): Boolean {
+        if (!overwriteOldest) return false
         var changed = false
         if (retentionValue <= 0L) {
             while (chunks.isNotEmpty()) {
@@ -893,6 +920,18 @@ internal class PersistentAudioChunkStore(
     private fun retentionExceededLocked(): Boolean = when (retentionMode) {
         RetentionMode.SIZE -> totalPayloadBytesLocked() > retentionValue
         RetentionMode.TIME -> totalDurationSecondsLocked() > retentionValue.toDouble()
+    }
+
+    private fun writableBytesLocked(frameBytes: Int): Long {
+        if (overwriteOldest) return Long.MAX_VALUE
+        return oneShotWritableBytes(
+            retentionMode = retentionMode,
+            retentionValue = retentionValue,
+            retainedPayloadBytes = retainedPayloadBytes,
+            retainedDurationSeconds = retainedDurationSeconds,
+            sampleRate = configuredSampleRate,
+            frameBytes = frameBytes,
+        )
     }
 
     private fun retireRecordLocked(record: ChunkRecord) {
