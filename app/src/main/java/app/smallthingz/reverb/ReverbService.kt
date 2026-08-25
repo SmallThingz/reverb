@@ -1489,15 +1489,15 @@ class ReverbService : Service() {
             Log.w(TAG, "Audio thread rejected shutdown work")
             return false
         }
-        try {
-            if (!latch.await(3, TimeUnit.SECONDS)) {
-                Log.w(TAG, "Timed out waiting for audio-thread shutdown work")
+        return try {
+            latch.await(3, TimeUnit.SECONDS).also { completed ->
+                if (!completed) Log.w(TAG, "Timed out waiting for audio-thread shutdown work")
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             Log.w(TAG, "Interrupted while waiting for audio-thread shutdown work")
+            false
         }
-        return true
     }
 
     private fun handleDebugCommand(intent: Intent?) {
