@@ -485,6 +485,17 @@ fun SettingsScreen(
 
         val requestedOneShotSizeBytes = rawMegabytesToBytes(oneShotSizeMb)
         val requestedLoopingSizeBytes = rawMegabytesToBytes(loopingSizeMb)
+        if (activeRetentionMode == RetentionMode.SIZE) {
+            val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample
+            if (requestedOneShotSizeBytes < frameBytes) {
+                oneShotRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
+                return false
+            }
+            if (requestedLoopingSizeBytes < frameBytes) {
+                loopingRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
+                return false
+            }
+        }
 
         oneShotRetentionTimeSecondsValue = oneShotRetentionTime
         oneShotRetentionSizeMbValue = oneShotSizeMb

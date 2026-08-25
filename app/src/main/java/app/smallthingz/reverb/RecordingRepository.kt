@@ -108,13 +108,8 @@ object RecordingRepository {
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
-                dao.deleteById(recording.id)
-                val deleted = deleteRecordingAsset(context, recording)
-                if (!deleted) {
-                    dao.upsert(recording)
-                    return@withLock false
-                }
+                if (!deleteRecordingAsset(context, recording)) return@withLock false
+                RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id)
                 schedulePersistedPermissionCleanup(context)
                 true
             }
@@ -133,7 +128,7 @@ object RecordingRepository {
                 try {
                     RecordingDatabase.getInstance(context).recordingDao().applyChanges(
                         upserts = listOf(renamed),
-                        deleteIds = listOf(recording.id),
+                        deleteIds = if (renamed.id == recording.id) emptyList() else listOf(recording.id),
                     )
                 } catch (error: Exception) {
                     // Keep the catalog and physical asset on the same name when the

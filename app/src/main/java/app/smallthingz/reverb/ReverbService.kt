@@ -79,6 +79,9 @@ class ReverbService : Service() {
     @Volatile
     private var audioRecord: AudioRecord? = null
 
+    @Volatile
+    private var audioRecordGeneration = Long.MIN_VALUE
+
     private val listeningCommandGeneration = AtomicLong()
     private val listeningIntentLock = Any()
 
@@ -252,7 +255,9 @@ class ReverbService : Service() {
         val prefs = getRecorderPreferences(this)
         val generation = synchronized(listeningIntentLock) {
             val previous = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            if (previous != enabled && !prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled).commit()) {
+            if (previous == enabled) {
+                listeningCommandGeneration.get()
+            } else if (!prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled).commit()) {
                 prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previous).apply()
                 null
             } else {
@@ -429,9 +434,7 @@ class ReverbService : Service() {
             if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return@post
             state = STATE_LISTENING
             updateWakeLockState()
-            if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                startAudioInputOnAudioThread()
-            }
+            startAudioInputOnAudioThread(generation)
         }
     }
 
@@ -450,11 +453,13 @@ class ReverbService : Service() {
         stopSelf()
     }
 
-    private fun startAudioInputOnAudioThread() {
+    private fun startAudioInputOnAudioThread(generation: Long = listeningCommandGeneration.get()) {
         check(audioHandler.looper == Looper.myLooper())
+        if (generation != listeningCommandGeneration.get()) return
+        if (audioRecordGeneration == generation && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
         audioHandler.removeCallbacks(audioReader)
         releaseAudioRecord()
-        if (state != STATE_LISTENING || !isListeningEnabled()) return
+        if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         // Binding the paused UI should not probe microphone hardware. Resolve the
         // requested configuration only when capture is actually about to start.
         try {
@@ -462,14 +467,20 @@ class ReverbService : Service() {
             configurePersistentBuffer()
         } catch (error: Exception) {
             reportPersistentStoreFailure("configure before capture", error)
-            failListeningOnAudioThread(getString(R.string.recorder_state_persist_failed), error)
+            failListeningOnAudioThread(getString(R.string.recorder_state_persist_failed), error, generation)
             return
         }
 
+        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
         val record = createAudioRecord()
         audioRecord = record
+        audioRecordGeneration = generation
+        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+            releaseAudioRecord()
+            return
+        }
         if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
-            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null)
+            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
 
@@ -477,11 +488,15 @@ class ReverbService : Service() {
             record.startRecording()
         } catch (error: RuntimeException) {
             Log.e(TAG, "AudioRecord.startRecording failed", error)
-            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error)
+            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error, generation)
+            return
+        }
+        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+            releaseAudioRecord()
             return
         }
         if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null)
+            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
         audioHandler.post(audioReader)
@@ -555,8 +570,12 @@ class ReverbService : Service() {
     }
 
     private fun releaseAudioRecord() {
-        val record = audioRecord ?: return
+        val record = audioRecord ?: run {
+            audioRecordGeneration = Long.MIN_VALUE
+            return
+        }
         audioRecord = null
+        audioRecordGeneration = Long.MIN_VALUE
         runCatching { record.stop() }
         runCatching { record.release() }
             .onFailure { Log.w(TAG, "AudioRecord.release failed", it) }
@@ -1141,8 +1160,10 @@ class ReverbService : Service() {
         audioReader.run()
     }
 
-    private fun readCaptureIntoScratch(): Int {
+    private fun readCaptureIntoScratch(generation: Long): Int {
+        if (generation != listeningCommandGeneration.get()) return 0
         val currentRecord = audioRecord ?: return 0
+        if (audioRecordGeneration != generation) return 0
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
         val targetFrames = maxOf(1L, sampleRate.toLong() * CAPTURE_READ_TARGET_MILLIS / 1000L)
         val requestedBytes = minOf(
@@ -1152,7 +1173,8 @@ class ReverbService : Service() {
         captureBuffer.clear()
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
         if (read == AudioRecord.ERROR_DEAD_OBJECT) {
-            if (!restartAudioRecordOnAudioThread()) {
+            if (generation != listeningCommandGeneration.get() || audioRecordGeneration != generation) return 0
+            if (!restartAudioRecordOnAudioThread(generation)) {
                 throw IOException("Audio input disconnected")
             }
             return 0
@@ -1161,6 +1183,7 @@ class ReverbService : Service() {
             throw IOException("AudioRecord read failed: $read")
         }
 
+        if (generation != listeningCommandGeneration.get() || audioRecord !== currentRecord || audioRecordGeneration != generation) return read
         val alignedRead = read - read % frameBytes
         if (alignedRead > 0) {
             captureBuffer.position(0)
@@ -1180,21 +1203,30 @@ class ReverbService : Service() {
         return read
     }
 
-    private fun restartAudioRecordOnAudioThread(): Boolean {
+    private fun restartAudioRecordOnAudioThread(generation: Long): Boolean {
         check(audioHandler.looper == Looper.myLooper())
+        if (generation != listeningCommandGeneration.get() || audioRecordGeneration != generation) return false
         audioHandler.removeCallbacks(audioReader)
         sealActiveChunks()
         releaseAudioRecord()
-        if (state != STATE_LISTENING) return false
+        if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return false
         val record = createAudioRecord() ?: return false
         audioRecord = record
+        audioRecordGeneration = generation
+        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+            releaseAudioRecord()
+            return false
+        }
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             releaseAudioRecord()
             return false
         }
         return try {
             record.startRecording()
-            if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+            if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+                releaseAudioRecord()
+                false
+            } else if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 audioHandler.post(audioReader)
                 true
             } else {
@@ -1209,9 +1241,10 @@ class ReverbService : Service() {
     }
 
     private val audioReader = Runnable {
-        val generation = listeningCommandGeneration.get()
+        val generation = audioRecordGeneration
+        if (generation == Long.MIN_VALUE || generation != listeningCommandGeneration.get()) return@Runnable
         try {
-            readCaptureIntoScratch()
+            readCaptureIntoScratch(generation)
         } catch (error: Exception) {
             Log.e(TAG, "Audio capture failed", error)
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error, generation)
@@ -1377,9 +1410,10 @@ class ReverbService : Service() {
         // the queued audio work remains ordered behind initial configuration.
         val listeningEnabled = isListeningEnabled()
         if (state != STATE_LISTENING && listeningEnabled) {
+            val generation = listeningCommandGeneration.get()
             state = STATE_LISTENING
             updateWakeLockState()
-            audioHandler.post { startAudioInputOnAudioThread() }
+            audioHandler.post { startAudioInputOnAudioThread(generation) }
         }
         if (listeningEnabled && state == STATE_LISTENING) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

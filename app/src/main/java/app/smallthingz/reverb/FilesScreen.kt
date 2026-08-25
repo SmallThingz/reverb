@@ -160,6 +160,7 @@ fun FilesScreen(
     suspend fun finalizeDeletions() {
         val pending = pendingDeletions.values.toList()
         if (pending.isEmpty()) return
+        val generation = ++refreshGeneration[0]
         var deleted = 0
         var failed = false
         val deletedIds = mutableSetOf<String>()
@@ -180,11 +181,12 @@ fun FilesScreen(
         }
         recordings = recordings.filterNot { it.id in deletedIds }
         try {
-            recordings = RecordingRepository.refresh(context)
+            val refreshed = RecordingRepository.refresh(context)
+            if (generation == refreshGeneration[0]) recordings = refreshed
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            failed = true
+            if (generation == refreshGeneration[0]) failed = true
         }
         if (failed || deleted == 0) {
             notice = LibraryNotice(

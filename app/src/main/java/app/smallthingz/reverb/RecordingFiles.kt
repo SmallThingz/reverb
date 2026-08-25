@@ -643,14 +643,9 @@ fun copyRecordingToConfiguredDirectory(
             RecordingStorageType.FILE -> runCatching { Files.size(File(recording.id).toPath()) }
                 .getOrNull()
                 ?.takeIf { it > 0L }
-            RecordingStorageType.DOCUMENT -> {
-                val uri = recording.id.toUri()
-                runCatching {
-                    context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-                        descriptor.statSize.takeIf { it > 0L }
-                    }
-                }.getOrNull() ?: DocumentFile.fromSingleUri(context, uri)?.length()?.takeIf { it > 0L }
-            }
+            // Document-provider size metadata may lag behind the stream contents.
+            // The destination is verified against the bytes actually copied below.
+            RecordingStorageType.DOCUMENT -> null
             null -> null
         }
         val input = when (resolveRecordingStorageType(recording)) {
@@ -871,17 +866,16 @@ private fun renameDocumentRecording(
         val document = DocumentFile.fromSingleUri(context, recording.id.toUri()) ?: return@runCatching null
         val tree = DocumentFile.fromTreeUri(context, recording.directoryId.toUri()) ?: return@runCatching null
         val uniqueName = findAvailableDisplayName(displayName) { candidate ->
-            candidate != document.name && tree.findFile(candidate) != null
+            tree.findFile(candidate)?.uri?.let { it != document.uri } == true
         }
         if (uniqueName == document.name) {
             return@runCatching recording
         }
-        if (!document.renameTo(uniqueName)) {
-            return@runCatching null
-        }
+        val renamedUri = DocumentsContract.renameDocument(context.contentResolver, document.uri, uniqueName)
+            ?: return@runCatching null
         recording.copy(
-            id = document.uri.toString(),
-            displayName = document.name ?: uniqueName,
+            id = renamedUri.toString(),
+            displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
         )
     }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
 }

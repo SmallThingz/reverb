@@ -83,6 +83,7 @@ fun RecordingPlayerDialog(
     }
 
     DisposableEffect(recording.id) {
+        var disposed = false
         val player = MediaPlayer()
         player.setAudioAttributes(
             AudioAttributes.Builder()
@@ -110,7 +111,7 @@ fun RecordingPlayerDialog(
         }
         player.setOnErrorListener { _, _, _ ->
             if (!released) {
-                Handler(Looper.getMainLooper()).post { onPlaybackFailed() }
+                Handler(Looper.getMainLooper()).post { if (!disposed) onPlaybackFailed() }
             }
             releasePlayer()
             true
@@ -129,7 +130,10 @@ fun RecordingPlayerDialog(
             onPlaybackFailed()
         }
 
-        onDispose { releasePlayer() }
+        onDispose {
+            disposed = true
+            releasePlayer()
+        }
     }
 
     DisposableEffect(lifecycleOwner, recording.id) {
@@ -278,7 +282,7 @@ fun RecordingPlayerDialog(
                         if (player != null && prepared && !released) {
                             runCatching {
                                 val pos = player.currentPosition.coerceAtLeast(0)
-                                player.seekTo((pos + SEEK_JUMP_MS).coerceAtMost(duration))
+                                player.seekTo((pos.toLong() + SEEK_JUMP_MS).coerceAtMost(duration.toLong()).toInt())
                             }
                         }
                     }
