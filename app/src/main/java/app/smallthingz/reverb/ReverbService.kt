@@ -23,7 +23,6 @@ import android.os.SystemClock
 import android.util.Log
 
 import androidx.core.app.NotificationCompat
-import androidx.core.content.edit
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileDescriptor
@@ -439,16 +438,22 @@ class ReverbService : Service() {
     }
 
     private fun failListeningStart(generation: Long) {
-        synchronized(listeningIntentLock) {
+        val persisted = synchronized(listeningIntentLock) {
             if (generation != listeningCommandGeneration.get()) return
-            getRecorderPreferences(this).edit(commit = true) {
-                putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            }
+            val prefs = getRecorderPreferences(this)
+            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            // A fatal recorder failure must invalidate the active capture even if the
+            // preference write cannot reach disk. SharedPreferences has already applied
+            // the value to its in-memory map when commit() returns false, so rolling it
+            // back to true here would leave the stopped service claiming listening is
+            // enabled. A later process may retry the user's durable intent if disk still
+            // contains true.
             listeningCommandGeneration.incrementAndGet()
             state = STATE_READY
+            committed
         }
         updateWakeLockState()
-        reportError(getString(R.string.audio_input_init_failed))
+        reportError(getString(if (persisted) R.string.audio_input_init_failed else R.string.recorder_state_persist_failed))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -1257,19 +1262,29 @@ class ReverbService : Service() {
         generation: Long = listeningCommandGeneration.get(),
     ) {
         check(audioHandler.looper == Looper.myLooper())
-        synchronized(listeningIntentLock) {
+        val persisted = synchronized(listeningIntentLock) {
             if (generation != listeningCommandGeneration.get()) return
-            getRecorderPreferences(this).edit()
-                .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-                .commit()
+            val prefs = getRecorderPreferences(this)
+            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            // A fatal recorder failure must invalidate the active capture even if the
+            // preference write cannot reach disk. SharedPreferences has already applied
+            // the value to its in-memory map when commit() returns false, so rolling it
+            // back to true here would leave the stopped service claiming listening is
+            // enabled. A later process may retry the user's durable intent if disk still
+            // contains true.
             listeningCommandGeneration.incrementAndGet()
             state = STATE_READY
+            committed
         }
         audioHandler.removeCallbacks(audioReader)
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
         updateWakeLockState()
-        reportError(if (error == null) message else userFacingError(message, error))
+        reportError(
+            if (!persisted) getString(R.string.recorder_state_persist_failed)
+            else if (error == null) message
+            else userFacingError(message, error),
+        )
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -1416,14 +1431,20 @@ class ReverbService : Service() {
             audioHandler.post { startAudioInputOnAudioThread(generation) }
         }
         if (listeningEnabled && state == STATE_LISTENING) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                startForeground(
-                    FOREGROUND_NOTIFICATION_ID,
-                    buildNotification(),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-                )
-            } else {
-                startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification())
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    startForeground(
+                        FOREGROUND_NOTIFICATION_ID,
+                        buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                    )
+                } else {
+                    startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification())
+                }
+            } catch (error: RuntimeException) {
+                Log.e(TAG, "Unable to enter microphone foreground state", error)
+                failListeningStart(listeningCommandGeneration.get())
+                return START_NOT_STICKY
             }
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -1527,6 +1548,12 @@ class ReverbService : Service() {
             }
         }
         if (!storeCloseOwnedByAudioThread) {
+            // A blocking AudioRecord.read() can prevent the audio-thread shutdown
+            // work from running. Release capture here so the read is forced to
+            // return instead of leaving the microphone/thread alive past onDestroy.
+            state = STATE_READY
+            audioHandler.removeCallbacks(audioReader)
+            releaseAudioRecord()
             runCatching { loopingAudioChunkStore.close() }
             runCatching { oneShotAudioChunkStore.close() }
         }

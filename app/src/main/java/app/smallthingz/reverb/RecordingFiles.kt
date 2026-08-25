@@ -372,7 +372,7 @@ private fun appendRelativePath(
         "$basePath/$normalizedRelativePath"
     }
 }
- 
+
 fun buildCodecSummary(
     context: Context,
     format: ExportFormat,
@@ -802,14 +802,18 @@ private fun createLocalOutputTarget(
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
     }
 
-    val dotIndex = requestedDisplayName.lastIndexOf('.')
-    val name = if (dotIndex > 0) requestedDisplayName.substring(0, dotIndex) else requestedDisplayName
-    val extension = if (dotIndex > 0) requestedDisplayName.substring(dotIndex) else ""
+    // Document-provider display names are metadata, not trusted filesystem paths.
+    // A name such as "../recording.wav" must never escape app-local storage when
+    // recordings are moved from SAF back into the app directory.
+    val safeDisplayName = sanitizeBaseName(requestedDisplayName)
+    val dotIndex = safeDisplayName.lastIndexOf('.')
+    val name = if (dotIndex > 0) safeDisplayName.substring(0, dotIndex) else safeDisplayName
+    val extension = if (dotIndex > 0) safeDisplayName.substring(dotIndex) else ""
     var suffix = 1
     var uniqueName: String
     var file: File
     while (true) {
-        uniqueName = if (suffix == 1) requestedDisplayName else "$name ($suffix)$extension"
+        uniqueName = if (suffix == 1) safeDisplayName else "$name ($suffix)$extension"
         file = File(storageDir, uniqueName)
         if (file.createNewFile()) break
         suffix++
