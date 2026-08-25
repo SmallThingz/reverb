@@ -510,6 +510,25 @@ fun SettingsScreen(
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
         if (!settingsEditor.commit()) {
+            val previous = originalSnapshot
+            getRecorderPreferences(context).edit()
+                .putInt(PrefKey.RETENTION_MODE, previous.retentionMode.ordinal)
+                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, previous.oneShotRetentionTime.toLong())
+                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rawMegabytesToBytes(previous.oneShotRetentionSizeMb))
+                .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
+                .putLong(PrefKey.AUDIO_MEMORY_SIZE, rawMegabytesToBytes(previous.loopingRetentionSizeMb))
+                .putString(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.prefValue)
+                .putInt(PrefKey.AUDIO_SOURCE, previous.source?.sourceValue ?: AudioSourceMode.defaultMode().sourceValue)
+                .putString(PrefKey.CHANNEL_MODE, (previous.channelMode ?: ChannelMode.MONO).prefValue)
+                .putString(PrefKey.INPUT_ROUTE, (previous.route ?: InputRouteMode.AUTO).prefValue)
+                .putInt(PrefKey.SAMPLE_RATE, previous.sampleRate)
+                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, previous.wakeLockEnabled)
+                .putString(PrefKey.THEME_MODE, previous.themeMode.prefValue)
+                .apply {
+                    if (previous.exportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
+                    else putString(PrefKey.EXPORT_DIRECTORY_URI, previous.exportDirectoryUri)
+                }
+                .apply()
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }

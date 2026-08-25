@@ -80,6 +80,7 @@ class ReverbService : Service() {
     private var audioRecord: AudioRecord? = null
 
     private val listeningCommandGeneration = AtomicLong()
+    private val listeningIntentLock = Any()
 
     @Volatile
     private var activeExportToken: ExportCancellationToken? = null
@@ -248,15 +249,21 @@ class ReverbService : Service() {
     }
 
     private fun setListeningEnabled(enabled: Boolean): Boolean {
-        val persisted = getRecorderPreferences(this).edit()
-            .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
-            .commit()
-        if (!persisted) {
+        val prefs = getRecorderPreferences(this)
+        val generation = synchronized(listeningIntentLock) {
+            val previous = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            if (previous != enabled && !prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled).commit()) {
+                prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previous).apply()
+                null
+            } else {
+                listeningCommandGeneration.incrementAndGet()
+            }
+        }
+        if (generation == null) {
             reportError(getString(R.string.recorder_state_persist_failed))
             return false
         }
-        listeningCommandGeneration.incrementAndGet()
-        if (enabled) innerStartListening() else innerStopListening()
+        if (enabled) innerStartListening(generation) else innerStopListening(generation)
         return true
     }
 
@@ -407,18 +414,19 @@ class ReverbService : Service() {
         return null
     }
 
-    private fun innerStartListening() {
+    private fun innerStartListening(generation: Long = listeningCommandGeneration.get()) {
+        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
         state = STATE_LISTENING
         updateWakeLockState()
         try {
             ContextCompat.startForegroundService(this, Intent(this, javaClass))
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to start recorder foreground service", error)
-            failListeningStart()
+            failListeningStart(generation)
             return
         }
         audioHandler.post {
-            if (!isListeningEnabled()) return@post
+            if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return@post
             state = STATE_LISTENING
             updateWakeLockState()
             if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -427,11 +435,15 @@ class ReverbService : Service() {
         }
     }
 
-    private fun failListeningStart() {
-        getRecorderPreferences(this).edit(commit = true) {
-            putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+    private fun failListeningStart(generation: Long) {
+        synchronized(listeningIntentLock) {
+            if (generation != listeningCommandGeneration.get()) return
+            getRecorderPreferences(this).edit(commit = true) {
+                putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            }
+            listeningCommandGeneration.incrementAndGet()
+            state = STATE_READY
         }
-        state = STATE_READY
         updateWakeLockState()
         reportError(getString(R.string.audio_input_init_failed))
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -475,14 +487,15 @@ class ReverbService : Service() {
         audioHandler.post(audioReader)
     }
 
-    private fun innerStopListening() {
+    private fun innerStopListening(generation: Long = listeningCommandGeneration.get()) {
+        if (generation != listeningCommandGeneration.get()) return
         when (state) {
             STATE_READY -> return
             STATE_LISTENING, STATE_PAUSED -> Unit
             else -> return
         }
         audioHandler.post {
-            if (isListeningEnabled()) return@post
+            if (generation != listeningCommandGeneration.get() || isListeningEnabled()) return@post
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
@@ -1211,13 +1224,14 @@ class ReverbService : Service() {
         generation: Long = listeningCommandGeneration.get(),
     ) {
         check(audioHandler.looper == Looper.myLooper())
-        if (generation != listeningCommandGeneration.get()) return
-        val disabledPersisted = getRecorderPreferences(this).edit()
-            .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            .commit()
-        if (generation != listeningCommandGeneration.get()) return
-        if (disabledPersisted) listeningCommandGeneration.incrementAndGet()
-        state = STATE_READY
+        synchronized(listeningIntentLock) {
+            if (generation != listeningCommandGeneration.get()) return
+            getRecorderPreferences(this).edit()
+                .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+                .commit()
+            listeningCommandGeneration.incrementAndGet()
+            state = STATE_READY
+        }
         audioHandler.removeCallbacks(audioReader)
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
@@ -1361,12 +1375,13 @@ class ReverbService : Service() {
         // initialization posted from onCreate has finished. Restore the logical
         // listening state immediately so the foreground-service deadline is met;
         // the queued audio work remains ordered behind initial configuration.
-        if (state != STATE_LISTENING && isListeningEnabled()) {
+        val listeningEnabled = isListeningEnabled()
+        if (state != STATE_LISTENING && listeningEnabled) {
             state = STATE_LISTENING
             updateWakeLockState()
             audioHandler.post { startAudioInputOnAudioThread() }
         }
-        if (state == STATE_LISTENING) {
+        if (listeningEnabled && state == STATE_LISTENING) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startForeground(
                     FOREGROUND_NOTIFICATION_ID,
@@ -1665,6 +1680,7 @@ class ReverbService : Service() {
     }
 
     @SuppressLint("WakelockTimeout")
+    @Synchronized
     private fun updateWakeLockState() {
         if (!isWakeLockEnabled(this)) {
             releaseWakeLock()
@@ -1687,6 +1703,7 @@ class ReverbService : Service() {
         }
     }
 
+    @Synchronized
     private fun releaseWakeLock() {
         val lock = wakeLock ?: return
         if (lock.isHeld) {

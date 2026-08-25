@@ -289,6 +289,7 @@ private fun MainScreen(
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var libraryCount by rememberSaveable { mutableIntStateOf(0) }
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
+    val libraryRefreshGeneration = remember { intArrayOf(0) }
     val context = LocalContext.current.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -297,9 +298,11 @@ private fun MainScreen(
     val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
     fun refreshLibrarySnapshot() {
+        val generation = ++libraryRefreshGeneration[0]
         scope.launch {
             try {
                 val known = RecordingRepository.listKnown(context)
+                if (generation != libraryRefreshGeneration[0]) return@launch
                 librarySnapshot = known
                 libraryCount = known.size
             } catch (cancelled: CancellationException) {
@@ -309,6 +312,7 @@ private fun MainScreen(
             }
             try {
                 val refreshed = RecordingRepository.refresh(context)
+                if (generation != libraryRefreshGeneration[0]) return@launch
                 librarySnapshot = refreshed
                 libraryCount = refreshed.size
             } catch (cancelled: CancellationException) {

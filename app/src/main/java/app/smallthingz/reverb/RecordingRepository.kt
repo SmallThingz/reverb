@@ -108,12 +108,15 @@ object RecordingRepository {
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
+                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                dao.deleteById(recording.id)
                 val deleted = deleteRecordingAsset(context, recording)
-                if (deleted) {
-                    RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id)
-                    schedulePersistedPermissionCleanup(context)
+                if (!deleted) {
+                    dao.upsert(recording)
+                    return@withLock false
                 }
-                deleted
+                schedulePersistedPermissionCleanup(context)
+                true
             }
         }
     }

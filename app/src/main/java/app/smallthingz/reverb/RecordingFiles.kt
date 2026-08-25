@@ -512,7 +512,7 @@ internal fun verifyOutputTargetSize(
 ): Long {
     require(expectedBytes > 0L) { "Expected output size must be positive" }
     val reportedSize = resolveOutputTargetSize(context, target)
-    if (reportedSize > 0L) return reportedSize
+    if (reportedSize == expectedBytes) return reportedSize
     return countOutputTargetBytes(context, target, expectedBytes)
 }
 
@@ -683,7 +683,7 @@ fun copyRecordingToConfiguredDirectory(
             throw IOException("Recording copy was incomplete: expected=$sourceSize copied=$copiedBytes")
         }
         val targetSize = resolveOutputTargetSize(context, resolvedTarget)
-        val verifiedTargetSize = if (targetSize > 0L) {
+        val verifiedTargetSize = if (targetSize == copiedBytes) {
             targetSize
         } else {
             countOutputTargetBytes(context, resolvedTarget, copiedBytes)
