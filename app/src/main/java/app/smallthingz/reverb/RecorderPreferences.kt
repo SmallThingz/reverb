@@ -20,7 +20,8 @@ import androidx.core.content.edit
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
-private const val WAV_HEADER_BYTES = 44L
+private const val PCM_WAV_HEADER_BYTES = 44L
+private const val FLOAT_WAV_HEADER_BYTES = 46L
 private const val WAV_MAX_FILE_BYTES = 0xFFFF_FFFFL
 
 private val STANDARD_SAMPLE_RATES =
@@ -433,10 +434,11 @@ fun estimateExportSizeBytes(
     if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
     val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
     if (bps <= 0L) return 0L
-    return if (durationSeconds > (Long.MAX_VALUE - WAV_HEADER_BYTES) / bps) {
+    val headerBytes = wavHeaderBytes(sampleFormat)
+    return if (durationSeconds > (Long.MAX_VALUE - headerBytes) / bps) {
         Long.MAX_VALUE
     } else {
-        WAV_HEADER_BYTES + durationSeconds * bps
+        headerBytes + durationSeconds * bps
     }
 }
 
@@ -454,14 +456,20 @@ fun estimateExportDurationSeconds(
     if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
     val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
     if (bps <= 0L) return 0L
-    return ((sizeBytes - WAV_HEADER_BYTES).coerceAtLeast(0L)) / bps
+    return ((sizeBytes - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)) / bps
 }
 
 fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_FILE_BYTES
 
-fun exportPayloadLimitBytes(format: ExportFormat): Long {
-    return (exportFileSizeLimitBytes(format) - WAV_HEADER_BYTES).coerceAtLeast(0L)
+fun exportPayloadLimitBytes(
+    format: ExportFormat,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+): Long {
+    return (exportFileSizeLimitBytes(format) - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
 }
+
+private fun wavHeaderBytes(sampleFormat: PcmSampleFormat): Long =
+    if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_WAV_HEADER_BYTES else PCM_WAV_HEADER_BYTES
 
 fun exportDurationLimitSeconds(
     format: ExportFormat,

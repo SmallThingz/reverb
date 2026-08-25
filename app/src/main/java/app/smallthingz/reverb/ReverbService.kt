@@ -670,7 +670,7 @@ class ReverbService : Service() {
             val targetBytesPerSecond = exportConfig.sampleRate.toLong() *
                 exportConfig.channelMode.channelCount.toLong() *
                 exportConfig.sampleFormat.bytesPerSample.toLong()
-            val maxDuration = exportPayloadLimitBytes(exportConfig.format).toDouble() /
+            val maxDuration = exportPayloadLimitBytes(exportConfig.format, exportConfig.sampleFormat).toDouble() /
                 targetBytesPerSecond.coerceAtLeast(1L).toDouble()
             val clampedStart = maxOf(boundedStart, boundedEnd - maxDuration)
             snapshot.acquireRange(clampedStart, boundedEnd)
@@ -691,7 +691,7 @@ class ReverbService : Service() {
         requestedEndSeconds: Double,
     ): PersistentAudioChunkStore.RangeLease? {
         val targetBytesPerSecond = fillRate.coerceAtLeast(1L).toDouble()
-        val maxDuration = exportPayloadLimitBytes(outputFormat).toDouble() / targetBytesPerSecond
+        val maxDuration = exportPayloadLimitBytes(outputFormat, pcmSampleFormat).toDouble() / targetBytesPerSecond
         val end = requestedEndSeconds.coerceAtLeast(requestedStartSeconds)
         val start = maxOf(requestedStartSeconds, end - maxDuration)
         return store.acquireRange(start, end)
@@ -1341,6 +1341,11 @@ class ReverbService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        if (isDebuggableBuild() && intent?.action == ACTION_DEBUG_ENABLE_LISTENING && !isListeningEnabled()) {
+            if (!getRecorderPreferences(this).edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true).commit()) {
+                reportError(getString(R.string.recorder_state_persist_failed))
+            }
+        }
         // A platform sticky restart reaches onStartCommand before the audio-thread
         // initialization posted from onCreate has finished. Restore the logical
         // listening state immediately so the foreground-service deadline is met;
@@ -1514,7 +1519,7 @@ class ReverbService : Service() {
         audioHandler.post {
             try {
                 when (action) {
-                    ACTION_DEBUG_ENABLE_LISTENING -> mainHandler.post { enableListening() }
+                    ACTION_DEBUG_ENABLE_LISTENING -> Unit
                     ACTION_DEBUG_DISABLE_LISTENING -> mainHandler.post { disableListening() }
                     ACTION_DEBUG_CLEAR_BUFFER -> loopingAudioChunkStore.clear()
                     ACTION_DEBUG_INJECT_BUFFER -> injectDebugBuffer(seconds)

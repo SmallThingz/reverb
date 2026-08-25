@@ -243,6 +243,25 @@ class FormattingAndHistoryMathTest {
         val limit = exportFileSizeLimitBytes(ExportFormat.WAV)
         assertEquals(0xFFFF_FFFFL, limit)
         assertEquals(0xFFFF_FFFFL - 44L, exportPayloadLimitBytes(ExportFormat.WAV))
+        assertEquals(
+            0xFFFF_FFFFL - 46L,
+            exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_FLOAT),
+        )
+    }
+
+    @Test
+    fun floatWavExportSize_accountsForExtendedFmtChunk() {
+        assertEquals(
+            46L + 44_100L * PcmSampleFormat.PCM_FLOAT.bytesPerSample,
+            estimateExportSizeBytes(
+                format = ExportFormat.WAV,
+                codec = ExportCodec.PCM_16,
+                sampleRate = 44_100,
+                channelCount = 1,
+                durationSeconds = 1,
+                sampleFormat = PcmSampleFormat.PCM_FLOAT,
+            ),
+        )
     }
 
     @Test

@@ -31,12 +31,13 @@ internal class WavAudioFileWriter(
     private val parcelFileDescriptor: ParcelFileDescriptor = openWritableParcelFileDescriptor(context, target)
     private val outputStream = FileOutputStream(parcelFileDescriptor.fileDescriptor)
     private val channel: FileChannel = outputStream.channel
-    private val headerBuffer = ByteBuffer.allocate(HEADER_SIZE)
+    private val headerSize = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_HEADER_SIZE else PCM_HEADER_SIZE
+    private val headerBuffer = ByteBuffer.allocate(headerSize)
     @Volatile
     var totalSampleBytesWritten: Long = 0
         private set
     val totalFileBytesWritten: Long
-        get() = HEADER_SIZE.toLong() + totalSampleBytesWritten
+        get() = headerSize.toLong() + totalSampleBytesWritten
 
     init {
         try {
@@ -62,7 +63,7 @@ internal class WavAudioFileWriter(
         require(count % frameBytes == 0) {
             "WAV writes must contain complete frames: count=$count frameBytes=$frameBytes"
         }
-        if (totalSampleBytesWritten > MAX_SAMPLE_BYTES - count.toLong()) {
+        if (totalSampleBytesWritten > maxSampleBytes - count.toLong()) {
             throw IOException("WAV file exceeds RIFF size limit")
         }
         val buf = ByteBuffer.wrap(bytes, offset, count)
@@ -77,7 +78,7 @@ internal class WavAudioFileWriter(
     override fun close() {
         try {
             writeHeader(totalSampleBytesWritten)
-            channel.truncate(HEADER_SIZE + totalSampleBytesWritten)
+            channel.truncate(headerSize.toLong() + totalSampleBytesWritten)
             channel.force(true)
         } finally {
             runCatching { outputStream.close() }
@@ -87,20 +88,21 @@ internal class WavAudioFileWriter(
 
     @Synchronized
     private fun writeHeader(dataSize: Long) {
-        val chunkSize = 36L + dataSize
+        val chunkSize = headerSize.toLong() - 8L + dataSize
         headerBuffer.clear()
         headerBuffer.order(ByteOrder.LITTLE_ENDIAN)
         headerBuffer.put(RIFF_BYTES)
         headerBuffer.putInt((chunkSize and 0xFFFF_FFFFL).toInt())
         headerBuffer.put(WAVE_BYTES)
         headerBuffer.put(FMT_BYTES)
-        headerBuffer.putInt(SUBCHUNK1_SIZE)
+        headerBuffer.putInt(if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_FMT_SIZE else PCM_FMT_SIZE)
         headerBuffer.putShort(sampleFormat.wavFormatTag)
         headerBuffer.putShort(channelCount.toShort())
         headerBuffer.putInt(sampleRate)
         headerBuffer.putInt(byteRate)
         headerBuffer.putShort(blockAlign)
         headerBuffer.putShort(sampleFormat.bitsPerSample.toShort())
+        if (sampleFormat == PcmSampleFormat.PCM_FLOAT) headerBuffer.putShort(0)
         headerBuffer.put(DATA_BYTES)
         headerBuffer.putInt((dataSize and 0xFFFF_FFFFL).toInt())
         headerBuffer.flip()
@@ -111,10 +113,14 @@ internal class WavAudioFileWriter(
         }
     }
 
+    private val maxSampleBytes: Long
+        get() = 0xFFFF_FFFFL - headerSize.toLong()
+
     private companion object {
-        const val HEADER_SIZE = 44
-        const val MAX_SAMPLE_BYTES = 0xFFFF_FFFFL - HEADER_SIZE
-        const val SUBCHUNK1_SIZE = 16
+        const val PCM_HEADER_SIZE = 44
+        const val FLOAT_HEADER_SIZE = 46
+        const val PCM_FMT_SIZE = 16
+        const val FLOAT_FMT_SIZE = 18
         private val RIFF_BYTES = byteArrayOf(0x52, 0x49, 0x46, 0x46)
         private val WAVE_BYTES = byteArrayOf(0x57, 0x41, 0x56, 0x45)
         private val FMT_BYTES = byteArrayOf(0x66, 0x6D, 0x74, 0x20)

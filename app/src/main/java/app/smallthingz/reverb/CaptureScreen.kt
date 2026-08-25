@@ -112,6 +112,7 @@ class NotifyFileReceiver(
                 recording
             }
             if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
             ) return@launch
