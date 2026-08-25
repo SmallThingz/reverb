@@ -162,6 +162,7 @@ fun FilesScreen(
         if (pending.isEmpty()) return
         var deleted = 0
         var failed = false
+        val deletedIds = mutableSetOf<String>()
         pending.forEach { recording ->
             val didDelete = try {
                 RecordingRepository.delete(context, recording)
@@ -172,8 +173,12 @@ fun FilesScreen(
                 false
             }
             pendingDeletions.remove(recording.id)
-            if (didDelete) deleted++
+            if (didDelete) {
+                deleted++
+                deletedIds += recording.id
+            }
         }
+        recordings = recordings.filterNot { it.id in deletedIds }
         try {
             recordings = RecordingRepository.refresh(context)
         } catch (cancelled: CancellationException) {

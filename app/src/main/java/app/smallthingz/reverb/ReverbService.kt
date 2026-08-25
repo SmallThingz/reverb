@@ -407,12 +407,6 @@ class ReverbService : Service() {
     }
 
     private fun innerStartListening() {
-        when (state) {
-            STATE_LISTENING -> return
-            STATE_READY, STATE_PAUSED -> Unit
-            else -> return
-        }
-
         state = STATE_LISTENING
         updateWakeLockState()
         try {
@@ -422,7 +416,14 @@ class ReverbService : Service() {
             failListeningStart()
             return
         }
-        audioHandler.post { startAudioInputOnAudioThread() }
+        audioHandler.post {
+            if (!isListeningEnabled()) return@post
+            state = STATE_LISTENING
+            updateWakeLockState()
+            if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                startAudioInputOnAudioThread()
+            }
+        }
     }
 
     private fun failListeningStart() {
@@ -490,6 +491,7 @@ class ReverbService : Service() {
             } finally {
                 releaseAudioRecord()
                 mainHandler.post {
+                    if (isListeningEnabled() || state == STATE_LISTENING) return@post
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }

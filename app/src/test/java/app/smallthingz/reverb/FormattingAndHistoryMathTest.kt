@@ -250,6 +250,43 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun pcm8WavExportSize_accountsForOddDataPadding() {
+        assertEquals(
+            44L + 11_025L + 1L,
+            estimateExportSizeBytes(
+                format = ExportFormat.WAV,
+                codec = ExportCodec.PCM_16,
+                sampleRate = 11_025,
+                channelCount = 1,
+                durationSeconds = 1,
+                sampleFormat = PcmSampleFormat.PCM_8,
+            ),
+        )
+        assertEquals(
+            1L,
+            estimateExportDurationSeconds(
+                format = ExportFormat.WAV,
+                codec = ExportCodec.PCM_16,
+                sampleRate = 11_025,
+                channelCount = 1,
+                sizeBytes = 44L + 11_025L + 1L,
+                sampleFormat = PcmSampleFormat.PCM_8,
+            ),
+        )
+        assertEquals(
+            0L,
+            estimateExportDurationSeconds(
+                format = ExportFormat.WAV,
+                codec = ExportCodec.PCM_16,
+                sampleRate = 11_025,
+                channelCount = 1,
+                sizeBytes = 44L + 11_025L,
+                sampleFormat = PcmSampleFormat.PCM_8,
+            ),
+        )
+    }
+
+    @Test
     fun floatWavExportSize_accountsForExtendedFmtChunk() {
         assertEquals(
             46L + 44_100L * PcmSampleFormat.PCM_FLOAT.bytesPerSample,

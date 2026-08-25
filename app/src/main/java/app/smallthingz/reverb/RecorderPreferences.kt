@@ -435,10 +435,11 @@ fun estimateExportSizeBytes(
     val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
     if (bps <= 0L) return 0L
     val headerBytes = wavHeaderBytes(sampleFormat)
-    return if (durationSeconds > (Long.MAX_VALUE - headerBytes) / bps) {
+    return if (durationSeconds > (Long.MAX_VALUE - headerBytes - 1L) / bps) {
         Long.MAX_VALUE
     } else {
-        headerBytes + durationSeconds * bps
+        val payloadBytes = durationSeconds * bps
+        headerBytes + payloadBytes + wavDataPaddingBytes(payloadBytes)
     }
 }
 
@@ -456,7 +457,13 @@ fun estimateExportDurationSeconds(
     if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
     val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
     if (bps <= 0L) return 0L
-    return ((sizeBytes - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)) / bps
+    val payloadBudget = (sizeBytes - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
+    var duration = payloadBudget / bps
+    if (duration > 0L) {
+        val payloadBytes = duration * bps
+        if (payloadBytes + wavDataPaddingBytes(payloadBytes) > payloadBudget) duration--
+    }
+    return duration
 }
 
 fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_FILE_BYTES
@@ -465,8 +472,11 @@ fun exportPayloadLimitBytes(
     format: ExportFormat,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
-    return (exportFileSizeLimitBytes(format) - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
+    val budget = (exportFileSizeLimitBytes(format) - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
+    return if (sampleFormat == PcmSampleFormat.PCM_8) (budget - 1L).coerceAtLeast(0L) else budget
 }
+
+private fun wavDataPaddingBytes(dataSize: Long): Long = dataSize and 1L
 
 private fun wavHeaderBytes(sampleFormat: PcmSampleFormat): Long =
     if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_WAV_HEADER_BYTES else PCM_WAV_HEADER_BYTES

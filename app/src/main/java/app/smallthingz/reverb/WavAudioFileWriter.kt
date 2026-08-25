@@ -37,7 +37,7 @@ internal class WavAudioFileWriter(
     var totalSampleBytesWritten: Long = 0
         private set
     val totalFileBytesWritten: Long
-        get() = headerSize.toLong() + totalSampleBytesWritten
+        get() = headerSize.toLong() + paddedDataSize(totalSampleBytesWritten)
 
     init {
         try {
@@ -63,7 +63,8 @@ internal class WavAudioFileWriter(
         require(count % frameBytes == 0) {
             "WAV writes must contain complete frames: count=$count frameBytes=$frameBytes"
         }
-        if (totalSampleBytesWritten > maxSampleBytes - count.toLong()) {
+        val nextDataSize = totalSampleBytesWritten + count.toLong()
+        if (paddedDataSize(nextDataSize) > maxPayloadBytes) {
             throw IOException("WAV file exceeds RIFF size limit")
         }
         val buf = ByteBuffer.wrap(bytes, offset, count)
@@ -77,8 +78,16 @@ internal class WavAudioFileWriter(
     @Synchronized
     override fun close() {
         try {
+            val paddedDataSize = paddedDataSize(totalSampleBytesWritten)
+            if (paddedDataSize != totalSampleBytesWritten) {
+                channel.position(headerSize.toLong() + totalSampleBytesWritten)
+                val padding = ByteBuffer.wrap(byteArrayOf(0))
+                while (padding.hasRemaining()) {
+                    if (channel.write(padding) <= 0) throw IOException("Failed to pad WAV data")
+                }
+            }
             writeHeader(totalSampleBytesWritten)
-            channel.truncate(headerSize.toLong() + totalSampleBytesWritten)
+            channel.truncate(headerSize.toLong() + paddedDataSize)
             channel.force(true)
         } finally {
             runCatching { outputStream.close() }
@@ -88,7 +97,7 @@ internal class WavAudioFileWriter(
 
     @Synchronized
     private fun writeHeader(dataSize: Long) {
-        val chunkSize = headerSize.toLong() - 8L + dataSize
+        val chunkSize = headerSize.toLong() - 8L + paddedDataSize(dataSize)
         headerBuffer.clear()
         headerBuffer.order(ByteOrder.LITTLE_ENDIAN)
         headerBuffer.put(RIFF_BYTES)
@@ -113,8 +122,10 @@ internal class WavAudioFileWriter(
         }
     }
 
-    private val maxSampleBytes: Long
+    private val maxPayloadBytes: Long
         get() = 0xFFFF_FFFFL - headerSize.toLong()
+
+    private fun paddedDataSize(dataSize: Long): Long = dataSize + (dataSize and 1L)
 
     private companion object {
         const val PCM_HEADER_SIZE = 44

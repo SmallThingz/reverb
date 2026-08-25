@@ -47,6 +47,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
@@ -616,6 +617,8 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
     }
 
+    val currentExportTreeUri by rememberUpdatedState(selectedExportTreeUri)
+
     val connection = remember {
         object : android.content.ServiceConnection {
             override fun onServiceConnected(className: ComponentName, binder: IBinder) {
@@ -639,7 +642,7 @@ fun SettingsScreen(
             if (bound) {
                 context.unbindService(connection)
             }
-            RecordingRepository.releasePendingDirectoryAndCleanup(context, selectedExportTreeUri)
+            RecordingRepository.releasePendingDirectoryAndCleanup(context, currentExportTreeUri)
         }
     }
 
