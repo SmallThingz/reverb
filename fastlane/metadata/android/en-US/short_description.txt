@@ -1,1 +1,1 @@
-Rolling audio recorder for Android.
+Rolling audio recorder for Android

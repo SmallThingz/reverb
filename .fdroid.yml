@@ -1,0 +1,24 @@
+Categories:
+  - Multimedia
+License: GPL-3.0-only
+AuthorName: SmallThingz
+WebSite: https://github.com/SmallThingz/reverb
+SourceCode: https://github.com/SmallThingz/reverb
+IssueTracker: https://github.com/SmallThingz/reverb/issues
+Changelog: https://github.com/SmallThingz/reverb/releases
+
+RepoType: git
+Repo: https://github.com/SmallThingz/reverb.git
+
+Builds:
+  - versionName: '0.1.1'
+    versionCode: 16
+    commit: v0.1.1
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '0.1.1'
+CurrentVersionCode: 16
