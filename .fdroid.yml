@@ -1,5 +1,5 @@
 Categories:
-  - Multimedia
+  - Recorder
 License: GPL-3.0-only
 AuthorName: SmallThingz
 WebSite: https://github.com/SmallThingz/reverb
@@ -11,14 +11,14 @@ RepoType: git
 Repo: https://github.com/SmallThingz/reverb.git
 
 Builds:
-  - versionName: '0.1.1'
-    versionCode: 16
-    commit: v0.1.1
+  - versionName: '0.1.2'
+    versionCode: 17
+    commit: v0.1.2
     subdir: app
     gradle:
       - yes
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '0.1.1'
-CurrentVersionCode: 16
+CurrentVersion: '0.1.2'
+CurrentVersionCode: 17
