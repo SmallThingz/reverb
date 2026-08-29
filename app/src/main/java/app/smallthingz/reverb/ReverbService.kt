@@ -108,6 +108,9 @@ class ReverbService : Service() {
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
     @Volatile
+    private var configuredCaptureSnapshot: RecorderConfigurationSnapshot? = null
+
+    @Volatile
     private var visualizationCallback: VisualizationCallback? = null
 
     private val captureScratch = ByteArray(CAPTURE_SCRATCH_BYTES)
@@ -281,15 +284,29 @@ class ReverbService : Service() {
         return getRecorderPreferences(this).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
     }
 
+    private fun readConfiguredCaptureSnapshot(): RecorderConfigurationSnapshot {
+        return RecorderConfigurationSnapshot(
+            format = getConfiguredOutputFormat(this),
+            codec = getConfiguredOutputCodec(this),
+            sampleFormat = getConfiguredPcmSampleFormat(this),
+            sampleRate = getConfiguredSampleRate(this).takeIf { it > 0 }
+                ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE,
+            sourceMode = getConfiguredAudioSourceMode(this),
+            channelMode = getConfiguredChannelMode(this),
+            routeMode = getConfiguredInputRouteMode(this),
+        )
+    }
+
     private fun loadConfiguredPreferences() {
-        sourceMode = getConfiguredAudioSourceMode(this)
-        channelMode = getConfiguredChannelMode(this)
-        inputRouteMode = getConfiguredInputRouteMode(this)
-        outputFormat = getConfiguredOutputFormat(this)
-        outputCodec = getConfiguredOutputCodec(this)
-        pcmSampleFormat = getConfiguredPcmSampleFormat(this)
-        sampleRate = getConfiguredSampleRate(this).takeIf { it > 0 }
-            ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
+        val configured = readConfiguredCaptureSnapshot()
+        configuredCaptureSnapshot = configured
+        sourceMode = configured.sourceMode
+        channelMode = configured.channelMode
+        inputRouteMode = configured.routeMode
+        outputFormat = configured.format
+        outputCodec = configured.codec
+        pcmSampleFormat = configured.sampleFormat
+        sampleRate = configured.sampleRate
         audioSource = sourceMode.sourceValue
         fillRate = sampleRate.toLong() * channelMode.channelCount * pcmSampleFormat.bytesPerSample
         publishConfigurationSnapshot()
@@ -297,14 +314,16 @@ class ReverbService : Service() {
     }
 
     private fun loadConfiguration() {
-        var selectedSourceMode = getConfiguredAudioSourceMode(this)
-        var selectedChannelMode = getConfiguredChannelMode(this)
-        var selectedRouteMode = getConfiguredInputRouteMode(this)
-        var selectedFormat = getConfiguredOutputFormat(this)
-        var selectedCodec = getConfiguredOutputCodec(this)
-        val selectedSampleFormat = getConfiguredPcmSampleFormat(this)
+        val configured = readConfiguredCaptureSnapshot()
+        configuredCaptureSnapshot = configured
+        var selectedSourceMode = configured.sourceMode
+        var selectedChannelMode = configured.channelMode
+        var selectedRouteMode = configured.routeMode
+        var selectedFormat = configured.format
+        var selectedCodec = configured.codec
+        val selectedSampleFormat = configured.sampleFormat
 
-        val requestedRate = getConfiguredSampleRate(this)
+        val requestedRate = configured.sampleRate
         val resolvedConfig = resolveOperationalConfiguration(
             preferredSourceMode = selectedSourceMode,
             preferredChannelMode = selectedChannelMode,
@@ -783,6 +802,10 @@ class ReverbService : Service() {
             lease.close()
             return
         }
+        val leaseClosed = AtomicBoolean(false)
+        fun closeLeaseOnce() {
+            if (leaseClosed.compareAndSet(false, true)) lease.close()
+        }
         val startedAtMillis = lease.startedAtMillis
         val endedAtMillis = lease.endedAtMillis.takeIf { it > 0L }
             ?: recordingEndTimestampMillis(startedAtMillis, lease.durationSeconds)
@@ -796,6 +819,7 @@ class ReverbService : Service() {
         val exportTask =
             object : FutureTask<Unit>(
                 Callable {
+                    exportToken.started.set(true)
                     var outTarget: RecordingOutputTarget? = null
                     var committed = false
                     try {
@@ -887,7 +911,7 @@ class ReverbService : Service() {
                         finishExportFailure(exportToken, receiver, message, e)
                         deleteOutputTarget(outTarget)
                     } finally {
-                        lease.close()
+                        closeLeaseOnce()
                         if (exportToken.cancelled.get() && !committed) {
                             deleteOutputTarget(outTarget)
                         }
@@ -897,14 +921,9 @@ class ReverbService : Service() {
                     Unit
                 },
             ) {
-                override fun run() {
-                    exportToken.started.set(true)
-                    super.run()
-                }
-
                 override fun done() {
                     if (!exportToken.started.get()) {
-                        lease.close()
+                        closeLeaseOnce()
                     }
                 }
             }
@@ -917,14 +936,14 @@ class ReverbService : Service() {
             }
         }
         if (!accepted) {
-            lease.close()
+            closeLeaseOnce()
             exportTask.cancel(true)
             return
         }
         try {
             exportWorkExecutor.execute(exportTask)
         } catch (e: RejectedExecutionException) {
-            lease.close()
+            closeLeaseOnce()
             clearExportState(exportToken)
             Log.w(TAG, "Export rejected because the service is shutting down", e)
             finishExportFailure(exportToken, receiver, getString(R.string.save_failed), e)
@@ -991,20 +1010,8 @@ class ReverbService : Service() {
 
     private fun applyConfiguredPreferencesOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
-        val newSourceMode = getConfiguredAudioSourceMode(this)
-        val newChannelMode = getConfiguredChannelMode(this)
-        val newRouteMode = getConfiguredInputRouteMode(this)
-        val newFormat = getConfiguredOutputFormat(this)
-        val newCodec = getConfiguredOutputCodec(this)
-        val newSampleFormat = getConfiguredPcmSampleFormat(this)
-        val captureConfigChanged =
-            newSourceMode != sourceMode ||
-                newChannelMode != channelMode ||
-                newRouteMode != inputRouteMode ||
-                newFormat != outputFormat ||
-                newCodec != outputCodec ||
-                getConfiguredSampleRate(this) != sampleRate ||
-                newSampleFormat != pcmSampleFormat
+        val configured = readConfiguredCaptureSnapshot()
+        val captureConfigChanged = configured != configuredCaptureSnapshot
         val restartInput = state == STATE_LISTENING && isListeningEnabled() && captureConfigChanged
 
         if (restartInput) {
@@ -1013,7 +1020,13 @@ class ReverbService : Service() {
             releaseAudioRecord()
             startAudioInputOnAudioThread()
         } else {
-            loadConfiguredPreferences()
+            // While capture is active, the fields above describe the operational
+            // AudioRecord configuration, which may be a hardware fallback from the
+            // user's requested configuration. Reloading requested values here would
+            // relabel the existing PCM stream without reopening AudioRecord.
+            if (state != STATE_LISTENING) {
+                loadConfiguredPreferences()
+            }
             configurePersistentBuffer()
             if (state == STATE_LISTENING && !hasWritableCaptureTarget()) {
                 pauseListeningForNoWritableBufferOnAudioThread()
@@ -1131,7 +1144,10 @@ class ReverbService : Service() {
     }
 
     private fun canExportBufferedAudio(): Boolean {
-        return availableBufferedDurationSeconds() > 0.0 || state == STATE_LISTENING || state == STATE_PAUSED
+        return availableBufferedDurationSeconds(BufferSlot.ONE_SHOT) > 0.0 ||
+            availableBufferedDurationSeconds(BufferSlot.LOOPING) > 0.0 ||
+            state == STATE_LISTENING ||
+            state == STATE_PAUSED
     }
 
     private fun appendCapturedAudio(array: ByteArray, offset: Int, count: Int) {
@@ -1488,6 +1504,9 @@ class ReverbService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        if (intent?.action == ACTION_APPLY_SETTINGS) {
+            applyUpdatedPreferences()
+        }
         if (isDebuggableBuild() && intent?.action == ACTION_DEBUG_ENABLE_LISTENING && !isListeningEnabled()) {
             setListeningEnabled(true)
         }
@@ -1566,10 +1585,15 @@ class ReverbService : Service() {
 
     private fun configurePersistentBuffer() {
         val mode = getConfiguredRetentionMode(this)
-        val retentionValue = when (mode) {
-            RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
-            RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
-        }
+        val frameBytes = channelMode.channelCount * pcmSampleFormat.bytesPerSample
+        val retentionValue = normalizeRetentionValue(
+            mode,
+            when (mode) {
+                RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
+                RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
+            },
+            frameBytes,
+        )
         loopingBufferEnabled = retentionValue > 0L
         loopingAudioChunkStore.configure(
             requestedRetentionMode = mode,
@@ -1578,10 +1602,14 @@ class ReverbService : Service() {
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
         )
-        val oneShotRetentionValue = when (mode) {
-            RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(this)
-            RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(this)
-        }
+        val oneShotRetentionValue = normalizeRetentionValue(
+            mode,
+            when (mode) {
+                RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(this)
+                RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(this)
+            },
+            frameBytes,
+        )
         oneShotBufferEnabled = oneShotRetentionValue > 0L
         oneShotAudioChunkStore.configure(
             requestedRetentionMode = mode,
@@ -1715,8 +1743,14 @@ class ReverbService : Service() {
             Log.w(TAG, "Debug export ignored; state=$state")
             return
         }
-        Log.d(TAG, "exportDebug seconds=$seconds available=${availableBufferedSampleBytes()}")
-        dumpRecording(seconds, NotifyFileReceiver(this), "")
+        val bufferSlot = when {
+            availableBufferedSampleBytes(BufferSlot.LOOPING) > 0L -> BufferSlot.LOOPING
+            availableBufferedSampleBytes(BufferSlot.ONE_SHOT) > 0L -> BufferSlot.ONE_SHOT
+            loopingBufferEnabled -> BufferSlot.LOOPING
+            else -> BufferSlot.ONE_SHOT
+        }
+        Log.d(TAG, "exportDebug seconds=$seconds slot=$bufferSlot available=${availableBufferedSampleBytes(bufferSlot)}")
+        dumpRecording(seconds, NotifyFileReceiver(this), "", bufferSlot)
     }
 
     private fun injectDebugBuffer(seconds: Float) {
@@ -1724,11 +1758,11 @@ class ReverbService : Service() {
             Log.w(TAG, "injectDebugBuffer ignored seconds=$seconds state=$state")
             return
         }
-        val logicalRetentionBytes = cachedRetentionSampleBytes
-        if (logicalRetentionBytes <= 0L) {
-            Log.w(TAG, "injectDebugBuffer ignored retention=$logicalRetentionBytes")
+        if (!hasWritableCaptureTarget()) {
+            Log.w(TAG, "injectDebugBuffer ignored; no writable buffer")
             return
         }
+        val logicalRetentionBytes = cachedRetentionSampleBytes
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1).toLong()
         val totalBytes = alignDown((seconds * fillRate).toLong().coerceAtLeast(0L), frameBytes)
         val chunk = ByteArray(64 * 1024)
@@ -1738,6 +1772,7 @@ class ReverbService : Service() {
             if (count <= 0) break
             appendCapturedAudio(chunk, 0, count)
             remaining -= count.toLong()
+            if (!hasWritableCaptureTarget()) break
         }
         if (state != STATE_LISTENING) {
             state = STATE_PAUSED
@@ -1926,8 +1961,8 @@ class ReverbService : Service() {
     private data class ExportCancellationToken(
         val id: Long,
         val cancelled: AtomicBoolean = AtomicBoolean(false),
-        // `started` flips in FutureTask.run() before any export work begins so queued
-        // cancellations can be completed synchronously without racing the worker body.
+        // `started` flips as the callable begins. Until then, queued cancellation owns
+        // lease cleanup; after that point the callable owns it.
         val started: AtomicBoolean = AtomicBoolean(false),
         val committed: AtomicBoolean = AtomicBoolean(false),
         val terminalDelivered: AtomicBoolean = AtomicBoolean(false),
@@ -1946,6 +1981,7 @@ class ReverbService : Service() {
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
         val nextExportTokenId = AtomicLong(1L)
+        const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         const val ACTION_DEBUG_ENABLE_LISTENING = "${DEBUG_ACTION_PREFIX}ENABLE_LISTENING"
         const val ACTION_DEBUG_DISABLE_LISTENING = "${DEBUG_ACTION_PREFIX}DISABLE_LISTENING"
         const val ACTION_DEBUG_CLEAR_BUFFER = "${DEBUG_ACTION_PREFIX}CLEAR_BUFFER"

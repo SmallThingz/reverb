@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 private const val PCM_WAV_HEADER_BYTES = 44L
-private const val FLOAT_WAV_HEADER_BYTES = 46L
+private const val FLOAT_WAV_HEADER_BYTES = 58L
 private const val WAV_MAX_FILE_BYTES = 0xFFFF_FFFFL
 
 private val STANDARD_SAMPLE_RATES =
@@ -57,6 +57,12 @@ enum class ExportFormat(
     val prefValue: String get() = name.lowercase()
     val extension: String get() = "wav"
     val outputMimeType: String get() = "audio/wav"
+
+    companion object {
+        private val byPrefValue = entries.associateBy { it.prefValue }
+
+        fun fromPrefValue(value: String?): ExportFormat = byPrefValue[value] ?: WAV
+    }
 }
 
 enum class ExportCodec {
@@ -64,6 +70,12 @@ enum class ExportCodec {
     ;
 
     val prefValue: String get() = name.lowercase()
+
+    companion object {
+        private val byPrefValue = entries.associateBy { it.prefValue }
+
+        fun fromPrefValue(value: String?): ExportCodec = byPrefValue[value] ?: PCM_16
+    }
 }
 
 private const val WAVE_FORMAT_PCM: Short = 1
@@ -222,16 +234,6 @@ fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-fun isBatteryOptimizationStartupPromptPending(context: Context): Boolean {
-    return !getRecorderPreferences(context).getBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, false)
-}
-
-fun markBatteryOptimizationStartupPromptHandled(context: Context) {
-    getRecorderPreferences(context).edit {
-        putBoolean(PrefKey.BATTERY_OPTIMIZATION_PROMPT_SHOWN, true)
-    }
-}
-
 fun getConfiguredThemeMode(context: Context): AppThemeMode {
     return AppThemeMode.fromPrefValue(
         getRecorderPreferences(context).getString(PrefKey.THEME_MODE, AppThemeMode.SYSTEM.prefValue),
@@ -262,13 +264,23 @@ fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long {
         .coerceAtLeast(0L)
 }
 
+private fun configuredSizeHasWholeFrame(
+    context: Context,
+    sizeBytes: Long,
+): Boolean {
+    val channelCount = getConfiguredChannelMode(context).channelCount
+    val bytesPerSample = getConfiguredPcmSampleFormat(context).bytesPerSample
+    val frameBytes = channelCount * bytesPerSample
+    return normalizeRetentionValue(RetentionMode.SIZE, sizeBytes, frameBytes) > 0L
+}
+
 fun isConfiguredOneShotBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
-    RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(context) > 0L
+    RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, getConfiguredOneShotRetentionSizeBytes(context))
     RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(context) > 0L
 }
 
 fun isConfiguredLoopingBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
-    RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(context) > 0L
+    RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, getConfiguredRetentionSizeBytes(context))
     RetentionMode.TIME -> getConfiguredRetentionSeconds(context) > 0L
 }
 
@@ -280,12 +292,64 @@ fun markOnboardingShown(context: Context): Boolean {
     return getRecorderPreferences(context).edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true).commit()
 }
 
+fun finishOnboarding(
+    context: Context,
+    oneShotEnabled: Boolean,
+    loopingEnabled: Boolean,
+): Boolean {
+    if (!oneShotEnabled && !loopingEnabled) return false
+    val prefs = getRecorderPreferences(context)
+    val editor = prefs.edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true)
+    when (getConfiguredRetentionMode(context)) {
+        RetentionMode.TIME -> {
+            val oneShotValue = getConfiguredOneShotRetentionSeconds(context)
+            val loopingValue = getConfiguredRetentionSeconds(context)
+            editor.putLong(
+                PrefKey.ONE_SHOT_RETENTION_SECONDS,
+                if (oneShotEnabled) oneShotValue.takeIf { it > 0L } ?: ReverbConfig.DEFAULT_RETENTION_SECONDS else 0L,
+            )
+            editor.putLong(
+                PrefKey.RETENTION_SECONDS,
+                if (loopingEnabled) loopingValue.takeIf { it > 0L } ?: ReverbConfig.DEFAULT_RETENTION_SECONDS else 0L,
+            )
+        }
+
+        RetentionMode.SIZE -> {
+            val oneShotValue = getConfiguredOneShotRetentionSizeBytes(context)
+            val loopingValue = getConfiguredRetentionSizeBytes(context)
+            editor.putLong(
+                PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
+                if (oneShotEnabled) {
+                    oneShotValue.takeIf { configuredSizeHasWholeFrame(context, it) }
+                        ?: ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES
+                } else {
+                    0L
+                },
+            )
+            editor.putLong(
+                PrefKey.AUDIO_MEMORY_SIZE,
+                if (loopingEnabled) {
+                    loopingValue.takeIf { configuredSizeHasWholeFrame(context, it) }
+                        ?: ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES
+                } else {
+                    0L
+                },
+            )
+        }
+    }
+    return editor.commit()
+}
+
 fun getConfiguredOutputFormat(context: Context): ExportFormat {
-    return ExportFormat.WAV
+    return ExportFormat.fromPrefValue(
+        getRecorderPreferences(context).getString(PrefKey.OUTPUT_FORMAT, ExportFormat.WAV.prefValue),
+    )
 }
 
 fun getConfiguredOutputCodec(context: Context): ExportCodec {
-    return ExportCodec.PCM_16
+    return ExportCodec.fromPrefValue(
+        getRecorderPreferences(context).getString(PrefKey.OUTPUT_CODEC, ExportCodec.PCM_16.prefValue),
+    )
 }
 
 fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat {
@@ -376,7 +440,7 @@ fun retentionSecondsForBytes(
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
     val bytesPerSecond = bytesPerSecond(sampleRate, channelCount, sampleFormat)
-    if (bytesPerSecond <= 0L) return 0
+    if (bytesPerSecond <= 0L || bytes <= 0L) return 0
     return bytes / bytesPerSecond
 }
 

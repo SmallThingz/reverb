@@ -202,7 +202,7 @@ fun CaptureScreen(
             if (oneShotEnabled) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING,
         )
     }
-    var startupBufferChosen by rememberSaveable { mutableStateOf(false) }
+    var startupBufferChosen by remember { mutableStateOf(false) }
     val blobController = remember { AudioBlobController() }
 
     var showClearDialog by remember { mutableStateOf(false) }
@@ -236,12 +236,22 @@ fun CaptureScreen(
                 loopingPayloadBytes = loopingBytes
                 oneShotEnabled = oneShotIsEnabled
                 loopingEnabled = loopingIsEnabled
-                if (!startupBufferChosen) {
-                    selectedBuffer = defaultStartupBufferSlot(
-                        oneShotEnabled = oneShotIsEnabled,
-                        oneShotFull = oneShotFull,
-                        loopingEnabled = loopingIsEnabled,
-                    )
+                val selectedBufferEnabled = when (selectedBuffer) {
+                    ReverbService.BufferSlot.ONE_SHOT -> oneShotIsEnabled
+                    ReverbService.BufferSlot.LOOPING -> loopingIsEnabled
+                }
+                if (!startupBufferChosen || !selectedBufferEnabled) {
+                    selectedBuffer = if (!startupBufferChosen) {
+                        defaultStartupBufferSlot(
+                            oneShotEnabled = oneShotIsEnabled,
+                            oneShotFull = oneShotFull,
+                            loopingEnabled = loopingIsEnabled,
+                        )
+                    } else if (oneShotIsEnabled) {
+                        ReverbService.BufferSlot.ONE_SHOT
+                    } else {
+                        ReverbService.BufferSlot.LOOPING
+                    }
                     startupBufferChosen = true
                 }
             }
@@ -621,6 +631,7 @@ fun CaptureScreen(
         val currentSeconds = activeRangeSnapshot.durationSeconds.toFloat().coerceAtLeast(0f)
         ExportRangeDialog(
             currentBufferSeconds = currentSeconds,
+            exportConfig = currentExportConfig(context, service),
             onExport = { range ->
                 showExportRangeDialog = false
                 if (range.warningDurationSeconds != null) {
@@ -862,9 +873,10 @@ private fun BufferSegment(
 ) {
     val colors = MaterialTheme.colorScheme
     val containerColor = if (selected) colors.primary else colors.surfaceContainerHighest
+    val segmentEnabled = enabled && bufferEnabled
     val contentColor = when {
         selected -> colors.onPrimary
-        enabled -> colors.onSurfaceVariant
+        segmentEnabled -> colors.onSurfaceVariant
         else -> colors.onSurfaceVariant.copy(alpha = 0.46f)
     }
     val statText = if (bufferEnabled) {
@@ -876,7 +888,7 @@ private fun BufferSegment(
     Surface(
         modifier = Modifier.selectable(
             selected = selected,
-            enabled = enabled,
+            enabled = segmentEnabled,
             role = Role.RadioButton,
             onClick = onClick,
         ),
@@ -1210,6 +1222,7 @@ private fun ExportClampDialog(
 @Composable
 private fun ExportRangeDialog(
     currentBufferSeconds: Float,
+    exportConfig: ExportUiConfig,
     onExport: (ExportRange) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1225,9 +1238,9 @@ private fun ExportRangeDialog(
     }
     var startError by remember { mutableStateOf<String?>(null) }
     var endError by remember { mutableStateOf<String?>(null) }
+    var textRangeEdited by remember { mutableStateOf(false) }
 
     fun clampExportRange(startSeconds: Float, endSeconds: Float): ExportRange {
-        val exportConfig = currentExportConfig(context, null)
         val maxDurationSeconds = exportDurationLimitSeconds(
             exportConfig.format,
             exportConfig.codec,
@@ -1266,7 +1279,7 @@ private fun ExportRangeDialog(
     }
 
     fun submit() {
-        applyTextRange()
+        if (textRangeEdited) applyTextRange()
         if (startError != null || endError != null || availableSeconds <= 0f) return
         onExport(clampExportRange(rangeStart, rangeEnd))
     }
@@ -1318,6 +1331,7 @@ private fun ExportRangeDialog(
                         rangeEnd = end
                         startText = formatDurationInput(start.roundToInt())
                         endText = formatDurationInput(end.roundToInt())
+                        textRangeEdited = false
                         startError = null
                         endError = null
                     },
@@ -1332,6 +1346,7 @@ private fun ExportRangeDialog(
                         value = startText,
                         onValueChange = { value ->
                             startText = value
+                            textRangeEdited = true
                             startError = null
                             val parsed = parseDurationInput(value)?.toFloat()
                             if (parsed != null && parsed >= 0f && parsed < rangeEnd) rangeStart = parsed
@@ -1348,6 +1363,7 @@ private fun ExportRangeDialog(
                         value = endText,
                         onValueChange = { value ->
                             endText = value
+                            textRangeEdited = true
                             endError = null
                             val parsed = parseDurationInput(value)?.toFloat()
                             if (parsed != null && parsed > rangeStart && parsed <= availableSeconds) rangeEnd = parsed

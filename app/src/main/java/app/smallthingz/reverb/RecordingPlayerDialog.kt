@@ -96,7 +96,7 @@ fun RecordingPlayerDialog(
             prepared = true
             val dur = preparedPlayer.duration.coerceAtLeast(0)
             duration = dur.coerceAtLeast(1)
-            if (!released) {
+            if (!released && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
                 preparedPlayer.start()
                 isPlaying = true
             }

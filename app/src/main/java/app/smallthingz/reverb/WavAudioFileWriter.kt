@@ -111,7 +111,12 @@ internal class WavAudioFileWriter(
         headerBuffer.putInt(byteRate)
         headerBuffer.putShort(blockAlign)
         headerBuffer.putShort(sampleFormat.bitsPerSample.toShort())
-        if (sampleFormat == PcmSampleFormat.PCM_FLOAT) headerBuffer.putShort(0)
+        if (sampleFormat == PcmSampleFormat.PCM_FLOAT) {
+            headerBuffer.putShort(0)
+            headerBuffer.put(FACT_BYTES)
+            headerBuffer.putInt(FACT_DATA_SIZE)
+            headerBuffer.putInt((dataSize / (blockAlign.toInt() and 0xFFFF).toLong()).toInt())
+        }
         headerBuffer.put(DATA_BYTES)
         headerBuffer.putInt((dataSize and 0xFFFF_FFFFL).toInt())
         headerBuffer.flip()
@@ -129,12 +134,14 @@ internal class WavAudioFileWriter(
 
     private companion object {
         const val PCM_HEADER_SIZE = 44
-        const val FLOAT_HEADER_SIZE = 46
+        const val FLOAT_HEADER_SIZE = 58
         const val PCM_FMT_SIZE = 16
         const val FLOAT_FMT_SIZE = 18
+        const val FACT_DATA_SIZE = 4
         private val RIFF_BYTES = byteArrayOf(0x52, 0x49, 0x46, 0x46)
         private val WAVE_BYTES = byteArrayOf(0x57, 0x41, 0x56, 0x45)
         private val FMT_BYTES = byteArrayOf(0x66, 0x6D, 0x74, 0x20)
+        private val FACT_BYTES = byteArrayOf(0x66, 0x61, 0x63, 0x74)
         private val DATA_BYTES = byteArrayOf(0x64, 0x61, 0x74, 0x61)
     }
 }

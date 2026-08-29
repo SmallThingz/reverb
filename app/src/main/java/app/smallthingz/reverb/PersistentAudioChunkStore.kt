@@ -16,6 +16,17 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToLong
 
+internal fun normalizeRetentionValue(
+    retentionMode: RetentionMode,
+    requestedRetentionValue: Long,
+    frameBytes: Int,
+): Long {
+    val nonNegative = requestedRetentionValue.coerceAtLeast(0L)
+    if (retentionMode != RetentionMode.SIZE) return nonNegative
+    if (frameBytes <= 0) return 0L
+    return nonNegative - nonNegative % frameBytes.toLong()
+}
+
 internal fun oneShotWritableBytes(
     retentionMode: RetentionMode,
     retentionValue: Long,
@@ -28,8 +39,17 @@ internal fun oneShotWritableBytes(
     val remaining = when (retentionMode) {
         RetentionMode.SIZE -> (retentionValue - retainedPayloadBytes).coerceAtLeast(0L)
         RetentionMode.TIME -> {
-            val remainingSeconds = (retentionValue.toDouble() - retainedDurationSeconds).coerceAtLeast(0.0)
-            val remainingFrames = floor(remainingSeconds * sampleRate.toDouble()).toLong()
+            val targetFrames = retentionValue.toDouble() * sampleRate.toDouble()
+            val retainedFrames = retainedDurationSeconds.coerceAtLeast(0.0) * sampleRate.toDouble()
+            val rawRemainingFrames = targetFrames - retainedFrames
+            // Summing durations from chunks with different sample rates necessarily uses
+            // floating point. Recover only the tiny error band around an integer frame;
+            // the 0.25-frame cap prevents the tolerance from extending retention.
+            val roundingTolerance = minOf(
+                0.25,
+                8.0 * (Math.ulp(targetFrames) + Math.ulp(retainedFrames)),
+            )
+            val remainingFrames = floor((rawRemainingFrames + roundingTolerance).coerceAtLeast(0.0)).toLong()
             if (remainingFrames > Long.MAX_VALUE / frameBytes.toLong()) Long.MAX_VALUE
             else remainingFrames * frameBytes.toLong()
         }
@@ -65,6 +85,7 @@ internal class PersistentAudioChunkStore(
     private var nextChunkId = 0u
     private var retainedPayloadBytes = 0L
     private var retainedDurationSeconds = 0.0
+    private var retainedDurationCompensation = 0.0
 
     private var retentionMode = RetentionMode.SIZE
     private var retentionValue = Long.MAX_VALUE
@@ -106,10 +127,19 @@ internal class PersistentAudioChunkStore(
     ) {
         ensureLoadedLocked()
 
-        val normalizedRetention = requestedRetentionValue.coerceAtLeast(0L)
         val validFormat = requestedSampleRate > 0 && requestedChannelCount in 1..MAX_CHANNEL_COUNT
         val normalizedSampleRate = if (validFormat) requestedSampleRate else 0
         val normalizedChannelCount = if (validFormat) requestedChannelCount else 0
+        val normalizedFrameBytes = if (validFormat) {
+            normalizedChannelCount * sampleFormat.bytesPerSample
+        } else {
+            0
+        }
+        val normalizedRetention = normalizeRetentionValue(
+            requestedRetentionMode,
+            requestedRetentionValue,
+            normalizedFrameBytes,
+        )
         val formatChanged =
             configuredSampleRate != normalizedSampleRate ||
                 configuredChannelCount != normalizedChannelCount ||
@@ -190,7 +220,7 @@ internal class PersistentAudioChunkStore(
             record.sampleFrames += writtenFrames
             record.payloadChecksum = activePayloadCrc.value.toInt()
             retainedPayloadBytes = safeAdd(retainedPayloadBytes, alignedWriteCount.toLong())
-            retainedDurationSeconds += writtenFrames.toDouble() / record.sampleRate.toDouble()
+            addRetainedDurationLocked(writtenFrames.toDouble() / record.sampleRate.toDouble())
             sourceOffset += alignedWriteCount
             remaining -= alignedWriteCount
             lastWriteAtMillis = System.currentTimeMillis()
@@ -909,24 +939,20 @@ internal class PersistentAudioChunkStore(
 
         when (retentionMode) {
             RetentionMode.SIZE -> {
-                var total = retainedPayloadBytes
-                while (total > retentionValue && chunks.isNotEmpty()) {
+                while (retainedPayloadBytes > retentionValue && chunks.isNotEmpty()) {
                     val oldest = chunks.first()
                     if (oldest === activeRecord) break
                     removeFirstChunkLocked()
-                    total -= oldest.payloadBytes
                     retireRecordLocked(oldest)
                     changed = true
                 }
             }
 
             RetentionMode.TIME -> {
-                var total = retainedDurationSeconds
-                while (total > retentionValue.toDouble() && chunks.isNotEmpty()) {
+                while (retainedDurationSeconds > retentionValue.toDouble() && chunks.isNotEmpty()) {
                     val oldest = chunks.first()
                     if (oldest === activeRecord) break
                     removeFirstChunkLocked()
-                    total -= oldest.durationSeconds
                     retireRecordLocked(oldest)
                     changed = true
                 }
@@ -993,7 +1019,7 @@ internal class PersistentAudioChunkStore(
         check(liveChunkIds.add(record.id)) { "Duplicate live chunk id ${record.id}" }
         chunks.addLast(record)
         retainedPayloadBytes = safeAdd(retainedPayloadBytes, record.payloadBytes)
-        retainedDurationSeconds += record.durationSeconds
+        addRetainedDurationLocked(record.durationSeconds)
     }
 
     private fun removeFirstChunkLocked(): ChunkRecord {
@@ -1011,7 +1037,21 @@ internal class PersistentAudioChunkStore(
     private fun removeChunkTotalsLocked(record: ChunkRecord) {
         check(liveChunkIds.remove(record.id)) { "Missing live chunk id ${record.id}" }
         retainedPayloadBytes = (retainedPayloadBytes - record.payloadBytes).coerceAtLeast(0L)
-        retainedDurationSeconds = (retainedDurationSeconds - record.durationSeconds).coerceAtLeast(0.0)
+        addRetainedDurationLocked(-record.durationSeconds)
+        if (chunks.isEmpty()) {
+            retainedDurationSeconds = 0.0
+            retainedDurationCompensation = 0.0
+        } else if (retainedDurationSeconds < 0.0) {
+            retainedDurationSeconds = 0.0
+            retainedDurationCompensation = 0.0
+        }
+    }
+
+    private fun addRetainedDurationLocked(deltaSeconds: Double) {
+        val adjusted = deltaSeconds - retainedDurationCompensation
+        val updated = retainedDurationSeconds + adjusted
+        retainedDurationCompensation = (updated - retainedDurationSeconds) - adjusted
+        retainedDurationSeconds = updated
     }
 
     private fun configuredFrameBytesLocked(): Int {

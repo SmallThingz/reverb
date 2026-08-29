@@ -306,9 +306,9 @@ private fun describeDocumentRecordingLocation(
     }.onFailure { Log.w(TAG, "getDocumentId failed for $documentUri", it) }.getOrNull())?.let {
         return it
     }
-    describeDocumentIdPath(context, directoryUri?.let {
-        runCatching { DocumentsContract.getTreeDocumentId(it) }
-            .onFailure { Log.w(TAG, "getTreeDocumentId failed for $it", it) }.getOrNull()
+    describeDocumentIdPath(context, directoryUri?.let { treeUri ->
+        runCatching { DocumentsContract.getTreeDocumentId(treeUri) }
+            .onFailure { error -> Log.w(TAG, "getTreeDocumentId failed for $treeUri", error) }.getOrNull()
     })?.let {
         val normalizedBasePath = it.trimEnd('/')
         return if (normalizedBasePath == recording.displayName ||

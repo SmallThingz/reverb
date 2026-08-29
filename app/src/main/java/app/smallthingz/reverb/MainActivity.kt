@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -19,6 +18,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -60,7 +63,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -73,28 +75,23 @@ private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permis
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
+    private var notificationPermissionGranted by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
-    private var showBatteryOptimizationPrompt by mutableStateOf(false)
     private var showOnboarding by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
-    private var batteryOptimizationPromptPending = false
 
     private val microphonePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                permissionsGranted = true
-                showPermissionDenied = false
-                if (!maybeRequestNotificationPermission()) {
-                    maybeShowBatteryOptimizationPrompt()
-                }
-            } else {
-                showPermissionDenied = true
+            permissionsGranted = granted
+            showPermissionDenied = !granted && !showOnboarding
+            if (granted && !showOnboarding) {
+                maybeRequestNotificationPermission()
             }
         }
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            maybeShowBatteryOptimizationPrompt()
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            notificationPermissionGranted = granted
         }
 
     private var microphonePermissionRequested = false
@@ -107,7 +104,8 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
-        batteryOptimizationPromptPending = isBatteryOptimizationStartupPromptPending(this)
+        permissionsGranted = hasRequiredPermissions()
+        notificationPermissionGranted = hasNotificationPermission()
         showOnboarding = isOnboardingPending(this)
         RecordingRepository.schedulePersistedPermissionCleanup(this)
         themeMode = getConfiguredThemeMode(this)
@@ -116,10 +114,31 @@ class MainActivity : ComponentActivity() {
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
                 if (showOnboarding) {
                     OnboardingScreen(
-                        onContinue = {
-                            markOnboardingShown(this)
-                            showOnboarding = false
-                            beginPermissionFlow()
+                        microphoneAllowed = permissionsGranted,
+                        notificationAllowed = notificationPermissionGranted,
+                        notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                        initialOneShotEnabled = isConfiguredOneShotBufferEnabled(this),
+                        initialLoopingEnabled = isConfiguredLoopingBufferEnabled(this),
+                        onRequestMicrophone = {
+                            microphonePermissionRequested = true
+                            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        onRequestNotifications = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notificationPermissionRequested = true
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                        onFinish = { oneShotEnabled, loopingEnabled ->
+                            if (finishOnboarding(this, oneShotEnabled, loopingEnabled)) {
+                                showOnboarding = false
+                                beginPermissionFlow()
+                            } else {
+                                AppFeedbackCenter.post(
+                                    getString(R.string.recorder_state_persist_failed),
+                                    FeedbackTone.ERROR,
+                                )
+                            }
                         },
                     )
                 } else {
@@ -132,20 +151,6 @@ class MainActivity : ComponentActivity() {
                                 startActivity(intent)
                             },
                             onExit = { finish() },
-                        )
-                    } else if (permissionsGranted && showBatteryOptimizationPrompt) {
-                        BatteryOptimizationPromptDialog(
-                            onAllow = {
-                                batteryOptimizationPromptPending = false
-                                markBatteryOptimizationStartupPromptHandled(this)
-                                showBatteryOptimizationPrompt = false
-                                openBatteryOptimizationSettings()
-                            },
-                            onDismiss = {
-                                batteryOptimizationPromptPending = false
-                                markBatteryOptimizationStartupPromptHandled(this)
-                                showBatteryOptimizationPrompt = false
-                            },
                         )
                     }
                     MainScreen(
@@ -166,6 +171,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        permissionsGranted = hasRequiredPermissions()
+        notificationPermissionGranted = hasNotificationPermission()
         if (!showOnboarding) beginPermissionFlow()
     }
 
@@ -173,11 +180,10 @@ class MainActivity : ComponentActivity() {
         if (hasRequiredPermissions()) {
             permissionsGranted = true
             showPermissionDenied = false
-            if (!maybeRequestNotificationPermission()) {
-                maybeShowBatteryOptimizationPrompt()
-            }
+            maybeRequestNotificationPermission()
             return
         }
+        permissionsGranted = false
         if (microphonePermissionRequested) {
             showPermissionDenied = true
             return
@@ -190,50 +196,20 @@ class MainActivity : ComponentActivity() {
         return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun hasNotificationPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
     private fun maybeRequestNotificationPermission(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return false
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
+        if (hasNotificationPermission()) {
+            notificationPermissionGranted = true
+            return false
+        }
         notificationPermissionRequested = true
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         return true
-    }
-
-    private fun maybeShowBatteryOptimizationPrompt() {
-        if (!batteryOptimizationPromptPending || !permissionsGranted) return
-        if (isIgnoringBatteryOptimizations(this)) {
-            batteryOptimizationPromptPending = false
-            markBatteryOptimizationStartupPromptHandled(this)
-        } else {
-            showBatteryOptimizationPrompt = true
-        }
-    }
-
-    @SuppressLint("BatteryLife")
-    private fun openBatteryOptimizationSettings() {
-        val intents = listOf(
-            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = "package:$packageName".toUri()
-            },
-            Intent("android.settings.VIEW_ADVANCED_POWER_USAGE_DETAIL").apply {
-                data = "package:$packageName".toUri()
-                putExtra("package_name", packageName)
-                putExtra("packageName", packageName)
-            },
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
-            },
-            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS),
-        )
-        val launched = intents.any { intent ->
-            runCatching {
-                startActivity(intent)
-                true
-            }.getOrDefault(false)
-        }
-        if (!launched) {
-            AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
-        }
     }
 
     private fun applyPhonePortraitOnly() {
@@ -253,52 +229,194 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
 }
 
 @Composable
-private fun OnboardingScreen(onContinue: () -> Unit) {
+private fun OnboardingScreen(
+    microphoneAllowed: Boolean,
+    notificationAllowed: Boolean,
+    notificationPermissionRequired: Boolean,
+    initialOneShotEnabled: Boolean,
+    initialLoopingEnabled: Boolean,
+    onRequestMicrophone: () -> Unit,
+    onRequestNotifications: () -> Unit,
+    onFinish: (oneShotEnabled: Boolean, loopingEnabled: Boolean) -> Unit,
+) {
+    var page by rememberSaveable { mutableIntStateOf(0) }
+    val validInitialOneShot = initialOneShotEnabled || !initialLoopingEnabled
+    var oneShotEnabled by rememberSaveable { mutableStateOf(validInitialOneShot) }
+    var loopingEnabled by rememberSaveable { mutableStateOf(initialLoopingEnabled) }
+
     Surface(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
+                .safeDrawingPadding()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
         ) {
-            Text(
-                text = stringResource(R.string.onboarding_title),
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Spacer(Modifier.height(20.dp))
-            BufferIntroCard(
-                marker = "1",
-                title = stringResource(R.string.onboarding_one_shot_title),
-                body = stringResource(R.string.onboarding_one_shot_body),
-            )
-            Spacer(Modifier.height(12.dp))
-            BufferIntroCard(
-                marker = "↻",
-                title = stringResource(R.string.onboarding_looping_title),
-                body = stringResource(R.string.onboarding_looping_body),
-            )
-            Spacer(Modifier.height(20.dp))
-            Text(
-                text = stringResource(R.string.onboarding_order),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(24.dp))
-            Button(
-                onClick = onContinue,
-                modifier = Modifier.fillMaxWidth(),
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center,
             ) {
-                Text(stringResource(R.string.onboarding_continue))
+                if (page == 0) {
+                    Text(
+                        text = stringResource(R.string.onboarding_permissions_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.onboarding_permissions_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    OnboardingPermissionCard(
+                        marker = "●",
+                        title = stringResource(R.string.onboarding_microphone_title),
+                        body = stringResource(R.string.onboarding_microphone_body),
+                        allowed = microphoneAllowed,
+                        canRequest = true,
+                        onAllow = onRequestMicrophone,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OnboardingPermissionCard(
+                        marker = "N",
+                        title = stringResource(R.string.onboarding_notifications_title),
+                        body = stringResource(R.string.onboarding_notifications_body),
+                        allowed = notificationAllowed,
+                        canRequest = notificationPermissionRequired,
+                        onAllow = onRequestNotifications,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.onboarding_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    OnboardingBufferCard(
+                        marker = "1",
+                        title = stringResource(R.string.onboarding_one_shot_title),
+                        body = stringResource(R.string.onboarding_one_shot_body),
+                        checked = oneShotEnabled,
+                        enabled = !oneShotEnabled || loopingEnabled,
+                        onCheckedChange = { oneShotEnabled = it },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OnboardingBufferCard(
+                        marker = "↻",
+                        title = stringResource(R.string.onboarding_looping_title),
+                        body = stringResource(R.string.onboarding_looping_body),
+                        checked = loopingEnabled,
+                        enabled = !loopingEnabled || oneShotEnabled,
+                        onCheckedChange = { loopingEnabled = it },
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        text = stringResource(R.string.onboarding_order),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OnboardingProgressDot(active = page == 0)
+                Spacer(Modifier.size(8.dp))
+                OnboardingProgressDot(active = page == 1)
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (page > 0) {
+                    TextButton(onClick = { page-- }) {
+                        Text(stringResource(R.string.onboarding_back))
+                    }
+                }
+                Button(
+                    onClick = {
+                        if (page == 0) page++ else onFinish(oneShotEnabled, loopingEnabled)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        if (page == 0) {
+                            stringResource(R.string.onboarding_continue)
+                        } else {
+                            stringResource(R.string.onboarding_get_started)
+                        },
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun BufferIntroCard(
+private fun OnboardingPermissionCard(
     marker: String,
     title: String,
     body: String,
+    allowed: Boolean,
+    canRequest: Boolean,
+    onAllow: () -> Unit,
+) {
+    OnboardingCard(
+        marker = marker,
+        title = title,
+        body = body,
+        trailing = {
+            Button(
+                onClick = onAllow,
+                enabled = canRequest && !allowed,
+            ) {
+                Text(
+                    if (allowed || !canRequest) {
+                        stringResource(R.string.onboarding_allowed)
+                    } else {
+                        stringResource(R.string.allow)
+                    },
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun OnboardingBufferCard(
+    marker: String,
+    title: String,
+    body: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    OnboardingCard(
+        marker = marker,
+        title = title,
+        body = body,
+        trailing = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
+            )
+        },
+    )
+}
+
+@Composable
+private fun OnboardingCard(
+    marker: String,
+    title: String,
+    body: String,
+    trailing: @Composable () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -333,8 +451,18 @@ private fun BufferIntroCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            trailing()
         }
     }
+}
+
+@Composable
+private fun OnboardingProgressDot(active: Boolean) {
+    Surface(
+        modifier = Modifier.size(width = if (active) 18.dp else 6.dp, height = 6.dp),
+        shape = RoundedCornerShape(99.dp),
+        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+    ) {}
 }
 
 @Composable
@@ -356,30 +484,6 @@ private fun PermissionDeniedDialog(
         dismissButton = {
             TextButton(onClick = onExit) {
                 Text(stringResource(R.string.exit))
-            }
-        },
-    )
-}
-
-@Composable
-private fun BatteryOptimizationPromptDialog(
-    onAllow: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(18.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        title = { Text(stringResource(R.string.battery_optimization_prompt_title)) },
-        text = { Text(stringResource(R.string.battery_optimization_prompt_message)) },
-        confirmButton = {
-            TextButton(onClick = onAllow) {
-                Text(stringResource(R.string.battery_optimization_prompt_allow))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.not_now))
             }
         },
     )

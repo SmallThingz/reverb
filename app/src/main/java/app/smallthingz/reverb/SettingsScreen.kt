@@ -497,6 +497,26 @@ fun SettingsScreen(
             }
         }
 
+        val oneShotEnabled = when (activeRetentionMode) {
+            RetentionMode.TIME -> oneShotRetentionTime > 0
+            RetentionMode.SIZE -> requestedOneShotSizeBytes > 0L
+        }
+        val loopingEnabled = when (activeRetentionMode) {
+            RetentionMode.TIME -> loopingRetentionTime > 0
+            RetentionMode.SIZE -> requestedLoopingSizeBytes > 0L
+        }
+        if (!oneShotEnabled && !loopingEnabled) {
+            val message = resources.getString(R.string.buffer_required)
+            if (activeRetentionMode == RetentionMode.TIME) {
+                oneShotRetentionTimeError = message
+                loopingRetentionTimeError = message
+            } else {
+                oneShotRetentionSizeError = message
+                loopingRetentionSizeError = message
+            }
+            return false
+        }
+
         oneShotRetentionTimeSecondsValue = oneShotRetentionTime
         oneShotRetentionSizeMbValue = oneShotSizeMb
         loopingRetentionTimeSecondsValue = loopingRetentionTime
@@ -508,6 +528,8 @@ fun SettingsScreen(
             .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, requestedOneShotSizeBytes)
             .putLong(PrefKey.RETENTION_SECONDS, loopingRetentionTime.toLong())
             .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedLoopingSizeBytes)
+            .putString(PrefKey.OUTPUT_FORMAT, format.prefValue)
+            .putString(PrefKey.OUTPUT_CODEC, codec.prefValue)
             .putString(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.prefValue)
             .putInt(PrefKey.AUDIO_SOURCE, source.sourceValue)
             .putString(PrefKey.CHANNEL_MODE, channelMode.prefValue)
@@ -528,6 +550,8 @@ fun SettingsScreen(
                 .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rawMegabytesToBytes(previous.oneShotRetentionSizeMb))
                 .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
                 .putLong(PrefKey.AUDIO_MEMORY_SIZE, rawMegabytesToBytes(previous.loopingRetentionSizeMb))
+                .putString(PrefKey.OUTPUT_FORMAT, (previous.format ?: ExportFormat.WAV).prefValue)
+                .putString(PrefKey.OUTPUT_CODEC, (previous.codec ?: ExportCodec.PCM_16).prefValue)
                 .putString(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.prefValue)
                 .putInt(PrefKey.AUDIO_SOURCE, previous.source?.sourceValue ?: AudioSourceMode.defaultMode().sourceValue)
                 .putString(PrefKey.CHANNEL_MODE, (previous.channelMode ?: ChannelMode.MONO).prefValue)
@@ -548,14 +572,20 @@ fun SettingsScreen(
         onThemeChanged(selectedTheme)
 
         val currentService = service
-        if (currentService == null) {
-            saveCurrentToSnapshot(currentSnapshot)
-            originalSnapshot.copyFrom(currentSnapshot)
-            hasUnsavedChanges = false
-            return true
+        if (currentService != null) {
+            currentService.applyUpdatedPreferences()
+        } else if (getRecorderPreferences(context).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
+            runCatching {
+                context.startService(
+                    Intent(context, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
+                )
+            }.onFailure { error ->
+                AppFeedbackCenter.post(
+                    resources.getString(R.string.settings_apply_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
         }
-
-        currentService.applyUpdatedPreferences()
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
         hasUnsavedChanges = false

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -16,9 +17,20 @@ object RecordingRepository {
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pendingDirectoryIds = mutableSetOf<String>()
+    private val backgroundDeleteLock = Any()
+    private var backgroundDeleteJob: Job? = null
+
+    private suspend fun awaitBackgroundDeletes() {
+        while (true) {
+            val pending = synchronized(backgroundDeleteLock) { backgroundDeleteJob } ?: return
+            pending.join()
+            if (synchronized(backgroundDeleteLock) { backgroundDeleteJob === pending }) return
+        }
+    }
 
     suspend fun refresh(context: Context): List<RecordingEntity> {
         return withContext(Dispatchers.IO) {
+            awaitBackgroundDeletes()
             mutex.withLock {
                 syncConfiguredDirectory(context)
                 pruneMissingLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
@@ -34,7 +46,24 @@ object RecordingRepository {
      */
     suspend fun listKnown(context: Context): List<RecordingEntity> {
         return withContext(Dispatchers.IO) {
-            RecordingDatabase.getInstance(context).recordingDao().listAll()
+            awaitBackgroundDeletes()
+            mutex.withLock {
+                RecordingDatabase.getInstance(context).recordingDao().listAll()
+            }
+        }
+    }
+
+    fun deleteInBackground(context: Context, recordings: List<RecordingEntity>) {
+        if (recordings.isEmpty()) return
+        val appContext = context.applicationContext
+        synchronized(backgroundDeleteLock) {
+            val previous = backgroundDeleteJob
+            backgroundDeleteJob = cleanupScope.launch {
+                previous?.join()
+                recordings.forEach { recording ->
+                    runCatching { delete(appContext, recording) }
+                }
+            }
         }
     }
 
@@ -43,6 +72,7 @@ object RecordingRepository {
         targetDirectoryId: String = getConfiguredOutputDirectoryId(context),
     ): Boolean {
         return withContext(Dispatchers.IO) {
+            awaitBackgroundDeletes()
             mutex.withLock {
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val nowMillis = System.currentTimeMillis()
@@ -146,6 +176,7 @@ object RecordingRepository {
 
     suspend fun moveAllToConfiguredDirectory(context: Context): MoveResult {
         return withContext(Dispatchers.IO) {
+            awaitBackgroundDeletes()
             mutex.withLock {
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val current = dao.listAll()
@@ -310,8 +341,13 @@ object RecordingRepository {
                 if (permission.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
                 if (permission.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 if (flags != 0) {
-                    runCatching {
-                        context.contentResolver.releasePersistableUriPermission(permission.uri, flags)
+                    synchronized(pendingDirectoryIds) {
+                        val permissionId = permission.uri.toString()
+                        val configuredId = getConfiguredExportTreeUri(context)?.toString()
+                        if (permissionId in pendingDirectoryIds || permissionId == configuredId) return@forEach
+                        runCatching {
+                            context.contentResolver.releasePersistableUriPermission(permission.uri, flags)
+                        }
                     }
                 }
             }

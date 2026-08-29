@@ -274,7 +274,7 @@ class FormattingAndHistoryMathTest {
         assertEquals(0xFFFF_FFFFL, limit)
         assertEquals(0xFFFF_FFFFL - 44L, exportPayloadLimitBytes(ExportFormat.WAV))
         assertEquals(
-            0xFFFF_FFFFL - 46L,
+            0xFFFF_FFFFL - 58L,
             exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_FLOAT),
         )
     }
@@ -319,7 +319,7 @@ class FormattingAndHistoryMathTest {
     @Test
     fun floatWavExportSize_accountsForExtendedFmtChunk() {
         assertEquals(
-            46L + 44_100L * PcmSampleFormat.PCM_FLOAT.bytesPerSample,
+            58L + 44_100L * PcmSampleFormat.PCM_FLOAT.bytesPerSample,
             estimateExportSizeBytes(
                 format = ExportFormat.WAV,
                 codec = ExportCodec.PCM_16,
@@ -463,6 +463,13 @@ class FormattingAndHistoryMathTest {
             listOf(44_100, 48_000, 96_000),
             orderSampleRatesByPreference(listOf(96_000, 48_000, 44_100), 44_100),
         )
+    }
+
+    @Test
+    fun sizeRetention_normalizesToWholeFrames() {
+        assertEquals(0L, normalizeRetentionValue(RetentionMode.SIZE, 1L, 2))
+        assertEquals(4L, normalizeRetentionValue(RetentionMode.SIZE, 5L, 2))
+        assertEquals(5L, normalizeRetentionValue(RetentionMode.TIME, 5L, 2))
     }
 
 }

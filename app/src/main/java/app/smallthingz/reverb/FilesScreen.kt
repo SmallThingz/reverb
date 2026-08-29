@@ -62,11 +62,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -80,8 +77,6 @@ private data class LibraryNotice(
     val tone: FeedbackTone,
     val canUndo: Boolean = false,
 )
-
-private val recordingCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 @Composable
 fun FilesScreen(
@@ -203,12 +198,7 @@ fun FilesScreen(
         val pending = pendingDeletions.values.toList()
         pendingDeletions.clear()
         isDeleting = false
-        val appContext = context.applicationContext
-        recordingCleanupScope.launch {
-            pending.forEach { recording ->
-                runCatching { RecordingRepository.delete(appContext, recording) }
-            }
-        }
+        RecordingRepository.deleteInBackground(context, pending)
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
