@@ -1,0 +1,3 @@
+Initial Reverb release.
+
+Includes a modern Material 3 interface, disk-backed rolling audio recovery, streamed WAV export, recording playback and management, configurable audio hardware settings, capture visualization, and hardened recorder buffers and onboarding.

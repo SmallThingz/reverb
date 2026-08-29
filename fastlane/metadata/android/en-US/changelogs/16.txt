@@ -1,3 +1,0 @@
-Reworked Reverb with a modern Material 3 interface.
-
-Added disk-backed rolling audio recovery, streamed WAV export, recording playback and management, configurable audio hardware settings, and more efficient capture visualization.

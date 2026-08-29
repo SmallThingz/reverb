@@ -1,1 +1,0 @@
-Improved build compatibility for distribution through F-Droid.
