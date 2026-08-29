@@ -115,7 +115,7 @@ internal class PersistentAudioChunkStore(
                 configuredChannelCount != normalizedChannelCount ||
                 configuredSampleFormat != sampleFormat
 
-        if (formatChanged) {
+        if (formatChanged || normalizedRetention == 0L) {
             finalizeActiveLocked()
         }
 
@@ -128,8 +128,8 @@ internal class PersistentAudioChunkStore(
         if (overwriteOldest && activeRecord != null && retentionExceededLocked()) {
             finalizeActiveLocked()
         }
-        val cleaned = overwriteOldest && cleanupRetentionLocked()
-        if (cleaned || formatChanged) {
+        val cleaned = overwriteOldest && normalizedRetention > 0L && cleanupRetentionLocked()
+        if (cleaned || formatChanged || normalizedRetention == 0L) {
             writeIndexLocked()
         }
     }
@@ -221,6 +221,15 @@ internal class PersistentAudioChunkStore(
             currentSampleFormat = configuredSampleFormat,
             lastWriteAtMillis = lastWriteAtMillis,
         )
+    }
+
+    @Synchronized
+    fun isFull(): Boolean {
+        ensureLoadedLocked()
+        if (overwriteOldest) return retentionValue <= 0L
+        val frameBytes = configuredFrameBytesLocked()
+        if (frameBytes <= 0 || retentionValue <= 0L) return true
+        return writableBytesLocked(frameBytes) < frameBytes.toLong()
     }
 
     @Synchronized

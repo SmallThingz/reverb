@@ -195,7 +195,14 @@ fun CaptureScreen(
     var oneShotPayloadBytes by remember { mutableLongStateOf(0L) }
     var loopingDurationSeconds by remember { mutableFloatStateOf(0f) }
     var loopingPayloadBytes by remember { mutableLongStateOf(0L) }
-    var selectedBuffer by rememberSaveable { mutableStateOf(ReverbService.BufferSlot.LOOPING) }
+    var oneShotEnabled by remember { mutableStateOf(isConfiguredOneShotBufferEnabled(context)) }
+    var loopingEnabled by remember { mutableStateOf(isConfiguredLoopingBufferEnabled(context)) }
+    var selectedBuffer by rememberSaveable {
+        mutableStateOf(
+            if (oneShotEnabled) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING,
+        )
+    }
+    var startupBufferChosen by rememberSaveable { mutableStateOf(false) }
     val blobController = remember { AudioBlobController() }
 
     var showClearDialog by remember { mutableStateOf(false) }
@@ -218,12 +225,25 @@ fun CaptureScreen(
                 oneShotBytes: Long,
                 loopingSeconds: Float,
                 loopingBytes: Long,
+                oneShotIsEnabled: Boolean,
+                oneShotFull: Boolean,
+                loopingIsEnabled: Boolean,
             ) {
                 isListening = listeningEnabled
                 oneShotDurationSeconds = oneShotSeconds
                 oneShotPayloadBytes = oneShotBytes
                 loopingDurationSeconds = loopingSeconds
                 loopingPayloadBytes = loopingBytes
+                oneShotEnabled = oneShotIsEnabled
+                loopingEnabled = loopingIsEnabled
+                if (!startupBufferChosen) {
+                    selectedBuffer = defaultStartupBufferSlot(
+                        oneShotEnabled = oneShotIsEnabled,
+                        oneShotFull = oneShotFull,
+                        loopingEnabled = loopingIsEnabled,
+                    )
+                    startupBufferChosen = true
+                }
             }
         }
     }
@@ -559,6 +579,8 @@ fun CaptureScreen(
             selectedBuffer = selectedBuffer,
             oneShotMetrics = BufferMetrics(oneShotDurationSeconds, oneShotPayloadBytes),
             loopingMetrics = BufferMetrics(loopingDurationSeconds, loopingPayloadBytes),
+            oneShotEnabled = oneShotEnabled,
+            loopingEnabled = loopingEnabled,
             isListening = isListening,
             isSaving = isSaving,
             service = service,
@@ -641,6 +663,8 @@ private fun MainCaptureContent(
     selectedBuffer: ReverbService.BufferSlot,
     oneShotMetrics: BufferMetrics,
     loopingMetrics: BufferMetrics,
+    oneShotEnabled: Boolean,
+    loopingEnabled: Boolean,
     isListening: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
@@ -698,6 +722,7 @@ private fun MainCaptureContent(
         }
     }
     val serviceReady = service != null
+    val captureAvailable = serviceReady && (oneShotEnabled || loopingEnabled)
     val hasHistory = selectedMetrics.seconds > 0f
     val exportBlocked = !serviceReady || isSaving || !hasHistory
     val clearEnabled = serviceReady && !isSaving && hasHistory
@@ -718,7 +743,7 @@ private fun MainCaptureContent(
             AudioBlobControl(
                 isListening = isListening,
                 isSaving = isSaving,
-                enabled = serviceReady,
+                enabled = captureAvailable,
                 blobController = blobController,
                 primaryText = timerText,
                 secondaryText = summaryText,
@@ -733,6 +758,8 @@ private fun MainCaptureContent(
             selectedBuffer = selectedBuffer,
             oneShotMetrics = oneShotMetrics,
             loopingMetrics = loopingMetrics,
+            oneShotEnabled = oneShotEnabled,
+            loopingEnabled = loopingEnabled,
             enabled = serviceReady && !isSaving,
             onSelectBuffer = onSelectBuffer,
         )
@@ -787,6 +814,8 @@ private fun BufferSelector(
     selectedBuffer: ReverbService.BufferSlot,
     oneShotMetrics: BufferMetrics,
     loopingMetrics: BufferMetrics,
+    oneShotEnabled: Boolean,
+    loopingEnabled: Boolean,
     enabled: Boolean,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
 ) {
@@ -806,6 +835,7 @@ private fun BufferSelector(
                 label = stringResource(R.string.buffer_one_shot),
                 metrics = oneShotMetrics,
                 selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
+                bufferEnabled = oneShotEnabled,
                 enabled = enabled,
                 onClick = { onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT) },
             )
@@ -813,6 +843,7 @@ private fun BufferSelector(
                 label = stringResource(R.string.buffer_loop),
                 metrics = loopingMetrics,
                 selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
+                bufferEnabled = loopingEnabled,
                 enabled = enabled,
                 onClick = { onSelectBuffer(ReverbService.BufferSlot.LOOPING) },
             )
@@ -825,6 +856,7 @@ private fun BufferSegment(
     label: String,
     metrics: BufferMetrics,
     selected: Boolean,
+    bufferEnabled: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
@@ -835,8 +867,10 @@ private fun BufferSegment(
         enabled -> colors.onSurfaceVariant
         else -> colors.onSurfaceVariant.copy(alpha = 0.46f)
     }
-    val statText = remember(metrics.seconds) {
+    val statText = if (bufferEnabled) {
         formatShortTimer(metrics.seconds.coerceAtLeast(0f))
+    } else {
+        stringResource(R.string.buffer_disabled)
     }
 
     Surface(

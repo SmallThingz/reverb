@@ -241,25 +241,43 @@ fun getConfiguredThemeMode(context: Context): AppThemeMode {
 fun getConfiguredRetentionSeconds(context: Context): Long {
     return getRecorderPreferences(context)
         .getLong(PrefKey.RETENTION_SECONDS, ReverbConfig.DEFAULT_RETENTION_SECONDS)
-        .coerceAtLeast(1L)
+        .coerceAtLeast(0L)
 }
 
 fun getConfiguredRetentionSizeBytes(context: Context): Long {
     return getRecorderPreferences(context)
         .getLong(PrefKey.AUDIO_MEMORY_SIZE, ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES)
-        .coerceAtLeast(1L)
+        .coerceAtLeast(0L)
 }
 
 fun getConfiguredOneShotRetentionSeconds(context: Context): Long {
     return getRecorderPreferences(context)
         .getLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, getConfiguredRetentionSeconds(context))
-        .coerceAtLeast(1L)
+        .coerceAtLeast(0L)
 }
 
 fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long {
     return getRecorderPreferences(context)
         .getLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, getConfiguredRetentionSizeBytes(context))
-        .coerceAtLeast(1L)
+        .coerceAtLeast(0L)
+}
+
+fun isConfiguredOneShotBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
+    RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(context) > 0L
+    RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(context) > 0L
+}
+
+fun isConfiguredLoopingBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
+    RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(context) > 0L
+    RetentionMode.TIME -> getConfiguredRetentionSeconds(context) > 0L
+}
+
+fun isOnboardingPending(context: Context): Boolean {
+    return !getRecorderPreferences(context).getBoolean(PrefKey.ONBOARDING_SHOWN, false)
+}
+
+fun markOnboardingShown(context: Context): Boolean {
+    return getRecorderPreferences(context).edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true).commit()
 }
 
 fun getConfiguredOutputFormat(context: Context): ExportFormat {
@@ -324,9 +342,8 @@ fun getConfiguredMemorySizeBytes(
         RetentionMode.SIZE -> {
             val configuredSizeBytes = getConfiguredRetentionSizeBytes(context)
             val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
-            if (frameBytes <= 0L) 0L else {
-                val rawBudget = configuredSizeBytes.coerceAtLeast(frameBytes)
-                (rawBudget / frameBytes) * frameBytes
+            if (frameBytes <= 0L || configuredSizeBytes <= 0L) 0L else {
+                (configuredSizeBytes / frameBytes) * frameBytes
             }
         }
 

@@ -99,6 +99,12 @@ class ReverbService : Service() {
     private var cachedRetentionSampleBytes = 0L
 
     @Volatile
+    private var oneShotBufferEnabled = true
+
+    @Volatile
+    private var loopingBufferEnabled = true
+
+    @Volatile
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
     @Volatile
@@ -477,6 +483,10 @@ class ReverbService : Service() {
         }
 
         if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
+        if (!hasWritableCaptureTarget()) {
+            pauseListeningForNoWritableBufferOnAudioThread(generation)
+            return
+        }
         val record = createAudioRecord()
         audioRecord = record
         audioRecordGeneration = generation
@@ -1005,6 +1015,9 @@ class ReverbService : Service() {
         } else {
             loadConfiguredPreferences()
             configurePersistentBuffer()
+            if (state == STATE_LISTENING && !hasWritableCaptureTarget()) {
+                pauseListeningForNoWritableBufferOnAudioThread()
+            }
         }
         updateWakeLockState()
     }
@@ -1122,10 +1135,56 @@ class ReverbService : Service() {
     }
 
     private fun appendCapturedAudio(array: ByteArray, offset: Int, count: Int) {
-        val oneShotBytes = oneShotAudioChunkStore.append(array, offset, count)
+        val oneShotBytes = if (oneShotBufferEnabled) {
+            oneShotAudioChunkStore.append(array, offset, count)
+        } else {
+            0
+        }
         val loopingBytes = count - oneShotBytes
-        if (loopingBytes > 0) {
+        if (loopingBytes > 0 && loopingBufferEnabled) {
             loopingAudioChunkStore.append(array, offset + oneShotBytes, loopingBytes)
+        }
+        if (state == STATE_LISTENING && !hasWritableCaptureTarget()) {
+            pauseListeningForNoWritableBufferOnAudioThread()
+        }
+    }
+
+    private fun hasWritableCaptureTarget(): Boolean {
+        if (loopingBufferEnabled) return true
+        return oneShotBufferEnabled && !oneShotAudioChunkStore.isFull()
+    }
+
+    private fun pauseListeningForNoWritableBufferOnAudioThread(
+        generation: Long = listeningCommandGeneration.get(),
+    ) {
+        check(audioHandler.looper == Looper.myLooper())
+        val persisted = synchronized(listeningIntentLock) {
+            if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) return
+            val prefs = getRecorderPreferences(this)
+            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            if (!committed) {
+                prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).apply()
+            }
+            listeningCommandGeneration.incrementAndGet()
+            state = STATE_PAUSED
+            committed
+        }
+        audioHandler.removeCallbacks(audioReader)
+        try {
+            sealActiveChunks()
+        } catch (error: Exception) {
+            reportPersistentStoreFailure("seal while auto-pausing", error)
+        } finally {
+            releaseAudioRecord()
+            updateWakeLockState()
+        }
+        if (!persisted) {
+            reportError(getString(R.string.recorder_state_persist_failed))
+        }
+        mainHandler.post {
+            if (state == STATE_LISTENING) return@post
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
@@ -1299,6 +1358,7 @@ class ReverbService : Service() {
                 val oneShotBytes = availableBufferedSampleBytes(BufferSlot.ONE_SHOT)
                 val loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat()
                 val loopingBytes = availableBufferedSampleBytes(BufferSlot.LOOPING)
+                val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
                 val listening = state == STATE_LISTENING
                 mainHandler.post {
                     callback.state(
@@ -1307,13 +1367,25 @@ class ReverbService : Service() {
                         oneShotBytes,
                         loopingSeconds,
                         loopingBytes,
+                        oneShotBufferEnabled,
+                        oneShotFull,
+                        loopingBufferEnabled,
                     )
                 }
             } catch (error: Exception) {
                 reportPersistentStoreFailure("read recorder state", error)
                 val listening = state == STATE_LISTENING
                 mainHandler.post {
-                    callback.state(listening, 0f, 0L, 0f, 0L)
+                    callback.state(
+                        listening,
+                        0f,
+                        0L,
+                        0f,
+                        0L,
+                        oneShotBufferEnabled,
+                        false,
+                        loopingBufferEnabled,
+                    )
                 }
             }
         }
@@ -1498,6 +1570,7 @@ class ReverbService : Service() {
             RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
             RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
         }
+        loopingBufferEnabled = retentionValue > 0L
         loopingAudioChunkStore.configure(
             requestedRetentionMode = mode,
             requestedRetentionValue = retentionValue,
@@ -1509,6 +1582,7 @@ class ReverbService : Service() {
             RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(this)
             RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(this)
         }
+        oneShotBufferEnabled = oneShotRetentionValue > 0L
         oneShotAudioChunkStore.configure(
             requestedRetentionMode = mode,
             requestedRetentionValue = oneShotRetentionValue,
@@ -1807,6 +1881,9 @@ class ReverbService : Service() {
             oneShotBytes: Long,
             loopingSeconds: Float,
             loopingBytes: Long,
+            oneShotEnabled: Boolean,
+            oneShotFull: Boolean,
+            loopingEnabled: Boolean,
         )
     }
 
@@ -1890,4 +1967,16 @@ class ReverbService : Service() {
         const val STATE_PAUSED = 2
     }
 
+}
+
+internal fun defaultStartupBufferSlot(
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+): ReverbService.BufferSlot {
+    return when {
+        oneShotEnabled && (!oneShotFull || !loopingEnabled) -> ReverbService.BufferSlot.ONE_SHOT
+        loopingEnabled -> ReverbService.BufferSlot.LOOPING
+        else -> ReverbService.BufferSlot.ONE_SHOT
+    }
 }

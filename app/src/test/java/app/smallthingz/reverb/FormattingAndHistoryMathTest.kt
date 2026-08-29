@@ -109,6 +109,36 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun oneShotWritableBytes_zeroCapacityDisablesWrites() {
+        assertEquals(0L, oneShotWritableBytes(RetentionMode.SIZE, 0L, 0L, 0.0, 48_000, 2))
+        assertEquals(0L, oneShotWritableBytes(RetentionMode.TIME, 0L, 0L, 0.0, 48_000, 2))
+    }
+
+    @Test
+    fun defaultStartupBufferSlot_prefersOneShotUntilItIsFull() {
+        assertEquals(
+            ReverbService.BufferSlot.ONE_SHOT,
+            defaultStartupBufferSlot(oneShotEnabled = true, oneShotFull = false, loopingEnabled = true),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            defaultStartupBufferSlot(oneShotEnabled = true, oneShotFull = true, loopingEnabled = true),
+        )
+    }
+
+    @Test
+    fun defaultStartupBufferSlot_respectsDisabledBuffers() {
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            defaultStartupBufferSlot(oneShotEnabled = false, oneShotFull = false, loopingEnabled = true),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.ONE_SHOT,
+            defaultStartupBufferSlot(oneShotEnabled = true, oneShotFull = true, loopingEnabled = false),
+        )
+    }
+
+    @Test
     fun oneShotWritableBytes_stopsAtCapacity_withoutOverwriting() {
         assertEquals(
             4L,

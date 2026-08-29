@@ -304,9 +304,9 @@ fun SettingsScreen(
                 parseDurationInput(loopingRetentionTimeText.trim())?.let { loopingRetentionTimeSecondsValue = it }
             }
             RetentionMode.SIZE -> {
-                parseRetentionSizeMib(oneShotRetentionSizeText.trim())?.takeIf { it > 0.0 }
+                parseRetentionSizeMib(oneShotRetentionSizeText.trim())?.takeIf { it >= 0.0 }
                     ?.let { oneShotRetentionSizeMbValue = it }
-                parseRetentionSizeMib(loopingRetentionSizeText.trim())?.takeIf { it > 0.0 }
+                parseRetentionSizeMib(loopingRetentionSizeText.trim())?.takeIf { it >= 0.0 }
                     ?.let { loopingRetentionSizeMbValue = it }
             }
         }
@@ -446,7 +446,7 @@ fun SettingsScreen(
         } else {
             oneShotRetentionTimeSecondsValue
         }
-        if (oneShotRetentionTime == null || oneShotRetentionTime <= 0) {
+        if (oneShotRetentionTime == null || oneShotRetentionTime < 0) {
             oneShotRetentionTimeError = resources.getString(R.string.retention_time_invalid)
             return false
         }
@@ -456,7 +456,7 @@ fun SettingsScreen(
         } else {
             loopingRetentionTimeSecondsValue
         }
-        if (loopingRetentionTime == null || loopingRetentionTime <= 0) {
+        if (loopingRetentionTime == null || loopingRetentionTime < 0) {
             loopingRetentionTimeError = resources.getString(R.string.retention_time_invalid)
             return false
         }
@@ -466,7 +466,7 @@ fun SettingsScreen(
         } else {
             oneShotRetentionSizeMbValue
         }
-        if (oneShotSizeMb == null || oneShotSizeMb <= 0.0) {
+        if (oneShotSizeMb == null || oneShotSizeMb < 0.0) {
             oneShotRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
             return false
         }
@@ -476,7 +476,7 @@ fun SettingsScreen(
         } else {
             loopingRetentionSizeMbValue
         }
-        if (loopingSizeMb == null || loopingSizeMb <= 0.0) {
+        if (loopingSizeMb == null || loopingSizeMb < 0.0) {
             loopingRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
             return false
         }
@@ -487,11 +487,11 @@ fun SettingsScreen(
         val requestedLoopingSizeBytes = rawMegabytesToBytes(loopingSizeMb)
         if (activeRetentionMode == RetentionMode.SIZE) {
             val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample
-            if (requestedOneShotSizeBytes < frameBytes) {
+            if (requestedOneShotSizeBytes != 0L && requestedOneShotSizeBytes < frameBytes) {
                 oneShotRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
                 return false
             }
-            if (requestedLoopingSizeBytes < frameBytes) {
+            if (requestedLoopingSizeBytes != 0L && requestedLoopingSizeBytes < frameBytes) {
                 loopingRetentionSizeError = resources.getString(R.string.custom_memory_size_invalid)
                 return false
             }
@@ -566,9 +566,9 @@ fun SettingsScreen(
         val configuredThemeMode = getConfiguredThemeMode(context)
         val configuredMode = getConfiguredRetentionMode(context)
         val configuredOneShotTime = getConfiguredOneShotRetentionSeconds(context)
-            .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+            .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
         val configuredLoopingTime = getConfiguredRetentionSeconds(context)
-            .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+            .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
         val storedOneShotSizeBytes = getConfiguredOneShotRetentionSizeBytes(context)
         val storedLoopingSizeBytes = getConfiguredRetentionSizeBytes(context)
         val configuredFormat = getConfiguredOutputFormat(context)

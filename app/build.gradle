@@ -46,8 +46,8 @@ android {
         applicationId "app.smallthingz.reverb"
         minSdk = 28
         targetSdk = 37
-        versionCode 17
-        versionName "0.1.2"
+        versionCode 1
+        versionName "0"
     }
 
     signingConfigs {

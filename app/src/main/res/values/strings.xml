@@ -10,6 +10,14 @@
     <string name="clear_loop_title">Discard loop?</string>
     <string name="buffer_one_shot">One-shot</string>
     <string name="buffer_loop">Looping</string>
+    <string name="buffer_disabled">Off</string>
+    <string name="onboarding_title">Buffers</string>
+    <string name="onboarding_one_shot_title">One-shot</string>
+    <string name="onboarding_one_shot_body">Fills once. It keeps that audio until you clear it.</string>
+    <string name="onboarding_looping_title">Looping</string>
+    <string name="onboarding_looping_body">Keeps the newest audio. Old audio is overwritten.</string>
+    <string name="onboarding_order">Recording fills One-shot first, then Looping. Set either limit to 0 to turn that buffer off.</string>
+    <string name="onboarding_continue">Continue</string>
     <string name="files_tab">Files</string>
     <string name="open_options">Open options</string>
     <string name="record_all_memory">Export full</string>

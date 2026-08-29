@@ -19,16 +19,23 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -68,6 +75,7 @@ class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
     private var showBatteryOptimizationPrompt by mutableStateOf(false)
+    private var showOnboarding by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
     private var batteryOptimizationPromptPending = false
 
@@ -100,41 +108,52 @@ class MainActivity : ComponentActivity() {
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
         batteryOptimizationPromptPending = isBatteryOptimizationStartupPromptPending(this)
+        showOnboarding = isOnboardingPending(this)
         RecordingRepository.schedulePersistedPermissionCleanup(this)
         themeMode = getConfiguredThemeMode(this)
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
-                if (showPermissionDenied) {
-                    PermissionDeniedDialog(
-                        onAllow = {
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
-                            }
-                            startActivity(intent)
+                if (showOnboarding) {
+                    OnboardingScreen(
+                        onContinue = {
+                            markOnboardingShown(this)
+                            showOnboarding = false
+                            beginPermissionFlow()
                         },
-                        onExit = { finish() },
                     )
-                } else if (permissionsGranted && showBatteryOptimizationPrompt) {
-                    BatteryOptimizationPromptDialog(
-                        onAllow = {
-                            batteryOptimizationPromptPending = false
-                            markBatteryOptimizationStartupPromptHandled(this)
-                            showBatteryOptimizationPrompt = false
-                            openBatteryOptimizationSettings()
-                        },
-                        onDismiss = {
-                            batteryOptimizationPromptPending = false
-                            markBatteryOptimizationStartupPromptHandled(this)
-                            showBatteryOptimizationPrompt = false
-                        },
+                } else {
+                    if (showPermissionDenied) {
+                        PermissionDeniedDialog(
+                            onAllow = {
+                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
+                                }
+                                startActivity(intent)
+                            },
+                            onExit = { finish() },
+                        )
+                    } else if (permissionsGranted && showBatteryOptimizationPrompt) {
+                        BatteryOptimizationPromptDialog(
+                            onAllow = {
+                                batteryOptimizationPromptPending = false
+                                markBatteryOptimizationStartupPromptHandled(this)
+                                showBatteryOptimizationPrompt = false
+                                openBatteryOptimizationSettings()
+                            },
+                            onDismiss = {
+                                batteryOptimizationPromptPending = false
+                                markBatteryOptimizationStartupPromptHandled(this)
+                                showBatteryOptimizationPrompt = false
+                            },
+                        )
+                    }
+                    MainScreen(
+                        permissionsGranted = permissionsGranted,
+                        showPermissionDenied = showPermissionDenied,
+                        onThemeChanged = { themeMode = it },
                     )
                 }
-                MainScreen(
-                    permissionsGranted = permissionsGranted,
-                    showPermissionDenied = showPermissionDenied,
-                    onThemeChanged = { themeMode = it },
-                )
             }
         }
     }
@@ -147,6 +166,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (!showOnboarding) beginPermissionFlow()
+    }
+
+    private fun beginPermissionFlow() {
         if (hasRequiredPermissions()) {
             permissionsGranted = true
             showPermissionDenied = false
@@ -227,6 +250,91 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
     AppThemeMode.SYSTEM -> systemDarkTheme
     AppThemeMode.LIGHT -> false
     AppThemeMode.DARK -> true
+}
+
+@Composable
+private fun OnboardingScreen(onContinue: () -> Unit) {
+    Surface(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = stringResource(R.string.onboarding_title),
+                style = MaterialTheme.typography.headlineMedium,
+            )
+            Spacer(Modifier.height(20.dp))
+            BufferIntroCard(
+                marker = "1",
+                title = stringResource(R.string.onboarding_one_shot_title),
+                body = stringResource(R.string.onboarding_one_shot_body),
+            )
+            Spacer(Modifier.height(12.dp))
+            BufferIntroCard(
+                marker = "↻",
+                title = stringResource(R.string.onboarding_looping_title),
+                body = stringResource(R.string.onboarding_looping_body),
+            )
+            Spacer(Modifier.height(20.dp))
+            Text(
+                text = stringResource(R.string.onboarding_order),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onContinue,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.onboarding_continue))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BufferIntroCard(
+    marker: String,
+    title: String,
+    body: String,
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = marker,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 @Composable
