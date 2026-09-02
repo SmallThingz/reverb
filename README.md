@@ -7,6 +7,8 @@
 ![kotlin](https://img.shields.io/badge/kotlin-2.3.0-7c3aed?logo=kotlin&logoColor=ffffff)
 ![material](https://img.shields.io/badge/ui-Material%203-2563eb)
 
+[<img src="https://f-droid.org/badge/get-it-on.svg" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/app.smallthingz.reverb/)
+
 Rolling audio buffer recorder for Android. Keeps recent audio alive, survives restarts, and exports past audio fast.
 
 Forked from `Echo`, now reworked and shipped as `Reverb`.
