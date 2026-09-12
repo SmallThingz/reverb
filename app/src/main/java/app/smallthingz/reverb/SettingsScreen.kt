@@ -1,11 +1,9 @@
 package app.smallthingz.reverb
 
 import android.content.ComponentName
-import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -76,7 +74,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.net.toUri
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.font.FontWeight
@@ -730,29 +727,10 @@ fun SettingsScreen(
         }
     }
 
-    @SuppressLint("BatteryLife")
-    fun openBatteryOptimizationSettings() {
-        val intents = buildList {
-            if (!isIgnoringBatteryOptimizations(context)) {
-                add(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = "package:${context.packageName}".toUri()
-                })
-            }
-            add(Intent("android.settings.VIEW_ADVANCED_POWER_USAGE_DETAIL").apply {
-                data = "package:${context.packageName}".toUri()
-                putExtra("package_name", context.packageName)
-                putExtra("packageName", context.packageName)
-            })
-            add(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts("package", context.packageName, null)
-            })
-            add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            add(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS))
+    fun reviewBatteryOptimization() {
+        if (!openBatteryOptimizationReview(context)) {
+            AppFeedbackCenter.post(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
         }
-        val launched = intents.any { intent ->
-            runCatching { context.startActivity(intent); true }.getOrDefault(false)
-        }
-        if (!launched) AppFeedbackCenter.post(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
     }
 
     fun moveExistingRecordings() {
@@ -844,8 +822,12 @@ fun SettingsScreen(
         ) {
             if (batteryOptimizationRestricted) {
                 item(key = "background-reliability") {
-                    BackgroundReliabilitySection(
-                        onBatterySettingsClick = { openBatteryOptimizationSettings() },
+                    BackgroundOptimizationWarning(
+                        restricted = true,
+                        onReview = ::reviewBatteryOptimization,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                     )
                 }
             }
@@ -1133,25 +1115,6 @@ fun SettingsScreen(
         }
     }
 
-}
-
-@Composable
-private fun BackgroundReliabilitySection(
-    onBatterySettingsClick: () -> Unit,
-) {
-    Column {
-        SectionTitle(stringResource(R.string.background_persistence_title))
-        ReliabilityRow(
-            title = stringResource(R.string.background_reliability_0_title),
-            summary = stringResource(R.string.battery_optimization_status_limited),
-            trailing = {
-                TextButton(onClick = onBatterySettingsClick) {
-                    Text(stringResource(R.string.battery_optimization_button))
-                }
-            },
-        )
-        Spacer(Modifier.height(12.dp))
-    }
 }
 
 @Composable

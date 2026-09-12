@@ -76,6 +76,7 @@ private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permis
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
     private var notificationPermissionGranted by mutableStateOf(false)
+    private var batteryOptimizationAllowed by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
     private var showOnboarding by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
         permissionsGranted = hasRequiredPermissions()
         notificationPermissionGranted = hasNotificationPermission()
+        batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         showOnboarding = isOnboardingPending(this)
         RecordingRepository.schedulePersistedPermissionCleanup(this)
         themeMode = getConfiguredThemeMode(this)
@@ -117,6 +119,7 @@ class MainActivity : ComponentActivity() {
                         microphoneAllowed = permissionsGranted,
                         notificationAllowed = notificationPermissionGranted,
                         notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                        batteryOptimizationAllowed = batteryOptimizationAllowed,
                         initialOneShotEnabled = isConfiguredOneShotBufferEnabled(this),
                         initialLoopingEnabled = isConfiguredLoopingBufferEnabled(this),
                         onRequestMicrophone = {
@@ -127,6 +130,14 @@ class MainActivity : ComponentActivity() {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 notificationPermissionRequested = true
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                        onReviewBatteryOptimization = {
+                            if (!openBatteryOptimizationReview(this)) {
+                                AppFeedbackCenter.post(
+                                    getString(R.string.no_app_available),
+                                    FeedbackTone.ERROR,
+                                )
                             }
                         },
                         onFinish = { oneShotEnabled, loopingEnabled ->
@@ -173,6 +184,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         permissionsGranted = hasRequiredPermissions()
         notificationPermissionGranted = hasNotificationPermission()
+        batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         if (!showOnboarding) beginPermissionFlow()
     }
 
@@ -233,10 +245,12 @@ private fun OnboardingScreen(
     microphoneAllowed: Boolean,
     notificationAllowed: Boolean,
     notificationPermissionRequired: Boolean,
+    batteryOptimizationAllowed: Boolean,
     initialOneShotEnabled: Boolean,
     initialLoopingEnabled: Boolean,
     onRequestMicrophone: () -> Unit,
     onRequestNotifications: () -> Unit,
+    onReviewBatteryOptimization: () -> Unit,
     onFinish: (oneShotEnabled: Boolean, loopingEnabled: Boolean) -> Unit,
 ) {
     var page by rememberSaveable { mutableIntStateOf(0) }
@@ -257,64 +271,91 @@ private fun OnboardingScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.Center,
             ) {
-                if (page == 0) {
-                    Text(
-                        text = stringResource(R.string.onboarding_permissions_title),
-                        style = MaterialTheme.typography.headlineMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(R.string.onboarding_permissions_body),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    OnboardingPermissionCard(
-                        marker = "●",
-                        title = stringResource(R.string.onboarding_microphone_title),
-                        body = stringResource(R.string.onboarding_microphone_body),
-                        allowed = microphoneAllowed,
-                        canRequest = true,
-                        onAllow = onRequestMicrophone,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OnboardingPermissionCard(
-                        marker = "N",
-                        title = stringResource(R.string.onboarding_notifications_title),
-                        body = stringResource(R.string.onboarding_notifications_body),
-                        allowed = notificationAllowed,
-                        canRequest = notificationPermissionRequired,
-                        onAllow = onRequestNotifications,
-                    )
-                } else {
-                    Text(
-                        text = stringResource(R.string.onboarding_title),
-                        style = MaterialTheme.typography.headlineMedium,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    OnboardingBufferCard(
-                        marker = "1",
-                        title = stringResource(R.string.onboarding_one_shot_title),
-                        body = stringResource(R.string.onboarding_one_shot_body),
-                        checked = oneShotEnabled,
-                        enabled = !oneShotEnabled || loopingEnabled,
-                        onCheckedChange = { oneShotEnabled = it },
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OnboardingBufferCard(
-                        marker = "↻",
-                        title = stringResource(R.string.onboarding_looping_title),
-                        body = stringResource(R.string.onboarding_looping_body),
-                        checked = loopingEnabled,
-                        enabled = !loopingEnabled || oneShotEnabled,
-                        onCheckedChange = { loopingEnabled = it },
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    Text(
-                        text = stringResource(R.string.onboarding_order),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                when (page) {
+                    0 -> {
+                        Text(
+                            text = stringResource(R.string.onboarding_permissions_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.onboarding_permissions_body),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        OnboardingPermissionCard(
+                            marker = "●",
+                            title = stringResource(R.string.onboarding_microphone_title),
+                            body = stringResource(R.string.onboarding_microphone_body),
+                            allowed = microphoneAllowed,
+                            canRequest = true,
+                            onAllow = onRequestMicrophone,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OnboardingPermissionCard(
+                            marker = "N",
+                            title = stringResource(R.string.onboarding_notifications_title),
+                            body = stringResource(R.string.onboarding_notifications_body),
+                            allowed = notificationAllowed,
+                            canRequest = notificationPermissionRequired,
+                            onAllow = onRequestNotifications,
+                        )
+                    }
+                    1 -> {
+                        Text(
+                            text = stringResource(R.string.onboarding_background_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.onboarding_background_body),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        BackgroundOptimizationWarning(
+                            restricted = !batteryOptimizationAllowed,
+                            onReview = onReviewBatteryOptimization,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.onboarding_background_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {
+                        Text(
+                            text = stringResource(R.string.onboarding_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        OnboardingBufferCard(
+                            marker = "1",
+                            title = stringResource(R.string.onboarding_one_shot_title),
+                            body = stringResource(R.string.onboarding_one_shot_body),
+                            checked = oneShotEnabled,
+                            enabled = !oneShotEnabled || loopingEnabled,
+                            onCheckedChange = { oneShotEnabled = it },
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OnboardingBufferCard(
+                            marker = "↻",
+                            title = stringResource(R.string.onboarding_looping_title),
+                            body = stringResource(R.string.onboarding_looping_body),
+                            checked = loopingEnabled,
+                            enabled = !loopingEnabled || oneShotEnabled,
+                            onCheckedChange = { loopingEnabled = it },
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        Text(
+                            text = stringResource(R.string.onboarding_order),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -327,6 +368,8 @@ private fun OnboardingScreen(
                 OnboardingProgressDot(active = page == 0)
                 Spacer(Modifier.size(8.dp))
                 OnboardingProgressDot(active = page == 1)
+                Spacer(Modifier.size(8.dp))
+                OnboardingProgressDot(active = page == 2)
             }
             Spacer(Modifier.height(14.dp))
             Row(
@@ -341,12 +384,12 @@ private fun OnboardingScreen(
                 }
                 Button(
                     onClick = {
-                        if (page == 0) page++ else onFinish(oneShotEnabled, loopingEnabled)
+                        if (page < 2) page++ else onFinish(oneShotEnabled, loopingEnabled)
                     },
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(
-                        if (page == 0) {
+                        if (page < 2) {
                             stringResource(R.string.onboarding_continue)
                         } else {
                             stringResource(R.string.onboarding_get_started)

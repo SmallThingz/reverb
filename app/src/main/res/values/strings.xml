@@ -28,6 +28,9 @@
     <string name="onboarding_notifications_title">Notifications</string>
     <string name="onboarding_notifications_body">Shows when Reverb is recording in the background.</string>
     <string name="onboarding_allowed">Allowed</string>
+    <string name="onboarding_background_title">Background recording</string>
+    <string name="onboarding_background_body">Android may stop Reverb when the screen is off. Disable battery optimization for more reliable background recording.</string>
+    <string name="onboarding_background_hint">You can review this later from the top of Settings.</string>
     <string name="onboarding_title">Buffers</string>
     <string name="onboarding_one_shot_title">One-shot</string>
     <string name="onboarding_one_shot_body">Fills once. It keeps that audio until you clear it.</string>
@@ -81,6 +84,9 @@
     <string name="recording_settings_title">Audio</string>
     <string name="storage_settings_title">Storage</string>
     <string name="background_persistence_title">Background</string>
+    <string name="background_use_restricted">Background use restricted</string>
+    <string name="background_use_unrestricted">Background use unrestricted</string>
+    <string name="background_review">Review</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
     <string name="sample_format_label">Bit depth</string>
