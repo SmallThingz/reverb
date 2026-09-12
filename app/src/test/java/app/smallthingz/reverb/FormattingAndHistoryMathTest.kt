@@ -279,6 +279,34 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun oneShotRetainedChunkBytesForTime_truncatesTailWithoutExtendingDuration() {
+        assertEquals(
+            48_000L,
+            oneShotRetainedChunkBytesForTime(
+                retentionSeconds = 2L,
+                retainedDurationBeforeChunk = 1.5,
+                chunkSampleFrames = 48_000L,
+                sampleRate = 48_000,
+                frameBytes = 2,
+            ),
+        )
+        assertEquals(
+            96_000L,
+            oneShotRetainedChunkBytesForTime(
+                retentionSeconds = 2L,
+                retainedDurationBeforeChunk = 1.0000000000000002,
+                chunkSampleFrames = 48_000L,
+                sampleRate = 48_000,
+                frameBytes = 2,
+            ),
+        )
+        assertEquals(
+            0L,
+            oneShotRetainedChunkBytesForTime(2L, 2.0, 48_000L, 48_000, 2),
+        )
+    }
+
+    @Test
     fun wavSampleFormatBytes_roundTripCorrectly() {
         val stereo48k = { sr: Int, ch: Int, fmt: PcmSampleFormat ->
             val bytes = bytesForRetentionSeconds(100, sr, ch, fmt)
