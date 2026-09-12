@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -49,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -70,6 +72,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
@@ -81,9 +85,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -773,14 +778,37 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) { bindUiFromPreferences() }
 
-    BackHandler {
-        if (hasUnsavedChanges) {
-            restorePreviousSettings()
+    var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
+    var predictiveBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_NONE) }
+    PredictiveBackHandler { progress ->
+        try {
+            progress.collect { event ->
+                predictiveBackProgress = event.progress.coerceIn(0f, 1f)
+                predictiveBackEdge = event.swipeEdge
+            }
+            if (hasUnsavedChanges) restorePreviousSettings()
+            onBack()
+        } finally {
+            predictiveBackProgress = 0f
+            predictiveBackEdge = BackEventCompat.EDGE_NONE
         }
-        onBack()
     }
 
     Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                val progress = predictiveBackProgress.coerceIn(0f, 1f)
+                val direction = if (predictiveBackEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                translationX = direction * size.width * 0.12f * progress
+                val scale = 1f - 0.035f * progress
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(
+                    pivotFractionX = if (direction < 0f) 1f else 0f,
+                    pivotFractionY = 0.5f,
+                )
+            },
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
@@ -791,9 +819,9 @@ fun SettingsScreen(
                         if (hasUnsavedChanges) restorePreviousSettings() else onBack()
                     }) {
                         Icon(
-                            imageVector = if (hasUnsavedChanges) AppIcons.undo else AppIcons.close,
+                            imageVector = if (hasUnsavedChanges) AppIcons.undo else AppIcons.back,
                             contentDescription = stringResource(
-                                if (hasUnsavedChanges) R.string.undo else R.string.close,
+                                if (hasUnsavedChanges) R.string.undo else R.string.onboarding_back,
                             ),
                         )
                     }
