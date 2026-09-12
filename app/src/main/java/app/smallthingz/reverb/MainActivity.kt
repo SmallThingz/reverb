@@ -506,7 +506,7 @@ private fun MainScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val librarySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val librarySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
     fun refreshLibrarySnapshot() {
