@@ -25,8 +25,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
@@ -48,7 +50,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableDoubleStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -63,11 +64,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.BackHandler
@@ -173,7 +176,6 @@ fun SettingsScreen(
     var oneShotRetentionSizeError by remember { mutableStateOf<String?>(null) }
     var loopingRetentionTimeError by remember { mutableStateOf<String?>(null) }
     var loopingRetentionSizeError by remember { mutableStateOf<String?>(null) }
-    var computedExportLimitSeconds by remember { mutableLongStateOf(0L) }
     var oneShotComputedSizeMb by remember { mutableDoubleStateOf(0.0) }
     var loopingComputedSizeMb by remember { mutableDoubleStateOf(0.0) }
     var exportPathText by remember { mutableStateOf("") }
@@ -320,7 +322,6 @@ fun SettingsScreen(
     fun refreshRetentionFields(preserveActiveInputs: Boolean = false) {
         val sr = selectedSampleRate
         if (sr <= 0) {
-            computedExportLimitSeconds = 0
             oneShotComputedSizeMb = 0.0
             loopingComputedSizeMb = 0.0
             if (!preserveActiveInputs) {
@@ -332,11 +333,6 @@ fun SettingsScreen(
             return
         }
         val chCount = selectedChannelMode.channelCount
-        val exportLimitBytes = exportFileSizeLimitBytes(selectedFormat)
-        val exportLimitDurationSeconds = estimateExportDurationSeconds(
-            selectedFormat, selectedCodec, sr, chCount, exportLimitBytes, selectedSampleFormat,
-        )
-        computedExportLimitSeconds = exportLimitDurationSeconds
         oneShotComputedSizeMb = bytesToMegabytes(
             bytesForRetentionSeconds(
                 oneShotRetentionTimeSecondsValue.toLong(), sr, chCount, selectedSampleFormat,
@@ -350,18 +346,18 @@ fun SettingsScreen(
 
         if (activeRetentionMode == RetentionMode.TIME) {
             if (!preserveActiveInputs) {
-                oneShotRetentionTimeText = formatDurationInput(oneShotRetentionTimeSecondsValue)
-                loopingRetentionTimeText = formatDurationInput(loopingRetentionTimeSecondsValue)
+                oneShotRetentionTimeText = formatRetentionTimeInput(oneShotRetentionTimeSecondsValue.toLong())
+                loopingRetentionTimeText = formatRetentionTimeInput(loopingRetentionTimeSecondsValue.toLong())
             }
             oneShotRetentionSizeText = formatRetentionSizeMib(oneShotComputedSizeMb)
             loopingRetentionSizeText = formatRetentionSizeMib(loopingComputedSizeMb)
         } else {
-            oneShotRetentionTimeText = formatDurationInput(
+            oneShotRetentionTimeText = formatRetentionTimeInput(
                 retentionSecondsForBytes(
                     rawMegabytesToBytes(oneShotRetentionSizeMbValue), sr, chCount, selectedSampleFormat,
                 ),
             )
-            loopingRetentionTimeText = formatDurationInput(
+            loopingRetentionTimeText = formatRetentionTimeInput(
                 retentionSecondsForBytes(
                     rawMegabytesToBytes(loopingRetentionSizeMbValue), sr, chCount, selectedSampleFormat,
                 ),
@@ -791,8 +787,6 @@ fun SettingsScreen(
         onBack()
     }
 
-    val estimatePrefixVal = ReverbConfig.ESTIMATE_EXACT_PREFIX
-
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -868,77 +862,49 @@ fun SettingsScreen(
             }
 
             item(key = "retention") {
-                Column {
-            SectionTitle(stringResource(R.string.retention_mode_title))
-            BufferRetentionFields(
-                bufferLabel = stringResource(R.string.buffer_one_shot),
-                timeText = oneShotRetentionTimeText,
-                sizeText = oneShotRetentionSizeText,
-                timeError = oneShotRetentionTimeError,
-                sizeError = oneShotRetentionSizeError,
-                computedSizeMb = oneShotComputedSizeMb,
-                activeMode = activeRetentionMode,
-                estimatePrefix = estimatePrefixVal,
-                onTimeChange = { value ->
-                    oneShotRetentionTimeText = value
-                    activateRetentionMode(RetentionMode.TIME)
-                    updateRetentionValuesFromActiveInput()
-                    refreshRetentionFields(preserveActiveInputs = true)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-                onSizeChange = { value ->
-                    oneShotRetentionSizeText = value
-                    activateRetentionMode(RetentionMode.SIZE)
-                    updateRetentionValuesFromActiveInput()
-                    refreshRetentionFields(preserveActiveInputs = true)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-                onActivateMode = ::activateRetentionMode,
-            )
-            Spacer(Modifier.height(8.dp))
-            BufferRetentionFields(
-                bufferLabel = stringResource(R.string.buffer_loop),
-                timeText = loopingRetentionTimeText,
-                sizeText = loopingRetentionSizeText,
-                timeError = loopingRetentionTimeError,
-                sizeError = loopingRetentionSizeError,
-                computedSizeMb = loopingComputedSizeMb,
-                activeMode = activeRetentionMode,
-                estimatePrefix = estimatePrefixVal,
-                onTimeChange = { value ->
-                    loopingRetentionTimeText = value
-                    activateRetentionMode(RetentionMode.TIME)
-                    updateRetentionValuesFromActiveInput()
-                    refreshRetentionFields(preserveActiveInputs = true)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-                onSizeChange = { value ->
-                    loopingRetentionSizeText = value
-                    activateRetentionMode(RetentionMode.SIZE)
-                    updateRetentionValuesFromActiveInput()
-                    refreshRetentionFields(preserveActiveInputs = true)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-                onActivateMode = ::activateRetentionMode,
-            )
-            if (computedExportLimitSeconds > 0) {
-                Text(
-                    text = stringResource(
-                        R.string.export_limit_label,
-                        formatDurationInput(computedExportLimitSeconds),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                RetentionSection(
+                    activeMode = activeRetentionMode,
+                    oneShotTimeText = oneShotRetentionTimeText,
+                    oneShotSizeText = oneShotRetentionSizeText,
+                    loopingTimeText = loopingRetentionTimeText,
+                    loopingSizeText = loopingRetentionSizeText,
+                    oneShotTimeError = oneShotRetentionTimeError,
+                    oneShotSizeError = oneShotRetentionSizeError,
+                    loopingTimeError = loopingRetentionTimeError,
+                    loopingSizeError = loopingRetentionSizeError,
+                    oneShotComputedSizeMb = oneShotComputedSizeMb,
+                    loopingComputedSizeMb = loopingComputedSizeMb,
+                    onModeSelected = ::activateRetentionMode,
+                    onOneShotTimeChange = { value ->
+                        oneShotRetentionTimeText = value
+                        updateRetentionValuesFromActiveInput()
+                        refreshRetentionFields(preserveActiveInputs = true)
+                        saveCurrentToSnapshot(currentSnapshot)
+                        pushUndoState()
+                    },
+                    onOneShotSizeChange = { value ->
+                        oneShotRetentionSizeText = value
+                        updateRetentionValuesFromActiveInput()
+                        refreshRetentionFields(preserveActiveInputs = true)
+                        saveCurrentToSnapshot(currentSnapshot)
+                        pushUndoState()
+                    },
+                    onLoopingTimeChange = { value ->
+                        loopingRetentionTimeText = value
+                        updateRetentionValuesFromActiveInput()
+                        refreshRetentionFields(preserveActiveInputs = true)
+                        saveCurrentToSnapshot(currentSnapshot)
+                        pushUndoState()
+                    },
+                    onLoopingSizeChange = { value ->
+                        loopingRetentionSizeText = value
+                        updateRetentionValuesFromActiveInput()
+                        refreshRetentionFields(preserveActiveInputs = true)
+                        saveCurrentToSnapshot(currentSnapshot)
+                        pushUndoState()
+                    },
                 )
-            }
-
-            Spacer(Modifier.height(12.dp))
-                }
+                Spacer(Modifier.height(12.dp))
             }
 
             item(key = "recording") {
@@ -1263,65 +1229,252 @@ private fun ReliabilityRow(
 }
 
 @Composable
-private fun BufferRetentionFields(
-    bufferLabel: String,
-    timeText: String,
-    sizeText: String,
-    timeError: String?,
-    sizeError: String?,
-    computedSizeMb: Double,
+private fun RetentionSection(
     activeMode: RetentionMode,
-    estimatePrefix: String,
-    onTimeChange: (String) -> Unit,
-    onSizeChange: (String) -> Unit,
-    onActivateMode: (RetentionMode) -> Unit,
+    oneShotTimeText: String,
+    oneShotSizeText: String,
+    loopingTimeText: String,
+    loopingSizeText: String,
+    oneShotTimeError: String?,
+    oneShotSizeError: String?,
+    loopingTimeError: String?,
+    loopingSizeError: String?,
+    oneShotComputedSizeMb: Double,
+    loopingComputedSizeMb: Double,
+    onModeSelected: (RetentionMode) -> Unit,
+    onOneShotTimeChange: (String) -> Unit,
+    onOneShotSizeChange: (String) -> Unit,
+    onLoopingTimeChange: (String) -> Unit,
+    onLoopingSizeChange: (String) -> Unit,
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = bufferLabel,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
-        )
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            SettingsTextField(
-                label = stringResource(R.string.retention_time_label),
-                value = timeText,
-                onValueChange = onTimeChange,
-                error = timeError,
-                prefix = if (activeMode == RetentionMode.TIME) null else estimatePrefix,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                modifier = Modifier
-                    .weight(1f)
-                    .alpha(if (activeMode == RetentionMode.TIME) 1f else 0.6f)
-                    .onFocusChanged { if (it.isFocused) onActivateMode(RetentionMode.TIME) },
+            Text(
+                text = stringResource(R.string.retention_mode_title),
+                fontSize = 19.sp,
+                lineHeight = 26.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-            SettingsTextField(
-                label = stringResource(R.string.retention_size_label),
-                value = sizeText,
-                onValueChange = onSizeChange,
-                error = sizeError,
-                prefix = if (activeMode == RetentionMode.SIZE) null else estimatePrefix,
-                supportingText = if (computedSizeMb > 0) {
-                    {
-                        Text(
-                            stringResource(
-                                R.string.estimated_file_size_label,
-                                String.format(Locale.US, "%.1f", computedSizeMb),
-                            ),
-                        )
-                    }
-                } else null,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier
-                    .weight(1f)
-                    .alpha(if (activeMode == RetentionMode.SIZE) 1f else 0.6f)
-                    .onFocusChanged { if (it.isFocused) onActivateMode(RetentionMode.SIZE) },
+            RetentionModeSelector(activeMode, onModeSelected)
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(23.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                ) {
+                    RetentionValue(
+                        modifier = Modifier.weight(1f),
+                        iconRes = R.drawable.ic_retention_one_shot,
+                        label = stringResource(R.string.buffer_one_shot),
+                        activeMode = activeMode,
+                        timeText = oneShotTimeText,
+                        sizeText = oneShotSizeText,
+                        computedSizeMb = oneShotComputedSizeMb,
+                        onTimeChange = onOneShotTimeChange,
+                        onSizeChange = onOneShotSizeChange,
+                    )
+                    RetentionValue(
+                        modifier = Modifier.weight(1f),
+                        iconRes = R.drawable.ic_retention_loop,
+                        label = stringResource(R.string.retention_loop_label),
+                        activeMode = activeMode,
+                        timeText = loopingTimeText,
+                        sizeText = loopingSizeText,
+                        computedSizeMb = loopingComputedSizeMb,
+                        onTimeChange = onLoopingTimeChange,
+                        onSizeChange = onLoopingSizeChange,
+                    )
+                }
+
+                val error = if (activeMode == RetentionMode.TIME) {
+                    oneShotTimeError ?: loopingTimeError
+                } else {
+                    oneShotSizeError ?: loopingSizeError
+                }
+                if (error != null) {
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetentionModeSelector(
+    activeMode: RetentionMode,
+    onModeSelected: (RetentionMode) -> Unit,
+) {
+    val segmentWidth = 59.dp
+    val indicatorOffset by animateDpAsState(
+        targetValue = if (activeMode == RetentionMode.TIME) 0.dp else segmentWidth,
+        label = "retentionModeIndicator",
+    )
+    Box(
+        modifier = Modifier
+            .width(126.dp)
+            .height(42.dp)
+            .background(
+                MaterialTheme.colorScheme.surfaceContainerLowest,
+                RoundedCornerShape(30.dp),
+            )
+            .padding(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset)
+                .width(segmentWidth)
+                .height(34.dp)
+                .background(
+                    MaterialTheme.colorScheme.surfaceContainerHigh,
+                    RoundedCornerShape(22.dp),
+                ),
+        )
+        Row {
+            RetentionModeButton(
+                label = stringResource(R.string.retention_time_label),
+                selected = activeMode == RetentionMode.TIME,
+                width = segmentWidth,
+                onClick = { onModeSelected(RetentionMode.TIME) },
+            )
+            RetentionModeButton(
+                label = stringResource(R.string.retention_size_mode_label),
+                selected = activeMode == RetentionMode.SIZE,
+                width = segmentWidth,
+                onClick = { onModeSelected(RetentionMode.SIZE) },
             )
         }
+    }
+}
+
+@Composable
+private fun RetentionModeButton(
+    label: String,
+    selected: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .height(34.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+            color = if (selected) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun RetentionValue(
+    modifier: Modifier,
+    iconRes: Int,
+    label: String,
+    activeMode: RetentionMode,
+    timeText: String,
+    sizeText: String,
+    computedSizeMb: Double,
+    onTimeChange: (String) -> Unit,
+    onSizeChange: (String) -> Unit,
+) {
+    val isTime = activeMode == RetentionMode.TIME
+    val value = if (isTime) timeText else sizeText
+    val unit = if (isTime) {
+        stringResource(R.string.retention_minutes_unit)
+    } else {
+        stringResource(R.string.retention_mib_unit)
+    }
+    val estimate = if (isTime) {
+        stringResource(
+            R.string.retention_size_estimate,
+            computedSizeMb.coerceAtLeast(0.0).roundToLong().toString(),
+        )
+    } else {
+        val seconds = parseDurationInput(timeText) ?: 0
+        stringResource(R.string.retention_time_estimate, formatRetentionMinutesEstimate(seconds))
+    }
+
+    Column(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 10.dp),
+        ) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(17.dp),
+            )
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = if (isTime) onTimeChange else onSizeChange,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = if (isTime) KeyboardType.Ascii else KeyboardType.Decimal,
+                ),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 40.sp,
+                    lineHeight = 48.sp,
+                    fontWeight = FontWeight.Normal,
+                    letterSpacing = (-1.7).sp,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = label },
+            )
+            Text(
+                text = unit,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+        Text(
+            text = estimate,
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 3.dp),
+        )
     }
 }
 
@@ -1387,36 +1540,22 @@ private fun SettingsDropdown(
     }
 }
 
-@Composable
-private fun SettingsTextField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    error: String? = null,
-    prefix: String? = null,
-    supportingText: @Composable (() -> Unit)? = null,
-    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        isError = error != null,
-        supportingText = {
-            Column {
-                if (error != null) {
-                    Text(error, color = MaterialTheme.colorScheme.error)
-                }
-                supportingText?.invoke()
-            }
-        },
-        singleLine = true,
-        prefix = if (prefix != null) { { Text(prefix) } } else null,
-        keyboardOptions = keyboardOptions,
-        shape = RoundedCornerShape(18.dp),
-        modifier = modifier,
-    )
+private fun formatRetentionTimeInput(seconds: Long): String {
+    val safeSeconds = seconds.coerceAtLeast(0L)
+    return if (safeSeconds % 60L == 0L) {
+        (safeSeconds / 60L).toString()
+    } else {
+        formatDurationInput(safeSeconds)
+    }
+}
+
+private fun formatRetentionMinutesEstimate(seconds: Int): String {
+    if (seconds <= 0) return "0"
+    return if (seconds % 60 == 0) {
+        (seconds / 60).toString()
+    } else {
+        String.format(Locale.US, "%.1f", seconds / 60.0)
+    }
 }
 
 private fun bytesToMegabytes(bytes: Long): Double {

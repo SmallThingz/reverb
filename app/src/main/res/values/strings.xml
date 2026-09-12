@@ -61,8 +61,14 @@
     <string name="theme_dark">Dark</string>
     <string name="retention_mode_title">Retention</string>
     <string name="retention_time_label">Time</string>
-    <string name="retention_time_invalid">Use MM:SS or HH:MM:SS.</string>
+    <string name="retention_time_invalid">Enter minutes, MM:SS, or HH:MM:SS.</string>
     <string name="retention_size_label">Size (MiB)</string>
+    <string name="retention_size_mode_label">Size</string>
+    <string name="retention_loop_label">Loop</string>
+    <string name="retention_minutes_unit">min</string>
+    <string name="retention_mib_unit">MiB</string>
+    <string name="retention_size_estimate">≈ %1$s MiB</string>
+    <string name="retention_time_estimate">≈ %1$s min</string>
     <string name="recording_settings_title">Audio</string>
     <string name="storage_settings_title">Storage</string>
     <string name="background_persistence_title">Background</string>
