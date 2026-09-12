@@ -5,12 +5,9 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RuntimeShader
 import android.graphics.Shader
-import android.os.Build
 import android.view.Choreographer
 import android.view.View
-import androidx.annotation.RequiresApi
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
@@ -34,27 +31,23 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var aggregatedVisible = false
     private var windowFocused = false
     private var framePosted = false
-    private var shaderTimeSeconds = 0f
+    private var animationTimeSeconds = 0f
     private var lastFrameNanos = 0L
     private var lastAudioSignalNanos = 0L
     private val choreographer = Choreographer.getInstance()
 
-    private val renderer: Renderer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        runCatching<Renderer> { ShaderRenderer() }.getOrElse { FallbackRenderer() }
-    } else {
-        FallbackRenderer()
-    }
+    private val renderer: Renderer = PathRenderer()
 
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
         framePosted = false
         if (!shouldAnimate()) return@FrameCallback
         val dtSeconds = if (lastFrameNanos == 0L) {
-            1f / 30f
+            1f / 60f
         } else {
             ((frameTimeNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         }
         lastFrameNanos = frameTimeNanos
-        shaderTimeSeconds += dtSeconds
+        animationTimeSeconds += dtSeconds
         advance(dtSeconds)
         invalidate()
         postNextFrame()
@@ -70,7 +63,15 @@ internal class AudioBlobView(context: Context) : View(context) {
         val wasHot = hasHotAudio()
         targetActivity = frame.activity.coerceIn(0f, 1f)
         val source = frame.bins
-        if (source.isEmpty()) {
+        var hasSignal = targetActivity > SIGNAL_ACTIVITY_THRESHOLD
+        if (source.size == BAND_COUNT * 2) {
+            for (band in 0 until BAND_COUNT) {
+                val index = band * 2
+                val value = max(source[index], source[index + 1]).coerceIn(0f, 1f)
+                targetBands[band] = value
+                if (value > SIGNAL_BAND_THRESHOLD) hasSignal = true
+            }
+        } else if (source.isEmpty()) {
             targetBands.fill(0f)
         } else {
             for (band in 0 until BAND_COUNT) {
@@ -78,10 +79,12 @@ internal class AudioBlobView(context: Context) : View(context) {
                 val end = max(start + 1, (band + 1) * source.size / BAND_COUNT).coerceAtMost(source.size)
                 var peak = 0f
                 for (index in start until end) peak = max(peak, source[index])
-                targetBands[band] = peak.coerceIn(0f, 1f)
+                val value = peak.coerceIn(0f, 1f)
+                targetBands[band] = value
+                if (value > SIGNAL_BAND_THRESHOLD) hasSignal = true
             }
         }
-        if (targetActivity > SIGNAL_ACTIVITY_THRESHOLD || targetBands.any { it > SIGNAL_BAND_THRESHOLD }) {
+        if (hasSignal) {
             lastAudioSignalNanos = System.nanoTime()
         }
         if (!wasHot && hasHotAudio() && framePosted) {
@@ -113,6 +116,8 @@ internal class AudioBlobView(context: Context) : View(context) {
     ) {
         val stateChanged = this.active != active ||
             enabledState != enabled || this.saving != saving || renderingVisible != visible
+        val shouldClearAudio = (this.active && !active) || (!this.saving && saving) ||
+            (enabledState && !enabled)
         this.active = active
         enabledState = enabled
         this.saving = saving
@@ -122,16 +127,14 @@ internal class AudioBlobView(context: Context) : View(context) {
             active && !saving -> 1f
             else -> COLLAPSED_LIFE
         }
-        renderer.setPalette(primary, tertiary, paused)
-        if (!active || saving) {
+        val paletteChanged = renderer.setPalette(primary, tertiary, paused)
+        if (shouldClearAudio) {
             targetActivity = 0f
             targetBands.fill(0f)
             lastAudioSignalNanos = 0L
         }
-        if (stateChanged) {
-            ensureAnimationState()
-        }
-        invalidate()
+        if (stateChanged) ensureAnimationState()
+        if (stateChanged || paletteChanged) invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -140,7 +143,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             canvas = canvas,
             width = width,
             height = height,
-            timeSeconds = shaderTimeSeconds,
+            timeSeconds = animationTimeSeconds,
             activity = currentActivity,
             bands = currentBands,
             life = currentLife,
@@ -177,9 +180,12 @@ internal class AudioBlobView(context: Context) : View(context) {
         ensureAnimationState()
     }
 
-    private fun shouldAnimate(): Boolean =
-        renderingVisible && isAttachedToWindow && aggregatedVisible && windowFocused && enabledState &&
-            (hasRecentAudioSignal() || hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
+    private fun shouldAnimate(): Boolean {
+        if (!renderingVisible || !isAttachedToWindow || !aggregatedVisible || !windowFocused) return false
+        if (kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON) return true
+        if (!enabledState || !active || saving) return false
+        return hasRecentAudioSignal() || hasResidualAudio()
+    }
 
     private fun ensureAnimationState() {
         if (shouldAnimate()) {
@@ -202,12 +208,11 @@ internal class AudioBlobView(context: Context) : View(context) {
     private fun postNextFrame(immediate: Boolean = false) {
         if (framePosted || !shouldAnimate()) return
         framePosted = true
-        if (immediate) {
+        val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON
+        if (immediate || lifeMoving || hasHotAudio()) {
             choreographer.postFrameCallback(frameCallback)
         } else {
-            val audioHot = hasHotAudio()
-            val delay = if (audioHot) renderer.activeFrameDelayMillis else renderer.idleFrameDelayMillis
-            choreographer.postFrameCallbackDelayed(frameCallback, delay)
+            choreographer.postFrameCallbackDelayed(frameCallback, IDLE_FRAME_DELAY_MILLIS)
         }
     }
 
@@ -241,26 +246,27 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private fun advance(dtSeconds: Float) {
-        val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)
-        val activityRate = if (targetActivity > currentActivity) 0.34f else 0.16f
-        val activityMix = (activityRate * normalized).coerceIn(0f, 0.82f)
+        val activityRate = if (targetActivity > currentActivity) 13f else 6f
+        val activityMix = (activityRate * dtSeconds).coerceIn(0f, 0.86f)
         currentActivity += (targetActivity - currentActivity) * activityMix
         for (index in currentBands.indices) {
-            val rate = if (targetBands[index] > currentBands[index]) 0.30f else 0.13f
-            val mix = (rate * normalized).coerceIn(0f, 0.8f)
+            val rate = if (targetBands[index] > currentBands[index]) 12f else 5f
+            val mix = (rate * dtSeconds).coerceIn(0f, 0.84f)
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
-        val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f
-        val lifeMix = (lifeRate * normalized).coerceIn(0f, 0.65f)
+        val lifeRate = if (targetLife > currentLife) 24f else 18f
+        val lifeMix = (lifeRate * dtSeconds).coerceIn(0f, 0.90f)
         currentLife += (targetLife - currentLife) * lifeMix
         if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife
+        if (!active && currentLife == targetLife) {
+            currentActivity = 0f
+            currentBands.fill(0f)
+        }
     }
 
     private interface Renderer {
-        val activeFrameDelayMillis: Long
-        val idleFrameDelayMillis: Long
         fun resize(width: Int, height: Int)
-        fun setPalette(primary: Int, tertiary: Int, paused: Int)
+        fun setPalette(primary: Int, tertiary: Int, paused: Int): Boolean
         fun draw(
             canvas: Canvas,
             width: Int,
@@ -273,82 +279,27 @@ internal class AudioBlobView(context: Context) : View(context) {
         )
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private class ShaderRenderer : Renderer {
-        override val activeFrameDelayMillis = 16L
-        override val idleFrameDelayMillis = 33L
-        private val shader = RuntimeShader(SHADER_SOURCE)
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).also { it.shader = shader }
-        private var primary = 0
-        private var tertiary = 0
-        private var paused = 0
-
-        override fun resize(width: Int, height: Int) {
-            shader.setFloatUniform("resolution", width.toFloat(), height.toFloat())
-        }
-
-        override fun setPalette(primary: Int, tertiary: Int, paused: Int) {
-            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused) return
-            this.primary = primary
-            this.tertiary = tertiary
-            this.paused = paused
-            shader.setColorUniform("primaryColor", primary)
-            shader.setColorUniform("tertiaryColor", tertiary)
-            shader.setColorUniform("pausedColor", paused)
-        }
-
-        override fun draw(
-            canvas: Canvas,
-            width: Int,
-            height: Int,
-            timeSeconds: Float,
-            activity: Float,
-            bands: FloatArray,
-            life: Float,
-            active: Boolean,
-        ) {
-            if (width <= 0 || height <= 0) return
-            shader.setFloatUniform("time", timeSeconds)
-            shader.setFloatUniform("activity", activity)
-            shader.setFloatUniform("life", life)
-            shader.setFloatUniform("active", if (active) 1f else 0f)
-            shader.setFloatUniform("bands0", bands[0], bands[1], bands[2], bands[3])
-            shader.setFloatUniform("bands1", bands[4], bands[5], bands[6], bands[7])
-            canvas.drawCircle(
-                width * 0.5f,
-                height * 0.5f,
-                minOf(width, height) * 0.495f,
-                paint,
-            )
-        }
-    }
-
-    private class FallbackRenderer : Renderer {
-        override val activeFrameDelayMillis = 16L
-        override val idleFrameDelayMillis = 33L
+    private class PathRenderer : Renderer {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val path = Path()
-        private val x = FloatArray(FALLBACK_POINTS)
-        private val y = FloatArray(FALLBACK_POINTS)
-        private var width = 0
-        private var height = 0
+        private val x = FloatArray(PATH_POINTS)
+        private val y = FloatArray(PATH_POINTS)
         private var primary = 0
         private var tertiary = 0
         private var paused = 0
         private var gradientState = -1
 
         override fun resize(width: Int, height: Int) {
-            this.width = width
-            this.height = height
             gradientState = -1
         }
 
-        override fun setPalette(primary: Int, tertiary: Int, paused: Int) {
-            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused) return
+        override fun setPalette(primary: Int, tertiary: Int, paused: Int): Boolean {
+            if (this.primary == primary && this.tertiary == tertiary && this.paused == paused) return false
             this.primary = primary
             this.tertiary = tertiary
             this.paused = paused
             gradientState = -1
+            return true
         }
 
         override fun draw(
@@ -366,30 +317,53 @@ internal class AudioBlobView(context: Context) : View(context) {
             val cx = width * 0.5f
             val cy = height * 0.5f
             val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))
-            for (index in 0 until FALLBACK_POINTS) {
-                val angle = index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f
-                val band = bands[index * BAND_COUNT / FALLBACK_POINTS]
+            val phase3 = timeSeconds * 0.8f
+            val phase5 = -timeSeconds * 0.55f
+            val phase3Sin = if (active) sin(phase3) else 0f
+            val phase3Cos = if (active) cos(phase3) else 1f
+            val phase5Sin = if (active) sin(phase5) else 0f
+            val phase5Cos = if (active) cos(phase5) else 1f
+
+            for (index in 0 until PATH_POINTS) {
+                val band = bands[PATH_BAND_INDEX[index]]
                 val idle = if (active) {
-                    sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +
-                        sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f
-                } else 0f
+                    val h3 = PATH_WAVE3_SIN[index] * phase3Cos + PATH_WAVE3_COS[index] * phase3Sin
+                    val h5 = PATH_WAVE5_SIN[index] * phase5Cos + PATH_WAVE5_COS[index] * phase5Sin
+                    (h3 * 0.005f + h5 * 0.0025f) * minSize
+                } else {
+                    0f
+                }
                 val radius = base + if (active) band * minSize * 0.078f + idle else 0f
-                x[index] = cx + cos(angle) * radius
-                y[index] = cy + sin(angle) * radius
+                x[index] = cx + PATH_UNIT_X[index] * radius
+                y[index] = cy + PATH_UNIT_Y[index] * radius
             }
+
             path.reset()
             path.moveTo((x[0] + x[1]) * 0.5f, (y[0] + y[1]) * 0.5f)
-            for (index in 1..FALLBACK_POINTS) {
-                val current = index % FALLBACK_POINTS
-                val next = (index + 1) % FALLBACK_POINTS
-                path.quadTo(x[current], y[current], (x[current] + x[next]) * 0.5f, (y[current] + y[next]) * 0.5f)
+            for (index in 1..PATH_POINTS) {
+                val current = index % PATH_POINTS
+                val next = (index + 1) % PATH_POINTS
+                path.quadTo(
+                    x[current],
+                    y[current],
+                    (x[current] + x[next]) * 0.5f,
+                    (y[current] + y[next]) * 0.5f,
+                )
             }
             path.close()
 
             val state = if (active) 1 else 0
             if (gradientState != state) {
                 paint.shader = if (active) {
-                    LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)
+                    LinearGradient(
+                        0f,
+                        0f,
+                        width.toFloat(),
+                        height.toFloat(),
+                        primary,
+                        tertiary,
+                        Shader.TileMode.CLAMP,
+                    )
                 } else {
                     null
                 }
@@ -402,7 +376,29 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     companion object {
         private const val BAND_COUNT = 8
-        private const val FALLBACK_POINTS = 40
+        private const val PATH_POINTS = 32
+        private const val IDLE_FRAME_DELAY_MILLIS = 33L
+        private val PATH_UNIT_X = FloatArray(PATH_POINTS) { index ->
+            cos(pathAngle(index))
+        }
+        private val PATH_UNIT_Y = FloatArray(PATH_POINTS) { index ->
+            sin(pathAngle(index))
+        }
+        private val PATH_WAVE3_SIN = FloatArray(PATH_POINTS) { index ->
+            sin(pathAngle(index) * 3f)
+        }
+        private val PATH_WAVE3_COS = FloatArray(PATH_POINTS) { index ->
+            cos(pathAngle(index) * 3f)
+        }
+        private val PATH_WAVE5_SIN = FloatArray(PATH_POINTS) { index ->
+            sin(pathAngle(index) * 5f)
+        }
+        private val PATH_WAVE5_COS = FloatArray(PATH_POINTS) { index ->
+            cos(pathAngle(index) * 5f)
+        }
+        private val PATH_BAND_INDEX = IntArray(PATH_POINTS) { index ->
+            index * BAND_COUNT / PATH_POINTS
+        }
         private const val ACTIVE_FRAME_THRESHOLD = 0.018f
         private const val ACTIVE_BAND_THRESHOLD = 0.030f
         private const val RESIDUAL_FRAME_THRESHOLD = 0.003f
@@ -414,53 +410,8 @@ internal class AudioBlobView(context: Context) : View(context) {
         private const val DISABLED_LIFE = 0.36f
         private const val LIFE_EPSILON = 0.006f
 
-        private const val SHADER_SOURCE = """
-            uniform float2 resolution;
-            uniform float time;
-            uniform float activity;
-            uniform float life;
-            uniform float active;
-            uniform float4 bands0;
-            uniform float4 bands1;
-            layout(color) uniform half4 primaryColor;
-            layout(color) uniform half4 tertiaryColor;
-            layout(color) uniform half4 pausedColor;
-
-            half4 main(float2 fragCoord) {
-                float minSize = min(resolution.x, resolution.y);
-                float2 p = (fragCoord - resolution * 0.5) / minSize;
-                float angle = atan(p.y, p.x);
-                float radius = length(p);
-
-                float low = dot(bands0, float4(0.34, 0.30, 0.21, 0.15));
-                float high = dot(bands1, float4(0.34, 0.30, 0.21, 0.15));
-                float h3 = sin(angle * 3.0 + time * 0.78);
-                float h7 = sin(angle * 7.0 - time * 0.39 + 1.8);
-                float audioWave = h3 * low * 0.66 + h7 * high * 0.44;
-
-                float idle = h3 * 0.0056 + h7 * 0.0024;
-                float liveRadius = 0.330 + activity * 0.018;
-                float baseRadius = mix(0.095, liveRadius, life);
-                float blobRadius = baseRadius + active * life *
-                    (idle + audioWave * (0.078 + activity * 0.020));
-                float distanceToEdge = radius - blobRadius;
-
-                float body = smoothstep(0.012, -0.006, distanceToEdge);
-                float glow = active * life * (1.0 - body) *
-                    smoothstep(0.024, 0.0, max(distanceToEdge, 0.0)) *
-                    (0.055 + activity * 0.12);
-
-                float gradientMix = clamp(0.46 + p.x * 0.9 - p.y * 0.55, 0.0, 1.0);
-                half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));
-                float colorLife = smoothstep(0.36, 0.86, life);
-                half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));
-                half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));
-
-                float alpha = body + glow;
-                half3 premultiplied = bodyColor.rgb * half(body) + glowColor.rgb * half(glow);
-                return half4(premultiplied, half(alpha));
-            }
-        """
+        private fun pathAngle(index: Int): Float =
+            index.toFloat() / PATH_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f
     }
 }
 
