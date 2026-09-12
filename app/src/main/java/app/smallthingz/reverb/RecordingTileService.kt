@@ -152,7 +152,7 @@ abstract class RecordingTileService : TileService() {
         tile.label = getString(labelRes)
         tile.icon = Icon.createWithResource(
             this,
-            if (uiState == RecordingTileUiState.FULL) R.drawable.ic_check else iconRes,
+            if (uiState == RecordingTileUiState.FULL) R.drawable.ic_qs_full else iconRes,
         )
         tile.state = if (!permissionGranted) {
             Tile.STATE_UNAVAILABLE
@@ -176,11 +176,11 @@ abstract class RecordingTileService : TileService() {
 class OneShotRecordingTileService : RecordingTileService() {
     override val bufferSlot = ReverbService.BufferSlot.ONE_SHOT
     override val labelRes = R.string.quick_tile_one_shot
-    override val iconRes = R.drawable.ic_retention_one_shot
+    override val iconRes = R.drawable.ic_qs_one_shot
 }
 
 class LoopingRecordingTileService : RecordingTileService() {
     override val bufferSlot = ReverbService.BufferSlot.LOOPING
     override val labelRes = R.string.quick_tile_looping
-    override val iconRes = R.drawable.ic_retention_loop
+    override val iconRes = R.drawable.ic_qs_looping
 }

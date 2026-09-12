@@ -941,7 +941,7 @@ private fun BufferSelector(
         ) {
             BufferSegment(
                 label = stringResource(R.string.buffer_one_shot),
-                icon = if (oneShotFull) R.drawable.ic_check else R.drawable.ic_retention_one_shot,
+                icon = if (oneShotFull) AppIcons.check else AppIcons.oneShot,
                 selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
                 recording = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
                 enabled = oneShotEnabled,
@@ -950,7 +950,7 @@ private fun BufferSelector(
             )
             BufferSegment(
                 label = stringResource(R.string.buffer_loop),
-                icon = R.drawable.ic_retention_loop,
+                icon = AppIcons.looping,
                 selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
                 recording = activeBuffer == ReverbService.BufferSlot.LOOPING,
                 enabled = loopingEnabled,
@@ -964,7 +964,7 @@ private fun BufferSelector(
 @Composable
 private fun BufferSegment(
     label: String,
-    icon: Int,
+    icon: ImageVector,
     selected: Boolean,
     recording: Boolean,
     enabled: Boolean,
@@ -1004,7 +1004,7 @@ private fun BufferSegment(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                painter = painterResource(icon),
+                imageVector = icon,
                 contentDescription = null,
                 tint = contentColor,
                 modifier = Modifier.size(18.dp),
@@ -1107,7 +1107,7 @@ private fun BufferBlobPage(
             secondaryText = summaryText,
             showWarning = overExportLimit,
             visualizerVisible = visualizerVisible,
-            flipRotationZ = flipRotation.value,
+            flipRotationZ = flipRotationZ,
             modifier = Modifier.size(blobSize),
             onClick = if (disabled) onOpenBufferSettings else onListenToggle,
 

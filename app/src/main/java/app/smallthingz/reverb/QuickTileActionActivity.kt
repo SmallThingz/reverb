@@ -48,6 +48,7 @@ class QuickTileActionActivity : ComponentActivity() {
         recorder.getState(
                 object : ReverbService.StateCallback {
                     override fun state(
+                        commandGeneration: Long,
                         listeningEnabled: Boolean,
                         activeBufferSlot: ReverbService.BufferSlot?,
                         oneShotSeconds: Float,
