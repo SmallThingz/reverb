@@ -134,10 +134,8 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             shape = RoundedCornerShape(30.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerHighest,
                         ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_brand_mark),
+                            ReverbBrandMark(
                                 contentDescription = resources.getString(R.string.app_name),
-                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(12.dp),
                             )
                         }

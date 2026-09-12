@@ -14,7 +14,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -46,10 +45,8 @@ internal fun AppTopBar(
             border = BorderStroke(1.dp, chrome.border),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_brand_mark),
+                ReverbBrandMark(
                     contentDescription = stringResource(R.string.app_name),
-                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(42.dp),
                 )
             }

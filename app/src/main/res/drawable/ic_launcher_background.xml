@@ -4,5 +4,5 @@
     android:height="108dp"
     android:viewportWidth="512"
     android:viewportHeight="512">
-    <path android:fillColor="#0D1324" android:pathData="M0,0h512v512H0z" />
+    <path android:fillColor="@color/launcher_background" android:pathData="M0,0h512v512H0z" />
 </vector>
