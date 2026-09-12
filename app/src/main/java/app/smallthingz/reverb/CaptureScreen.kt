@@ -67,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -900,23 +901,87 @@ private fun MainCaptureContent(
             )
         }
 
-        BufferSelector(
+        CaptureControlCluster(
             selectedBuffer = displayedBuffer,
             activeBuffer = activeBuffer,
             oneShotEnabled = oneShotEnabled,
             oneShotFull = oneShotFull,
             loopingEnabled = loopingEnabled,
+            serviceReady = serviceReady,
+            isSaving = isSaving,
+            hasHistory = hasHistory,
+            selectedRecording = displayedRecording,
+            showLibraryButton = showLibraryButton,
+            flipDegrees = flipDegrees.value,
             onSelectBuffer = onSelectBuffer,
+            onExportFull = { onExportFull(displayedBuffer) },
+            onExportCustom = { onExportCustom(displayedBuffer) },
+            onClearBuffer = { onClearBuffer(displayedBuffer) },
+            onOpenLibrary = onOpenLibrary,
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(18.dp))
+    }
+}
 
-        Surface(
-            modifier = Modifier.animateContentSize(),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
+@Composable
+private fun CaptureControlCluster(
+    selectedBuffer: ReverbService.BufferSlot,
+    activeBuffer: ReverbService.BufferSlot?,
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+    serviceReady: Boolean,
+    isSaving: Boolean,
+    hasHistory: Boolean,
+    selectedRecording: Boolean,
+    showLibraryButton: Boolean,
+    flipDegrees: Float,
+    onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
+    onExportFull: () -> Unit,
+    onExportCustom: () -> Unit,
+    onClearBuffer: () -> Unit,
+    onOpenLibrary: () -> Unit,
+) {
+    val chrome = appChrome()
+    val selectorWidth = 242.dp
+    val selectorHeight = 54.dp
+    val actionWidth = if (showLibraryButton) 256.dp else 194.dp
+    val actionHeight = 70.dp
+    val clusterWidth = maxOf(selectorWidth, actionWidth)
+    val clusterHeight = 112.dp
+    val selectorFraction = selectorWidth.value / clusterWidth.value
+    val actionFraction = actionWidth.value / clusterWidth.value
+    val unionShape = remember(selectorFraction, actionFraction) {
+        captureControlUnionShape(selectorFraction, actionFraction)
+    }
+
+    Surface(
+        modifier = Modifier
+            .size(clusterWidth, clusterHeight)
+            .animateContentSize(),
+        shape = unionShape,
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            BufferSelector(
+                selectedBuffer = selectedBuffer,
+                activeBuffer = activeBuffer,
+                oneShotEnabled = oneShotEnabled,
+                oneShotFull = oneShotFull,
+                loopingEnabled = loopingEnabled,
+                onSelectBuffer = onSelectBuffer,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .size(selectorWidth, selectorHeight),
+            )
+
             Row(
-                modifier = Modifier.padding(8.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .width(actionWidth)
+                    .height(actionHeight)
+                    .padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -924,23 +989,23 @@ private fun MainCaptureContent(
                     icon = AppIcons.save,
                     contentDescription = stringResource(R.string.record_all_memory),
                     enabled = serviceReady && !isSaving && hasHistory,
-                    flipDegrees = flipDegrees.value,
-                    onClick = { onExportFull(displayedBuffer) },
+                    flipDegrees = flipDegrees,
+                    onClick = onExportFull,
                 )
                 CaptureActionButton(
                     icon = AppIcons.exportRange,
                     contentDescription = stringResource(R.string.export_range_title),
                     enabled = serviceReady && !isSaving && hasHistory,
-                    flipDegrees = flipDegrees.value,
-                    onClick = { onExportCustom(displayedBuffer) },
+                    flipDegrees = flipDegrees,
+                    onClick = onExportCustom,
                 )
                 CaptureActionButton(
                     icon = AppIcons.delete,
                     contentDescription = stringResource(R.string.clear_buffer),
-                    enabled = serviceReady && !isSaving && hasHistory && !displayedRecording,
+                    enabled = serviceReady && !isSaving && hasHistory && !selectedRecording,
                     destructive = true,
-                    flipDegrees = flipDegrees.value,
-                    onClick = { onClearBuffer(displayedBuffer) },
+                    flipDegrees = flipDegrees,
+                    onClick = onClearBuffer,
                 )
                 if (showLibraryButton) {
                     CaptureActionButton(
@@ -952,8 +1017,73 @@ private fun MainCaptureContent(
                 }
             }
         }
-        Spacer(Modifier.height(18.dp))
     }
+}
+
+private fun captureControlUnionShape(
+    selectorWidthFraction: Float,
+    actionWidthFraction: Float,
+) = androidx.compose.foundation.shape.GenericShape { size, _ ->
+    // The lobes genuinely overlap. We trace only their exterior silhouette, so there is no
+    // fake gap/neck and no internal corner to reveal where one rounded rectangle ends.
+    val centerX = size.width * 0.5f
+    val topHeight = size.height * (54f / 112f)
+    val bottomTop = size.height * (42f / 112f)
+    val topWidth = size.width * selectorWidthFraction
+    val bottomWidth = size.width * actionWidthFraction
+    val topLeft = centerX - topWidth * 0.5f
+    val topRight = centerX + topWidth * 0.5f
+    val bottomLeft = centerX - bottomWidth * 0.5f
+    val bottomRight = centerX + bottomWidth * 0.5f
+    val topRadius = topHeight * 0.40f
+    val bottomRadius = (size.height - bottomTop) * 0.40f
+    val squircleControl = 0.44f
+
+    // Morph from the top lobe's side to the bottom lobe's side while both lobes overlap.
+    // Vertical endpoint tangents make this visually continuous with both squircle walls.
+    val transitionStart = topHeight * 0.52f
+    val transitionEnd = bottomTop + bottomRadius * 0.62f
+    val transitionSpan = (transitionEnd - transitionStart).coerceAtLeast(1f)
+    val handle = transitionSpan * 0.46f
+
+    moveTo(topLeft + topRadius, 0f)
+    lineTo(topRight - topRadius, 0f)
+    cubicTo(
+        topRight - topRadius * squircleControl, 0f,
+        topRight, topRadius * squircleControl,
+        topRight, topRadius,
+    )
+    lineTo(topRight, transitionStart)
+    cubicTo(
+        topRight, transitionStart + handle,
+        bottomRight, transitionEnd - handle,
+        bottomRight, transitionEnd,
+    )
+    lineTo(bottomRight, size.height - bottomRadius)
+    cubicTo(
+        bottomRight, size.height - bottomRadius * squircleControl,
+        bottomRight - bottomRadius * squircleControl, size.height,
+        bottomRight - bottomRadius, size.height,
+    )
+    lineTo(bottomLeft + bottomRadius, size.height)
+    cubicTo(
+        bottomLeft + bottomRadius * squircleControl, size.height,
+        bottomLeft, size.height - bottomRadius * squircleControl,
+        bottomLeft, size.height - bottomRadius,
+    )
+    lineTo(bottomLeft, transitionEnd)
+    cubicTo(
+        bottomLeft, transitionEnd - handle,
+        topLeft, transitionStart + handle,
+        topLeft, transitionStart,
+    )
+    lineTo(topLeft, topRadius)
+    cubicTo(
+        topLeft, topRadius * squircleControl,
+        topLeft + topRadius * squircleControl, 0f,
+        topLeft + topRadius, 0f,
+    )
+    close()
 }
 
 @Composable
@@ -964,38 +1094,33 @@ private fun BufferSelector(
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = Modifier.animateContentSize(),
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    Row(
+        modifier = modifier
+            .selectableGroup()
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .selectableGroup()
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BufferSegment(
-                label = stringResource(R.string.buffer_one_shot),
-                icon = if (oneShotFull) AppIcons.check else AppIcons.oneShot,
-                selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
-                recording = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
-                enabled = oneShotEnabled,
-                filled = oneShotFull,
-                onClick = { onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT) },
-            )
-            BufferSegment(
-                label = stringResource(R.string.buffer_loop),
-                icon = AppIcons.looping,
-                selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
-                recording = activeBuffer == ReverbService.BufferSlot.LOOPING,
-                enabled = loopingEnabled,
-                filled = false,
-                onClick = { onSelectBuffer(ReverbService.BufferSlot.LOOPING) },
-            )
-        }
+        BufferSegment(
+            label = stringResource(R.string.buffer_one_shot),
+            icon = if (oneShotFull) AppIcons.check else AppIcons.oneShot,
+            selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
+            recording = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
+            enabled = oneShotEnabled,
+            filled = oneShotFull,
+            onClick = { onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT) },
+        )
+        BufferSegment(
+            label = stringResource(R.string.buffer_loop),
+            icon = AppIcons.looping,
+            selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
+            recording = activeBuffer == ReverbService.BufferSlot.LOOPING,
+            enabled = loopingEnabled,
+            filled = false,
+            onClick = { onSelectBuffer(ReverbService.BufferSlot.LOOPING) },
+        )
     }
 }
 
@@ -1010,19 +1135,21 @@ private fun BufferSegment(
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val chrome = appChrome()
     val containerColor = when {
-        !enabled -> colors.surfaceContainerHighest
+        !enabled -> Color.Transparent
         selected && recording -> colors.primary
-        filled -> colors.tertiaryContainer
-        selected -> colors.primaryContainer
-        else -> colors.surfaceContainerHighest
+        selected && filled -> colors.tertiaryContainer.copy(alpha = 0.82f)
+        filled -> colors.tertiaryContainer.copy(alpha = 0.32f)
+        selected -> chrome.raised
+        else -> Color.Transparent
     }
     val contentColor = when {
-        !enabled -> colors.onSurfaceVariant.copy(alpha = 0.38f)
+        !enabled -> chrome.muted.copy(alpha = 0.38f)
         selected && recording -> colors.onPrimary
         filled -> colors.onTertiaryContainer
-        selected -> colors.onPrimaryContainer
-        else -> colors.onSurfaceVariant
+        selected -> chrome.ink
+        else -> chrome.muted
     }
 
     Surface(
@@ -1162,10 +1289,11 @@ private fun CaptureActionButton(
     flipDegrees: Float = 0f,
     onClick: () -> Unit,
 ) {
+    val chrome = appChrome()
     val tint = when {
-        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
+        !enabled -> chrome.muted.copy(alpha = 0.28f)
         destructive -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurface
+        else -> chrome.ink
     }
     IconButton(
         onClick = onClick,

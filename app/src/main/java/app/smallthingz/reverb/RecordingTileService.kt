@@ -150,10 +150,7 @@ abstract class RecordingTileService : TileService() {
             }
         }
         tile.label = getString(labelRes)
-        tile.icon = Icon.createWithResource(
-            this,
-            if (uiState == RecordingTileUiState.FULL) R.drawable.ic_qs_full else iconRes,
-        )
+        tile.icon = Icon.createWithResource(this, iconRes)
         tile.state = if (!permissionGranted) {
             Tile.STATE_UNAVAILABLE
         } else {

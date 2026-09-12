@@ -27,11 +27,12 @@ fun BackgroundOptimizationWarning(
     onReview: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val chrome = appChrome()
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.82f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f)),
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
     ) {
         Row(
             modifier = Modifier

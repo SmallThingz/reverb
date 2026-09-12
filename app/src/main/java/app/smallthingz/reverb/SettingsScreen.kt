@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.content.ComponentName
-import android.graphics.BitmapFactory
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
@@ -62,8 +61,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -73,14 +70,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageShader
-import androidx.compose.ui.graphics.Shader
-import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
@@ -104,62 +96,6 @@ import kotlin.math.roundToLong
 private val BYTES_IN_MEGABYTE = 1024L * 1024L
 private val retentionSizeFormatter =
     DecimalFormat(ReverbConfig.FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
-private val themeSegmentDarkField = Color(0xFF101927)
-private val themeSegmentDarkRaised = Color(0xFF1C2939)
-private val themeSegmentDarkInk = Color(0xFFEDF3F3)
-private val themeSegmentDarkMuted = Color(0xFFA0B1C0)
-private val themeSegmentLightField = Color(0xFFF0F5F5)
-private val themeSegmentLightRaised = Color(0xFFE5EEEE)
-private val themeSegmentLightInk = Color(0xFF182D34)
-private val themeSegmentLightMuted = Color(0xFF526872)
-
-private data class SettingsChrome(
-    val field: Color,
-    val raised: Color,
-    val ink: Color,
-    val muted: Color,
-    val border: Color,
-)
-
-private object SettingsNoiseTile {
-    @Volatile
-    private var cachedBrush: Brush? = null
-
-    fun brush(resources: android.content.res.Resources): Brush {
-        cachedBrush?.let { return it }
-        return synchronized(this) {
-            cachedBrush ?: run {
-                val image = checkNotNull(
-                    BitmapFactory.decodeResource(resources, R.drawable.settings_noise_tile),
-                ).asImageBitmap()
-                val shader = ImageShader(
-                    image = image,
-                    tileModeX = TileMode.Repeated,
-                    tileModeY = TileMode.Repeated,
-                )
-                object : ShaderBrush() {
-                    override fun createShader(size: Size): Shader = shader
-                }.also { cachedBrush = it }
-            }
-        }
-    }
-}
-
-@Composable
-private fun settingsChrome(): SettingsChrome {
-    val colors = MaterialTheme.colorScheme
-    val dark = colors.surface.luminance() < 0.5f
-    return SettingsChrome(
-        field = (if (dark) themeSegmentDarkField else themeSegmentLightField)
-            .copy(alpha = if (dark) 0.82f else 0.88f),
-        raised = (if (dark) themeSegmentDarkRaised else themeSegmentLightRaised)
-            .copy(alpha = if (dark) 0.90f else 0.94f),
-        ink = if (dark) themeSegmentDarkInk else themeSegmentLightInk,
-        muted = if (dark) themeSegmentDarkMuted else themeSegmentLightMuted,
-        border = colors.outlineVariant.copy(alpha = if (dark) 0.34f else 0.42f),
-    )
-}
-
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     var retentionMode: RetentionMode = RetentionMode.TIME,
@@ -207,8 +143,7 @@ fun SettingsScreen(
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    val noiseBrush = remember(resources) { SettingsNoiseTile.brush(resources) }
-    val chrome = settingsChrome()
+    val chrome = appChrome()
 
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
@@ -873,9 +808,7 @@ fun SettingsScreen(
                     pivotFractionX = if (direction < 0f) 1f else 0f,
                     pivotFractionY = 0.5f,
                 )
-            }
-            .background(MaterialTheme.colorScheme.surface)
-            .staticNoise(noiseBrush),
+            },
         containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
@@ -1257,7 +1190,7 @@ private fun ReverbSwitch(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val chrome = settingsChrome()
+    val chrome = appChrome()
     val trackColor by animateColorAsState(
         targetValue = if (checked) colors.primary else chrome.raised,
         label = "reverbSwitchTrack",
@@ -1303,7 +1236,7 @@ private fun ReliabilityRow(
     summary: String,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    val chrome = settingsChrome()
+    val chrome = appChrome()
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1378,7 +1311,7 @@ private fun RetentionSection(
 
         val colors = MaterialTheme.colorScheme
         val darkPalette = colors.surface.luminance() < 0.5f
-        val chrome = settingsChrome()
+        val chrome = appChrome()
         val cardShape = RoundedCornerShape(23.dp)
         val cardStart = lerp(colors.surface, colors.primary, if (darkPalette) 0.075f else 0.035f)
             .copy(alpha = if (darkPalette) 0.84f else 0.90f)
@@ -1477,7 +1410,7 @@ private fun SettingsSegmentedControl(
     modifier: Modifier = Modifier,
     content: @Composable (index: Int, contentColor: Color) -> Unit,
 ) {
-    val chrome = settingsChrome()
+    val chrome = appChrome()
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(30.dp),
@@ -1532,7 +1465,7 @@ private fun RetentionValue(
     onTimeChange: (String) -> Unit,
     onSizeChange: (String) -> Unit,
 ) {
-    val chrome = settingsChrome()
+    val chrome = appChrome()
     val isTime = activeMode == RetentionMode.TIME
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(requestFocus) {
@@ -1676,7 +1609,7 @@ private fun SettingsDropdown(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val chrome = settingsChrome()
+    val chrome = appChrome()
     val containerColor by animateColorAsState(
         targetValue = if (expanded) chrome.raised else chrome.field,
         label = "settings-choice-background",
@@ -1773,9 +1706,6 @@ private fun formatRetentionMinutesEstimate(seconds: Int): String {
     }
 }
 
-private fun Modifier.staticNoise(brush: Brush): Modifier = drawBehind {
-    drawRect(brush = brush)
-}
 
 private fun bytesToMegabytes(bytes: Long): Double {
     return (bytes.coerceAtLeast(0L) / BYTES_IN_MEGABYTE.toDouble())

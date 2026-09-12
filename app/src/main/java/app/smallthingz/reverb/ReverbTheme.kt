@@ -117,8 +117,8 @@ private fun ReverbThemeBase(
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
             val insetsController = WindowCompat.getInsetsController(window, view)
-            val surfaceColor = colorScheme.surface.toArgb()
-            setLegacySystemBarColors(window, surfaceColor)
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            setLegacySystemBarColors(window, Color.Transparent.toArgb())
             insetsController.isAppearanceLightStatusBars = !darkTheme
             insetsController.isAppearanceLightNavigationBars = !darkTheme
         }
@@ -127,8 +127,11 @@ private fun ReverbThemeBase(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = ReverbTypography,
-        content = content,
-    )
+    ) {
+        ReverbNoiseBackground {
+            content()
+        }
+    }
 }
 
 @Suppress("DEPRECATION")

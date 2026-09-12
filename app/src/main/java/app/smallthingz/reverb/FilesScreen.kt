@@ -48,6 +48,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -93,6 +94,7 @@ fun FilesScreen(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
+    val chrome = appChrome()
 
     var recordings by remember { mutableStateOf(initialRecordings) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -341,11 +343,12 @@ fun FilesScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = Color.Transparent,
         topBar = {
             if (selectionActive) {
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    tonalElevation = 3.dp,
+                    color = chrome.field,
+                    tonalElevation = 0.dp,
                 ) {
                     Row(
                         modifier = Modifier

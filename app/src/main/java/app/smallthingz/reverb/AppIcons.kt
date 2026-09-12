@@ -18,7 +18,6 @@ import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.LooksOne
 import androidx.compose.material.icons.rounded.Loop
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -53,7 +52,7 @@ internal object AppIcons {
     val library: ImageVector = Icons.AutoMirrored.Rounded.FormatListBulleted
     val audioFile: ImageVector = Icons.Rounded.AudioFile
     val capture: ImageVector = Icons.Rounded.GraphicEq
-    val oneShot: ImageVector = Icons.Rounded.LooksOne
+    val oneShot: ImageVector = oneShotIcon
     val looping: ImageVector = Icons.Rounded.Loop
     val reset: ImageVector = Icons.Rounded.RestartAlt
     val folder: ImageVector = Icons.Rounded.Folder
@@ -64,6 +63,31 @@ internal object AppIcons {
     val themeDark: ImageVector = Icons.Rounded.DarkMode
     val arrowDropDown: ImageVector = Icons.Rounded.ArrowDropDown
 }
+
+
+private val oneShotIcon: ImageVector = ImageVector.Builder(
+    name = "OneShot",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 2.2f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(5f, 5f)
+        verticalLineTo(19f)
+        moveTo(8.5f, 12f)
+        horizontalLineTo(19f)
+        moveTo(15f, 8f)
+        lineTo(19f, 12f)
+        lineTo(15f, 16f)
+    }
+}.build()
 
 private val exportRangeIcon: ImageVector = ImageVector.Builder(
     name = "ExportRange",

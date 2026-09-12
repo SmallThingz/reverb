@@ -71,6 +71,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
     }
     val versionText = resources.getString(R.string.about_version, versionName)
     val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
+    val noiseBrush = rememberAppNoiseBrush()
     var dismissing by remember { mutableStateOf(false) }
     var linkError by remember { mutableStateOf<String?>(null) }
 
@@ -111,6 +112,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                 Column(
                     modifier = Modifier
                         .statusBarsPadding()
+                        .appNoise(noiseBrush)
                         .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 26.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {

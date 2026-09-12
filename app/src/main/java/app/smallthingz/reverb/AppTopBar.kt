@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -8,7 +9,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -25,6 +25,8 @@ internal fun AppTopBar(
     onSettingsClick: () -> Unit,
     applyStatusBarPadding: Boolean = true,
 ) {
+    val chrome = appChrome()
+    val buttonShape = RoundedCornerShape(15.dp)
     val topBarModifier = Modifier
         .fillMaxWidth()
         .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
@@ -38,8 +40,9 @@ internal fun AppTopBar(
             modifier = Modifier
                 .align(Alignment.Center)
                 .size(46.dp),
-            shape = RoundedCornerShape(15.dp),
-            color = Color(0xFF0D1324),
+            shape = buttonShape,
+            color = chrome.field,
+            border = BorderStroke(1.dp, chrome.border),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
@@ -51,16 +54,23 @@ internal fun AppTopBar(
             }
         }
 
-        IconButton(
+        Surface(
             onClick = onSettingsClick,
-            modifier = Modifier.align(Alignment.CenterEnd),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .size(46.dp),
+            shape = buttonShape,
+            color = chrome.field,
+            border = BorderStroke(1.dp, chrome.border),
         ) {
-            Icon(
-                imageVector = AppIcons.settings,
-                contentDescription = stringResource(R.string.open_settings),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(23.dp),
-            )
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = AppIcons.settings,
+                    contentDescription = stringResource(R.string.open_settings),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
         }
     }
 }

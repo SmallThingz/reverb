@@ -2,7 +2,7 @@
 <resources>
     <style name="Theme.Reverb" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">#0D1324</item>
+        <item name="android:windowBackground">@drawable/reverb_window_background</item>
     </style>
 
     <style name="Theme.Reverb.QuickTileAction" parent="@android:style/Theme.Material.NoActionBar">

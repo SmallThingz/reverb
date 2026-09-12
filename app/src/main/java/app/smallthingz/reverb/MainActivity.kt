@@ -18,6 +18,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +57,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -257,7 +261,7 @@ private fun OnboardingScreen(
     var oneShotEnabled by rememberSaveable { mutableStateOf(validInitialOneShot) }
     var loopingEnabled by rememberSaveable { mutableStateOf(initialLoopingEnabled) }
 
-    Surface(Modifier.fillMaxSize()) {
+    Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -332,7 +336,7 @@ private fun OnboardingScreen(
                         )
                         Spacer(Modifier.height(24.dp))
                         OnboardingBufferCard(
-                            marker = "1",
+                            icon = AppIcons.oneShot,
                             title = stringResource(R.string.onboarding_one_shot_title),
                             body = stringResource(R.string.onboarding_one_shot_body),
                             checked = oneShotEnabled,
@@ -341,7 +345,7 @@ private fun OnboardingScreen(
                         )
                         Spacer(Modifier.height(12.dp))
                         OnboardingBufferCard(
-                            marker = "↻",
+                            icon = AppIcons.looping,
                             title = stringResource(R.string.onboarding_looping_title),
                             body = stringResource(R.string.onboarding_looping_body),
                             checked = loopingEnabled,
@@ -432,7 +436,7 @@ private fun OnboardingPermissionCard(
 
 @Composable
 private fun OnboardingBufferCard(
-    marker: String,
+    icon: ImageVector,
     title: String,
     body: String,
     checked: Boolean,
@@ -440,7 +444,8 @@ private fun OnboardingBufferCard(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     OnboardingCard(
-        marker = marker,
+        marker = null,
+        markerIcon = icon,
         title = title,
         body = body,
         trailing = {
@@ -455,14 +460,17 @@ private fun OnboardingBufferCard(
 
 @Composable
 private fun OnboardingCard(
-    marker: String,
+    marker: String?,
+    markerIcon: ImageVector? = null,
     title: String,
     body: String,
     trailing: @Composable () -> Unit,
 ) {
+    val chrome = appChrome()
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = chrome.field,
+        border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
     ) {
         Row(
             modifier = Modifier
@@ -477,11 +485,20 @@ private fun OnboardingCard(
                 color = MaterialTheme.colorScheme.primaryContainer,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = marker,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
+                    if (markerIcon != null) {
+                        androidx.compose.material3.Icon(
+                            imageVector = markerIcon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    } else {
+                        Text(
+                            text = marker.orEmpty(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -550,6 +567,7 @@ private fun MainScreen(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val librarySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val noiseBrush = rememberAppNoiseBrush()
     val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
     fun refreshLibrarySnapshot() {
@@ -651,6 +669,7 @@ private fun MainScreen(
                                 },
                             )
                         },
+                    containerColor = Color.Transparent,
                     topBar = {
                         AppTopBar(
                             onBrandClick = { showAboutDialog = true },
@@ -674,7 +693,7 @@ private fun MainScreen(
                                 },
                             )
                         } else if (!showPermissionDenied) {
-                            Surface(Modifier.fillMaxSize()) {
+                            Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Text(
                                         text = stringResource(R.string.permission_required_message),
@@ -706,44 +725,51 @@ private fun MainScreen(
         ModalBottomSheet(
             onDismissRequest = ::closeLibrary,
             sheetState = librarySheetState,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = Color.Transparent,
             dragHandle = null,
             sheetGesturesEnabled = false,
         ) {
-            FilesScreen(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(),
-                initialRecordings = librarySnapshot,
-                onRecordingCountChanged = { count ->
-                    libraryCount = count
-                    if (count == 0) {
-                        librarySnapshot = emptyList()
-                        showLibrary = false
-                    }
-                },
-                onVisibleRecordingsChanged = { visible ->
-                    if (librarySnapshot != visible) {
-                        ++libraryRefreshGeneration[0]
-                        librarySnapshot = visible
-                    }
-                },
-                onBrandClick = { showAboutDialog = true },
-                onSettingsClick = {
-                    scope.launch {
-                        librarySheetState.hide()
-                        closeLibrary()
-                        settingsBufferTarget = null
-                        showSettings = true
-                    }
-                },
-                onDismissLibrary = {
-                    scope.launch {
-                        librarySheetState.hide()
-                        closeLibrary()
-                    }
-                },
-            )
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .appNoise(noiseBrush),
+            ) {
+                FilesScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    initialRecordings = librarySnapshot,
+                    onRecordingCountChanged = { count ->
+                        libraryCount = count
+                        if (count == 0) {
+                            librarySnapshot = emptyList()
+                            showLibrary = false
+                        }
+                    },
+                    onVisibleRecordingsChanged = { visible ->
+                        if (librarySnapshot != visible) {
+                            ++libraryRefreshGeneration[0]
+                            librarySnapshot = visible
+                        }
+                    },
+                    onBrandClick = { showAboutDialog = true },
+                    onSettingsClick = {
+                        scope.launch {
+                            librarySheetState.hide()
+                            closeLibrary()
+                            settingsBufferTarget = null
+                            showSettings = true
+                        }
+                    },
+                    onDismissLibrary = {
+                        scope.launch {
+                            librarySheetState.hide()
+                            closeLibrary()
+                        }
+                    },
+                )
+            }
         }
     }
 
