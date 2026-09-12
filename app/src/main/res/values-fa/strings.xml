@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">یک نام معتبر وارد کنید.</string>
     <string name="rename_recording_failed">تغییر نام ضبط ممکن نشد.</string>
     <string name="clear_selection">پاک کردن انتخاب</string>
+    <string name="multi_select">انتخاب چندگانه</string>
     <string name="recording_deleted">ضبط حذف شد.</string>
     <string name="recording_delete_failed">حذف ضبط ممکن نشد.</string>
     <string name="recording_info">اطلاعات</string>

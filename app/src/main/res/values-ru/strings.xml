@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">Введите корректное имя.</string>
     <string name="rename_recording_failed">Не удалось переименовать запись.</string>
     <string name="clear_selection">Очистить выбор</string>
+    <string name="multi_select">Множественный выбор</string>
     <string name="recording_deleted">Запись удалена.</string>
     <string name="recording_delete_failed">Не удалось удалить запись.</string>
     <string name="recording_info">Информация</string>

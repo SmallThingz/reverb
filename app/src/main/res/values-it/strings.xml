@@ -67,6 +67,7 @@
     <string name="rename_recording_invalid">Inserisci un nome valido.</string>
     <string name="rename_recording_failed">Impossibile rinominare la registrazione.</string>
     <string name="clear_selection">Cancella selezione</string>
+    <string name="multi_select">Selezione multipla</string>
     <string name="recording_deleted">Registrazione eliminata.</string>
     <string name="recording_delete_failed">Impossibile eliminare la registrazione.</string>
     <string name="recording_info">Info</string>

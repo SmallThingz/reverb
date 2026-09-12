@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">أدخل اسمًا صالحًا.</string>
     <string name="rename_recording_failed">تعذرت إعادة تسمية التسجيل.</string>
     <string name="clear_selection">مسح التحديد</string>
+    <string name="multi_select">تحديد متعدد</string>
     <string name="recording_deleted">تم حذف التسجيل.</string>
     <string name="recording_delete_failed">تعذر حذف التسجيل.</string>
     <string name="recording_info">معلومات</string>

@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">Geçerli bir ad girin.</string>
     <string name="rename_recording_failed">Kayıt yeniden adlandırılamadı.</string>
     <string name="clear_selection">Seçimi temizle</string>
+    <string name="multi_select">Çoklu seçim</string>
     <string name="recording_deleted">Kayıt silindi.</string>
     <string name="recording_delete_failed">Kayıt silinemedi.</string>
     <string name="recording_info">Bilgi</string>

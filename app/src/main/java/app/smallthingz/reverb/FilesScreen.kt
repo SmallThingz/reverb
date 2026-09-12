@@ -21,13 +21,15 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -114,6 +116,7 @@ fun FilesScreen(
     var notice by remember { mutableStateOf<LibraryNotice?>(null) }
     var deletionJob by remember { mutableStateOf<Job?>(null) }
     var deletionsCommittedInBackground by remember { mutableStateOf(false) }
+    var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
         if (notice?.canUndo != true) notice = LibraryNotice(message, tone)
@@ -277,15 +280,14 @@ fun FilesScreen(
         if (hasLoaded) onRecordingCountChanged(recordings.size)
     }
 
-    fun deleteSelected() {
-        if (isDeleting) return
-        val selected = selectedIds.values.toList()
-        if (selected.isEmpty()) { clearSelection(); return }
+    fun deleteRecordings(targets: Collection<RecordingEntity>) {
+        if (isDeleting || targets.isEmpty()) return
         isDeleting = true
         deletionsCommittedInBackground = false
-        selected.forEach { pendingDeletions[it.id] = it }
+        targets.forEach { pendingDeletions[it.id] = it }
         onVisibleRecordingsChanged(recordings.filterNot { it.id in pendingDeletions })
         clearSelection()
+        contextMenuRecordingId = null
         val count = pendingDeletions.size
         val message = if (count == 1) resources.getString(R.string.recording_deleted)
         else resources.getQuantityString(R.plurals.recordings_deleted, count, count)
@@ -299,6 +301,12 @@ fun FilesScreen(
         }
     }
 
+    fun deleteSelected() {
+        val selected = selectedIds.values.toList()
+        if (selected.isEmpty()) { clearSelection(); return }
+        deleteRecordings(selected)
+    }
+
     fun undoDelete() {
         deletionJob?.cancel()
         deletionJob = null
@@ -308,18 +316,6 @@ fun FilesScreen(
         notice = null
         isDeleting = false
         refresh(showSpinner = false)
-    }
-
-    fun renameSelected() {
-        val recording = selectedIds.values.singleOrNull() ?: return
-        renameRecording = recording
-        showRenameDialog = true
-    }
-
-    fun infoSelected() {
-        val recording = selectedIds.values.singleOrNull() ?: return
-        infoRecording = recording
-        showInfoDialog = true
     }
 
     fun shareRecordings(recordingsToShare: Collection<RecordingEntity>) {
@@ -361,7 +357,11 @@ fun FilesScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(onClick = { clearSelection() }) {
-                            Icon(AppIcons.close, contentDescription = stringResource(R.string.clear_selection))
+                            Icon(
+                                AppIcons.close,
+                                contentDescription = stringResource(R.string.clear_selection),
+                                tint = chrome.ink,
+                            )
                         }
                         Spacer(Modifier.width(16.dp))
                         Text(
@@ -369,6 +369,7 @@ fun FilesScreen(
                                 R.plurals.recordings_selected, selectedIds.size, selectedIds.size,
                             ),
                             style = MaterialTheme.typography.titleMedium,
+                            color = chrome.ink,
                         )
                         Spacer(Modifier.weight(1f))
                         if (selectedIds.isNotEmpty()) {
@@ -376,15 +377,8 @@ fun FilesScreen(
                                 Icon(
                                     imageVector = AppIcons.share,
                                     contentDescription = stringResource(R.string.share_recording),
+                                    tint = chrome.ink,
                                 )
-                            }
-                        }
-                        if (selectedIds.size == 1) {
-                            IconButton(onClick = { renameSelected() }) {
-                                Icon(AppIcons.edit, contentDescription = stringResource(R.string.rename_recording))
-                            }
-                            IconButton(onClick = { infoSelected() }) {
-                                Icon(AppIcons.info, contentDescription = stringResource(R.string.recording_info))
                             }
                         }
                         if (selectedIds.isNotEmpty()) {
@@ -433,37 +427,62 @@ fun FilesScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp),
                     ) {
-                        items(listItems, key = { item ->
+                        itemsIndexed(listItems, key = { _, item ->
                             when (item) {
                                 is ListItem.Header -> "header:${item.dateLabel}"
                                 is ListItem.Recording -> "recording:${item.recording.id}"
                             }
-                        }) { item ->
+                        }) { index, item ->
                             when (item) {
-                                is ListItem.Header -> HeaderItem(item.dateLabel)
+                                is ListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)
                                 is ListItem.Recording -> {
+                                    val recording = item.recording
                                     RecordingItem(
                                         item = item,
-                                        isSelected = item.recording.id in selectedIds,
+                                        isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
+                                        menuExpanded = contextMenuRecordingId == recording.id,
                                         onClick = {
+                                            contextMenuRecordingId = null
                                             if (selectionActive) {
-                                                if (selectedIds.containsKey(item.recording.id)) {
-                                                    selectedIds.remove(item.recording.id)
+                                                if (selectedIds.containsKey(recording.id)) {
+                                                    selectedIds.remove(recording.id)
                                                 } else {
-                                                    selectedIds[item.recording.id] = item.recording
+                                                    selectedIds[recording.id] = recording
                                                 }
                                             } else {
-                                                playerRecording = item.recording
+                                                playerRecording = recording
                                                 showPlayerDialog = true
                                             }
                                         },
-                                        onLongClick = {
-                                            if (selectedIds.containsKey(item.recording.id)) {
-                                                selectedIds.remove(item.recording.id)
+                                        onIconLongClick = {
+                                            contextMenuRecordingId = null
+                                            if (selectedIds.containsKey(recording.id)) {
+                                                selectedIds.remove(recording.id)
                                             } else {
-                                                selectedIds[item.recording.id] = item.recording
+                                                selectedIds[recording.id] = recording
                                             }
+                                        },
+                                        onLongClick = { contextMenuRecordingId = recording.id },
+                                        onDismissMenu = { contextMenuRecordingId = null },
+                                        onRename = {
+                                            contextMenuRecordingId = null
+                                            renameRecording = recording
+                                            showRenameDialog = true
+                                        },
+                                        onInfo = {
+                                            contextMenuRecordingId = null
+                                            infoRecording = recording
+                                            showInfoDialog = true
+                                        },
+                                        onShare = {
+                                            contextMenuRecordingId = null
+                                            shareRecordings(listOf(recording))
+                                        },
+                                        onDelete = { deleteRecordings(listOf(recording)) },
+                                        onMultiSelect = {
+                                            contextMenuRecordingId = null
+                                            selectedIds[recording.id] = recording
                                         },
                                     )
                                 }
@@ -603,13 +622,13 @@ private fun EmptyState() {
 }
 
 @Composable
-private fun HeaderItem(dateLabel: String) {
+private fun HeaderItem(dateLabel: String, compactTop: Boolean = false) {
     Text(
         text = dateLabel,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = (0.04).sp,
-        modifier = Modifier.padding(top = 28.dp, bottom = 8.dp),
+        modifier = Modifier.padding(top = if (compactTop) 8.dp else 28.dp, bottom = 8.dp),
     )
 }
 
@@ -618,19 +637,66 @@ private fun RecordingItem(
     item: ListItem.Recording,
     isSelected: Boolean,
     selectionActive: Boolean,
+    menuExpanded: Boolean,
     onClick: () -> Unit,
+    onIconLongClick: () -> Unit,
     onLongClick: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRename: () -> Unit,
+    onInfo: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+    onMultiSelect: () -> Unit,
 ) {
-    RecordingEntityCard(
-        recording = item.recording,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 10.dp),
-        isSelected = isSelected,
-        selectionActive = selectionActive,
-        onClick = onClick,
-        onLongClick = onLongClick,
-    )
+    val chrome = appChrome()
+    Box {
+        RecordingEntityCard(
+            recording = item.recording,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            isSelected = isSelected,
+            selectionActive = selectionActive,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            onIconLongClick = onIconLongClick,
+        )
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = onDismissMenu,
+            modifier = Modifier.align(Alignment.TopEnd),
+            shape = RoundedCornerShape(18.dp),
+            containerColor = chrome.raised,
+        ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.rename_recording), color = chrome.ink) },
+                onClick = onRename,
+                leadingIcon = { Icon(AppIcons.edit, contentDescription = null, tint = chrome.ink) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.recording_info), color = chrome.ink) },
+                onClick = onInfo,
+                leadingIcon = { Icon(AppIcons.info, contentDescription = null, tint = chrome.ink) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.share_recording), color = chrome.ink) },
+                onClick = onShare,
+                leadingIcon = { Icon(AppIcons.share, contentDescription = null, tint = chrome.ink) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
+                onClick = onDelete,
+                leadingIcon = {
+                    Icon(AppIcons.delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.multi_select), color = chrome.ink) },
+                onClick = onMultiSelect,
+                leadingIcon = { Icon(AppIcons.check, contentDescription = null, tint = chrome.ink) },
+            )
+        }
+    }
 }
 
 @Composable

@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">Gültigen Namen eingeben.</string>
     <string name="rename_recording_failed">Aufnahme konnte nicht umbenannt werden.</string>
     <string name="clear_selection">Auswahl löschen</string>
+    <string name="multi_select">Mehrfachauswahl</string>
     <string name="recording_deleted">Aufnahme gelöscht.</string>
     <string name="recording_delete_failed">Aufnahme konnte nicht gelöscht werden.</string>
     <string name="recording_info">Info</string>

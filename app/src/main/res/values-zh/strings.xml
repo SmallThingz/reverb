@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">请输入有效名称。</string>
     <string name="rename_recording_failed">无法重命名录音。</string>
     <string name="clear_selection">清除选择</string>
+    <string name="multi_select">多选</string>
     <string name="recording_deleted">录音已删除。</string>
     <string name="recording_delete_failed">无法删除录音。</string>
     <string name="recording_info">信息</string>

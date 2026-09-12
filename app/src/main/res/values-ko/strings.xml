@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">유효한 이름을 입력하세요.</string>
     <string name="rename_recording_failed">녹음 이름을 바꿀 수 없습니다.</string>
     <string name="clear_selection">선택 지우기</string>
+    <string name="multi_select">다중 선택</string>
     <string name="recording_deleted">녹음이 삭제되었습니다.</string>
     <string name="recording_delete_failed">녹음을 삭제할 수 없습니다.</string>
     <string name="recording_info">정보</string>

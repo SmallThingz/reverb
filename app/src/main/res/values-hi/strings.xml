@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">एक मान्य नाम दर्ज करें।</string>
     <string name="rename_recording_failed">रिकॉर्डिंग का नाम नहीं बदला जा सका।</string>
     <string name="clear_selection">चयन साफ़ करें</string>
+    <string name="multi_select">एकाधिक चयन</string>
     <string name="recording_deleted">रिकॉर्डिंग हटा दी गई।</string>
     <string name="recording_delete_failed">रिकॉर्डिंग हटाई नहीं जा सकी।</string>
     <string name="recording_info">जानकारी</string>

@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">Masukkan nama yang valid.</string>
     <string name="rename_recording_failed">Nama rekaman tidak dapat diubah.</string>
     <string name="clear_selection">Kosongkan pilihan</string>
+    <string name="multi_select">Pilih beberapa</string>
     <string name="recording_deleted">Rekaman dihapus.</string>
     <string name="recording_delete_failed">Rekaman tidak dapat dihapus.</string>
     <string name="recording_info">Info</string>

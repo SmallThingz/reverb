@@ -37,6 +37,7 @@ internal fun RecordingEntityCard(
     selectionActive: Boolean = false,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    onIconLongClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     RecordingSummaryCard(
@@ -49,6 +50,7 @@ internal fun RecordingEntityCard(
         selectionActive = selectionActive,
         onClick = onClick,
         onLongClick = onLongClick,
+        onIconLongClick = onIconLongClick,
     )
 }
 
@@ -91,6 +93,7 @@ private fun RecordingSummaryCard(
     trailingContent: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    onIconLongClick: (() -> Unit)? = null,
 ) {
     val chrome = appChrome()
     val bgColor by animateColorAsState(
@@ -103,6 +106,14 @@ private fun RecordingSummaryCard(
         else chrome.border,
         label = "recordingCardBorder",
     )
+    val iconBackground by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else chrome.raised,
+        label = "recordingCardIconBackground",
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else chrome.ink,
+        label = "recordingCardIconTint",
+    )
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
@@ -110,7 +121,15 @@ private fun RecordingSummaryCard(
         border = BorderStroke(1.dp, borderColor),
         tonalElevation = 0.dp,
     ) {
-        val interactionModifier = if (onClick != null) {
+        val iconInteractionModifier = if (onClick != null) {
+            Modifier.combinedClickable(
+                onClick = onClick,
+                onLongClick = onIconLongClick ?: onLongClick ?: {},
+            )
+        } else {
+            Modifier
+        }
+        val cardInteractionModifier = if (onClick != null) {
             Modifier.combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick ?: {},
@@ -118,40 +137,42 @@ private fun RecordingSummaryCard(
         } else {
             Modifier
         }
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .alpha(if (selectionActive && !isSelected) 0.75f else 1f)
-                .then(interactionModifier)
+                .then(cardInteractionModifier)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(iconBackground)
+                    .then(iconInteractionModifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (showProgress) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Icon(
+                        imageVector = AppIcons.audioFile,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(chrome.raised),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (showProgress) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        Icon(
-                            imageVector = AppIcons.audioFile,
-                            contentDescription = null,
-                            tint = chrome.ink,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,

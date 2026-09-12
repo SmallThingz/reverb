@@ -69,6 +69,7 @@
     <string name="rename_recording_invalid">有効な名前を入力してください。</string>
     <string name="rename_recording_failed">録音名を変更できませんでした。</string>
     <string name="clear_selection">選択を解除</string>
+    <string name="multi_select">複数選択</string>
     <string name="recording_deleted">録音を削除しました。</string>
     <string name="recording_delete_failed">録音を削除できませんでした。</string>
     <string name="recording_info">情報</string>

@@ -67,6 +67,7 @@
     <string name="rename_recording_invalid">Insira um nome válido.</string>
     <string name="rename_recording_failed">Não foi possível renomear a gravação.</string>
     <string name="clear_selection">Limpar seleção</string>
+    <string name="multi_select">Seleção múltipla</string>
     <string name="recording_deleted">Gravação excluída.</string>
     <string name="recording_delete_failed">Não foi possível excluir a gravação.</string>
     <string name="recording_info">Info</string>
