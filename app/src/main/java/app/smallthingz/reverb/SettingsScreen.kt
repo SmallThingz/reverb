@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.ComponentName
+import android.graphics.BitmapFactory
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
@@ -12,7 +13,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,11 +41,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,8 +62,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -72,11 +73,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PointMode
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Shader
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
@@ -84,7 +88,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -109,6 +112,53 @@ private val themeSegmentLightField = Color(0xFFF0F5F5)
 private val themeSegmentLightRaised = Color(0xFFE5EEEE)
 private val themeSegmentLightInk = Color(0xFF182D34)
 private val themeSegmentLightMuted = Color(0xFF526872)
+
+private data class SettingsChrome(
+    val field: Color,
+    val raised: Color,
+    val ink: Color,
+    val muted: Color,
+    val border: Color,
+)
+
+private object SettingsNoiseTile {
+    @Volatile
+    private var cachedBrush: Brush? = null
+
+    fun brush(resources: android.content.res.Resources): Brush {
+        cachedBrush?.let { return it }
+        return synchronized(this) {
+            cachedBrush ?: run {
+                val image = checkNotNull(
+                    BitmapFactory.decodeResource(resources, R.drawable.settings_noise_tile),
+                ).asImageBitmap()
+                val shader = ImageShader(
+                    image = image,
+                    tileModeX = TileMode.Repeated,
+                    tileModeY = TileMode.Repeated,
+                )
+                object : ShaderBrush() {
+                    override fun createShader(size: Size): Shader = shader
+                }.also { cachedBrush = it }
+            }
+        }
+    }
+}
+
+@Composable
+private fun settingsChrome(): SettingsChrome {
+    val colors = MaterialTheme.colorScheme
+    val dark = colors.surface.luminance() < 0.5f
+    return SettingsChrome(
+        field = (if (dark) themeSegmentDarkField else themeSegmentLightField)
+            .copy(alpha = if (dark) 0.82f else 0.88f),
+        raised = (if (dark) themeSegmentDarkRaised else themeSegmentLightRaised)
+            .copy(alpha = if (dark) 0.90f else 0.94f),
+        ink = if (dark) themeSegmentDarkInk else themeSegmentLightInk,
+        muted = if (dark) themeSegmentDarkMuted else themeSegmentLightMuted,
+        border = colors.outlineVariant.copy(alpha = if (dark) 0.34f else 0.42f),
+    )
+}
 
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
@@ -157,6 +207,8 @@ fun SettingsScreen(
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val noiseBrush = remember(resources) { SettingsNoiseTile.brush(resources) }
+    val chrome = settingsChrome()
 
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
@@ -820,9 +872,16 @@ fun SettingsScreen(
                     pivotFractionX = if (direction < 0f) 1f else 0f,
                     pivotFractionY = 0.5f,
                 )
-            },
+            }
+            .background(MaterialTheme.colorScheme.surface)
+            .staticNoise(noiseBrush),
+        containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent,
+                ),
                 title = {
                     Text(stringResource(R.string.settings_title))
                 },
@@ -861,14 +920,7 @@ fun SettingsScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.surface)
-                .noiseTexture(
-                    color = MaterialTheme.colorScheme.onSurface,
-                    alpha = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) 0.045f else 0.026f,
-                    spacing = 7.dp,
-                    seed = 0x51F15,
-                ),
+                .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             if (batteryOptimizationRestricted) {
@@ -885,21 +937,33 @@ fun SettingsScreen(
 
             item(key = "theme") {
                 Column {
-                    SectionTitle(stringResource(R.string.theme_title))
-                    ThemeSelector(
-                        selectedTheme = selectedTheme,
-                        onThemeSelected = { theme ->
-                            if (theme != selectedTheme) {
-                                selectedTheme = theme
-                                onThemeChanged(theme)
-                                saveCurrentToSnapshot(currentSnapshot)
-                                pushUndoState()
-                            }
-                        },
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                    )
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.theme_title),
+                            fontSize = 19.sp,
+                            lineHeight = 26.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        ThemeSelector(
+                            selectedTheme = selectedTheme,
+                            onThemeSelected = { theme ->
+                                if (theme != selectedTheme) {
+                                    selectedTheme = theme
+                                    onThemeChanged(theme)
+                                    saveCurrentToSnapshot(currentSnapshot)
+                                    pushUndoState()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                 }
             }
@@ -1096,29 +1160,37 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                color = chrome.field,
+                border = BorderStroke(1.dp, chrome.border),
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
                             text = exportPathText,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = chrome.muted,
                             modifier = Modifier.weight(1f),
                         )
                         if (selectedExportTreeUri != null) {
-                            IconButton(onClick = {
-                                val previousTreeUri = selectedExportTreeUri
-                                selectedExportTreeUri = null
-                                RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
-                                refreshExportDirectoryUi()
-                                refreshMoveRecordingsAvailability()
-                                saveCurrentToSnapshot(currentSnapshot)
-                                pushUndoState()
-                            }) {
+                            IconButton(
+                                onClick = {
+                                    val previousTreeUri = selectedExportTreeUri
+                                    selectedExportTreeUri = null
+                                    RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
+                                    refreshExportDirectoryUi()
+                                    refreshMoveRecordingsAvailability()
+                                    saveCurrentToSnapshot(currentSnapshot)
+                                    pushUndoState()
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(chrome.raised),
+                            ) {
                                 Icon(
                                     imageVector = AppIcons.reset,
                                     contentDescription = stringResource(R.string.default_folder),
@@ -1126,7 +1198,13 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) }) {
+                        IconButton(
+                            onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(chrome.raised),
+                        ) {
                             Icon(
                                 imageVector = AppIcons.folder,
                                 contentDescription = stringResource(R.string.choose_folder),
@@ -1137,6 +1215,9 @@ fun SettingsScreen(
                     TextButton(
                         onClick = { moveExistingRecordings() },
                         enabled = canMove,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(chrome.raised),
                     ) {
                         Text(stringResource(R.string.move_recordings))
                     }
@@ -1175,8 +1256,9 @@ private fun ReverbSwitch(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val chrome = settingsChrome()
     val trackColor by animateColorAsState(
-        targetValue = if (checked) colors.primary else colors.surfaceContainerHigh,
+        targetValue = if (checked) colors.primary else chrome.raised,
         label = "reverbSwitchTrack",
     )
     val thumbColor by animateColorAsState(
@@ -1220,12 +1302,14 @@ private fun ReliabilityRow(
     summary: String,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    val chrome = settingsChrome()
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -1239,12 +1323,12 @@ private fun ReliabilityRow(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = chrome.ink,
                 )
                 Text(
                     text = summary,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = chrome.muted,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
@@ -1293,9 +1377,12 @@ private fun RetentionSection(
 
         val colors = MaterialTheme.colorScheme
         val darkPalette = colors.surface.luminance() < 0.5f
+        val chrome = settingsChrome()
         val cardShape = RoundedCornerShape(23.dp)
         val cardStart = lerp(colors.surface, colors.primary, if (darkPalette) 0.075f else 0.035f)
+            .copy(alpha = if (darkPalette) 0.84f else 0.90f)
         val cardEnd = lerp(colors.surface, colors.onSurfaceVariant, if (darkPalette) 0.045f else 0.025f)
+            .copy(alpha = if (darkPalette) 0.80f else 0.88f)
 
         Box(
             modifier = Modifier
@@ -1304,14 +1391,8 @@ private fun RetentionSection(
                 .background(Brush.linearGradient(listOf(cardStart, cardEnd)))
                 .border(
                     width = 1.dp,
-                    color = colors.primary.copy(alpha = if (darkPalette) 0.11f else 0.09f),
+                    color = chrome.border,
                     shape = cardShape,
-                )
-                .noiseTexture(
-                    color = colors.onSurface,
-                    alpha = if (darkPalette) 0.095f else 0.050f,
-                    spacing = 5.dp,
-                    seed = 0xC4A2D,
                 ),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
@@ -1368,69 +1449,72 @@ private fun RetentionModeSelector(
     activeMode: RetentionMode,
     onModeSelected: (RetentionMode) -> Unit,
 ) {
-    val segmentWidth = 59.dp
-    val indicatorOffset by animateDpAsState(
-        targetValue = if (activeMode == RetentionMode.TIME) 0.dp else segmentWidth,
-        label = "retentionModeIndicator",
-    )
-    Box(
-        modifier = Modifier
-            .width(126.dp)
-            .height(42.dp)
-            .background(
-                MaterialTheme.colorScheme.surfaceContainerLowest,
-                RoundedCornerShape(30.dp),
-            )
-            .padding(4.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .offset(x = indicatorOffset)
-                .width(segmentWidth)
-                .height(34.dp)
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh,
-                    RoundedCornerShape(22.dp),
-                ),
+    val modes = listOf(RetentionMode.TIME, RetentionMode.SIZE)
+    SettingsSegmentedControl(
+        itemCount = modes.size,
+        selectedIndex = modes.indexOf(activeMode),
+        onSelected = { onModeSelected(modes[it]) },
+        modifier = Modifier.width(126.dp),
+    ) { index, contentColor ->
+        Text(
+            text = stringResource(
+                if (modes[index] == RetentionMode.TIME) R.string.retention_time_label
+                else R.string.retention_size_mode_label,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = contentColor,
+            maxLines = 1,
         )
-        Row {
-            RetentionModeButton(
-                label = stringResource(R.string.retention_time_label),
-                selected = activeMode == RetentionMode.TIME,
-                width = segmentWidth,
-                onClick = { onModeSelected(RetentionMode.TIME) },
-            )
-            RetentionModeButton(
-                label = stringResource(R.string.retention_size_mode_label),
-                selected = activeMode == RetentionMode.SIZE,
-                width = segmentWidth,
-                onClick = { onModeSelected(RetentionMode.SIZE) },
-            )
-        }
     }
 }
 
 @Composable
-private fun RetentionModeButton(
-    label: String,
-    selected: Boolean,
-    width: androidx.compose.ui.unit.Dp,
-    onClick: () -> Unit,
+private fun SettingsSegmentedControl(
+    itemCount: Int,
+    selectedIndex: Int,
+    onSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable (index: Int, contentColor: Color) -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .width(width)
-            .height(34.dp)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
+    val chrome = settingsChrome()
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(30.dp),
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
     ) {
-        Text(
-            text = label,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-            color = if (selected) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier
+                .padding(4.dp)
+                .selectableGroup(),
+        ) {
+            repeat(itemCount) { index ->
+                val selected = index == selectedIndex
+                val backgroundColor by animateColorAsState(
+                    targetValue = if (selected) chrome.raised else Color.Transparent,
+                    label = "settings-segment-background",
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) chrome.ink else chrome.muted,
+                    label = "settings-segment-content",
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(backgroundColor)
+                        .selectable(
+                            selected = selected,
+                            onClick = { onSelected(index) },
+                            role = Role.RadioButton,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    content(index, contentColor)
+                }
+            }
+        }
     }
 }
 
@@ -1447,6 +1531,7 @@ private fun RetentionValue(
     onTimeChange: (String) -> Unit,
     onSizeChange: (String) -> Unit,
 ) {
+    val chrome = settingsChrome()
     val isTime = activeMode == RetentionMode.TIME
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(requestFocus) {
@@ -1477,14 +1562,14 @@ private fun RetentionValue(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = chrome.muted,
                 modifier = Modifier.size(17.dp),
             )
             Text(
                 text = label,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = chrome.muted,
             )
         }
 
@@ -1500,7 +1585,7 @@ private fun RetentionValue(
                     keyboardType = if (isTime) KeyboardType.Ascii else KeyboardType.Decimal,
                 ),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = chrome.ink,
                     fontSize = 34.sp,
                     lineHeight = 40.sp,
                     fontWeight = FontWeight.Normal,
@@ -1516,7 +1601,7 @@ private fun RetentionValue(
                 text = unit,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = chrome.muted,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
         }
@@ -1524,7 +1609,7 @@ private fun RetentionValue(
             text = estimate,
             fontSize = 13.sp,
             lineHeight = 20.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = chrome.muted,
             modifier = Modifier.padding(top = 3.dp),
         )
     }
@@ -1534,8 +1619,9 @@ private fun RetentionValue(
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
+        fontSize = 19.sp,
+        lineHeight = 26.sp,
+        fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
     )
@@ -1547,70 +1633,35 @@ private fun ThemeSelector(
     onThemeSelected: (AppThemeMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkPalette = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val fieldColor = if (darkPalette) themeSegmentDarkField else themeSegmentLightField
-    val raisedColor = if (darkPalette) themeSegmentDarkRaised else themeSegmentLightRaised
-    val inkColor = if (darkPalette) themeSegmentDarkInk else themeSegmentLightInk
-    val mutedColor = if (darkPalette) themeSegmentDarkMuted else themeSegmentLightMuted
-
-    Surface(
+    val themes = AppThemeMode.entries
+    SettingsSegmentedControl(
+        itemCount = themes.size,
+        selectedIndex = themes.indexOf(selectedTheme),
+        onSelected = { onThemeSelected(themes[it]) },
         modifier = modifier,
-        shape = RoundedCornerShape(30.dp),
-        color = fieldColor,
-    ) {
+    ) { index, contentColor ->
+        val theme = themes[index]
+        val icon = when (theme) {
+            AppThemeMode.SYSTEM -> AppIcons.themeSystem
+            AppThemeMode.LIGHT -> AppIcons.themeLight
+            AppThemeMode.DARK -> AppIcons.themeDark
+        }
         Row(
-            modifier = Modifier
-                .padding(4.dp)
-                .selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            AppThemeMode.entries.forEach { theme ->
-                val selected = theme == selectedTheme
-                val backgroundColor by animateColorAsState(
-                    targetValue = if (selected) raisedColor else Color.Transparent,
-                    label = "theme-segment-background",
-                )
-                val contentColor by animateColorAsState(
-                    targetValue = if (selected) inkColor else mutedColor,
-                    label = "theme-segment-content",
-                )
-                val icon = when (theme) {
-                    AppThemeMode.SYSTEM -> AppIcons.themeSystem
-                    AppThemeMode.LIGHT -> AppIcons.themeLight
-                    AppThemeMode.DARK -> AppIcons.themeDark
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(backgroundColor)
-                        .selectable(
-                            selected = selected,
-                            onClick = { onThemeSelected(theme) },
-                            role = Role.RadioButton,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            text = stringResource(theme.labelRes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = contentColor,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = stringResource(theme.labelRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -1624,41 +1675,78 @@ private fun SettingsDropdown(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val chrome = settingsChrome()
+    val containerColor by animateColorAsState(
+        targetValue = if (expanded) chrome.raised else chrome.field,
+        label = "settings-choice-background",
+    )
 
     Box(modifier = modifier) {
-        OutlinedTextField(
-            value = selectedValue,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true },
+            shape = RoundedCornerShape(16.dp),
+            color = containerColor,
+            border = BorderStroke(1.dp, chrome.border),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = chrome.muted,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = selectedValue,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = chrome.ink,
+                        maxLines = 1,
+                    )
+                }
                 Icon(
                     AppIcons.arrowDropDown,
                     contentDescription = stringResource(R.string.open_options),
+                    tint = chrome.muted,
                 )
-            },
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { expanded = true }
-        )
+            }
+        }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(18.dp),
+            containerColor = chrome.raised,
         ) {
             options.forEach { option ->
+                val selected = option == selectedValue
                 DropdownMenuItem(
-                    text = { Text(option) },
+                    text = {
+                        Text(
+                            text = option,
+                            color = if (selected) chrome.ink else chrome.muted,
+                        )
+                    },
                     onClick = {
                         onOptionSelected(option)
                         expanded = false
                     },
+                    trailingIcon = if (selected) {
+                        {
+                            Icon(
+                                imageVector = AppIcons.check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else null,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
@@ -1684,47 +1772,8 @@ private fun formatRetentionMinutesEstimate(seconds: Int): String {
     }
 }
 
-private fun Modifier.noiseTexture(
-    color: Color,
-    alpha: Float,
-    spacing: Dp,
-    seed: Int,
-): Modifier = drawWithCache {
-    val step = spacing.toPx().coerceAtLeast(2f)
-    val stroke = 1.dp.toPx().coerceAtLeast(1f)
-    val faint = ArrayList<Offset>()
-    val medium = ArrayList<Offset>()
-    val strong = ArrayList<Offset>()
-    var state = seed
-
-    fun nextNoise(): Float {
-        state = state * 1664525 + 1013904223
-        return ((state ushr 8) and 0x00FFFFFF) / 16777215f
-    }
-
-    var y = -step
-    while (y < size.height + step) {
-        var x = -step
-        while (x < size.width + step) {
-            val point = Offset(
-                x = x + nextNoise() * step,
-                y = y + nextNoise() * step,
-            )
-            when ((nextNoise() * 3f).toInt().coerceIn(0, 2)) {
-                0 -> faint.add(point)
-                1 -> medium.add(point)
-                else -> strong.add(point)
-            }
-            x += step
-        }
-        y += step
-    }
-
-    onDrawBehind {
-        drawPoints(faint, PointMode.Points, color.copy(alpha = alpha * 0.45f), stroke, StrokeCap.Round)
-        drawPoints(medium, PointMode.Points, color.copy(alpha = alpha * 0.70f), stroke, StrokeCap.Round)
-        drawPoints(strong, PointMode.Points, color.copy(alpha = alpha), stroke, StrokeCap.Round)
-    }
+private fun Modifier.staticNoise(brush: Brush): Modifier = drawBehind {
+    drawRect(brush = brush)
 }
 
 private fun bytesToMegabytes(bytes: Long): Double {
