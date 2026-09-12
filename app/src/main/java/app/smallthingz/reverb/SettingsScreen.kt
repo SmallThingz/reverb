@@ -8,6 +8,8 @@ import android.os.IBinder
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,7 +23,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
@@ -33,7 +38,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
@@ -61,6 +65,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -1137,7 +1142,7 @@ fun SettingsScreen(
                         title = stringResource(R.string.wake_lock_label),
                         summary = stringResource(R.string.wake_lock_summary),
                         trailing = {
-                            Switch(
+                            ReverbSwitch(
                                 checked = currentSnapshot.wakeLockEnabled,
                                 onCheckedChange = { enabled ->
                                     currentSnapshot = currentSnapshot.copy(wakeLockEnabled = enabled)
@@ -1170,6 +1175,51 @@ private fun BackgroundReliabilitySection(
             },
         )
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ReverbSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val trackColor by animateColorAsState(
+        targetValue = if (checked) colors.primary else colors.surfaceContainerHigh,
+        label = "reverbSwitchTrack",
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) colors.onPrimary else colors.onSurfaceVariant.copy(alpha = 0.84f),
+        label = "reverbSwitchThumb",
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 18.dp else 0.dp,
+        label = "reverbSwitchThumbOffset",
+    )
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 44.dp, height = 26.dp)
+                .background(trackColor, RoundedCornerShape(13.dp))
+                .padding(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .offset(x = thumbOffset)
+                    .size(18.dp)
+                    .background(thumbColor, RoundedCornerShape(50)),
+            )
+        }
     }
 }
 
