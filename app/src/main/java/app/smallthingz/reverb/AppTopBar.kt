@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -23,13 +24,14 @@ internal fun AppTopBar(
     onBrandClick: () -> Unit,
     onSettingsClick: () -> Unit,
     applyStatusBarPadding: Boolean = true,
+    barHeight: Dp = 66.dp,
 ) {
     val chrome = appChrome()
     val buttonShape = RoundedCornerShape(15.dp)
     val topBarModifier = Modifier
         .fillMaxWidth()
         .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
-        .height(66.dp)
+        .height(barHeight)
         .padding(horizontal = 14.dp)
     Box(
         modifier = topBarModifier,

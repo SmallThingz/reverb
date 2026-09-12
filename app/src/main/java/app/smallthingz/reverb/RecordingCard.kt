@@ -140,37 +140,43 @@ private fun RecordingSummaryCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .alpha(if (selectionActive && !isSelected) 0.75f else 1f)
-                .then(cardInteractionModifier)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .alpha(if (selectionActive && !isSelected) 0.75f else 1f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(iconBackground)
-                    .then(iconInteractionModifier),
+                    .then(iconInteractionModifier)
+                    .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                if (showProgress) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.5.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else {
-                    Icon(
-                        imageVector = AppIcons.audioFile,
-                        contentDescription = null,
-                        tint = iconTint,
-                        modifier = Modifier.size(24.dp),
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(iconBackground),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (showProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.5.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = AppIcons.audioFile,
+                            contentDescription = null,
+                            tint = iconTint,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(12.dp))
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(cardInteractionModifier)
+                    .padding(end = 14.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {

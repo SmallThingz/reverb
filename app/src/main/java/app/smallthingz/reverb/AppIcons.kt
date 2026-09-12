@@ -7,6 +7,7 @@ import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
@@ -43,6 +44,7 @@ internal object AppIcons {
     val close: ImageVector = Icons.Rounded.Close
     val back: ImageVector = Icons.AutoMirrored.Rounded.ArrowBack
     val check: ImageVector = Icons.Rounded.Check
+    val multiSelect: ImageVector = Icons.Rounded.SelectAll
     val play: ImageVector = Icons.Rounded.PlayArrow
     val pause: ImageVector = Icons.Rounded.Pause
     val seekBack: ImageVector = Icons.Rounded.Replay10

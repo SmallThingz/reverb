@@ -352,7 +352,7 @@ fun FilesScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(58.dp)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -397,6 +397,7 @@ fun FilesScreen(
                     onBrandClick = onBrandClick,
                     onSettingsClick = onSettingsClick,
                     applyStatusBarPadding = false,
+                    barHeight = 58.dp,
                 )
             }
         },
@@ -512,14 +513,14 @@ fun FilesScreen(
 
                 Box(
                     Modifier
-                        .weight(0.13f)
+                        .weight(0.15f)
                         .fillMaxHeight()
                         .edgeDismissGesture(),
                 )
-                Spacer(Modifier.weight(0.74f))
+                Spacer(Modifier.weight(0.70f))
                 Box(
                     Modifier
-                        .weight(0.13f)
+                        .weight(0.15f)
                         .fillMaxHeight()
                         .edgeDismissGesture(),
                 )
@@ -693,7 +694,7 @@ private fun RecordingItem(
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.multi_select), color = chrome.ink) },
                 onClick = onMultiSelect,
-                leadingIcon = { Icon(AppIcons.check, contentDescription = null, tint = chrome.ink) },
+                leadingIcon = { Icon(AppIcons.multiSelect, contentDescription = null, tint = chrome.ink) },
             )
         }
     }
