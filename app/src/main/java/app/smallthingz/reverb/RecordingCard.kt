@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,16 +92,23 @@ private fun RecordingSummaryCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
+    val chrome = appChrome()
     val bgColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
-        else MaterialTheme.colorScheme.surfaceContainerLow,
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.56f)
+        else chrome.field,
         label = "recordingCardColor",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.52f)
+        else chrome.border,
+        label = "recordingCardBorder",
     )
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         color = bgColor,
-        tonalElevation = if (isSelected) 2.dp else 0.5.dp,
+        border = BorderStroke(1.dp, borderColor),
+        tonalElevation = 0.dp,
     ) {
         val interactionModifier = if (onClick != null) {
             Modifier.combinedClickable(
@@ -125,7 +133,7 @@ private fun RecordingSummaryCard(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(RoundedCornerShape(22.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .background(chrome.raised),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (showProgress) {
@@ -138,7 +146,7 @@ private fun RecordingSummaryCard(
                         Icon(
                             imageVector = AppIcons.audioFile,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface,
+                            tint = chrome.ink,
                             modifier = Modifier.size(24.dp),
                         )
                     }
@@ -148,14 +156,14 @@ private fun RecordingSummaryCard(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = chrome.ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = chrome.muted,
                         modifier = Modifier.padding(top = 4.dp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -171,14 +179,14 @@ private fun RecordingSummaryCard(
                             Text(
                                 text = trailingTop,
                                 style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = chrome.ink,
                             )
                         }
                         if (trailingBottom != null) {
                             Text(
                                 text = trailingBottom,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = chrome.muted,
                                 modifier = Modifier.padding(top = 4.dp),
                             )
                         }
