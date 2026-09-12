@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
@@ -135,6 +136,39 @@ fun buildOpenRecordingIntent(
             recording.mimeType.ifBlank { ReverbConfig.FALLBACK_MIME_TYPE_AUDIO },
         )
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+}
+
+fun buildShareRecordingsIntent(
+    context: Context,
+    recordings: Collection<RecordingEntity>,
+): Intent {
+    require(recordings.isNotEmpty()) { "At least one recording is required" }
+
+    val recordingList = recordings.toList()
+    val uris = recordingList.map { buildRecordingUri(context, it) }
+    val mimeTypes = recordingList
+        .map { it.mimeType.ifBlank { ReverbConfig.FALLBACK_MIME_TYPE_AUDIO } }
+        .distinct()
+    val mimeType = mimeTypes.singleOrNull() ?: ReverbConfig.FALLBACK_MIME_TYPE_AUDIO
+    val action = if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE
+
+    return Intent(action).apply {
+        type = mimeType
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (uris.size == 1) {
+            putExtra(Intent.EXTRA_STREAM, uris.single())
+        } else {
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+
+        clipData = ClipData.newUri(
+            context.contentResolver,
+            recordingList.first().displayName,
+            uris.first(),
+        ).apply {
+            uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import java.util.Date
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -275,6 +276,22 @@ fun FilesScreen(
         showInfoDialog = true
     }
 
+    fun shareRecordings(recordingsToShare: Collection<RecordingEntity>) {
+        if (recordingsToShare.isEmpty()) return
+        val chooserTitle = resources.getString(
+            if (recordingsToShare.size == 1) R.string.share_recording_title
+            else R.string.share_recordings_title,
+        )
+        try {
+            val shareIntent = buildShareRecordingsIntent(context, recordingsToShare)
+            context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+        } catch (_: ActivityNotFoundException) {
+            notice = LibraryNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+        } catch (_: RuntimeException) {
+            notice = LibraryNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+        }
+    }
+
     val selectionActive by remember { derivedStateOf { selectedIds.isNotEmpty() } }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
     DisposableEffect(Unit) { onDispose { onSelectionActiveChange(false) } }
@@ -306,6 +323,14 @@ fun FilesScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Spacer(Modifier.weight(1f))
+                        if (selectedIds.isNotEmpty()) {
+                            IconButton(onClick = { shareRecordings(selectedIds.values.toList()) }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_share),
+                                    contentDescription = stringResource(R.string.share_recording),
+                                )
+                            }
+                        }
                         if (selectedIds.size == 1) {
                             IconButton(onClick = { renameSelected() }) {
                                 Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.rename_recording))
@@ -453,6 +478,7 @@ fun FilesScreen(
                     infoRecording = currentRecording
                     showInfoDialog = true
                 },
+                onShareClick = { shareRecordings(listOf(currentRecording)) },
                 onPlaybackFailed = {
                     showPlayerDialog = false
                     playerRecording = null

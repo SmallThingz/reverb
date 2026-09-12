@@ -117,6 +117,10 @@
     <string name="clear_selection">Clear selection</string>
     <string name="recording_deleted">Recording deleted.</string>
     <string name="recording_delete_failed">Couldn\'t delete recording.</string>
+    <string name="share_recording">Share</string>
+    <string name="share_recording_title">Share recording</string>
+    <string name="share_recordings_title">Share recordings</string>
+    <string name="share_recording_failed">Couldn\'t share recording.</string>
     <string name="recording_info">Info</string>
     <string name="about_version">Version %1$s</string>
     <string name="github_repo">GitHub repository</string>

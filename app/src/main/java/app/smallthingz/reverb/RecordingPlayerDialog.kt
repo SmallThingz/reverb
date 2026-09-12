@@ -55,6 +55,7 @@ fun RecordingPlayerDialog(
     recording: RecordingEntity,
     onDismiss: () -> Unit,
     onInfoClick: () -> Unit,
+    onShareClick: () -> Unit,
     onPlaybackFailed: () -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
@@ -181,6 +182,13 @@ fun RecordingPlayerDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = onShareClick) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_share),
+                        contentDescription = stringResource(R.string.share_recording),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = onInfoClick) {
                     Icon(
                         imageVector = Icons.Default.Info,
