@@ -197,6 +197,42 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun captureTarget_activationRequiresTheRequestedBufferToBeUsable() {
+        assertTrue(
+            canActivateCaptureBuffer(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertFalse(
+            canActivateCaptureBuffer(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertFalse(
+            canActivateCaptureBuffer(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = true,
+            ),
+        )
+        assertTrue(
+            canActivateCaptureBuffer(
+                requested = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+    }
+
+    @Test
     fun logicalListeningState_followsNewestUserIntentDuringAsyncStop() {
         assertTrue(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = true))
         assertFalse(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = false))

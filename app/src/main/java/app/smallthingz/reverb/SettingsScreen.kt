@@ -68,6 +68,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -144,8 +145,9 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val chrome = appChrome()
 
@@ -755,10 +757,15 @@ fun SettingsScreen(
         }
     }
 
-    LaunchedEffect(Unit) { bindUiFromPreferences() }
-    LaunchedEffect(active) {
-        if (!active) focusManager.clearFocus(force = true)
+    fun releaseInputFocus() {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
     }
+
+    LaunchedEffect(active) {
+        if (!active) releaseInputFocus()
+    }
+    LaunchedEffect(Unit) { bindUiFromPreferences() }
     LaunchedEffect(focusRetentionBuffer, batteryOptimizationRestricted) {
         if (focusRetentionBuffer != null) {
             listState.scrollToItem(if (batteryOptimizationRestricted) 2 else 1)
@@ -775,7 +782,12 @@ fun SettingsScreen(
                 predictiveBackProgress = event.progress.coerceIn(0f, 1f)
                 predictiveBackEdge = event.swipeEdge
             }
-            if (predictiveBackCloses) onBack() else restorePreviousSettings()
+            if (predictiveBackCloses) {
+                releaseInputFocus()
+                onBack()
+            } else {
+                restorePreviousSettings()
+            }
         } finally {
             predictiveBackProgress = 0f
             predictiveBackEdge = BackEventCompat.EDGE_NONE
@@ -814,7 +826,12 @@ fun SettingsScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (hasUnsavedChanges) restorePreviousSettings() else onBack()
+                        if (hasUnsavedChanges) {
+                            restorePreviousSettings()
+                        } else {
+                            releaseInputFocus()
+                            onBack()
+                        }
                     }) {
                         Icon(
                             imageVector = if (hasUnsavedChanges) AppIcons.undo else AppIcons.back,
@@ -828,7 +845,10 @@ fun SettingsScreen(
                     IconButton(
                         onClick = {
                             if (!hasUnsavedChanges) return@IconButton
-                            if (persistSettings()) onBack()
+                            if (persistSettings()) {
+                                releaseInputFocus()
+                                onBack()
+                            }
                         },
                         enabled = hasUnsavedChanges,
                     ) {
