@@ -2,7 +2,7 @@ package app.smallthingz.reverb
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Dehaze
+import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AudioFile
@@ -50,7 +50,7 @@ internal object AppIcons {
     val seekForward: ImageVector = Icons.Rounded.Forward10
     val save: ImageVector = Icons.Rounded.Save
     val exportRange: ImageVector = exportRangeIcon
-    val library: ImageVector = Icons.Rounded.Dehaze
+    val library: ImageVector = Icons.AutoMirrored.Rounded.FormatListBulleted
     val audioFile: ImageVector = Icons.Rounded.AudioFile
     val capture: ImageVector = Icons.Rounded.GraphicEq
     val oneShot: ImageVector = Icons.Rounded.LooksOne

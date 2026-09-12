@@ -23,6 +23,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -72,9 +73,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -788,15 +791,6 @@ internal fun isCaptureBlockedByOtherBuffer(
     activeBuffer: ReverbService.BufferSlot?,
 ): Boolean = isListening && activeBuffer != null && activeBuffer != bufferSlot
 
-private val ReverbService.BufferSlot.pageIndex: Int
-    get() = when (this) {
-        ReverbService.BufferSlot.ONE_SHOT -> 0
-        ReverbService.BufferSlot.LOOPING -> 1
-    }
-
-private fun bufferSlotForPage(page: Int): ReverbService.BufferSlot =
-    if (page == 0) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING
-
 @Composable
 private fun MainCaptureContent(
     selectedBuffer: ReverbService.BufferSlot,
@@ -821,51 +815,38 @@ private fun MainCaptureContent(
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
 ) {
-    val pagerState = androidx.compose.foundation.pager.rememberPagerState(
-        initialPage = selectedBuffer.pageIndex,
-        pageCount = { 2 },
-    )
-    val flipRotation = remember { androidx.compose.animation.core.Animatable(0f) }
-    var flipInitialized by remember { mutableStateOf(false) }
+    var displayedBuffer by remember { mutableStateOf(selectedBuffer) }
+    val flipDegrees = remember { androidx.compose.animation.core.Animatable(0f) }
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 56.dp.toPx() }
 
     LaunchedEffect(selectedBuffer) {
-        val targetPage = selectedBuffer.pageIndex
-        if (pagerState.currentPage != targetPage) {
-            pagerState.animateScrollToPage(targetPage)
-        }
-        if (flipInitialized) {
-            flipRotation.snapTo(0f)
-            flipRotation.animateTo(360f, tween(durationMillis = 320))
-            flipRotation.snapTo(0f)
-        } else {
-            flipInitialized = true
-        }
-    }
-    LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
-        if (!pagerState.isScrollInProgress) {
-            val settledBuffer = bufferSlotForPage(pagerState.currentPage)
-            if (settledBuffer != selectedBuffer) onSelectBuffer(settledBuffer)
-        }
+        if (displayedBuffer == selectedBuffer) return@LaunchedEffect
+        flipDegrees.snapTo(0f)
+        flipDegrees.animateTo(90f, tween(durationMillis = 140))
+        displayedBuffer = selectedBuffer
+        flipDegrees.snapTo(-90f)
+        flipDegrees.animateTo(0f, tween(durationMillis = 180))
     }
 
-    val selectedMetrics = when (selectedBuffer) {
+    val displayedMetrics = when (displayedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
         ReverbService.BufferSlot.LOOPING -> loopingMetrics
     }
-    val selectedEnabled = when (selectedBuffer) {
+    val displayedEnabled = when (displayedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotEnabled
         ReverbService.BufferSlot.LOOPING -> loopingEnabled
     }
-    val selectedUiState = captureBufferUiState(
-        bufferSlot = selectedBuffer,
-        enabled = selectedEnabled,
+    val displayedUiState = captureBufferUiState(
+        bufferSlot = displayedBuffer,
+        enabled = displayedEnabled,
         oneShotFull = oneShotFull,
         isListening = isListening,
         activeBuffer = activeBuffer,
     )
-    val selectedRecording = selectedUiState == CaptureBufferUiState.RECORDING
+    val displayedRecording = displayedUiState == CaptureBufferUiState.RECORDING
     val serviceReady = service != null
-    val hasHistory = selectedMetrics.seconds > 0f
+    val hasHistory = displayedMetrics.seconds > 0f
 
     Column(
         modifier = Modifier
@@ -873,42 +854,54 @@ private fun MainCaptureContent(
             .padding(horizontal = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        androidx.compose.foundation.pager.HorizontalPager(
-            state = pagerState,
-            beyondViewportPageCount = 1,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
-        ) { page ->
-            val bufferSlot = bufferSlotForPage(page)
+                .weight(1f)
+                .pointerInput(selectedBuffer, isSaving, swipeThresholdPx) {
+                    var horizontalDrag = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { horizontalDrag = 0f },
+                        onHorizontalDrag = { _, amount -> horizontalDrag += amount },
+                        onDragEnd = {
+                            if (!isSaving) {
+                                when {
+                                    horizontalDrag <= -swipeThresholdPx &&
+                                        selectedBuffer == ReverbService.BufferSlot.ONE_SHOT ->
+                                        onSelectBuffer(ReverbService.BufferSlot.LOOPING)
+                                    horizontalDrag >= swipeThresholdPx &&
+                                        selectedBuffer == ReverbService.BufferSlot.LOOPING ->
+                                        onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT)
+                                }
+                            }
+                            horizontalDrag = 0f
+                        },
+                        onDragCancel = { horizontalDrag = 0f },
+                    )
+                },
+        ) {
             BufferBlobPage(
-                bufferSlot = bufferSlot,
+                bufferSlot = displayedBuffer,
                 activeBuffer = activeBuffer,
-                metrics = when (bufferSlot) {
-                    ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
-                    ReverbService.BufferSlot.LOOPING -> loopingMetrics
-                },
-                bufferEnabled = when (bufferSlot) {
-                    ReverbService.BufferSlot.ONE_SHOT -> oneShotEnabled
-                    ReverbService.BufferSlot.LOOPING -> loopingEnabled
-                },
+                metrics = displayedMetrics,
+                bufferEnabled = displayedEnabled,
                 oneShotFull = oneShotFull,
                 isListening = isListening,
                 isSaving = isSaving,
                 service = service,
-                blobController = when (bufferSlot) {
+                blobController = when (displayedBuffer) {
                     ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController
                     ReverbService.BufferSlot.LOOPING -> loopingBlobController
                 },
-                flipRotationZ = if (bufferSlot == selectedBuffer) flipRotation.value else 0f,
-                onListenToggle = { onListenToggle(bufferSlot) },
-                onOpenBufferSettings = { onOpenBufferSettings(bufferSlot) },
-                visualizerVisible = visualizerVisible && selectedBuffer == bufferSlot,
+                flipDegrees = flipDegrees.value,
+                onListenToggle = { onListenToggle(displayedBuffer) },
+                onOpenBufferSettings = { onOpenBufferSettings(displayedBuffer) },
+                visualizerVisible = visualizerVisible,
             )
         }
 
         BufferSelector(
-            selectedBuffer = selectedBuffer,
+            selectedBuffer = displayedBuffer,
             activeBuffer = activeBuffer,
             oneShotEnabled = oneShotEnabled,
             oneShotFull = oneShotFull,
@@ -931,30 +924,29 @@ private fun MainCaptureContent(
                     icon = AppIcons.save,
                     contentDescription = stringResource(R.string.record_all_memory),
                     enabled = serviceReady && !isSaving && hasHistory,
-                    flipRotationZ = flipRotation.value,
-                    onClick = { onExportFull(selectedBuffer) },
+                    flipDegrees = flipDegrees.value,
+                    onClick = { onExportFull(displayedBuffer) },
                 )
                 CaptureActionButton(
                     icon = AppIcons.exportRange,
                     contentDescription = stringResource(R.string.export_range_title),
                     enabled = serviceReady && !isSaving && hasHistory,
-                    flipRotationZ = flipRotation.value,
-                    onClick = { onExportCustom(selectedBuffer) },
+                    flipDegrees = flipDegrees.value,
+                    onClick = { onExportCustom(displayedBuffer) },
                 )
                 CaptureActionButton(
                     icon = AppIcons.delete,
                     contentDescription = stringResource(R.string.clear_buffer),
-                    enabled = serviceReady && !isSaving && hasHistory && !selectedRecording,
+                    enabled = serviceReady && !isSaving && hasHistory && !displayedRecording,
                     destructive = true,
-                    flipRotationZ = flipRotation.value,
-                    onClick = { onClearBuffer(selectedBuffer) },
+                    flipDegrees = flipDegrees.value,
+                    onClick = { onClearBuffer(displayedBuffer) },
                 )
                 if (showLibraryButton) {
                     CaptureActionButton(
                         icon = AppIcons.library,
                         contentDescription = stringResource(R.string.files_tab),
                         enabled = !isSaving,
-                        flipRotationZ = flipRotation.value,
                         onClick = onOpenLibrary,
                     )
                 }
@@ -1077,7 +1069,7 @@ private fun BufferBlobPage(
     isSaving: Boolean,
     service: ReverbService?,
     blobController: AudioBlobController,
-    flipRotationZ: Float,
+    flipDegrees: Float,
     onListenToggle: () -> Unit,
     onOpenBufferSettings: () -> Unit,
     visualizerVisible: Boolean,
@@ -1153,7 +1145,7 @@ private fun BufferBlobPage(
             secondaryText = summaryText,
             showWarning = overExportLimit,
             visualizerVisible = visualizerVisible,
-            flipRotationZ = flipRotationZ,
+            flipDegrees = flipDegrees,
             modifier = Modifier.size(blobSize),
             onClick = if (disabled) onOpenBufferSettings else onListenToggle,
 
@@ -1167,7 +1159,7 @@ private fun CaptureActionButton(
     contentDescription: String,
     enabled: Boolean,
     destructive: Boolean = false,
-    flipRotationZ: Float = 0f,
+    flipDegrees: Float = 0f,
     onClick: () -> Unit,
 ) {
     val tint = when {
@@ -1186,7 +1178,10 @@ private fun CaptureActionButton(
             tint = tint,
             modifier = Modifier
                 .size(25.dp)
-                .graphicsLayer { rotationZ = flipRotationZ },
+                .graphicsLayer {
+                    rotationY = flipDegrees
+                    cameraDistance = 24.dp.toPx()
+                },
         )
     }
 }
@@ -1237,7 +1232,7 @@ private fun AudioBlobControl(
     secondaryText: String? = null,
     showWarning: Boolean = false,
     visualizerVisible: Boolean = true,
-    flipRotationZ: Float = 0f,
+    flipDegrees: Float = 0f,
 ) {
     val active = isListening
     val interactionSource = remember { MutableInteractionSource() }
@@ -1267,6 +1262,7 @@ private fun AudioBlobControl(
         active -> colors.onPrimary
         else -> colors.onSurfaceVariant
     }
+    val flipCameraDistancePx = with(LocalDensity.current) { 24.dp.toPx() }
 
     DisposableEffect(blobController) {
         onDispose {
@@ -1282,7 +1278,8 @@ private fun AudioBlobControl(
                 alpha = if (!dimmed && visuallyEnabled && !isSaving) 1f else 0.56f,
                 scaleX = pressScale,
                 scaleY = pressScale,
-                rotationZ = flipRotationZ,
+                rotationY = flipDegrees,
+                cameraDistance = flipCameraDistancePx,
             )
             .clickable(
                 interactionSource = interactionSource,
