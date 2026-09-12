@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -63,6 +64,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -148,10 +151,12 @@ data class SettingsSnapshot(
 fun SettingsScreen(
     onBack: () -> Unit = {},
     onThemeChanged: (AppThemeMode) -> Unit = {},
+    focusRetentionBuffer: ReverbService.BufferSlot? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
@@ -604,6 +609,8 @@ fun SettingsScreen(
                     FeedbackTone.ERROR,
                 )
             }
+        } else {
+            RecordingQuickTiles.requestRefresh(context)
         }
         saveCurrentToSnapshot(currentSnapshot)
         originalSnapshot.copyFrom(currentSnapshot)
@@ -777,6 +784,11 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) { bindUiFromPreferences() }
+    LaunchedEffect(focusRetentionBuffer, batteryOptimizationRestricted) {
+        if (focusRetentionBuffer != null) {
+            listState.scrollToItem(if (batteryOptimizationRestricted) 2 else 1)
+        }
+    }
 
     var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
     var predictiveBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_NONE) }
@@ -846,6 +858,7 @@ fun SettingsScreen(
         },
     ) { innerPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
@@ -894,6 +907,7 @@ fun SettingsScreen(
             item(key = "retention") {
                 RetentionSection(
                     activeMode = activeRetentionMode,
+                    focusBuffer = focusRetentionBuffer,
                     oneShotTimeText = oneShotRetentionTimeText,
                     oneShotSizeText = oneShotRetentionSizeText,
                     loopingTimeText = loopingRetentionTimeText,
@@ -1242,6 +1256,7 @@ private fun ReliabilityRow(
 @Composable
 private fun RetentionSection(
     activeMode: RetentionMode,
+    focusBuffer: ReverbService.BufferSlot?,
     oneShotTimeText: String,
     oneShotSizeText: String,
     loopingTimeText: String,
@@ -1312,6 +1327,7 @@ private fun RetentionSection(
                         timeText = oneShotTimeText,
                         sizeText = oneShotSizeText,
                         computedSizeMb = oneShotComputedSizeMb,
+                        requestFocus = focusBuffer == ReverbService.BufferSlot.ONE_SHOT,
                         onTimeChange = onOneShotTimeChange,
                         onSizeChange = onOneShotSizeChange,
                     )
@@ -1323,6 +1339,7 @@ private fun RetentionSection(
                         timeText = loopingTimeText,
                         sizeText = loopingSizeText,
                         computedSizeMb = loopingComputedSizeMb,
+                        requestFocus = focusBuffer == ReverbService.BufferSlot.LOOPING,
                         onTimeChange = onLoopingTimeChange,
                         onSizeChange = onLoopingSizeChange,
                     )
@@ -1426,10 +1443,15 @@ private fun RetentionValue(
     timeText: String,
     sizeText: String,
     computedSizeMb: Double,
+    requestFocus: Boolean,
     onTimeChange: (String) -> Unit,
     onSizeChange: (String) -> Unit,
 ) {
     val isTime = activeMode == RetentionMode.TIME
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) focusRequester.requestFocus()
+    }
     val value = if (isTime) timeText else sizeText
     val unit = if (isTime) {
         stringResource(R.string.retention_minutes_unit)
@@ -1487,6 +1509,7 @@ private fun RetentionValue(
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier
                     .weight(1f)
+                    .focusRequester(focusRequester)
                     .semantics { contentDescription = label },
             )
             Text(

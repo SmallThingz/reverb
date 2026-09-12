@@ -181,6 +181,7 @@ fun CaptureScreen(
     visualizerVisible: Boolean = true,
     onOpenLibrary: () -> Unit = {},
     onRecordingSaved: () -> Unit = {},
+    onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit = {},
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -638,6 +639,7 @@ fun CaptureScreen(
             onExportFull = onExportFull,
             onExportCustom = onExportCustom,
             onSelectBuffer = { selectedBuffer = it },
+            onOpenBufferSettings = onOpenBufferSettings,
             showLibraryButton = showLibraryButton,
             visualizerVisible = visualizerVisible,
             onOpenLibrary = onOpenLibrary,
@@ -768,6 +770,7 @@ private fun MainCaptureContent(
     onExportFull: (ReverbService.BufferSlot) -> Unit,
     onExportCustom: (ReverbService.BufferSlot) -> Unit,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
+    onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit,
     showLibraryButton: Boolean,
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
@@ -776,11 +779,20 @@ private fun MainCaptureContent(
         initialPage = selectedBuffer.pageIndex,
         pageCount = { 2 },
     )
+    val flipRotation = remember { androidx.compose.animation.core.Animatable(0f) }
+    var flipInitialized by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedBuffer) {
         val targetPage = selectedBuffer.pageIndex
         if (pagerState.currentPage != targetPage) {
             pagerState.animateScrollToPage(targetPage)
+        }
+        if (flipInitialized) {
+            flipRotation.snapTo(0f)
+            flipRotation.animateTo(360f, tween(durationMillis = 320))
+            flipRotation.snapTo(0f)
+        } else {
+            flipInitialized = true
         }
     }
     LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
@@ -790,24 +802,31 @@ private fun MainCaptureContent(
         }
     }
 
+    val selectedMetrics = when (selectedBuffer) {
+        ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
+        ReverbService.BufferSlot.LOOPING -> loopingMetrics
+    }
+    val selectedEnabled = when (selectedBuffer) {
+        ReverbService.BufferSlot.ONE_SHOT -> oneShotEnabled
+        ReverbService.BufferSlot.LOOPING -> loopingEnabled
+    }
+    val selectedUiState = captureBufferUiState(
+        bufferSlot = selectedBuffer,
+        enabled = selectedEnabled,
+        oneShotFull = oneShotFull,
+        isListening = isListening,
+        activeBuffer = activeBuffer,
+    )
+    val selectedRecording = selectedUiState == CaptureBufferUiState.RECORDING
+    val serviceReady = service != null
+    val hasHistory = selectedMetrics.seconds > 0f
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        BufferTabBar(
-            selectedBuffer = selectedBuffer,
-            activeBuffer = activeBuffer,
-            oneShotMetrics = oneShotMetrics,
-            loopingMetrics = loopingMetrics,
-            oneShotEnabled = oneShotEnabled,
-            oneShotFull = oneShotFull,
-            loopingEnabled = loopingEnabled,
-            onSelectBuffer = onSelectBuffer,
-        )
-        Spacer(Modifier.height(8.dp))
-
         androidx.compose.foundation.pager.HorizontalPager(
             state = pagerState,
             beyondViewportPageCount = 1,
@@ -816,7 +835,7 @@ private fun MainCaptureContent(
                 .weight(1f),
         ) { page ->
             val bufferSlot = bufferSlotForPage(page)
-            CaptureBufferPage(
+            BufferBlobPage(
                 bufferSlot = bufferSlot,
                 activeBuffer = activeBuffer,
                 metrics = when (bufferSlot) {
@@ -835,31 +854,81 @@ private fun MainCaptureContent(
                     ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController
                     ReverbService.BufferSlot.LOOPING -> loopingBlobController
                 },
+                flipRotationZ = if (bufferSlot == selectedBuffer) flipRotation.value else 0f,
                 onListenToggle = { onListenToggle(bufferSlot) },
-                onClearBuffer = { onClearBuffer(bufferSlot) },
-                onExportFull = { onExportFull(bufferSlot) },
-                onExportCustom = { onExportCustom(bufferSlot) },
-                showLibraryButton = showLibraryButton,
+                onOpenBufferSettings = { onOpenBufferSettings(bufferSlot) },
                 visualizerVisible = visualizerVisible && selectedBuffer == bufferSlot,
-                onOpenLibrary = onOpenLibrary,
             )
         }
+
+        BufferSelector(
+            selectedBuffer = selectedBuffer,
+            activeBuffer = activeBuffer,
+            oneShotEnabled = oneShotEnabled,
+            oneShotFull = oneShotFull,
+            loopingEnabled = loopingEnabled,
+            onSelectBuffer = onSelectBuffer,
+        )
+        Spacer(Modifier.height(10.dp))
+
+        Surface(
+            modifier = Modifier.animateContentSize(),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Row(
+                modifier = Modifier.padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CaptureActionButton(
+                    icon = AppIcons.save,
+                    contentDescription = stringResource(R.string.record_all_memory),
+                    enabled = serviceReady && !isSaving && hasHistory,
+                    flipRotationZ = flipRotation.value,
+                    onClick = { onExportFull(selectedBuffer) },
+                )
+                CaptureActionButton(
+                    icon = AppIcons.exportRange,
+                    contentDescription = stringResource(R.string.export_range_title),
+                    enabled = serviceReady && !isSaving && hasHistory,
+                    flipRotationZ = flipRotation.value,
+                    onClick = { onExportCustom(selectedBuffer) },
+                )
+                CaptureActionButton(
+                    icon = AppIcons.delete,
+                    contentDescription = stringResource(R.string.clear_buffer),
+                    enabled = serviceReady && !isSaving && hasHistory && !selectedRecording,
+                    destructive = true,
+                    flipRotationZ = flipRotation.value,
+                    onClick = { onClearBuffer(selectedBuffer) },
+                )
+                if (showLibraryButton) {
+                    CaptureActionButton(
+                        icon = AppIcons.library,
+                        contentDescription = stringResource(R.string.files_tab),
+                        enabled = !isSaving,
+                        flipRotationZ = flipRotation.value,
+                        onClick = onOpenLibrary,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
     }
 }
 
 @Composable
-private fun BufferTabBar(
+private fun BufferSelector(
     selectedBuffer: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
-    oneShotMetrics: BufferMetrics,
-    loopingMetrics: BufferMetrics,
     oneShotEnabled: Boolean,
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.animateContentSize(),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
@@ -868,21 +937,20 @@ private fun BufferTabBar(
                 .selectableGroup()
                 .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            BufferTab(
-                modifier = Modifier.weight(1f),
+            BufferSegment(
                 label = stringResource(R.string.buffer_one_shot),
-                metrics = oneShotMetrics,
+                icon = if (oneShotFull) R.drawable.ic_check else R.drawable.ic_retention_one_shot,
                 selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
                 recording = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
                 enabled = oneShotEnabled,
                 filled = oneShotFull,
                 onClick = { onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT) },
             )
-            BufferTab(
-                modifier = Modifier.weight(1f),
+            BufferSegment(
                 label = stringResource(R.string.buffer_loop),
-                metrics = loopingMetrics,
+                icon = R.drawable.ic_retention_loop,
                 selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
                 recording = activeBuffer == ReverbService.BufferSlot.LOOPING,
                 enabled = loopingEnabled,
@@ -894,28 +962,33 @@ private fun BufferTabBar(
 }
 
 @Composable
-private fun BufferTab(
+private fun BufferSegment(
     label: String,
-    metrics: BufferMetrics,
+    icon: Int,
     selected: Boolean,
     recording: Boolean,
     enabled: Boolean,
     filled: Boolean,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val containerColor = if (selected) colors.primaryContainer else colors.surfaceContainerHighest
-    val contentColor = if (selected) colors.onPrimaryContainer else colors.onSurfaceVariant
-    val status = when {
-        recording -> stringResource(R.string.buffer_recording)
-        !enabled -> stringResource(R.string.buffer_disabled)
-        filled -> stringResource(R.string.buffer_filled)
-        else -> formatShortTimer(metrics.seconds.coerceAtLeast(0f))
+    val containerColor = when {
+        !enabled -> colors.surfaceContainerHighest
+        selected && recording -> colors.primary
+        filled -> colors.tertiaryContainer
+        selected -> colors.primaryContainer
+        else -> colors.surfaceContainerHighest
+    }
+    val contentColor = when {
+        !enabled -> colors.onSurfaceVariant.copy(alpha = 0.38f)
+        selected && recording -> colors.onPrimary
+        filled -> colors.onTertiaryContainer
+        selected -> colors.onPrimaryContainer
+        else -> colors.onSurfaceVariant
     }
 
     Surface(
-        modifier = modifier.selectable(
+        modifier = Modifier.selectable(
             selected = selected,
             role = Role.Tab,
             onClick = onClick,
@@ -923,21 +996,24 @@ private fun BufferTab(
         shape = RoundedCornerShape(16.dp),
         color = containerColor,
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Row(
+            modifier = Modifier
+                .width(112.dp)
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(7.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 color = contentColor,
-                maxLines = 1,
-            )
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodySmall,
-                color = contentColor.copy(alpha = 0.78f),
-                fontFamily = if (recording || !enabled || filled) FontFamily.Default else FontFamily.Monospace,
                 maxLines = 1,
             )
         }
@@ -945,7 +1021,7 @@ private fun BufferTab(
 }
 
 @Composable
-private fun CaptureBufferPage(
+private fun BufferBlobPage(
     bufferSlot: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
     metrics: BufferMetrics,
@@ -955,13 +1031,10 @@ private fun CaptureBufferPage(
     isSaving: Boolean,
     service: ReverbService?,
     blobController: AudioBlobController,
+    flipRotationZ: Float,
     onListenToggle: () -> Unit,
-    onClearBuffer: () -> Unit,
-    onExportFull: () -> Unit,
-    onExportCustom: () -> Unit,
-    showLibraryButton: Boolean,
+    onOpenBufferSettings: () -> Unit,
     visualizerVisible: Boolean,
-    onOpenLibrary: () -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -976,10 +1049,11 @@ private fun CaptureBufferPage(
     val blockedByOther = isCaptureBlockedByOtherBuffer(bufferSlot, isListening, activeBuffer)
     val recordingThisBuffer = uiState == CaptureBufferUiState.RECORDING
     val filled = uiState == CaptureBufferUiState.FILLED
+    val disabled = uiState == CaptureBufferUiState.DISABLED
     val serviceReady = service != null
-    val hasHistory = metrics.seconds > 0f
     val captureEnabled = serviceReady && !blockedByOther &&
         (uiState == CaptureBufferUiState.READY || recordingThisBuffer)
+    val clickEnabled = !isSaving && (disabled || (!blockedByOther && captureEnabled))
 
     val displayedCurrentSeconds = metrics.seconds.coerceAtLeast(0f).toInt()
     val currentBytes = metrics.bytes.coerceAtLeast(0L)
@@ -1016,130 +1090,27 @@ private fun CaptureBufferPage(
         }
     }
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        contentAlignment = Alignment.Center,
     ) {
-        CaptureBufferStatus(
-            bufferSlot = bufferSlot,
-            activeBuffer = activeBuffer,
-            uiState = uiState,
-            blockedByOther = blockedByOther,
-        )
+        val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
+        AudioBlobControl(
+            isListening = recordingThisBuffer,
+            isSaving = isSaving,
+            enabled = captureEnabled,
+            clickableEnabled = clickEnabled,
+            filled = filled,
+            dimmed = blockedByOther || disabled,
+            blobController = blobController,
+            primaryText = timerText,
+            secondaryText = summaryText,
+            showWarning = overExportLimit,
+            visualizerVisible = visualizerVisible,
+            flipRotationZ = flipRotation.value,
+            modifier = Modifier.size(blobSize),
+            onClick = if (disabled) onOpenBufferSettings else onListenToggle,
 
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentAlignment = Alignment.Center,
-        ) {
-            val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
-            AudioBlobControl(
-                isListening = recordingThisBuffer,
-                isSaving = isSaving,
-                enabled = captureEnabled,
-                filled = filled,
-                dimmed = blockedByOther || uiState == CaptureBufferUiState.DISABLED,
-                blobController = blobController,
-                primaryText = timerText,
-                secondaryText = summaryText,
-                showWarning = overExportLimit,
-                visualizerVisible = visualizerVisible,
-                modifier = Modifier.size(blobSize),
-                onClick = onListenToggle,
-            )
-        }
-
-        Surface(
-            modifier = Modifier.animateContentSize(),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
-            Row(
-                modifier = Modifier.padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CaptureActionButton(
-                    icon = AppIcons.save,
-                    contentDescription = stringResource(R.string.record_all_memory),
-                    enabled = serviceReady && !isSaving && hasHistory,
-                    onClick = onExportFull,
-                )
-                CaptureActionButton(
-                    icon = AppIcons.exportRange,
-                    contentDescription = stringResource(R.string.export_range_title),
-                    enabled = serviceReady && !isSaving && hasHistory,
-                    onClick = onExportCustom,
-                )
-                CaptureActionButton(
-                    icon = AppIcons.delete,
-                    contentDescription = stringResource(R.string.clear_buffer),
-                    enabled = serviceReady && !isSaving && hasHistory && !recordingThisBuffer,
-                    destructive = true,
-                    onClick = onClearBuffer,
-                )
-                if (showLibraryButton) {
-                    CaptureActionButton(
-                        icon = AppIcons.library,
-                        contentDescription = stringResource(R.string.files_tab),
-                        enabled = !isSaving,
-                        onClick = onOpenLibrary,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(18.dp))
-    }
-}
-
-@Composable
-private fun CaptureBufferStatus(
-    bufferSlot: ReverbService.BufferSlot,
-    activeBuffer: ReverbService.BufferSlot?,
-    uiState: CaptureBufferUiState,
-    blockedByOther: Boolean,
-) {
-    val message = when {
-        blockedByOther -> when (activeBuffer) {
-            ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.buffer_recording_one_shot)
-            ReverbService.BufferSlot.LOOPING -> stringResource(R.string.buffer_recording_looping)
-            null -> ""
-        }
-        uiState == CaptureBufferUiState.RECORDING -> when (bufferSlot) {
-            ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.buffer_recording_one_shot)
-            ReverbService.BufferSlot.LOOPING -> stringResource(R.string.buffer_recording_looping)
-        }
-        uiState == CaptureBufferUiState.FILLED -> stringResource(R.string.buffer_one_shot_filled)
-        uiState == CaptureBufferUiState.DISABLED -> when (bufferSlot) {
-            ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.buffer_off_one_shot)
-            ReverbService.BufferSlot.LOOPING -> stringResource(R.string.buffer_off_looping)
-        }
-        else -> when (bufferSlot) {
-            ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.buffer_ready_one_shot)
-            ReverbService.BufferSlot.LOOPING -> stringResource(R.string.buffer_ready_looping)
-        }
-    }
-    val emphasized = uiState == CaptureBufferUiState.RECORDING || uiState == CaptureBufferUiState.FILLED
-
-    Surface(
-        shape = RoundedCornerShape(99.dp),
-        color = if (emphasized) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainer
-        },
-    ) {
-        Text(
-            text = message,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
         )
     }
 }
@@ -1150,6 +1121,7 @@ private fun CaptureActionButton(
     contentDescription: String,
     enabled: Boolean,
     destructive: Boolean = false,
+    flipRotationZ: Float = 0f,
     onClick: () -> Unit,
 ) {
     val tint = when {
@@ -1166,7 +1138,9 @@ private fun CaptureActionButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = tint,
-            modifier = Modifier.size(25.dp),
+            modifier = Modifier
+                .size(25.dp)
+                .graphicsLayer { rotationZ = flipRotationZ },
         )
     }
 }
@@ -1210,12 +1184,14 @@ private fun AudioBlobControl(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    clickableEnabled: Boolean = enabled,
     filled: Boolean = false,
     dimmed: Boolean = false,
     primaryText: String? = null,
     secondaryText: String? = null,
     showWarning: Boolean = false,
     visualizerVisible: Boolean = true,
+    flipRotationZ: Float = 0f,
 ) {
     val active = isListening
     val interactionSource = remember { MutableInteractionSource() }
@@ -1228,7 +1204,7 @@ private fun AudioBlobControl(
         label = "pressScale",
     )
     val colors = MaterialTheme.colorScheme
-    val interactionEnabled = enabled && !isSaving
+    val interactionEnabled = clickableEnabled && !isSaving
     val visuallyEnabled = enabled || filled
     val actionIcon = when {
         filled -> AppIcons.check
@@ -1260,6 +1236,7 @@ private fun AudioBlobControl(
                 alpha = if (!dimmed && visuallyEnabled && !isSaving) 1f else 0.56f,
                 scaleX = pressScale,
                 scaleY = pressScale,
+                rotationZ = flipRotationZ,
             )
             .clickable(
                 interactionSource = interactionSource,

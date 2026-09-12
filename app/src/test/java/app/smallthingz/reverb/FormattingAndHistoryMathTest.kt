@@ -269,6 +269,32 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileUiState_distinguishesRecordingStoppedFullDisabledAndBlocked() {
+        val stopped = RecordingTileSnapshot(
+            listening = false,
+            activeBuffer = null,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+        )
+        assertEquals(RecordingTileUiState.STOPPED, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, stopped))
+        assertEquals(RecordingTileUiState.STOPPED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, stopped))
+
+        val oneShotRunning = stopped.copy(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+        )
+        assertEquals(RecordingTileUiState.RUNNING, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, oneShotRunning))
+        assertEquals(RecordingTileUiState.BLOCKED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, oneShotRunning))
+
+        val oneShotFull = stopped.copy(oneShotFull = true)
+        assertEquals(RecordingTileUiState.FULL, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, oneShotFull))
+
+        val loopingDisabled = stopped.copy(loopingEnabled = false)
+        assertEquals(RecordingTileUiState.DISABLED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, loopingDisabled))
+    }
+
+    @Test
     fun oneShotWritableBytes_stopsAtCapacity_withoutOverwriting() {
         assertEquals(
             4L,

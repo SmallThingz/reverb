@@ -540,6 +540,7 @@ private fun MainScreen(
     onThemeChanged: (AppThemeMode) -> Unit,
 ) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var settingsBufferTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var libraryCount by rememberSaveable { mutableIntStateOf(0) }
@@ -603,8 +604,14 @@ private fun MainScreen(
         ) { settingsVisible ->
             if (settingsVisible) {
                 SettingsScreen(
-                    onBack = { showSettings = false },
+                    onBack = {
+                        showSettings = false
+                        settingsBufferTarget = null
+                    },
                     onThemeChanged = onThemeChanged,
+                    focusRetentionBuffer = settingsBufferTarget?.let { stored ->
+                        runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
+                    },
                 )
             } else {
                 Scaffold(
@@ -631,6 +638,7 @@ private fun MainScreen(
                                             downwardDrag += amount
                                             if (downwardDrag >= openPanelDistancePx) {
                                                 triggered = true
+                                                settingsBufferTarget = null
                                                 showSettings = true
                                             }
                                         } else if (dragStartY >= bottomRegionStart && amount < 0f) {
@@ -647,7 +655,10 @@ private fun MainScreen(
                     topBar = {
                         AppTopBar(
                             onBrandClick = { showAboutDialog = true },
-                            onSettingsClick = { showSettings = true },
+                            onSettingsClick = {
+                                settingsBufferTarget = null
+                                showSettings = true
+                            },
                         )
                     },
                 ) { innerPadding ->
@@ -658,6 +669,10 @@ private fun MainScreen(
                                 visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
                                 onOpenLibrary = { showLibrary = true },
                                 onRecordingSaved = { refreshLibrarySnapshot() },
+                                onOpenBufferSettings = { bufferSlot ->
+                                    settingsBufferTarget = bufferSlot.name
+                                    showSettings = true
+                                },
                             )
                         } else if (!showPermissionDenied) {
                             Surface(Modifier.fillMaxSize()) {

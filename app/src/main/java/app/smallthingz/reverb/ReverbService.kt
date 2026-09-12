@@ -159,7 +159,8 @@ class ReverbService : Service() {
             try {
                 loadConfiguredPreferences()
                 configurePersistentBuffer()
-                switchActiveBufferOnAudioThread(resolveConfiguredCaptureBufferSlot())
+                switchActiveBufferOnAudioThread(resolveConfiguredCaptureBufferSlot(), notifyTiles = false)
+                syncOneShotFullQuickTileOnAudioThread()
             } catch (error: Exception) {
                 reportPersistentStoreFailure("initialize", error)
                 if (isListeningEnabled()) {
@@ -345,7 +346,10 @@ class ReverbService : Service() {
         return true
     }
 
-    private fun switchActiveBufferOnAudioThread(bufferSlot: BufferSlot) {
+    private fun switchActiveBufferOnAudioThread(
+        bufferSlot: BufferSlot,
+        notifyTiles: Boolean = true,
+    ) {
         check(audioHandler.looper == Looper.myLooper())
         if (activeBufferSlot == bufferSlot) return
         activeBufferSlot = bufferSlot
@@ -354,6 +358,19 @@ class ReverbService : Service() {
             prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).apply()
             reportError(getString(R.string.recorder_state_persist_failed))
         }
+        if (notifyTiles) RecordingQuickTiles.requestRefresh(this)
+    }
+
+    private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
+        check(audioHandler.looper == Looper.myLooper())
+        val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
+        val prefs = getRecorderPreferences(this)
+        if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
+            if (!prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).commit()) {
+                prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).apply()
+            }
+        }
+        if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
     }
 
     private fun readConfiguredCaptureSnapshot(): RecorderConfigurationSnapshot {
@@ -526,6 +543,7 @@ class ReverbService : Service() {
             failListeningStart(generation)
             return
         }
+        RecordingQuickTiles.requestRefresh(this)
         audioHandler.post {
             if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return@post
             state = STATE_LISTENING
@@ -550,6 +568,7 @@ class ReverbService : Service() {
             committed
         }
         updateWakeLockState()
+        RecordingQuickTiles.requestRefresh(this)
         reportError(getString(if (persisted) R.string.audio_input_init_failed else R.string.recorder_state_persist_failed))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -605,6 +624,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
+        RecordingQuickTiles.requestRefresh(this)
         audioHandler.post(audioReader)
     }
 
@@ -620,6 +640,7 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
+            RecordingQuickTiles.requestRefresh(this)
             try {
                 sealActiveChunks()
             } catch (error: Exception) {
@@ -1112,6 +1133,7 @@ class ReverbService : Service() {
             }
         }
         updateWakeLockState()
+        syncOneShotFullQuickTileOnAudioThread()
     }
 
     private fun notifyReceiver(
@@ -1244,11 +1266,16 @@ class ReverbService : Service() {
                     0
                 }
                 val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
-                if (oneShotFull && loopingBufferEnabled) {
-                    switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
-                    val overflow = count - writtenToOneShot
-                    if (overflow > 0) {
-                        loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
+                if (oneShotFull) {
+                    syncOneShotFullQuickTileOnAudioThread(refreshTiles = false)
+                    if (loopingBufferEnabled) {
+                        switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
+                        val overflow = count - writtenToOneShot
+                        if (overflow > 0) {
+                            loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
+                        }
+                    } else {
+                        RecordingQuickTiles.requestRefresh(this)
                     }
                 }
             }
@@ -1292,6 +1319,7 @@ class ReverbService : Service() {
         if (!persisted) {
             reportError(getString(R.string.recorder_state_persist_failed))
         }
+        RecordingQuickTiles.requestRefresh(this)
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -1450,6 +1478,7 @@ class ReverbService : Service() {
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
         updateWakeLockState()
+        RecordingQuickTiles.requestRefresh(this)
         reportError(
             if (!persisted) getString(R.string.recorder_state_persist_failed)
             else if (error == null) message
@@ -1590,6 +1619,12 @@ class ReverbService : Service() {
                 chunkStore(bufferSlot).clear()
             } catch (error: Exception) {
                 reportPersistentStoreFailure("clear history", error)
+            } finally {
+                if (bufferSlot == BufferSlot.ONE_SHOT) {
+                    syncOneShotFullQuickTileOnAudioThread()
+                } else {
+                    RecordingQuickTiles.requestRefresh(this)
+                }
             }
         }
     }
