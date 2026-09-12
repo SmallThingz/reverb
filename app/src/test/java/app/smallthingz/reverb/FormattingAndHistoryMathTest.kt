@@ -155,6 +155,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun oneShotRetainedChunkBytes_truncatesTailToFrameAlignedCapacity() {
+        assertEquals(8L, oneShotRetainedChunkBytes(12L, 4L, 10L, 2))
+        assertEquals(6L, oneShotRetainedChunkBytes(11L, 4L, 10L, 2))
+        assertEquals(0L, oneShotRetainedChunkBytes(4L, 4L, 10L, 2))
+        assertEquals(10L, oneShotRetainedChunkBytes(20L, 4L, 10L, 2))
+    }
+
+    @Test
     fun wavSampleFormatBytes_roundTripCorrectly() {
         val stereo48k = { sr: Int, ch: Int, fmt: PcmSampleFormat ->
             val bytes = bytesForRetentionSeconds(100, sr, ch, fmt)

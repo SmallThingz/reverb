@@ -57,6 +57,17 @@ internal fun oneShotWritableBytes(
     return remaining - remaining % frameBytes.toLong()
 }
 
+internal fun oneShotRetainedChunkBytes(
+    retentionValue: Long,
+    retainedBeforeChunk: Long,
+    chunkPayloadBytes: Long,
+    frameBytes: Int,
+): Long {
+    if (retentionValue <= retainedBeforeChunk || chunkPayloadBytes <= 0L || frameBytes <= 0) return 0L
+    val available = minOf(retentionValue - retainedBeforeChunk, chunkPayloadBytes)
+    return available - available % frameBytes.toLong()
+}
+
 /**
  * Disk-backed append-only PCM timeline.
  *
@@ -86,6 +97,7 @@ internal class PersistentAudioChunkStore(
     private var retainedPayloadBytes = 0L
     private var retainedDurationSeconds = 0.0
     private var retainedDurationCompensation = 0.0
+    private var pendingOneShotSizeTruncation = false
 
     private var retentionMode = RetentionMode.SIZE
     private var retentionValue = Long.MAX_VALUE
@@ -158,7 +170,14 @@ internal class PersistentAudioChunkStore(
         if (overwriteOldest && activeRecord != null && retentionExceededLocked()) {
             finalizeActiveLocked()
         }
-        val cleaned = overwriteOldest && normalizedRetention > 0L && cleanupRetentionLocked()
+        val cleaned = when {
+            overwriteOldest -> normalizedRetention > 0L && cleanupRetentionLocked()
+            requestedRetentionMode == RetentionMode.SIZE -> truncateOneShotSizeLocked()
+            else -> {
+                pendingOneShotSizeTruncation = false
+                false
+            }
+        }
         if (cleaned || formatChanged || normalizedRetention == 0L) {
             writeIndexLocked()
         }
@@ -920,6 +939,142 @@ internal class PersistentAudioChunkStore(
         activeAccess = null
     }
 
+    private fun truncateOneShotSizeLocked(): Boolean {
+        if (overwriteOldest || retentionMode != RetentionMode.SIZE) {
+            pendingOneShotSizeTruncation = false
+            return false
+        }
+        if (retainedPayloadBytes <= retentionValue) {
+            pendingOneShotSizeTruncation = false
+            return false
+        }
+
+        finalizeActiveLocked()
+        val current = chunks.toList()
+        var retainedBeforeChunk = 0L
+        var cutoffIndex = current.size
+        var partialRecord: ChunkRecord? = null
+        var partialPayloadBytes = 0L
+
+        for ((index, record) in current.withIndex()) {
+            val keepBytes = oneShotRetainedChunkBytes(
+                retentionValue = retentionValue,
+                retainedBeforeChunk = retainedBeforeChunk,
+                chunkPayloadBytes = record.payloadBytes,
+                frameBytes = record.frameBytes,
+            )
+            if (keepBytes == record.payloadBytes) {
+                retainedBeforeChunk += record.payloadBytes
+                continue
+            }
+            cutoffIndex = index
+            if (keepBytes > 0L) {
+                partialRecord = record
+                partialPayloadBytes = keepBytes
+            }
+            break
+        }
+
+        if (partialRecord != null && partialRecord.refCount > 0) {
+            pendingOneShotSizeTruncation = true
+            return false
+        }
+
+        if (partialRecord != null) {
+            truncateFinalizedChunkLocked(partialRecord, partialPayloadBytes)
+            cutoffIndex++
+        }
+
+        for (index in current.lastIndex downTo cutoffIndex) {
+            val record = current[index]
+            if (removeChunkLocked(record)) retireRecordLocked(record)
+        }
+
+        lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
+            newest.createdAtMillis + (newest.durationSeconds * 1000.0).toLong()
+        } ?: 0L
+        pendingOneShotSizeTruncation = retainedPayloadBytes > retentionValue
+        return true
+    }
+
+    private fun truncateFinalizedChunkLocked(record: ChunkRecord, payloadBytes: Long) {
+        require(record.refCount == 0) { "Cannot truncate a referenced chunk" }
+        require(payloadBytes in 1 until record.payloadBytes) { "Invalid truncated payload size: $payloadBytes" }
+        require(payloadBytes % record.frameBytes.toLong() == 0L) { "Truncated payload must be frame aligned" }
+
+        if (record === activeRecord) finalizeActiveLocked()
+        val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
+        if (temp.exists() && !temp.delete()) {
+            throw IOException("Unable to remove stale truncation artifact: ${temp.absolutePath}")
+        }
+
+        val replacement = ChunkRecord(
+            id = record.id,
+            file = temp,
+            state = ChunkState.ACTIVE,
+            createdAtMillis = record.createdAtMillis,
+            payloadBytes = 0L,
+            sampleFrames = 0L,
+            sampleRate = record.sampleRate,
+            channelCount = record.channelCount,
+            sampleFormat = record.sampleFormat,
+            payloadChecksum = 0,
+            headerGeneration = 0L,
+            payloadOffsetBytes = CHUNK_HEADER_BYTES.toLong(),
+        )
+        var output: RandomAccessFile? = null
+        try {
+            if (!temp.createNewFile()) throw IOException("Unable to create truncation artifact: ${temp.absolutePath}")
+            output = RandomAccessFile(temp, "rw")
+            writeInitialChunkHeader(replacement, output)
+            val checksum = CRC32()
+            RandomAccessFile(record.file, "r").use { input ->
+                input.seek(record.payloadOffsetBytes)
+                output.seek(replacement.payloadOffsetBytes)
+                val scratch = ByteArray(64 * 1024)
+                var remaining = payloadBytes
+                while (remaining > 0L) {
+                    val count = minOf(scratch.size.toLong(), remaining).toInt()
+                    input.readFully(scratch, 0, count)
+                    output.write(scratch, 0, count)
+                    checksum.update(scratch, 0, count)
+                    remaining -= count.toLong()
+                }
+            }
+            replacement.payloadBytes = payloadBytes
+            replacement.sampleFrames = payloadBytes / replacement.frameBytes.toLong()
+            replacement.payloadChecksum = checksum.value.toInt()
+            replacement.state = ChunkState.FINALIZED
+            writeMutableChunkSlot(replacement, access = output, forceToDisk = true)
+            output.close()
+            output = null
+            try {
+                Files.move(
+                    temp.toPath(),
+                    record.file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp.toPath(), record.file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (error: Exception) {
+            runCatching { output?.close() }
+            runCatching { temp.delete() }
+            throw error
+        }
+
+        val oldDuration = record.durationSeconds
+        val removedBytes = record.payloadBytes - replacement.payloadBytes
+        record.state = replacement.state
+        record.payloadBytes = replacement.payloadBytes
+        record.sampleFrames = replacement.sampleFrames
+        record.payloadChecksum = replacement.payloadChecksum
+        record.headerGeneration = replacement.headerGeneration
+        retainedPayloadBytes = (retainedPayloadBytes - removedBytes).coerceAtLeast(0L)
+        addRetainedDurationLocked(record.durationSeconds - oldDuration)
+    }
+
     private fun cleanupRetentionLocked(): Boolean {
         if (!overwriteOldest) return false
         var changed = false
@@ -992,6 +1147,9 @@ internal class PersistentAudioChunkStore(
         record.refCount--
         if (record.refCount == 0 && record.pendingDelete) {
             tryDeleteRetiredRecordLocked(record)
+        }
+        if (!closed && pendingOneShotSizeTruncation && record.refCount == 0) {
+            if (truncateOneShotSizeLocked()) writeIndexLocked()
         }
     }
 
