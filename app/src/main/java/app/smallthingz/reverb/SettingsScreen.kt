@@ -43,8 +43,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -65,7 +63,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -74,6 +71,7 @@ import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -793,9 +791,7 @@ fun SettingsScreen(
                         if (hasUnsavedChanges) restorePreviousSettings() else onBack()
                     }) {
                         Icon(
-                            painter = painterResource(
-                                if (hasUnsavedChanges) R.drawable.ic_undo else R.drawable.ic_close,
-                            ),
+                            imageVector = if (hasUnsavedChanges) AppIcons.undo else AppIcons.close,
                             contentDescription = stringResource(
                                 if (hasUnsavedChanges) R.string.undo else R.string.close,
                             ),
@@ -811,7 +807,7 @@ fun SettingsScreen(
                         enabled = hasUnsavedChanges,
                     ) {
                         Icon(
-                            painter = painterResource(R.drawable.ic_check),
+                            imageVector = AppIcons.check,
                             contentDescription = stringResource(R.string.done),
                             tint = if (hasUnsavedChanges) MaterialTheme.colorScheme.onSurface
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
@@ -1082,7 +1078,7 @@ fun SettingsScreen(
                                 pushUndoState()
                             }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_reset),
+                                    imageVector = AppIcons.reset,
                                     contentDescription = stringResource(R.string.default_folder),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1090,7 +1086,7 @@ fun SettingsScreen(
                         }
                         IconButton(onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) }) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_folder),
+                                imageVector = AppIcons.folder,
                                 contentDescription = stringResource(R.string.choose_folder),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1282,7 +1278,7 @@ private fun RetentionSection(
                 ) {
                     RetentionValue(
                         modifier = Modifier.weight(1f),
-                        iconRes = R.drawable.ic_retention_one_shot,
+                        icon = AppIcons.oneShot,
                         label = stringResource(R.string.buffer_one_shot),
                         activeMode = activeMode,
                         timeText = oneShotTimeText,
@@ -1293,7 +1289,7 @@ private fun RetentionSection(
                     )
                     RetentionValue(
                         modifier = Modifier.weight(1f),
-                        iconRes = R.drawable.ic_retention_loop,
+                        icon = AppIcons.looping,
                         label = stringResource(R.string.retention_loop_label),
                         activeMode = activeMode,
                         timeText = loopingTimeText,
@@ -1396,7 +1392,7 @@ private fun RetentionModeButton(
 @Composable
 private fun RetentionValue(
     modifier: Modifier,
-    iconRes: Int,
+    icon: ImageVector,
     label: String,
     activeMode: RetentionMode,
     timeText: String,
@@ -1429,7 +1425,7 @@ private fun RetentionValue(
             modifier = Modifier.padding(bottom = 10.dp),
         ) {
             Icon(
-                painter = painterResource(iconRes),
+                imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(17.dp),
@@ -1526,10 +1522,10 @@ private fun ThemeSelector(
                     targetValue = if (selected) inkColor else mutedColor,
                     label = "theme-segment-content",
                 )
-                val iconRes = when (theme) {
-                    AppThemeMode.SYSTEM -> R.drawable.ic_theme_system
-                    AppThemeMode.LIGHT -> R.drawable.ic_theme_light
-                    AppThemeMode.DARK -> R.drawable.ic_theme_dark
+                val icon = when (theme) {
+                    AppThemeMode.SYSTEM -> AppIcons.themeSystem
+                    AppThemeMode.LIGHT -> AppIcons.themeLight
+                    AppThemeMode.DARK -> AppIcons.themeDark
                 }
 
                 Box(
@@ -1550,7 +1546,7 @@ private fun ThemeSelector(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Icon(
-                            painter = painterResource(iconRes),
+                            imageVector = icon,
                             contentDescription = null,
                             tint = contentColor,
                             modifier = Modifier.size(16.dp),
@@ -1586,7 +1582,7 @@ private fun SettingsDropdown(
             label = { Text(label) },
             trailingIcon = {
                 Icon(
-                    Icons.Default.ArrowDropDown,
+                    AppIcons.arrowDropDown,
                     contentDescription = stringResource(R.string.open_options),
                 )
             },

@@ -12,9 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -184,21 +180,21 @@ fun RecordingPlayerDialog(
                 )
                 IconButton(onClick = onShareClick) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_share),
+                        imageVector = AppIcons.share,
                         contentDescription = stringResource(R.string.share_recording),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 IconButton(onClick = onInfoClick) {
                     Icon(
-                        imageVector = Icons.Default.Info,
+                        imageVector = AppIcons.info,
                         contentDescription = stringResource(R.string.recording_info),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 IconButton(onClick = dismissRequest) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -311,7 +307,7 @@ fun RecordingPlayerDialog(
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_seek_back),
+                                imageVector = AppIcons.seekBack,
                                 contentDescription = stringResource(R.string.player_seek_back),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -328,9 +324,7 @@ fun RecordingPlayerDialog(
                             enabled = prepared,
                         ) {
                             Icon(
-                                painter = painterResource(
-                                    if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
-                                ),
+                                imageVector = if (isPlaying) AppIcons.pause else AppIcons.play,
                                 contentDescription = stringResource(
                                     if (isPlaying) R.string.player_pause else R.string.player_play,
                                 ),
@@ -350,7 +344,7 @@ fun RecordingPlayerDialog(
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_seek_forward),
+                                imageVector = AppIcons.seekForward,
                                 contentDescription = stringResource(R.string.player_seek_forward),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

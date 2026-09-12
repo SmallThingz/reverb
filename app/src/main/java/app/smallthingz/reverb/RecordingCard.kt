@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -68,7 +67,7 @@ internal fun SavingRecordingCard(
             {
                 IconButton(onClick = cancel) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_close),
+                        imageVector = AppIcons.close,
                         contentDescription = androidx.compose.ui.res.stringResource(R.string.cancel),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -137,7 +136,7 @@ private fun RecordingSummaryCard(
                         )
                     } else {
                         Icon(
-                            painter = painterResource(R.drawable.ic_audio_file),
+                            imageVector = AppIcons.audioFile,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(24.dp),

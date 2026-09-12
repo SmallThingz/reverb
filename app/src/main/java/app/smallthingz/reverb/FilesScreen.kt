@@ -25,11 +25,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -313,7 +308,7 @@ fun FilesScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(onClick = { clearSelection() }) {
-                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.clear_selection))
+                            Icon(AppIcons.close, contentDescription = stringResource(R.string.clear_selection))
                         }
                         Spacer(Modifier.width(16.dp))
                         Text(
@@ -326,25 +321,25 @@ fun FilesScreen(
                         if (selectedIds.isNotEmpty()) {
                             IconButton(onClick = { shareRecordings(selectedIds.values.toList()) }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_share),
+                                    imageVector = AppIcons.share,
                                     contentDescription = stringResource(R.string.share_recording),
                                 )
                             }
                         }
                         if (selectedIds.size == 1) {
                             IconButton(onClick = { renameSelected() }) {
-                                Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.rename_recording))
+                                Icon(AppIcons.edit, contentDescription = stringResource(R.string.rename_recording))
                             }
                         }
                         if (selectedIds.size == 1) {
                             IconButton(onClick = { infoSelected() }) {
-                                Icon(Icons.Default.Info, contentDescription = stringResource(R.string.recording_info))
+                                Icon(AppIcons.info, contentDescription = stringResource(R.string.recording_info))
                             }
                         }
                         if (selectedIds.isNotEmpty()) {
                             IconButton(onClick = { deleteSelected() }, enabled = !isDeleting) {
                                 Icon(
-                                    Icons.Default.Delete,
+                                    AppIcons.delete,
                                     contentDescription = stringResource(R.string.delete_recording),
                                     tint = MaterialTheme.colorScheme.error,
                                 )
@@ -504,7 +499,7 @@ private fun EmptyState() {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
-                painter = painterResource(R.drawable.ic_tab_files),
+                imageVector = AppIcons.library,
                 contentDescription = null,
                 modifier = Modifier.size(34.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
@@ -606,7 +601,7 @@ private fun RenameRecordingDialog(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -634,7 +629,7 @@ private fun RenameRecordingDialog(
                     enabled = error == null && !isRenaming,
                 ) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_check),
+                        imageVector = AppIcons.check,
                         contentDescription = stringResource(R.string.rename_recording),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -669,7 +664,7 @@ private fun RecordingInfoDialogContent(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

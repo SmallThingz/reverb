@@ -44,8 +44,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,12 +68,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -1055,19 +1053,19 @@ private fun CaptureBufferPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CaptureActionButton(
-                    icon = R.drawable.ic_save,
+                    icon = AppIcons.save,
                     contentDescription = stringResource(R.string.record_all_memory),
                     enabled = serviceReady && !isSaving && hasHistory,
                     onClick = onExportFull,
                 )
                 CaptureActionButton(
-                    icon = R.drawable.ic_export_range,
+                    icon = AppIcons.exportRange,
                     contentDescription = stringResource(R.string.export_range_title),
                     enabled = serviceReady && !isSaving && hasHistory,
                     onClick = onExportCustom,
                 )
                 CaptureActionButton(
-                    icon = R.drawable.ic_delete,
+                    icon = AppIcons.delete,
                     contentDescription = stringResource(R.string.clear_buffer),
                     enabled = serviceReady && !isSaving && hasHistory && !recordingThisBuffer,
                     destructive = true,
@@ -1075,7 +1073,7 @@ private fun CaptureBufferPage(
                 )
                 if (showLibraryButton) {
                     CaptureActionButton(
-                        icon = R.drawable.ic_tab_files,
+                        icon = AppIcons.library,
                         contentDescription = stringResource(R.string.files_tab),
                         enabled = !isSaving,
                         onClick = onOpenLibrary,
@@ -1140,7 +1138,7 @@ private fun CaptureBufferStatus(
 
 @Composable
 private fun CaptureActionButton(
-    icon: Int,
+    icon: ImageVector,
     contentDescription: String,
     enabled: Boolean,
     destructive: Boolean = false,
@@ -1157,7 +1155,7 @@ private fun CaptureActionButton(
         modifier = Modifier.size(54.dp),
     ) {
         Icon(
-            painter = painterResource(icon),
+            imageVector = icon,
             contentDescription = contentDescription,
             tint = tint,
             modifier = Modifier.size(25.dp),
@@ -1225,9 +1223,9 @@ private fun AudioBlobControl(
     val interactionEnabled = enabled && !isSaving
     val visuallyEnabled = enabled || filled
     val actionIcon = when {
-        filled -> R.drawable.ic_check
-        isListening -> R.drawable.ic_player_pause
-        else -> R.drawable.ic_capture_wave
+        filled -> AppIcons.check
+        isListening -> AppIcons.pause
+        else -> AppIcons.capture
     }
     val actionDescription = when {
         filled -> stringResource(R.string.buffer_filled)
@@ -1289,7 +1287,7 @@ private fun AudioBlobControl(
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                painter = painterResource(actionIcon),
+                imageVector = actionIcon,
                 contentDescription = actionDescription,
                 tint = contentColor,
                 modifier = Modifier.size(38.dp),
@@ -1346,7 +1344,7 @@ private fun ErrorDialog(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1390,7 +1388,7 @@ private fun ClearBufferDialog(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1400,7 +1398,7 @@ private fun ClearBufferDialog(
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_delete),
+                    imageVector = AppIcons.delete,
                     contentDescription = stringResource(R.string.clear_buffer),
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(22.dp),
@@ -1432,7 +1430,7 @@ private fun ExportClampDialog(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1548,7 +1546,7 @@ private fun ExportRangeDialog(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_export_range),
+                    imageVector = AppIcons.exportRange,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(24.dp),
@@ -1561,7 +1559,7 @@ private fun ExportRangeDialog(
                 )
                 IconButton(onClick = onDismiss) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                     )
                 }
@@ -1633,7 +1631,7 @@ private fun ExportRangeDialog(
         confirmButton = {
             TextButton(onClick = { submit() }) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_save),
+                    imageVector = AppIcons.save,
                     contentDescription = stringResource(R.string.export),
                     modifier = Modifier.size(22.dp),
                 )

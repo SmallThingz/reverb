@@ -120,7 +120,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             modifier = Modifier.align(Alignment.TopEnd),
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_close),
+                                imageVector = AppIcons.close,
                                 contentDescription = stringResource(R.string.close),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

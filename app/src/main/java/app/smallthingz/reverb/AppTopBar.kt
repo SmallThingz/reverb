@@ -54,7 +54,7 @@ internal fun AppTopBar(
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_settings),
+                imageVector = AppIcons.settings,
                 contentDescription = stringResource(R.string.open_settings),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(23.dp),

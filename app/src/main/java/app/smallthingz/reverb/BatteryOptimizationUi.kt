@@ -15,7 +15,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
@@ -40,7 +39,7 @@ fun BackgroundOptimizationWarning(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_background_warning),
+                imageVector = AppIcons.backgroundWarning,
                 contentDescription = null,
                 tint = if (restricted) BackgroundWarningColor else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp),
