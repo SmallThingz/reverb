@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,7 +66,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -85,6 +90,14 @@ import kotlin.math.roundToLong
 private val BYTES_IN_MEGABYTE = 1024L * 1024L
 private val retentionSizeFormatter =
     DecimalFormat(ReverbConfig.FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
+private val themeSegmentDarkField = Color(0xFF101927)
+private val themeSegmentDarkRaised = Color(0xFF1C2939)
+private val themeSegmentDarkInk = Color(0xFFEDF3F3)
+private val themeSegmentDarkMuted = Color(0xFFA0B1C0)
+private val themeSegmentLightField = Color(0xFFF0F5F5)
+private val themeSegmentLightRaised = Color(0xFFE5EEEE)
+private val themeSegmentLightInk = Color(0xFF182D34)
+private val themeSegmentLightMuted = Color(0xFF526872)
 
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
@@ -183,7 +196,6 @@ fun SettingsScreen(
     var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
 
     // Pre-computed label lists
-    val themeLabels = remember { AppThemeMode.entries.map { resources.getString(it.labelRes) } }
     var formatLabels by remember { mutableStateOf(availableFormats.map { resources.getString(it.labelRes) }) }
     var sampleFormatLabels by remember {
         mutableStateOf(PcmSampleFormat.entries.map { resources.getString(it.labelRes) })
@@ -194,7 +206,6 @@ fun SettingsScreen(
     var sampleRateLabels by remember { mutableStateOf(emptyList<String>()) }
 
     // Selection labels
-    var selectedThemeLabel by remember { mutableStateOf(resources.getString(AppThemeMode.SYSTEM.labelRes)) }
     var selectedFormatLabel by remember { mutableStateOf(resources.getString(supportedFormats().first().labelRes)) }
     var selectedSampleFormatLabel by remember { mutableStateOf(resources.getString(PcmSampleFormat.PCM_16.labelRes)) }
     var selectedSourceLabel by remember {
@@ -397,7 +408,6 @@ fun SettingsScreen(
         }
 
         selectedTheme = prev.themeMode
-        selectedThemeLabel = resources.getString(prev.themeMode.labelRes)
         onThemeChanged(prev.themeMode)
         selectedFormat = prev.format ?: availableFormats.first()
         selectedFormatLabel = resources.getString((prev.format ?: availableFormats.first()).labelRes)
@@ -619,7 +629,6 @@ fun SettingsScreen(
         selectedExportTreeUri = configuredExportTreeUriVal
 
         selectedTheme = configuredThemeMode
-        selectedThemeLabel = resources.getString(configuredThemeMode.labelRes)
 
         availableFormats = supportedFormats()
         selectedFormat = configuredFormat.takeIf { it in availableFormats } ?: availableFormats.first()
@@ -843,21 +852,22 @@ fun SettingsScreen(
 
             item(key = "theme") {
                 Column {
-            SettingsDropdown(
-                label = stringResource(R.string.theme_title),
-                selectedValue = selectedThemeLabel,
-                options = themeLabels,
-                onOptionSelected = { label ->
-                    selectedThemeLabel = label
-                    selectedTheme = AppThemeMode.entries.first { resources.getString(it.labelRes) == label }
-                    onThemeChanged(selectedTheme)
-                    saveCurrentToSnapshot(currentSnapshot)
-                    pushUndoState()
-                },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            )
-
-            Spacer(Modifier.height(12.dp))
+                    SectionTitle(stringResource(R.string.theme_title))
+                    ThemeSelector(
+                        selectedTheme = selectedTheme,
+                        onThemeSelected = { theme ->
+                            if (theme != selectedTheme) {
+                                selectedTheme = theme
+                                onThemeChanged(theme)
+                                saveCurrentToSnapshot(currentSnapshot)
+                                pushUndoState()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(12.dp))
                 }
             }
 
@@ -1487,6 +1497,80 @@ private fun SectionTitle(text: String) {
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
     )
+}
+
+@Composable
+private fun ThemeSelector(
+    selectedTheme: AppThemeMode,
+    onThemeSelected: (AppThemeMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val darkPalette = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val fieldColor = if (darkPalette) themeSegmentDarkField else themeSegmentLightField
+    val raisedColor = if (darkPalette) themeSegmentDarkRaised else themeSegmentLightRaised
+    val inkColor = if (darkPalette) themeSegmentDarkInk else themeSegmentLightInk
+    val mutedColor = if (darkPalette) themeSegmentDarkMuted else themeSegmentLightMuted
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(30.dp),
+        color = fieldColor,
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(4.dp)
+                .selectableGroup(),
+        ) {
+            AppThemeMode.entries.forEach { theme ->
+                val selected = theme == selectedTheme
+                val backgroundColor by animateColorAsState(
+                    targetValue = if (selected) raisedColor else Color.Transparent,
+                    label = "theme-segment-background",
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) inkColor else mutedColor,
+                    label = "theme-segment-content",
+                )
+                val iconRes = when (theme) {
+                    AppThemeMode.SYSTEM -> R.drawable.ic_theme_system
+                    AppThemeMode.LIGHT -> R.drawable.ic_theme_light
+                    AppThemeMode.DARK -> R.drawable.ic_theme_dark
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(backgroundColor)
+                        .selectable(
+                            selected = selected,
+                            onClick = { onThemeSelected(theme) },
+                            role = Role.RadioButton,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(iconRes),
+                            contentDescription = null,
+                            tint = contentColor,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = stringResource(theme.labelRes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = contentColor,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

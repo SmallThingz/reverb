@@ -56,7 +56,7 @@
     <string name="estimated_file_size_label">Estimated file size: %1$s MiB</string>
     <string name="undo">Undo</string>
     <string name="theme_title">Theme</string>
-    <string name="theme_system">System</string>
+    <string name="theme_system">Auto</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
     <string name="retention_mode_title">Retention</string>
