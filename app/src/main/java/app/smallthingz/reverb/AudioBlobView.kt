@@ -50,16 +50,13 @@ internal class AudioBlobView(context: Context) : View(context) {
         framePosted = false
         if (!shouldAnimate()) return@FrameCallback
         val dtSeconds = if (lastFrameNanos == 0L) {
-            1f / 30f
+            initialFrameDeltaSeconds()
         } else {
             ((frameTimeNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         }
         lastFrameNanos = frameTimeNanos
         shaderTimeSeconds += dtSeconds
-        advance(
-            dtSeconds = dtSeconds,
-            preserveIdleLifeCurve = !hasHotAudio(),
-        )
+        advance(dtSeconds)
         invalidate()
         postNextFrame()
     }
@@ -207,9 +204,9 @@ internal class AudioBlobView(context: Context) : View(context) {
         framePosted = true
         val audioHot = hasHotAudio()
         val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON
-        if (immediate || (lifeMoving && !audioHot)) {
-            // Keep silent expand/collapse on every display vsync. The life interpolator below
-            // preserves the original 30 Hz trajectory at the old frame boundaries.
+        if (immediate || lifeMoving) {
+            // Render grow/collapse on every display vsync. The time-normalized life curve below
+            // preserves the original 30 Hz trajectory without the visible half-rate stepping.
             choreographer.postFrameCallback(frameCallback)
         } else {
             val delay = if (audioHot) renderer.activeFrameDelayMillis else renderer.idleFrameDelayMillis
@@ -238,6 +235,14 @@ internal class AudioBlobView(context: Context) : View(context) {
         return System.nanoTime() - lastAudioSignalNanos <= RECENT_AUDIO_HOLD_NANOS
     }
 
+    private fun initialFrameDeltaSeconds(): Float {
+        val refreshRate = display?.refreshRate
+            ?.takeIf { it.isFinite() && it >= 24f }
+            ?.coerceIn(24f, 240f)
+            ?: 60f
+        return 1f / refreshRate
+    }
+
     private fun stopFrames() {
         if (framePosted) {
             choreographer.removeFrameCallback(frameCallback)
@@ -246,10 +251,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         lastFrameNanos = 0L
     }
 
-    private fun advance(
-        dtSeconds: Float,
-        preserveIdleLifeCurve: Boolean,
-    ) {
+    private fun advance(dtSeconds: Float) {
         val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)
         val activityRate = if (targetActivity > currentActivity) 0.34f else 0.16f
         val activityMix = (activityRate * normalized).coerceIn(0f, 0.82f)
@@ -260,11 +262,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
         val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f
-        val lifeMix = if (preserveIdleLifeCurve && normalized < 1f) {
-            1f - (1f - lifeRate).pow(normalized)
-        } else {
-            (lifeRate * normalized).coerceIn(0f, 0.65f)
-        }
+        val lifeMix = 1f - (1f - lifeRate).pow(normalized)
         currentLife += (targetLife - currentLife) * lifeMix
         if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife
     }
