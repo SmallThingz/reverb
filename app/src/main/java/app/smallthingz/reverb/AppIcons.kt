@@ -24,7 +24,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.RestartAlt
-import androidx.compose.material.icons.rounded.SaveAlt
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.ui.graphics.Color
@@ -48,7 +48,7 @@ internal object AppIcons {
     val pause: ImageVector = Icons.Rounded.Pause
     val seekBack: ImageVector = Icons.Rounded.Replay10
     val seekForward: ImageVector = Icons.Rounded.Forward10
-    val save: ImageVector = Icons.Rounded.SaveAlt
+    val save: ImageVector = Icons.Rounded.Save
     val exportRange: ImageVector = exportRangeIcon
     val library: ImageVector = Icons.Rounded.Dehaze
     val audioFile: ImageVector = Icons.Rounded.AudioFile
