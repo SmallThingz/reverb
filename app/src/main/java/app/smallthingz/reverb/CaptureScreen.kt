@@ -174,10 +174,13 @@ private data class BufferMetrics(
     val bytes: Long,
 )
 
-private sealed interface CaptureSaveStatus {
+internal sealed interface CaptureSaveStatus {
     data class Saving(val cancellable: Boolean) : CaptureSaveStatus
     data class Saved(val recording: RecordingEntity) : CaptureSaveStatus
 }
+
+internal fun markExportCancelRequested(status: CaptureSaveStatus?): CaptureSaveStatus? =
+    if (status is CaptureSaveStatus.Saving) status.copy(cancellable = false) else status
 
 @Composable
 fun CaptureScreen(
@@ -293,6 +296,7 @@ fun CaptureScreen(
                         pendingExportRange = null
                         showExportRangeDialog = false
                         showExportClampDialog = false
+                        pendingClearBuffer = null
                         invalidateCustomRangePreparation()
                         service = null
                         return
@@ -306,6 +310,7 @@ fun CaptureScreen(
                     pendingExportRange = null
                     showExportRangeDialog = false
                     showExportClampDialog = false
+                    pendingClearBuffer = null
                     invalidateCustomRangePreparation()
                 }
                 service = connectedService
@@ -320,6 +325,7 @@ fun CaptureScreen(
                 pendingExportRange = null
                 showExportRangeDialog = false
                 showExportClampDialog = false
+                pendingClearBuffer = null
                 invalidateCustomRangePreparation()
                 if (isSaving) {
                     isSaving = false
@@ -392,6 +398,7 @@ fun CaptureScreen(
                     pendingExportRange = null
                     showExportRangeDialog = false
                     showExportClampDialog = false
+                    pendingClearBuffer = null
                     invalidateCustomRangePreparation()
                     if (bound) {
                         context.unbindService(connection)
@@ -411,6 +418,7 @@ fun CaptureScreen(
             rangeSnapshot = null
             pendingExportSnapshot?.close()
             pendingExportSnapshot = null
+            pendingClearBuffer = null
             invalidateCustomRangePreparation()
             if (bound) {
                 context.unbindService(connection)
@@ -688,8 +696,13 @@ fun CaptureScreen(
         CaptureSaveStatusCard(
             status = saveStatus,
             onCancel = {
-                service?.cancelCurrentExport()
-                saveStatus = null
+                val recorder = service
+                if (recorder != null) {
+                    recorder.cancelCurrentExport()
+                    // Cancellation can lose a race with final commit. Keep the status visible
+                    // and non-cancellable until the service delivers the terminal callback.
+                    saveStatus = markExportCancelRequested(saveStatus)
+                }
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -822,7 +835,12 @@ private fun MainCaptureContent(
     val swipeThresholdPx = with(density) { 56.dp.toPx() }
 
     LaunchedEffect(selectedBuffer) {
-        if (displayedBuffer == selectedBuffer) return@LaunchedEffect
+        if (displayedBuffer == selectedBuffer) {
+            if (flipDegrees.value != 0f) {
+                flipDegrees.animateTo(0f, tween(durationMillis = 120))
+            }
+            return@LaunchedEffect
+        }
         flipDegrees.snapTo(0f)
         flipDegrees.animateTo(90f, tween(durationMillis = 140))
         displayedBuffer = selectedBuffer

@@ -609,7 +609,6 @@ private fun MainScreen(
 
     fun closeLibrary() {
         showLibrary = false
-        refreshLibrarySnapshot()
     }
 
     val libraryTopPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -754,6 +753,7 @@ private fun MainScreen(
                                 librarySnapshot = visible
                             }
                         },
+                        onParentRefreshRequested = { refreshLibrarySnapshot() },
                         onBrandClick = { showAboutDialog = true },
                         onSettingsClick = {
                             closeLibrary()

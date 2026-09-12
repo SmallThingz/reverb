@@ -696,4 +696,43 @@ class FormattingAndHistoryMathTest {
         assertFalse(shouldApplyCustomRangeSnapshot(7L, 7L, oneShot, oneShot, looping))
     }
 
+    @Test
+    fun exportCancelRequest_keepsSavingStatusVisibleAndDisablesRepeatCancel() {
+        assertEquals(
+            CaptureSaveStatus.Saving(cancellable = false),
+            markExportCancelRequested(CaptureSaveStatus.Saving(cancellable = true)),
+        )
+        assertEquals(
+            CaptureSaveStatus.Saving(cancellable = false),
+            markExportCancelRequested(CaptureSaveStatus.Saving(cancellable = false)),
+        )
+        assertEquals(null, markExportCancelRequested(null))
+    }
+
+    @Test
+    fun retentionPresentation_roundsWithoutChangingIndependentBackingValues() {
+        val exactSizeBytes = 123_456_789L
+        val snapshot = SettingsSnapshot(
+            oneShotRetentionTime = 61,
+            oneShotRetentionSizeBytes = exactSizeBytes,
+            loopingRetentionTime = 3_599,
+            loopingRetentionSizeBytes = 987_654_321L,
+        )
+
+        assertEquals("1.017", formatRetentionTimeInput(snapshot.oneShotRetentionTime.toLong()))
+        assertEquals(61, parseRetentionTimeSeconds(formatRetentionTimeInput(61)))
+        assertEquals(3_599, parseRetentionTimeSeconds(formatRetentionTimeInput(3_599)))
+        assertEquals(90, parseRetentionTimeSeconds("1.5"))
+        assertEquals(90, parseRetentionTimeSeconds("1,5"))
+        assertEquals(65, parseRetentionTimeSeconds("1:05"))
+        assertEquals(null, parseRetentionTimeSeconds("-1.5"))
+        assertEquals(exactSizeBytes, snapshot.oneShotRetentionSizeBytes)
+        assertEquals("117.738", formatRetentionSizeBytes(exactSizeBytes))
+        assertTrue(
+            rawMegabytesToBytes(requireNotNull(parseRetentionSizeMib(formatRetentionSizeBytes(exactSizeBytes)))) !=
+                exactSizeBytes,
+        )
+        assertEquals(exactSizeBytes, snapshot.oneShotRetentionSizeBytes)
+    }
+
 }

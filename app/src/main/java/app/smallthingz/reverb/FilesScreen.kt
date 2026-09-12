@@ -88,6 +88,7 @@ fun FilesScreen(
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
     onVisibleRecordingsChanged: (List<RecordingEntity>) -> Unit = {},
+    onParentRefreshRequested: () -> Unit = {},
     onBrandClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onDismissLibrary: () -> Unit = {},
@@ -122,6 +123,16 @@ fun FilesScreen(
         if (notice?.canUndo != true) notice = LibraryNotice(message, tone)
     }
 
+    fun reconcileTransientRecordings(storedById: Map<String, RecordingEntity>) {
+        contextMenuRecordingId = contextMenuRecordingId?.takeIf { it in storedById }
+        renameRecording = renameRecording?.let { storedById[it.id] }
+        if (renameRecording == null) showRenameDialog = false
+        infoRecording = infoRecording?.let { storedById[it.id] }
+        if (infoRecording == null) showInfoDialog = false
+        playerRecording = playerRecording?.let { storedById[it.id] }
+        if (playerRecording == null) showPlayerDialog = false
+    }
+
     fun refresh(showSpinner: Boolean = true) {
         val generation = ++refreshGeneration[0]
         if (showSpinner) isRefreshing = true
@@ -137,6 +148,7 @@ fun FilesScreen(
                     if (updated == null) selectedIds.remove(id)
                     else if (selectedIds[id] != updated) selectedIds[id] = updated
                 }
+                reconcileTransientRecordings(storedById)
                 if (deletionsCommittedInBackground) {
                     pendingDeletions.clear()
                     deletionsCommittedInBackground = false
@@ -171,11 +183,24 @@ fun FilesScreen(
                 if (updated == null) selectedIds.remove(id)
                 else if (selectedIds[id] != updated) selectedIds[id] = updated
             }
+            reconcileTransientRecordings(currentById)
         }
     }
 
     LaunchedEffect(active) {
-        if (!active) return@LaunchedEffect
+        if (!active) {
+            contextMenuRecordingId = null
+            selectedIds.clear()
+            showRenameDialog = false
+            renameRecording = null
+            showInfoDialog = false
+            infoRecording = null
+            showPlayerDialog = false
+            playerRecording = null
+            notice = null
+            onSelectionActiveChange(false)
+            return@LaunchedEffect
+        }
         if (!hasLoaded) {
             recordings = try {
                 RecordingRepository.listKnown(context)
@@ -257,8 +282,13 @@ fun FilesScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            deletionJob?.cancel()
-            commitPendingDeletionsInBackground()
+            if (active) {
+                deletionJob?.cancel()
+                // Register any committed delete before asking the parent to refresh. This keeps
+                // its fast DB snapshot from racing ahead of background deletion on sheet close.
+                commitPendingDeletionsInBackground()
+                onParentRefreshRequested()
+            }
         }
     }
 

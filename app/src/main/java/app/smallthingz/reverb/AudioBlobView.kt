@@ -130,7 +130,15 @@ internal class AudioBlobView(context: Context) : View(context) {
             targetBands.fill(0f)
             lastAudioSignalNanos = 0L
         }
-        if (stateChanged) ensureAnimationState()
+        if (stateChanged) {
+            // A silent/residual frame may already be queued on the 33 ms idle cadence.
+            // Do not let a new expand/collapse request inherit that stale delay.
+            if (framePosted) {
+                choreographer.removeFrameCallback(frameCallback)
+                framePosted = false
+            }
+            ensureAnimationState()
+        }
         if (stateChanged || paletteChanged) invalidate()
     }
 
