@@ -197,6 +197,20 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun logicalListeningState_followsNewestUserIntentDuringAsyncStop() {
+        assertTrue(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = true))
+        assertFalse(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = false))
+        assertFalse(isLogicalListeningState(ReverbService.STATE_READY, listeningIntentEnabled = true))
+    }
+
+    @Test
+    fun recorderStateSnapshot_rejectsStaleCommandGenerations() {
+        assertTrue(shouldApplyRecorderStateSnapshot(snapshotGeneration = 7L, latestCommandGeneration = 7L))
+        assertTrue(shouldApplyRecorderStateSnapshot(snapshotGeneration = 8L, latestCommandGeneration = 7L))
+        assertFalse(shouldApplyRecorderStateSnapshot(snapshotGeneration = 6L, latestCommandGeneration = 7L))
+    }
+
+    @Test
     fun captureUiState_distinguishesRunningFilledDisabled_andOtherBufferBlock() {
         assertEquals(
             CaptureBufferUiState.RECORDING,

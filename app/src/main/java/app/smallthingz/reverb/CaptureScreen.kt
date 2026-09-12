@@ -205,6 +205,7 @@ fun CaptureScreen(
         )
     }
     var startupBufferChosen by remember { mutableStateOf(false) }
+    var latestListeningCommandGeneration by remember { mutableLongStateOf(Long.MIN_VALUE) }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
 
@@ -223,6 +224,7 @@ fun CaptureScreen(
     val stateCallback = remember {
         object : ReverbService.StateCallback {
             override fun state(
+                commandGeneration: Long,
                 listeningEnabled: Boolean,
                 activeBufferSlot: ReverbService.BufferSlot?,
                 oneShotSeconds: Float,
@@ -233,6 +235,8 @@ fun CaptureScreen(
                 oneShotIsFull: Boolean,
                 loopingIsEnabled: Boolean,
             ) {
+                if (!shouldApplyRecorderStateSnapshot(commandGeneration, latestListeningCommandGeneration)) return
+                latestListeningCommandGeneration = commandGeneration
                 val previousActiveBuffer = activeBuffer
                 isListening = listeningEnabled
                 activeBuffer = activeBufferSlot
@@ -509,22 +513,20 @@ fun CaptureScreen(
                 if (s != null && !isSaving) {
                     val recordingThisBuffer = isListening && activeBuffer == bufferSlot
                     if (recordingThisBuffer || !isListening) {
-                        val accepted = if (recordingThisBuffer) {
-                            s.disableListening().also { disabled ->
-                                if (disabled) {
-                                    isListening = false
-                                    activeBuffer = null
-                                }
-                            }
+                        val result = if (recordingThisBuffer) {
+                            s.disableListening()
                         } else {
-                            s.enableListening(bufferSlot).also { enabled ->
-                                if (enabled) {
-                                    isListening = true
-                                    activeBuffer = bufferSlot
-                                }
-                            }
+                            s.enableListening(bufferSlot)
                         }
-                        if (accepted) view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        if (result.accepted) {
+                            latestListeningCommandGeneration = maxOf(
+                                latestListeningCommandGeneration,
+                                result.generation,
+                            )
+                            isListening = !recordingThisBuffer
+                            activeBuffer = if (recordingThisBuffer) null else bufferSlot
+                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        }
                     }
                 }
             }
@@ -705,6 +707,11 @@ fun CaptureScreen(
     }
 }
 
+internal fun shouldApplyRecorderStateSnapshot(
+    snapshotGeneration: Long,
+    latestCommandGeneration: Long,
+): Boolean = snapshotGeneration >= latestCommandGeneration
+
 internal enum class CaptureBufferUiState {
     READY,
     RECORDING,
@@ -803,6 +810,7 @@ private fun MainCaptureContent(
 
         androidx.compose.foundation.pager.HorizontalPager(
             state = pagerState,
+            beyondViewportPageCount = 1,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),

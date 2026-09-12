@@ -256,19 +256,21 @@ class ReverbService : Service() {
         writer.println("  rawHistoryDirectory=${ReverbConfig.BUFFER_CACHE_FOLDER_NAME}/${ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME}")
     }
 
-    fun enableListening(bufferSlot: BufferSlot): Boolean {
-        if (state == STATE_LISTENING && activeBufferSlot != bufferSlot) return false
+    fun enableListening(bufferSlot: BufferSlot): ListeningCommandResult {
+        if (isLogicalListeningState(state, isListeningEnabled()) && activeBufferSlot != bufferSlot) {
+            return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
+        }
         return setListeningEnabled(enabled = true, requestedBufferSlot = bufferSlot)
     }
 
-    fun disableListening(): Boolean {
+    fun disableListening(): ListeningCommandResult {
         return setListeningEnabled(enabled = false)
     }
 
     private fun setListeningEnabled(
         enabled: Boolean,
         requestedBufferSlot: BufferSlot? = null,
-    ): Boolean {
+    ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         val generation = synchronized(listeningIntentLock) {
             val previousEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
@@ -295,10 +297,13 @@ class ReverbService : Service() {
         }
         if (generation == null) {
             reportError(getString(R.string.recorder_state_persist_failed))
-            return false
+            return ListeningCommandResult(
+                accepted = false,
+                generation = listeningCommandGeneration.get(),
+            )
         }
         if (enabled) innerStartListening(generation) else innerStopListening(generation)
-        return true
+        return ListeningCommandResult(accepted = true, generation = generation)
     }
 
     private fun isListeningEnabled(): Boolean {
@@ -1459,16 +1464,18 @@ class ReverbService : Service() {
 
     fun getState(callback: StateCallback) {
         audioHandler.post {
+            val commandGeneration = listeningCommandGeneration.get()
             try {
                 val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
                 val oneShotBytes = availableBufferedSampleBytes(BufferSlot.ONE_SHOT)
                 val loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat()
                 val loopingBytes = availableBufferedSampleBytes(BufferSlot.LOOPING)
                 val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
-                val listening = state == STATE_LISTENING
+                val listening = isLogicalListeningState(state, isListeningEnabled())
                 val activeBuffer = activeBufferSlot.takeIf { listening }
                 mainHandler.post {
                     callback.state(
+                        commandGeneration,
                         listening,
                         activeBuffer,
                         oneShotSeconds,
@@ -1482,9 +1489,10 @@ class ReverbService : Service() {
                 }
             } catch (error: Exception) {
                 reportPersistentStoreFailure("read recorder state", error)
-                val listening = state == STATE_LISTENING
+                val listening = isLogicalListeningState(state, isListeningEnabled())
                 mainHandler.post {
                     callback.state(
+                        commandGeneration,
                         listening,
                         activeBufferSlot.takeIf { listening },
                         0f,
@@ -2004,6 +2012,7 @@ class ReverbService : Service() {
 
     interface StateCallback {
         fun state(
+            commandGeneration: Long,
             listeningEnabled: Boolean,
             activeBufferSlot: BufferSlot?,
             oneShotSeconds: Float,
@@ -2015,6 +2024,11 @@ class ReverbService : Service() {
             loopingIsEnabled: Boolean,
         )
     }
+
+    data class ListeningCommandResult(
+        val accepted: Boolean,
+        val generation: Long,
+    )
 
     fun interface VisualizationCallback {
         fun frame(frame: VisualizationFrame)
@@ -2098,6 +2112,12 @@ class ReverbService : Service() {
     }
 
 }
+
+
+internal fun isLogicalListeningState(
+    recorderState: Int,
+    listeningIntentEnabled: Boolean,
+): Boolean = listeningIntentEnabled && recorderState == ReverbService.STATE_LISTENING
 
 internal fun resolveCaptureBufferSlot(
     requested: ReverbService.BufferSlot,
