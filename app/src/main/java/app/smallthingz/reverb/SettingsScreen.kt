@@ -10,6 +10,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,19 +60,26 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PointMode
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -817,7 +825,13 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.surface),
+                .background(MaterialTheme.colorScheme.surface)
+                .noiseTexture(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    alpha = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) 0.045f else 0.026f,
+                    spacing = 7.dp,
+                    seed = 0x51F15,
+                ),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             if (batteryOptimizationRestricted) {
@@ -1238,10 +1252,28 @@ private fun RetentionSection(
             RetentionModeSelector(activeMode, onModeSelected)
         }
 
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(23.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
+        val colors = MaterialTheme.colorScheme
+        val darkPalette = colors.surface.luminance() < 0.5f
+        val cardShape = RoundedCornerShape(23.dp)
+        val cardStart = lerp(colors.surface, colors.primary, if (darkPalette) 0.075f else 0.035f)
+        val cardEnd = lerp(colors.surface, colors.onSurfaceVariant, if (darkPalette) 0.045f else 0.025f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(cardShape)
+                .background(Brush.linearGradient(listOf(cardStart, cardEnd)))
+                .border(
+                    width = 1.dp,
+                    color = colors.primary.copy(alpha = if (darkPalette) 0.11f else 0.09f),
+                    shape = cardShape,
+                )
+                .noiseTexture(
+                    color = colors.onSurface,
+                    alpha = if (darkPalette) 0.095f else 0.050f,
+                    spacing = 5.dp,
+                    seed = 0xC4A2D,
+                ),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(
@@ -1423,10 +1455,10 @@ private fun RetentionValue(
                 ),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 40.sp,
-                    lineHeight = 48.sp,
+                    fontSize = 34.sp,
+                    lineHeight = 40.sp,
                     fontWeight = FontWeight.Normal,
-                    letterSpacing = (-1.7).sp,
+                    letterSpacing = (-1.1).sp,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier
@@ -1602,6 +1634,49 @@ private fun formatRetentionMinutesEstimate(seconds: Int): String {
         (seconds / 60).toString()
     } else {
         String.format(Locale.US, "%.1f", seconds / 60.0)
+    }
+}
+
+private fun Modifier.noiseTexture(
+    color: Color,
+    alpha: Float,
+    spacing: Dp,
+    seed: Int,
+): Modifier = drawWithCache {
+    val step = spacing.toPx().coerceAtLeast(2f)
+    val stroke = 1.dp.toPx().coerceAtLeast(1f)
+    val faint = ArrayList<Offset>()
+    val medium = ArrayList<Offset>()
+    val strong = ArrayList<Offset>()
+    var state = seed
+
+    fun nextNoise(): Float {
+        state = state * 1664525 + 1013904223
+        return ((state ushr 8) and 0x00FFFFFF) / 16777215f
+    }
+
+    var y = -step
+    while (y < size.height + step) {
+        var x = -step
+        while (x < size.width + step) {
+            val point = Offset(
+                x = x + nextNoise() * step,
+                y = y + nextNoise() * step,
+            )
+            when ((nextNoise() * 3f).toInt().coerceIn(0, 2)) {
+                0 -> faint.add(point)
+                1 -> medium.add(point)
+                else -> strong.add(point)
+            }
+            x += step
+        }
+        y += step
+    }
+
+    onDrawBehind {
+        drawPoints(faint, PointMode.Points, color.copy(alpha = alpha * 0.45f), stroke, StrokeCap.Round)
+        drawPoints(medium, PointMode.Points, color.copy(alpha = alpha * 0.70f), stroke, StrokeCap.Round)
+        drawPoints(strong, PointMode.Points, color.copy(alpha = alpha), stroke, StrokeCap.Round)
     }
 }
 
