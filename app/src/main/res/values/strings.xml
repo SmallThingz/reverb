@@ -11,6 +11,15 @@
     <string name="buffer_one_shot">One-shot</string>
     <string name="buffer_loop">Looping</string>
     <string name="buffer_disabled">Off</string>
+    <string name="buffer_recording">Recording</string>
+    <string name="buffer_filled">Filled</string>
+    <string name="buffer_ready_one_shot">Ready for One-shot</string>
+    <string name="buffer_ready_looping">Ready for Looping</string>
+    <string name="buffer_recording_one_shot">Recording to One-shot buffer</string>
+    <string name="buffer_recording_looping">Recording to Looping buffer</string>
+    <string name="buffer_one_shot_filled">One-shot buffer is full</string>
+    <string name="buffer_off_one_shot">One-shot is off in Settings</string>
+    <string name="buffer_off_looping">Looping is off in Settings</string>
     <string name="buffer_required">Keep at least one buffer on.</string>
     <string name="onboarding_permissions_title">Permissions</string>
     <string name="onboarding_permissions_body">Reverb needs these for background recording.</string>
@@ -24,7 +33,7 @@
     <string name="onboarding_one_shot_body">Fills once. It keeps that audio until you clear it.</string>
     <string name="onboarding_looping_title">Looping</string>
     <string name="onboarding_looping_body">Keeps the newest audio. Old audio is overwritten.</string>
-    <string name="onboarding_order">Recording fills One-shot first, then Looping. Set either limit to 0 to turn that buffer off.</string>
+    <string name="onboarding_order">Choose which buffer to record into. When One-shot fills, recording continues in Looping if it is enabled. Set either limit to 0 to turn that buffer off.</string>
     <string name="onboarding_continue">Continue</string>
     <string name="onboarding_back">Back</string>
     <string name="onboarding_get_started">Get started</string>

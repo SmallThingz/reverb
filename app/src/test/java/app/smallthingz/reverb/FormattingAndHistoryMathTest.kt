@@ -139,6 +139,122 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun captureTarget_respectsManualChoice_andFallsBackOnlyWhenUnavailable() {
+        assertEquals(
+            ReverbService.BufferSlot.ONE_SHOT,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            null,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = false,
+            ),
+        )
+        assertEquals(
+            null,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = false,
+            ),
+        )
+        assertEquals(
+            null,
+            resolveCaptureBufferSlot(
+                requested = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+    }
+
+    @Test
+    fun captureUiState_distinguishesRunningFilledDisabled_andOtherBufferBlock() {
+        assertEquals(
+            CaptureBufferUiState.RECORDING,
+            captureBufferUiState(
+                ReverbService.BufferSlot.ONE_SHOT,
+                enabled = true,
+                oneShotFull = false,
+                isListening = true,
+                activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            ),
+        )
+        assertTrue(
+            isCaptureBlockedByOtherBuffer(
+                ReverbService.BufferSlot.LOOPING,
+                isListening = true,
+                activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            ),
+        )
+        assertEquals(
+            CaptureBufferUiState.FILLED,
+            captureBufferUiState(
+                ReverbService.BufferSlot.ONE_SHOT,
+                enabled = true,
+                oneShotFull = true,
+                isListening = true,
+                activeBuffer = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertTrue(
+            isCaptureBlockedByOtherBuffer(
+                ReverbService.BufferSlot.ONE_SHOT,
+                isListening = true,
+                activeBuffer = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertEquals(
+            CaptureBufferUiState.DISABLED,
+            captureBufferUiState(
+                ReverbService.BufferSlot.LOOPING,
+                enabled = false,
+                oneShotFull = false,
+                isListening = false,
+                activeBuffer = null,
+            ),
+        )
+        assertEquals(
+            CaptureBufferUiState.READY,
+            captureBufferUiState(
+                ReverbService.BufferSlot.LOOPING,
+                enabled = true,
+                oneShotFull = false,
+                isListening = false,
+                activeBuffer = null,
+            ),
+        )
+    }
+
+    @Test
     fun oneShotWritableBytes_stopsAtCapacity_withoutOverwriting() {
         assertEquals(
             4L,
