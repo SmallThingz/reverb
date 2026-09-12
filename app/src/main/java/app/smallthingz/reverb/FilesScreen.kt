@@ -164,7 +164,6 @@ fun FilesScreen(
                 failed = true
                 false
             }
-            pendingDeletions.remove(recording.id)
             if (didDelete) {
                 deleted++
                 deletedIds += recording.id
@@ -179,6 +178,7 @@ fun FilesScreen(
         } catch (_: Exception) {
             if (generation == refreshGeneration[0]) failed = true
         }
+        pendingDeletions.clear()
         if (failed || deleted == 0) {
             notice = LibraryNotice(
                 resources.getString(R.string.recording_delete_failed),
