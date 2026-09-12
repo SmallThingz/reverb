@@ -135,6 +135,8 @@ data class SettingsSnapshot(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    modifier: Modifier = Modifier,
+    active: Boolean = true,
     onBack: () -> Unit = {},
     onThemeChanged: (AppThemeMode) -> Unit = {},
     focusRetentionBuffer: ReverbService.BufferSlot? = null,
@@ -780,7 +782,7 @@ fun SettingsScreen(
 
     var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
     var predictiveBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_NONE) }
-    PredictiveBackHandler { progress ->
+    PredictiveBackHandler(enabled = active) { progress ->
         try {
             progress.collect { event ->
                 predictiveBackProgress = event.progress.coerceIn(0f, 1f)
@@ -795,7 +797,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
                 val progress = predictiveBackProgress.coerceIn(0f, 1f)

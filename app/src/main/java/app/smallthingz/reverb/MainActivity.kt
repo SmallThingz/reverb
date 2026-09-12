@@ -12,11 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -33,19 +28,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +58,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -566,7 +565,6 @@ private fun MainScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val librarySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val noiseBrush = rememberAppNoiseBrush()
     val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
@@ -596,112 +594,114 @@ private fun MainScreen(
         }
     }
 
+    val hasObservedInitialResume = remember { booleanArrayOf(false) }
     LaunchedEffect(Unit) { refreshLibrarySnapshot() }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshLibrarySnapshot()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (hasObservedInitialResume[0]) refreshLibrarySnapshot()
+                else hasObservedInitialResume[0] = true
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    fun closeLibrary() {
+        showLibrary = false
+        refreshLibrarySnapshot()
+    }
+
+    val libraryTopPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
     Box(Modifier.fillMaxSize()) {
-        AnimatedContent(
-            targetState = showSettings,
-            transitionSpec = {
-                if (targetState) {
-                    slideInVertically(animationSpec = tween(220)) { -it } togetherWith
-                        slideOutVertically(animationSpec = tween(180)) { it / 10 }
-                } else {
-                    slideInVertically(animationSpec = tween(180)) { it / 10 } togetherWith
-                        slideOutVertically(animationSpec = tween(220)) { -it }
-                }
+        SettingsScreen(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(if (showSettings) 1f else -1f)
+                .graphicsLayer { alpha = if (showSettings) 1f else 0.01f },
+            active = showSettings,
+            onBack = {
+                showSettings = false
+                settingsBufferTarget = null
             },
-            label = "settingsSheet",
-        ) { settingsVisible ->
-            if (settingsVisible) {
-                SettingsScreen(
-                    onBack = {
-                        showSettings = false
-                        settingsBufferTarget = null
-                    },
-                    onThemeChanged = onThemeChanged,
-                    focusRetentionBuffer = settingsBufferTarget?.let { stored ->
-                        runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
-                    },
-                )
-            } else {
-                Scaffold(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(permissionsGranted, showLibrary, showAboutDialog, libraryCount) {
-                            if (!permissionsGranted || showLibrary || showAboutDialog) return@pointerInput
-                            var dragStartY = 0f
-                            var downwardDrag = 0f
-                            var upwardDrag = 0f
-                            var triggered = false
-                            detectVerticalDragGestures(
-                                onDragStart = { offset ->
-                                    dragStartY = offset.y
-                                    downwardDrag = 0f
-                                    upwardDrag = 0f
-                                    triggered = false
-                                },
-                                onVerticalDrag = { _, amount ->
-                                    if (!triggered) {
-                                        val topRegionEnd = size.height * 0.48f
-                                        val bottomRegionStart = size.height * 0.52f
-                                        if (dragStartY <= topRegionEnd && amount > 0f) {
-                                            downwardDrag += amount
-                                            if (downwardDrag >= openPanelDistancePx) {
-                                                triggered = true
-                                                settingsBufferTarget = null
-                                                showSettings = true
-                                            }
-                                        } else if (dragStartY >= bottomRegionStart && amount < 0f) {
-                                            upwardDrag -= amount
-                                            if (libraryCount > 0 && upwardDrag >= openPanelDistancePx) {
-                                                triggered = true
-                                                showLibrary = true
-                                            }
-                                        }
-                                    }
-                                },
-                            )
+            onThemeChanged = onThemeChanged,
+            focusRetentionBuffer = settingsBufferTarget?.let { stored ->
+                runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
+            },
+        )
+
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(0f)
+                .graphicsLayer { alpha = if (showSettings) 0f else 1f }
+                .pointerInput(permissionsGranted, showSettings, showLibrary, showAboutDialog, libraryCount) {
+                    if (!permissionsGranted || showSettings || showLibrary || showAboutDialog) return@pointerInput
+                    var dragStartY = 0f
+                    var downwardDrag = 0f
+                    var upwardDrag = 0f
+                    var triggered = false
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            dragStartY = offset.y
+                            downwardDrag = 0f
+                            upwardDrag = 0f
+                            triggered = false
                         },
-                    containerColor = Color.Transparent,
-                    topBar = {
-                        AppTopBar(
-                            onBrandClick = { showAboutDialog = true },
-                            onSettingsClick = {
-                                settingsBufferTarget = null
-                                showSettings = true
-                            },
-                        )
-                    },
-                ) { innerPadding ->
-                    Box(Modifier.fillMaxSize().padding(innerPadding)) {
-                        if (permissionsGranted) {
-                            CaptureScreen(
-                                showLibraryButton = libraryCount > 0,
-                                visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
-                                onOpenLibrary = { showLibrary = true },
-                                onRecordingSaved = { refreshLibrarySnapshot() },
-                                onOpenBufferSettings = { bufferSlot ->
-                                    settingsBufferTarget = bufferSlot.name
-                                    showSettings = true
-                                },
-                            )
-                        } else if (!showPermissionDenied) {
-                            Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = stringResource(R.string.permission_required_message),
-                                        modifier = Modifier.padding(24.dp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                        onVerticalDrag = { _, amount ->
+                            if (!triggered) {
+                                val topRegionEnd = size.height * 0.48f
+                                val bottomRegionStart = size.height * 0.52f
+                                if (dragStartY <= topRegionEnd && amount > 0f) {
+                                    downwardDrag += amount
+                                    if (downwardDrag >= openPanelDistancePx) {
+                                        triggered = true
+                                        settingsBufferTarget = null
+                                        showSettings = true
+                                    }
+                                } else if (dragStartY >= bottomRegionStart && amount < 0f) {
+                                    upwardDrag -= amount
+                                    if (libraryCount > 0 && upwardDrag >= openPanelDistancePx) {
+                                        triggered = true
+                                        showLibrary = true
+                                    }
                                 }
                             }
+                        },
+                    )
+                },
+            containerColor = Color.Transparent,
+            topBar = {
+                AppTopBar(
+                    onBrandClick = { showAboutDialog = true },
+                    onSettingsClick = {
+                        settingsBufferTarget = null
+                        showSettings = true
+                    },
+                )
+            },
+        ) { innerPadding ->
+            Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                if (permissionsGranted) {
+                    CaptureScreen(
+                        showLibraryButton = libraryCount > 0,
+                        visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
+                        onOpenLibrary = { showLibrary = true },
+                        onRecordingSaved = { refreshLibrarySnapshot() },
+                        onOpenBufferSettings = { bufferSlot ->
+                            settingsBufferTarget = bufferSlot.name
+                            showSettings = true
+                        },
+                    )
+                } else if (!showPermissionDenied) {
+                    Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = stringResource(R.string.permission_required_message),
+                                modifier = Modifier.padding(24.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -711,64 +711,58 @@ private fun MainScreen(
         AppFeedbackHost(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .zIndex(2f)
                 .padding(horizontal = 18.dp)
                 .padding(bottom = if (showSettings) 20.dp else 104.dp),
         )
-    }
 
-    if (showLibrary && libraryCount > 0) {
-        fun closeLibrary() {
-            showLibrary = false
-            refreshLibrarySnapshot()
-        }
-
-        ModalBottomSheet(
-            onDismissRequest = ::closeLibrary,
-            sheetState = librarySheetState,
-            containerColor = Color.Transparent,
-            dragHandle = null,
-            sheetGesturesEnabled = false,
-        ) {
+        if (libraryCount > 0) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .appNoise(noiseBrush),
+                    .fillMaxSize()
+                    .zIndex(if (showLibrary) 3f else -2f)
+                    .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f },
             ) {
-                FilesScreen(
-                    modifier = Modifier.fillMaxSize(),
-                    initialRecordings = librarySnapshot,
-                    onRecordingCountChanged = { count ->
-                        libraryCount = count
-                        if (count == 0) {
-                            librarySnapshot = emptyList()
-                            showLibrary = false
-                        }
-                    },
-                    onVisibleRecordingsChanged = { visible ->
-                        if (librarySnapshot != visible) {
-                            ++libraryRefreshGeneration[0]
-                            librarySnapshot = visible
-                        }
-                    },
-                    onBrandClick = { showAboutDialog = true },
-                    onSettingsClick = {
-                        scope.launch {
-                            librarySheetState.hide()
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(BottomSheetDefaults.ScrimColor),
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight()
+                        .padding(top = libraryTopPadding)
+                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .appNoise(noiseBrush),
+                ) {
+                    FilesScreen(
+                        modifier = Modifier.fillMaxSize(),
+                        active = showLibrary,
+                        initialRecordings = librarySnapshot,
+                        onRecordingCountChanged = { count ->
+                            libraryCount = count
+                            if (count == 0) {
+                                librarySnapshot = emptyList()
+                                showLibrary = false
+                            }
+                        },
+                        onVisibleRecordingsChanged = { visible ->
+                            if (librarySnapshot != visible) {
+                                ++libraryRefreshGeneration[0]
+                                librarySnapshot = visible
+                            }
+                        },
+                        onBrandClick = { showAboutDialog = true },
+                        onSettingsClick = {
                             closeLibrary()
                             settingsBufferTarget = null
                             showSettings = true
-                        }
-                    },
-                    onDismissLibrary = {
-                        scope.launch {
-                            librarySheetState.hide()
-                            closeLibrary()
-                        }
-                    },
-                )
+                        },
+                        onDismissLibrary = ::closeLibrary,
+                    )
+                }
             }
         }
     }

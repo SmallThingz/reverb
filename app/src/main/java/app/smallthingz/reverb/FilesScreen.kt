@@ -81,6 +81,7 @@ private data class LibraryNotice(
 @Composable
 fun FilesScreen(
     modifier: Modifier = Modifier,
+    active: Boolean = true,
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
@@ -170,7 +171,8 @@ fun FilesScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(active) {
+        if (!active) return@LaunchedEffect
         if (!hasLoaded) {
             recordings = try {
                 RecordingRepository.listKnown(context)
@@ -239,9 +241,9 @@ fun FilesScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, active) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
+            if (active && event == Lifecycle.Event.ON_RESUME) {
                 refresh(showSpinner = false)
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
@@ -339,7 +341,8 @@ fun FilesScreen(
     val selectionActive by remember { derivedStateOf { selectedIds.isNotEmpty() } }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
     DisposableEffect(Unit) { onDispose { onSelectionActiveChange(false) } }
-    BackHandler(enabled = selectionActive) { clearSelection() }
+    BackHandler(enabled = active && selectionActive) { clearSelection() }
+    BackHandler(enabled = active && !selectionActive) { onDismissLibrary() }
 
     Scaffold(
         modifier = modifier,
