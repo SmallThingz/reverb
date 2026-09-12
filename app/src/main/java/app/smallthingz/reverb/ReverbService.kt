@@ -792,6 +792,7 @@ class ReverbService : Service() {
         receiver: AudioFileReceiver,
         newFileName: String,
     ) {
+        val exportConfig = getConfigurationSnapshot()
         val exportToken = beginExport(receiver)
         if (exportToken == null) {
             snapshot.close()
@@ -799,7 +800,6 @@ class ReverbService : Service() {
             return
         }
 
-        val exportConfig = getConfigurationSnapshot()
         val lease = try {
             val totalDuration = snapshot.durationSeconds
             val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
@@ -811,8 +811,13 @@ class ReverbService : Service() {
                 targetBytesPerSecond.coerceAtLeast(1L).toDouble()
             val clampedStart = maxOf(boundedStart, boundedEnd - maxDuration)
             snapshot.acquireRange(clampedStart, boundedEnd)
+        } catch (error: Exception) {
+            clearExportState(exportToken)
+            finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
+            return
         } finally {
-            snapshot.close()
+            runCatching { snapshot.close() }
+                .onFailure { error -> Log.w(TAG, "Unable to release export-range snapshot", error) }
         }
         if (lease == null) {
             clearExportState(exportToken)

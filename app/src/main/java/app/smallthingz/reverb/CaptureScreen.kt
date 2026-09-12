@@ -21,8 +21,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +41,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -47,7 +50,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -67,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
@@ -93,7 +96,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.roundToInt
 
 private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -664,7 +666,7 @@ fun CaptureScreen(
 
     val activeRangeSnapshot = rangeSnapshot
     if (showExportRangeDialog && activeRangeSnapshot != null) {
-        val currentSeconds = activeRangeSnapshot.durationSeconds.toFloat().coerceAtLeast(0f)
+        val currentSeconds = activeRangeSnapshot.durationSeconds.coerceAtLeast(0.0)
         ExportRangeDialog(
             currentBufferSeconds = currentSeconds,
             exportConfig = currentExportConfig(context, service),
@@ -1454,26 +1456,28 @@ private fun ExportClampDialog(
 
 @Composable
 private fun ExportRangeDialog(
-    currentBufferSeconds: Float,
+    currentBufferSeconds: Double,
     exportConfig: ExportUiConfig,
     onExport: (ExportRange) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
     val resources = LocalResources.current
-    val availableSeconds = remember { currentBufferSeconds.coerceAtLeast(0f) }
-    val maxSeconds = availableSeconds.coerceAtLeast(1f)
-    var rangeStart by remember { mutableFloatStateOf(0f) }
-    var rangeEnd by remember { mutableFloatStateOf(availableSeconds) }
-    var startText by remember { mutableStateOf("0:00") }
-    var endText by remember {
-        mutableStateOf(formatDurationInput(availableSeconds.roundToInt()))
+    val availableSeconds = remember(currentBufferSeconds) {
+        currentBufferSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
     }
+    val availableSliderSeconds = availableSeconds.toFloat().coerceAtLeast(0f)
+    val maxSliderSeconds = availableSliderSeconds.coerceAtLeast(1f)
+    var rangeStart by remember { mutableFloatStateOf(0f) }
+    var rangeEnd by remember(availableSliderSeconds) { mutableFloatStateOf(availableSliderSeconds) }
+    var startText by remember { mutableStateOf(formatRangeTimeInput(0.0)) }
+    var endText by remember(availableSeconds) { mutableStateOf(formatRangeTimeInput(availableSeconds)) }
     var startError by remember { mutableStateOf<String?>(null) }
     var endError by remember { mutableStateOf<String?>(null) }
     var textRangeEdited by remember { mutableStateOf(false) }
 
     fun clampExportRange(startSeconds: Float, endSeconds: Float): ExportRange {
+        val boundedStart = startSeconds.toDouble().coerceIn(0.0, availableSeconds).toFloat()
+        val boundedEnd = endSeconds.toDouble().coerceIn(boundedStart.toDouble(), availableSeconds).toFloat()
         val maxDurationSeconds = exportDurationLimitSeconds(
             exportConfig.format,
             exportConfig.codec,
@@ -1481,10 +1485,9 @@ private fun ExportRangeDialog(
             exportConfig.channelCount,
             exportConfig.sampleFormat,
         ).toFloat().coerceAtLeast(1f)
-        val boundedEnd = endSeconds.coerceAtLeast(startSeconds)
-        val requestedDuration = boundedEnd - startSeconds
+        val requestedDuration = boundedEnd - boundedStart
         return if (requestedDuration <= maxDurationSeconds) {
-            ExportRange(startSeconds, boundedEnd, null)
+            ExportRange(boundedStart, boundedEnd, null)
         } else {
             ExportRange(
                 startSeconds = (boundedEnd - maxDurationSeconds).coerceAtLeast(0f),
@@ -1494,26 +1497,44 @@ private fun ExportRangeDialog(
         }
     }
 
-    fun applyTextRange() {
-        val parsedStart = parseDurationInput(startText)?.toFloat()
-        val parsedEnd = parseDurationInput(endText)?.toFloat()
-        startError = if (parsedStart == null || parsedStart < 0f || parsedStart >= availableSeconds) {
-            resources.getString(R.string.custom_export_range_invalid)
-        } else null
-        endError = if (parsedEnd == null || parsedEnd <= 0f || parsedEnd > availableSeconds ||
+    fun applyTextRange(): Boolean {
+        val parsedStart = parseRangeTimeInput(startText)
+        val parsedEnd = parseRangeTimeInput(endText)
+        val invalidMessage = resources.getString(R.string.custom_export_range_invalid)
+        startError = if (parsedStart == null || parsedStart < 0.0 || parsedStart >= availableSeconds) {
+            invalidMessage
+        } else {
+            null
+        }
+        endError = if (
+            parsedEnd == null || parsedEnd <= 0.0 || parsedEnd > availableSeconds ||
             (parsedStart != null && parsedEnd <= parsedStart)
         ) {
-            resources.getString(R.string.custom_export_range_invalid)
-        } else null
-        if (startError == null && endError == null && parsedStart != null && parsedEnd != null) {
-            rangeStart = parsedStart
-            rangeEnd = parsedEnd
+            invalidMessage
+        } else {
+            null
         }
+        if (startError != null || endError != null || parsedStart == null || parsedEnd == null) return false
+
+        val newStart = parsedStart.toFloat()
+        val newEnd = parsedEnd.toFloat()
+        if (newEnd <= newStart) {
+            endError = invalidMessage
+            return false
+        }
+        rangeStart = newStart
+        rangeEnd = newEnd
+        textRangeEdited = false
+        return true
     }
 
     fun submit() {
-        if (textRangeEdited) applyTextRange()
-        if (startError != null || endError != null || availableSeconds <= 0f) return
+        if (availableSeconds <= 0.0) return
+        if (textRangeEdited && !applyTextRange()) return
+        if (rangeEnd <= rangeStart) {
+            endError = resources.getString(R.string.custom_export_range_invalid)
+            return
+        }
         onExport(clampExportRange(rangeStart, rangeEnd))
     }
 
@@ -1548,71 +1569,62 @@ private fun ExportRangeDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = "${formatShortTimer(rangeStart)}  –  ${formatShortTimer(rangeEnd)}",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                )
                 RangeSlider(
                     value = rangeStart..rangeEnd,
                     onValueChange = { range ->
-                        val start = range.start.coerceIn(0f, availableSeconds)
-                        val end = range.endInclusive.coerceIn(start, availableSeconds)
+                        val start = range.start.toDouble().coerceIn(0.0, availableSeconds).toFloat()
+                        val end = range.endInclusive.toDouble().coerceIn(start.toDouble(), availableSeconds).toFloat()
                         rangeStart = start
                         rangeEnd = end
-                        startText = formatDurationInput(start.roundToInt())
-                        endText = formatDurationInput(end.roundToInt())
+                        startText = formatRangeTimeInput(start.toDouble())
+                        endText = formatRangeTimeInput(minOf(end.toDouble(), availableSeconds))
                         textRangeEdited = false
                         startError = null
                         endError = null
                     },
-                    valueRange = 0f..maxSeconds,
+                    valueRange = 0f..maxSliderSeconds,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedTextField(
+                    RangeTimeField(
                         value = startText,
                         onValueChange = { value ->
                             startText = value
                             textRangeEdited = true
                             startError = null
-                            val parsed = parseDurationInput(value)?.toFloat()
-                            if (parsed != null && parsed >= 0f && parsed < rangeEnd) rangeStart = parsed
+                            val parsed = parseRangeTimeInput(value)
+                            if (parsed != null && parsed >= 0.0 && parsed < rangeEnd.toDouble()) {
+                                rangeStart = parsed.toFloat()
+                            }
                         },
-                        label = { Text(stringResource(R.string.custom_export_start_label)) },
-                        isError = startError != null,
-                        supportingText = startError?.let { { Text(it) } },
-                        singleLine = true,
-                        shape = RoundedCornerShape(18.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                        label = stringResource(R.string.custom_export_start_label),
+                        error = startError,
+                        imeAction = ImeAction.Next,
                         modifier = Modifier.weight(1f),
                     )
-                    OutlinedTextField(
+                    RangeTimeField(
                         value = endText,
                         onValueChange = { value ->
                             endText = value
                             textRangeEdited = true
                             endError = null
-                            val parsed = parseDurationInput(value)?.toFloat()
-                            if (parsed != null && parsed > rangeStart && parsed <= availableSeconds) rangeEnd = parsed
+                            val parsed = parseRangeTimeInput(value)
+                            if (parsed != null && parsed > rangeStart.toDouble() && parsed <= availableSeconds) {
+                                rangeEnd = parsed.toFloat()
+                            }
                         },
-                        label = { Text(stringResource(R.string.custom_export_end_label)) },
-                        isError = endError != null,
-                        supportingText = endError?.let { { Text(it) } },
-                        singleLine = true,
-                        shape = RoundedCornerShape(18.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                        label = stringResource(R.string.custom_export_end_label),
+                        error = endError,
+                        imeAction = ImeAction.Done,
+                        onDone = { submit() },
                         modifier = Modifier.weight(1f),
                     )
                 }
                 Text(
-                    text = stringResource(R.string.export_range_buffer_hint, formatShortTimer(availableSeconds)),
+                    text = stringResource(R.string.export_range_buffer_hint, formatRangeTimeInput(availableSeconds)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1628,6 +1640,64 @@ private fun ExportRangeDialog(
             }
         },
     )
+}
+
+@Composable
+private fun RangeTimeField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    error: String?,
+    imeAction: ImeAction,
+    modifier: Modifier = Modifier,
+    onDone: () -> Unit = {},
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val borderColor = when {
+        error != null -> MaterialTheme.colorScheme.error
+        focused -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(3.dp))
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                interactionSource = interactionSource,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = imeAction),
+                keyboardActions = KeyboardActions(onDone = { onDone() }),
+                textStyle = MaterialTheme.typography.titleMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (error != null) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
 }
 
 private fun startExport(
@@ -1658,10 +1728,17 @@ private fun startExport(
             onError = onError,
             onSaved = onSaved,
     )
-    if (snapshot != null) {
-        recorder.dumpRecordingRange(snapshot, range.startSeconds, range.endSeconds, receiver, "")
-    } else {
-        recorder.dumpRecordingRange(range.startSeconds, range.endSeconds, receiver, "")
+    try {
+        if (snapshot != null) {
+            recorder.dumpRecordingRange(snapshot, range.startSeconds, range.endSeconds, receiver, "")
+        } else {
+            recorder.dumpRecordingRange(range.startSeconds, range.endSeconds, receiver, "")
+        }
+    } catch (_: Exception) {
+        runCatching { snapshot?.close() }
+        setSaving(false)
+        onStatus(null)
+        onError(context.getString(R.string.save_failed))
     }
 }
 

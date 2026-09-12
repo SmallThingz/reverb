@@ -4,6 +4,7 @@ import android.content.Context
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+import kotlin.math.floor
 
 private val sizeFormatter = object : ThreadLocal<DecimalFormat>() {
     override fun initialValue(): DecimalFormat =
@@ -36,6 +37,44 @@ fun formatShortTimer(seconds: Float): String {
         chars[0] = DIGIT_0[minutes]; chars[1] = ':'; chars[2] = DIGIT_0[secs / 10]; chars[3] = DIGIT_0[secs % 10]
         String(chars)
     }
+}
+
+internal fun formatRangeTimeInput(seconds: Double): String {
+    val safeSeconds = if (seconds.isFinite()) seconds.coerceAtLeast(0.0) else 0.0
+    val totalMillis = floor(safeSeconds * 1_000.0).toLong()
+    val totalSeconds = totalMillis / 1_000L
+    val millis = (totalMillis % 1_000L).toInt()
+    val hours = totalSeconds / 3_600L
+    val minutes = ((totalSeconds % 3_600L) / 60L).toInt()
+    val secs = (totalSeconds % 60L).toInt()
+    val fraction = millis.toString().padStart(3, '0')
+
+    return if (hours > 0L) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.$fraction"
+    } else {
+        "${minutes}:${secs.toString().padStart(2, '0')}.$fraction"
+    }
+}
+
+internal fun parseRangeTimeInput(value: String): Double? {
+    val parts = value.trim().split(':')
+    if (parts.size !in 1..3 || parts.any { it.isBlank() }) return null
+
+    val secondsPart = parts.last().toDoubleOrNull() ?: return null
+    if (!secondsPart.isFinite() || secondsPart < 0.0 || (parts.size > 1 && secondsPart >= 60.0)) return null
+
+    val minutes = if (parts.size >= 2) parts[parts.size - 2].toLongOrNull() ?: return null else 0L
+    if (minutes < 0L || (parts.size == 3 && minutes >= 60L)) return null
+    val hours = if (parts.size == 3) parts[0].toLongOrNull() ?: return null else 0L
+    if (hours < 0L) return null
+
+    val wholeSeconds = try {
+        Math.addExact(Math.multiplyExact(hours, 3_600L), Math.multiplyExact(minutes, 60L))
+    } catch (_: ArithmeticException) {
+        return null
+    }
+    val result = wholeSeconds.toDouble() + secondsPart
+    return result.takeIf { it.isFinite() }
 }
 
 fun formatShortFileSize(size: Long): String {
