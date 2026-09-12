@@ -60,8 +60,16 @@ object RecordingRepository {
             val previous = backgroundDeleteJob
             backgroundDeleteJob = cleanupScope.launch {
                 previous?.join()
+                var failed = false
                 recordings.forEach { recording ->
-                    runCatching { delete(appContext, recording) }
+                    val deleted = runCatching { delete(appContext, recording) }.getOrDefault(false)
+                    if (!deleted) failed = true
+                }
+                if (failed) {
+                    AppFeedbackCenter.post(
+                        appContext.getString(R.string.recording_delete_failed),
+                        FeedbackTone.ERROR,
+                    )
                 }
             }
         }

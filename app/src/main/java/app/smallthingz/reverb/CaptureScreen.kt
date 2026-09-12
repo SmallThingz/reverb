@@ -218,9 +218,17 @@ fun CaptureScreen(
     var rangeSnapshot by remember { mutableStateOf<ReverbService.TimelineSnapshot?>(null) }
     var pendingExportSnapshot by remember { mutableStateOf<ReverbService.TimelineSnapshot?>(null) }
     var isPreparingRange by remember { mutableStateOf(false) }
+    var customRangeRequestGeneration by remember { mutableLongStateOf(0L) }
+    var pendingCustomRangeBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
     val screenAlive = remember { AtomicBoolean(true) }
+
+    fun invalidateCustomRangePreparation() {
+        customRangeRequestGeneration++
+        pendingCustomRangeBuffer = null
+        isPreparingRange = false
+    }
 
     val stateCallback = remember {
         object : ReverbService.StateCallback {
@@ -281,7 +289,7 @@ fun CaptureScreen(
                         pendingExportRange = null
                         showExportRangeDialog = false
                         showExportClampDialog = false
-                        isPreparingRange = false
+                        invalidateCustomRangePreparation()
                         service = null
                         return
                     }
@@ -294,7 +302,7 @@ fun CaptureScreen(
                     pendingExportRange = null
                     showExportRangeDialog = false
                     showExportClampDialog = false
-                    isPreparingRange = false
+                    invalidateCustomRangePreparation()
                 }
                 service = connectedService
                 service?.getState(stateCallback)
@@ -308,7 +316,7 @@ fun CaptureScreen(
                 pendingExportRange = null
                 showExportRangeDialog = false
                 showExportClampDialog = false
-                isPreparingRange = false
+                invalidateCustomRangePreparation()
                 if (isSaving) {
                     isSaving = false
                     saveStatus = null
@@ -320,6 +328,7 @@ fun CaptureScreen(
     }
 
     val activeBufferState = androidx.compose.runtime.rememberUpdatedState(activeBuffer)
+    val selectedBufferState = androidx.compose.runtime.rememberUpdatedState(selectedBuffer)
     val visualizationCallback = remember {
         ReverbService.VisualizationCallback { frame ->
             when (activeBufferState.value) {
@@ -327,6 +336,13 @@ fun CaptureScreen(
                 ReverbService.BufferSlot.LOOPING -> loopingBlobController.submit(frame)
                 null -> Unit
             }
+        }
+    }
+
+    LaunchedEffect(selectedBuffer) {
+        val pendingBuffer = pendingCustomRangeBuffer
+        if (pendingBuffer != null && pendingBuffer != selectedBuffer) {
+            invalidateCustomRangePreparation()
         }
     }
 
@@ -372,7 +388,7 @@ fun CaptureScreen(
                     pendingExportRange = null
                     showExportRangeDialog = false
                     showExportClampDialog = false
-                    isPreparingRange = false
+                    invalidateCustomRangePreparation()
                     if (bound) {
                         context.unbindService(connection)
                         bound = false
@@ -391,6 +407,7 @@ fun CaptureScreen(
             rangeSnapshot = null
             pendingExportSnapshot?.close()
             pendingExportSnapshot = null
+            invalidateCustomRangePreparation()
             if (bound) {
                 context.unbindService(connection)
                 bound = false
@@ -594,8 +611,27 @@ fun CaptureScreen(
                             ReverbService.BufferSlot.LOOPING -> loopingDurationSeconds
                         }.coerceAtLeast(0f)
                         if (secs > 0f) {
+                            val requestGeneration = customRangeRequestGeneration + 1L
+                            customRangeRequestGeneration = requestGeneration
+                            pendingCustomRangeBuffer = bufferSlot
                             isPreparingRange = true
                             s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
+                                val currentRequest = shouldApplyCustomRangeSnapshot(
+                                    requestGeneration = requestGeneration,
+                                    latestRequestGeneration = customRangeRequestGeneration,
+                                    requestedBuffer = bufferSlot,
+                                    pendingBuffer = pendingCustomRangeBuffer,
+                                    selectedBuffer = selectedBufferState.value,
+                                )
+                                if (!currentRequest) {
+                                    snapshot?.close()
+                                    if (requestGeneration == customRangeRequestGeneration) {
+                                        pendingCustomRangeBuffer = null
+                                        isPreparingRange = false
+                                    }
+                                    return@acquireTimelineSnapshot
+                                }
+                                pendingCustomRangeBuffer = null
                                 isPreparingRange = false
                                 if (!screenAlive.get() || service !== s) {
                                     snapshot?.close()
@@ -713,6 +749,16 @@ internal fun shouldApplyRecorderStateSnapshot(
     snapshotGeneration: Long,
     latestCommandGeneration: Long,
 ): Boolean = snapshotGeneration >= latestCommandGeneration
+
+internal fun shouldApplyCustomRangeSnapshot(
+    requestGeneration: Long,
+    latestRequestGeneration: Long,
+    requestedBuffer: ReverbService.BufferSlot,
+    pendingBuffer: ReverbService.BufferSlot?,
+    selectedBuffer: ReverbService.BufferSlot,
+): Boolean = requestGeneration == latestRequestGeneration &&
+    pendingBuffer == requestedBuffer &&
+    selectedBuffer == requestedBuffer
 
 internal enum class CaptureBufferUiState {
     READY,

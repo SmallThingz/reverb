@@ -83,6 +83,7 @@ fun FilesScreen(
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
+    onVisibleRecordingsChanged: (List<RecordingEntity>) -> Unit = {},
     onBrandClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onDismissLibrary: () -> Unit = {},
@@ -109,6 +110,11 @@ fun FilesScreen(
     var playerRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var notice by remember { mutableStateOf<LibraryNotice?>(null) }
     var deletionJob by remember { mutableStateOf<Job?>(null) }
+    var deletionsCommittedInBackground by remember { mutableStateOf(false) }
+
+    fun showPassiveNotice(message: String, tone: FeedbackTone) {
+        if (notice?.canUndo != true) notice = LibraryNotice(message, tone)
+    }
 
     fun refresh(showSpinner: Boolean = true) {
         val generation = ++refreshGeneration[0]
@@ -119,21 +125,45 @@ fun FilesScreen(
                 if (generation != refreshGeneration[0]) return@launch
                 recordings = stored
                 hasLoaded = true
-                val storedIds = stored.mapTo(mutableSetOf()) { it.id }
-                pendingDeletions.keys.toList().forEach { id ->
-                    if (id !in storedIds) pendingDeletions.remove(id)
+                val storedById = stored.associateBy { it.id }
+                selectedIds.keys.toList().forEach { id ->
+                    val updated = storedById[id]
+                    if (updated == null) selectedIds.remove(id)
+                    else if (selectedIds[id] != updated) selectedIds[id] = updated
+                }
+                if (deletionsCommittedInBackground) {
+                    pendingDeletions.clear()
+                    deletionsCommittedInBackground = false
+                    isDeleting = false
+                } else {
+                    pendingDeletions.keys.toList().forEach { id ->
+                        if (id !in storedById) pendingDeletions.remove(id)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 if (generation == refreshGeneration[0]) {
-                    notice = LibraryNotice(
+                    showPassiveNotice(
                         resources.getString(R.string.recordings_refresh_failed),
                         FeedbackTone.ERROR,
                     )
                 }
             } finally {
                 if (generation == refreshGeneration[0]) isRefreshing = false
+            }
+        }
+    }
+
+    LaunchedEffect(initialRecordings) {
+        if (pendingDeletions.isEmpty() && initialRecordings != recordings) {
+            recordings = initialRecordings
+            hasLoaded = true
+            val currentById = initialRecordings.associateBy { it.id }
+            selectedIds.keys.toList().forEach { id ->
+                val updated = currentById[id]
+                if (updated == null) selectedIds.remove(id)
+                else if (selectedIds[id] != updated) selectedIds[id] = updated
             }
         }
     }
@@ -187,6 +217,7 @@ fun FilesScreen(
             if (generation == refreshGeneration[0]) failed = true
         }
         pendingDeletions.clear()
+        deletionsCommittedInBackground = false
         if (failed || deleted == 0) {
             notice = LibraryNotice(
                 resources.getString(R.string.recording_delete_failed),
@@ -196,12 +227,12 @@ fun FilesScreen(
     }
 
     fun commitPendingDeletionsInBackground() {
-        if (pendingDeletions.isEmpty()) return
+        if (pendingDeletions.isEmpty() || deletionsCommittedInBackground) return
         deletionJob?.cancel()
         deletionJob = null
         val pending = pendingDeletions.values.toList()
-        pendingDeletions.clear()
-        isDeleting = false
+        deletionsCommittedInBackground = true
+        isDeleting = true
         RecordingRepository.deleteInBackground(context, pending)
     }
 
@@ -235,6 +266,9 @@ fun FilesScreen(
     val listItems by remember {
         derivedStateOf { buildListItems(context, visibleRecordings) }
     }
+    LaunchedEffect(visibleRecordings) {
+        onVisibleRecordingsChanged(visibleRecordings)
+    }
     LaunchedEffect(hasLoaded, recordings.size) {
         if (hasLoaded) onRecordingCountChanged(recordings.size)
     }
@@ -244,7 +278,9 @@ fun FilesScreen(
         val selected = selectedIds.values.toList()
         if (selected.isEmpty()) { clearSelection(); return }
         isDeleting = true
+        deletionsCommittedInBackground = false
         selected.forEach { pendingDeletions[it.id] = it }
+        onVisibleRecordingsChanged(recordings.filterNot { it.id in pendingDeletions })
         clearSelection()
         val count = pendingDeletions.size
         val message = if (count == 1) resources.getString(R.string.recording_deleted)
@@ -263,8 +299,11 @@ fun FilesScreen(
         deletionJob?.cancel()
         deletionJob = null
         pendingDeletions.clear()
+        deletionsCommittedInBackground = false
+        onVisibleRecordingsChanged(recordings)
         notice = null
         isDeleting = false
+        refresh(showSpinner = false)
     }
 
     fun renameSelected() {
@@ -289,9 +328,9 @@ fun FilesScreen(
             val shareIntent = buildShareRecordingsIntent(context, recordingsToShare)
             context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
         } catch (_: ActivityNotFoundException) {
-            notice = LibraryNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
         } catch (_: RuntimeException) {
-            notice = LibraryNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
         }
     }
 
@@ -482,11 +521,16 @@ fun FilesScreen(
             RenameRecordingDialog(
                 recording = renameRecording ?: return,
                 onDismiss = { showRenameDialog = false; renameRecording = null },
-                onRenamed = {
+                onRenamed = { renamed ->
+                    val updatedRecordings = recordings.map { item ->
+                        if (item.id == (renameRecording?.id ?: renamed.id)) renamed else item
+                    }
+                    recordings = updatedRecordings
+                    onVisibleRecordingsChanged(updatedRecordings.filterNot { it.id in pendingDeletions })
                     showRenameDialog = false
                     renameRecording = null
                     clearSelection()
-                    refresh()
+                    refresh(showSpinner = false)
                 },
             )
         }
@@ -524,9 +568,9 @@ fun FilesScreen(
                     try {
                         context.startActivity(buildOpenRecordingIntent(context, currentRecording))
                     } catch (_: ActivityNotFoundException) {
-                        notice = LibraryNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
+                        showPassiveNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     } catch (_: RuntimeException) {
-                        notice = LibraryNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
+                        showPassiveNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
                     }
                 },
             )
@@ -587,7 +631,7 @@ private fun RecordingItem(
 private fun RenameRecordingDialog(
     recording: RecordingEntity,
     onDismiss: () -> Unit,
-    onRenamed: () -> Unit,
+    onRenamed: (RecordingEntity) -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -617,7 +661,7 @@ private fun RenameRecordingDialog(
                 if (renamed == null) {
                     error = resources.getString(R.string.rename_recording_failed)
                 } else {
-                    onRenamed()
+                    onRenamed(renamed)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -630,7 +674,7 @@ private fun RenameRecordingDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isRenaming) onDismiss() },
         shape = RoundedCornerShape(18.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
@@ -643,7 +687,7 @@ private fun RenameRecordingDialog(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = onDismiss) {
+                IconButton(onClick = onDismiss, enabled = !isRenaming) {
                     Icon(
                         imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),

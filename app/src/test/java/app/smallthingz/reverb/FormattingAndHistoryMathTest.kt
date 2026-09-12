@@ -685,4 +685,15 @@ class FormattingAndHistoryMathTest {
         assertEquals(null, parseRangeTimeInput("-1:00.000"))
     }
 
+    @Test
+    fun customRangeSnapshot_rejectsStaleGenerationAndWrongTab() {
+        val oneShot = ReverbService.BufferSlot.ONE_SHOT
+        val looping = ReverbService.BufferSlot.LOOPING
+
+        assertTrue(shouldApplyCustomRangeSnapshot(7L, 7L, oneShot, oneShot, oneShot))
+        assertFalse(shouldApplyCustomRangeSnapshot(6L, 7L, oneShot, oneShot, oneShot))
+        assertFalse(shouldApplyCustomRangeSnapshot(7L, 7L, oneShot, null, oneShot))
+        assertFalse(shouldApplyCustomRangeSnapshot(7L, 7L, oneShot, oneShot, looping))
+    }
+
 }

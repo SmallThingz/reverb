@@ -722,6 +722,12 @@ private fun MainScreen(
                         showLibrary = false
                     }
                 },
+                onVisibleRecordingsChanged = { visible ->
+                    if (librarySnapshot != visible) {
+                        ++libraryRefreshGeneration[0]
+                        librarySnapshot = visible
+                    }
+                },
                 onBrandClick = { showAboutDialog = true },
                 onSettingsClick = {
                     scope.launch {

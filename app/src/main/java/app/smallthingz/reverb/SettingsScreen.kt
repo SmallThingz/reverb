@@ -497,6 +497,7 @@ fun SettingsScreen(
 
         refreshRetentionFields()
         refreshExportDirectoryUi()
+        refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
         currentSnapshot = prev.copy()
