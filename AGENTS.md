@@ -8,3 +8,6 @@
 - The active capture destination stays highlighted while idle; disabled buffers remain viewable, show Off, and cannot become active.
 - Quick Settings buffer tiles are start/activate controls: usable tiles switch capture to that buffer; disabled or full buffers are unavailable.
 - Brand marks keep the main stroke on the current foreground color and derive echo/accent strokes from the Material primary color; Android 12+ launcher accents use system Material You colors and Android 13+ keeps a monochrome themed-icon mask.
+- Buffer selector taps are navigation-only and follow the same path as horizontal swipes; only the blob starts or stops recording.
+- The Library action is always visible and must open even when the library is empty.
+- Both buffer readouts use the configured retention mode for their primary metric.

@@ -184,7 +184,6 @@ internal fun markExportCancelRequested(status: CaptureSaveStatus?): CaptureSaveS
 
 @Composable
 fun CaptureScreen(
-    showLibraryButton: Boolean = false,
     visualizerVisible: Boolean = true,
     onOpenLibrary: () -> Unit = {},
     onRecordingSaved: () -> Unit = {},
@@ -559,31 +558,6 @@ fun CaptureScreen(
                 }
             }
         }
-        val onActivateBuffer = remember(
-            service, isSaving, activeBuffer, oneShotEnabled, oneShotFull, loopingEnabled,
-        ) {
-            { bufferSlot: ReverbService.BufferSlot ->
-                selectedBuffer = bufferSlot
-                val s = service
-                val canActivate = canActivateCaptureBuffer(
-                    requested = bufferSlot,
-                    oneShotEnabled = oneShotEnabled,
-                    oneShotFull = oneShotFull,
-                    loopingEnabled = loopingEnabled,
-                )
-                if (s != null && !isSaving && canActivate && activeBuffer != bufferSlot) {
-                    val result = s.selectCaptureBuffer(bufferSlot)
-                    if (result.accepted) {
-                        latestListeningCommandGeneration = maxOf(
-                            latestListeningCommandGeneration,
-                            result.generation,
-                        )
-                        activeBuffer = bufferSlot
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    }
-                }
-            }
-        }
         val onClearBuffer = remember(isSaving) {
             { bufferSlot: ReverbService.BufferSlot ->
                 if (!isSaving) pendingClearBuffer = bufferSlot
@@ -710,9 +684,7 @@ fun CaptureScreen(
             onExportFull = onExportFull,
             onExportCustom = onExportCustom,
             onSelectBuffer = { selectedBuffer = it },
-            onActivateBuffer = onActivateBuffer,
             onOpenBufferSettings = onOpenBufferSettings,
-            showLibraryButton = showLibraryButton,
             visualizerVisible = visualizerVisible,
             onOpenLibrary = onOpenLibrary,
         )
@@ -808,6 +780,12 @@ internal enum class CaptureBufferUiState {
     DISABLED,
 }
 
+internal fun isBufferActivelyRecording(
+    bufferSlot: ReverbService.BufferSlot,
+    isListening: Boolean,
+    activeBuffer: ReverbService.BufferSlot?,
+): Boolean = isListening && activeBuffer == bufferSlot
+
 internal fun captureBufferUiState(
     bufferSlot: ReverbService.BufferSlot,
     enabled: Boolean,
@@ -817,7 +795,7 @@ internal fun captureBufferUiState(
 ): CaptureBufferUiState {
     return when {
         !enabled -> CaptureBufferUiState.DISABLED
-        isListening && activeBuffer == bufferSlot -> CaptureBufferUiState.RECORDING
+        isBufferActivelyRecording(bufferSlot, isListening, activeBuffer) -> CaptureBufferUiState.RECORDING
         bufferSlot == ReverbService.BufferSlot.ONE_SHOT && oneShotFull -> CaptureBufferUiState.FILLED
         else -> CaptureBufferUiState.READY
     }
@@ -848,9 +826,7 @@ private fun MainCaptureContent(
     onExportFull: (ReverbService.BufferSlot) -> Unit,
     onExportCustom: (ReverbService.BufferSlot) -> Unit,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
-    onActivateBuffer: (ReverbService.BufferSlot) -> Unit,
     onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit,
-    showLibraryButton: Boolean,
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
 ) {
@@ -891,6 +867,9 @@ private fun MainCaptureContent(
     val displayedRecording = displayedUiState == CaptureBufferUiState.RECORDING
     val serviceReady = service != null
     val hasHistory = displayedMetrics.seconds > 0f
+    val navigateToBuffer: (ReverbService.BufferSlot) -> Unit = { target ->
+        if (!isSaving && target != selectedBuffer) onSelectBuffer(target)
+    }
 
     Column(
         modifier = Modifier
@@ -912,10 +891,10 @@ private fun MainCaptureContent(
                                 when {
                                     horizontalDrag <= -swipeThresholdPx &&
                                         selectedBuffer == ReverbService.BufferSlot.ONE_SHOT ->
-                                        onSelectBuffer(ReverbService.BufferSlot.LOOPING)
+                                        navigateToBuffer(ReverbService.BufferSlot.LOOPING)
                                     horizontalDrag >= swipeThresholdPx &&
                                         selectedBuffer == ReverbService.BufferSlot.LOOPING ->
-                                        onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT)
+                                        navigateToBuffer(ReverbService.BufferSlot.ONE_SHOT)
                                 }
                             }
                             horizontalDrag = 0f
@@ -955,9 +934,8 @@ private fun MainCaptureContent(
             isSaving = isSaving,
             hasHistory = hasHistory,
             selectedRecording = displayedRecording,
-            showLibraryButton = showLibraryButton,
             flipDegrees = flipDegrees.value,
-            onSelectBuffer = onActivateBuffer,
+            onSelectBuffer = navigateToBuffer,
             onExportFull = { onExportFull(displayedBuffer) },
             onExportCustom = { onExportCustom(displayedBuffer) },
             onClearBuffer = { onClearBuffer(displayedBuffer) },
@@ -979,7 +957,6 @@ private fun CaptureControlCluster(
     isSaving: Boolean,
     hasHistory: Boolean,
     selectedRecording: Boolean,
-    showLibraryButton: Boolean,
     flipDegrees: Float,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
     onExportFull: () -> Unit,
@@ -990,7 +967,7 @@ private fun CaptureControlCluster(
     val chrome = appChrome()
     val selectorWidth = 242.dp
     val selectorHeight = 54.dp
-    val actionWidth = if (showLibraryButton) 256.dp else 194.dp
+    val actionWidth = 256.dp
     val actionHeight = 70.dp
     val clusterWidth = maxOf(selectorWidth, actionWidth)
     val clusterHeight = 112.dp
@@ -1053,14 +1030,12 @@ private fun CaptureControlCluster(
                     flipDegrees = flipDegrees,
                     onClick = onClearBuffer,
                 )
-                if (showLibraryButton) {
-                    CaptureActionButton(
-                        icon = AppIcons.library,
-                        contentDescription = stringResource(R.string.files_tab),
-                        enabled = !isSaving,
-                        onClick = onOpenLibrary,
-                    )
-                }
+                CaptureActionButton(
+                    icon = AppIcons.library,
+                    contentDescription = stringResource(R.string.files_tab),
+                    enabled = !isSaving,
+                    onClick = onOpenLibrary,
+                )
             }
         }
     }
@@ -1155,8 +1130,12 @@ private fun BufferSelector(
             icon = if (oneShotFull) AppIcons.check else AppIcons.oneShot,
             selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
             active = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
-            recording = isListening && activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
-            enabled = oneShotEnabled,
+            recording = isBufferActivelyRecording(
+                ReverbService.BufferSlot.ONE_SHOT,
+                isListening,
+                activeBuffer,
+            ),
+            enabled = oneShotEnabled && !oneShotFull,
             filled = oneShotFull,
             onClick = { onSelectBuffer(ReverbService.BufferSlot.ONE_SHOT) },
         )
@@ -1165,7 +1144,11 @@ private fun BufferSelector(
             icon = AppIcons.looping,
             selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
             active = activeBuffer == ReverbService.BufferSlot.LOOPING,
-            recording = isListening && activeBuffer == ReverbService.BufferSlot.LOOPING,
+            recording = isBufferActivelyRecording(
+                ReverbService.BufferSlot.LOOPING,
+                isListening,
+                activeBuffer,
+            ),
             enabled = loopingEnabled,
             filled = false,
             onClick = { onSelectBuffer(ReverbService.BufferSlot.LOOPING) },
@@ -1187,21 +1170,20 @@ private fun BufferSegment(
     val colors = MaterialTheme.colorScheme
     val chrome = appChrome()
     val containerColor = when {
-        !enabled -> Color.Transparent
         recording -> colors.primary
         active && filled -> colors.tertiaryContainer.copy(alpha = 0.82f)
-        active -> colors.primaryContainer.copy(alpha = 0.78f)
         selected && filled -> colors.tertiaryContainer.copy(alpha = 0.60f)
         filled -> colors.tertiaryContainer.copy(alpha = 0.32f)
+        !enabled -> Color.Transparent
+        active -> colors.primaryContainer.copy(alpha = 0.78f)
         selected -> chrome.raised
         else -> Color.Transparent
     }
     val contentColor = when {
-        !enabled -> chrome.muted.copy(alpha = 0.38f)
         recording -> colors.onPrimary
-        active && filled -> colors.onTertiaryContainer
-        active -> colors.onPrimaryContainer
         filled -> colors.onTertiaryContainer
+        !enabled -> chrome.muted.copy(alpha = 0.38f)
+        active -> colors.onPrimaryContainer
         selected -> chrome.ink
         else -> chrome.muted
     }
@@ -1291,16 +1273,15 @@ private fun BufferBlobPage(
     }
     val exportLimitBytes = remember(exportConfig.format) { exportFileSizeLimitBytes(exportConfig.format) }
     val overExportLimit = remember(estimatedExportBytes, exportLimitBytes) { estimatedExportBytes > exportLimitBytes }
-    val timerText = remember(bufferSlot, retentionMode, displayedCurrentSeconds, currentBytes, disabled, resources) {
+    val timerText = remember(retentionMode, displayedCurrentSeconds, currentBytes, disabled, resources) {
         when {
             disabled -> resources.getString(R.string.buffer_disabled)
-            bufferSlot == ReverbService.BufferSlot.ONE_SHOT -> formatShortTimer(displayedCurrentSeconds.toFloat())
             retentionMode == RetentionMode.TIME -> formatShortTimer(displayedCurrentSeconds.toFloat())
             else -> formatShortFileSize(currentBytes)
         }
     }
     val summaryText: String? = remember(
-        bufferSlot, retentionMode, overExportLimit, currentBytes, disabled,
+        retentionMode, overExportLimit, currentBytes, disabled,
         displayedCurrentSeconds, exportLimitBytes, context,
     ) {
         if (disabled) {
@@ -1312,7 +1293,6 @@ private fun BufferBlobPage(
             )
             when {
                 overExportLimit -> exportLimitSummary
-                bufferSlot == ReverbService.BufferSlot.ONE_SHOT -> formatShortFileSize(currentBytes)
                 retentionMode == RetentionMode.TIME -> formatShortFileSize(currentBytes)
                 else -> formatShortTimer(displayedCurrentSeconds.toFloat())
             }

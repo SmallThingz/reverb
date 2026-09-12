@@ -247,6 +247,24 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun bufferRecordingIndicator_requiresListeningEvenWhenLastActiveSlotMatches() {
+        assertFalse(
+            isBufferActivelyRecording(
+                ReverbService.BufferSlot.ONE_SHOT,
+                isListening = false,
+                activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            ),
+        )
+        assertTrue(
+            isBufferActivelyRecording(
+                ReverbService.BufferSlot.ONE_SHOT,
+                isListening = true,
+                activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            ),
+        )
+    }
+
+    @Test
     fun captureUiState_distinguishesRunningFilledDisabled_andOtherBufferBlock() {
         assertEquals(
             CaptureBufferUiState.RECORDING,
@@ -280,6 +298,16 @@ class FormattingAndHistoryMathTest {
                 ReverbService.BufferSlot.ONE_SHOT,
                 isListening = true,
                 activeBuffer = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertEquals(
+            CaptureBufferUiState.FILLED,
+            captureBufferUiState(
+                ReverbService.BufferSlot.ONE_SHOT,
+                enabled = true,
+                oneShotFull = true,
+                isListening = false,
+                activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
             ),
         )
         assertEquals(

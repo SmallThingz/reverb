@@ -558,7 +558,6 @@ private fun MainScreen(
     var settingsBufferTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
-    var libraryCount by rememberSaveable { mutableIntStateOf(0) }
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
     val context = LocalContext.current.applicationContext
@@ -575,7 +574,6 @@ private fun MainScreen(
                 val known = RecordingRepository.listKnown(context)
                 if (generation != libraryRefreshGeneration[0]) return@launch
                 librarySnapshot = known
-                libraryCount = known.size
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -585,7 +583,6 @@ private fun MainScreen(
                 val refreshed = RecordingRepository.refresh(context)
                 if (generation != libraryRefreshGeneration[0]) return@launch
                 librarySnapshot = refreshed
-                libraryCount = refreshed.size
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -635,7 +632,7 @@ private fun MainScreen(
                 .fillMaxSize()
                 .zIndex(0f)
                 .graphicsLayer { alpha = if (showSettings) 0f else 1f }
-                .pointerInput(permissionsGranted, showSettings, showLibrary, showAboutDialog, libraryCount) {
+                .pointerInput(permissionsGranted, showSettings, showLibrary, showAboutDialog) {
                     if (!permissionsGranted || showSettings || showLibrary || showAboutDialog) return@pointerInput
                     var dragStartY = 0f
                     var downwardDrag = 0f
@@ -661,7 +658,7 @@ private fun MainScreen(
                                     }
                                 } else if (dragStartY >= bottomRegionStart && amount < 0f) {
                                     upwardDrag -= amount
-                                    if (libraryCount > 0 && upwardDrag >= openPanelDistancePx) {
+                                    if (upwardDrag >= openPanelDistancePx) {
                                         triggered = true
                                         showLibrary = true
                                     }
@@ -684,7 +681,6 @@ private fun MainScreen(
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
                 if (permissionsGranted) {
                     CaptureScreen(
-                        showLibraryButton = libraryCount > 0,
                         visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
                         onOpenLibrary = { showLibrary = true },
                         onRecordingSaved = { refreshLibrarySnapshot() },
@@ -715,54 +711,45 @@ private fun MainScreen(
                 .padding(bottom = if (showSettings) 20.dp else 104.dp),
         )
 
-        if (libraryCount > 0) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(if (showLibrary) 3f else -2f)
+                .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f },
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(BottomSheetDefaults.ScrimColor),
+            )
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(if (showLibrary) 3f else -2f)
-                    .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f },
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .padding(top = libraryTopPadding)
+                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .appNoise(noiseBrush),
             ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(BottomSheetDefaults.ScrimColor),
+                FilesScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    active = showLibrary,
+                    initialRecordings = librarySnapshot,
+                    onVisibleRecordingsChanged = { visible ->
+                        if (librarySnapshot != visible) {
+                            ++libraryRefreshGeneration[0]
+                            librarySnapshot = visible
+                        }
+                    },
+                    onParentRefreshRequested = { refreshLibrarySnapshot() },
+                    onBrandClick = { showAboutDialog = true },
+                    onSettingsClick = {
+                        closeLibrary()
+                        settingsBufferTarget = null
+                        showSettings = true
+                    },
+                    onDismissLibrary = ::closeLibrary,
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight()
-                        .padding(top = libraryTopPadding)
-                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .appNoise(noiseBrush),
-                ) {
-                    FilesScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        active = showLibrary,
-                        initialRecordings = librarySnapshot,
-                        onRecordingCountChanged = { count ->
-                            libraryCount = count
-                            if (count == 0) {
-                                librarySnapshot = emptyList()
-                                showLibrary = false
-                            }
-                        },
-                        onVisibleRecordingsChanged = { visible ->
-                            if (librarySnapshot != visible) {
-                                ++libraryRefreshGeneration[0]
-                                librarySnapshot = visible
-                            }
-                        },
-                        onParentRefreshRequested = { refreshLibrarySnapshot() },
-                        onBrandClick = { showAboutDialog = true },
-                        onSettingsClick = {
-                            closeLibrary()
-                            settingsBufferTarget = null
-                            showSettings = true
-                        },
-                        onDismissLibrary = ::closeLibrary,
-                    )
-                }
             }
         }
     }
