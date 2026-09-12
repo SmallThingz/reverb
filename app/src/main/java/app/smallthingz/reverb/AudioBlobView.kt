@@ -14,6 +14,7 @@ import androidx.annotation.RequiresApi
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -55,7 +56,10 @@ internal class AudioBlobView(context: Context) : View(context) {
         }
         lastFrameNanos = frameTimeNanos
         shaderTimeSeconds += dtSeconds
-        advance(dtSeconds)
+        advance(
+            dtSeconds = dtSeconds,
+            preserveIdleLifeCurve = !hasHotAudio(),
+        )
         invalidate()
         postNextFrame()
     }
@@ -201,10 +205,13 @@ internal class AudioBlobView(context: Context) : View(context) {
     private fun postNextFrame(immediate: Boolean = false) {
         if (framePosted || !shouldAnimate()) return
         framePosted = true
-        if (immediate) {
+        val audioHot = hasHotAudio()
+        val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON
+        if (immediate || (lifeMoving && !audioHot)) {
+            // Keep silent expand/collapse on every display vsync. The life interpolator below
+            // preserves the original 30 Hz trajectory at the old frame boundaries.
             choreographer.postFrameCallback(frameCallback)
         } else {
-            val audioHot = hasHotAudio()
             val delay = if (audioHot) renderer.activeFrameDelayMillis else renderer.idleFrameDelayMillis
             choreographer.postFrameCallbackDelayed(frameCallback, delay)
         }
@@ -239,7 +246,10 @@ internal class AudioBlobView(context: Context) : View(context) {
         lastFrameNanos = 0L
     }
 
-    private fun advance(dtSeconds: Float) {
+    private fun advance(
+        dtSeconds: Float,
+        preserveIdleLifeCurve: Boolean,
+    ) {
         val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)
         val activityRate = if (targetActivity > currentActivity) 0.34f else 0.16f
         val activityMix = (activityRate * normalized).coerceIn(0f, 0.82f)
@@ -250,7 +260,11 @@ internal class AudioBlobView(context: Context) : View(context) {
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
         val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f
-        val lifeMix = (lifeRate * normalized).coerceIn(0f, 0.65f)
+        val lifeMix = if (preserveIdleLifeCurve && normalized < 1f) {
+            1f - (1f - lifeRate).pow(normalized)
+        } else {
+            (lifeRate * normalized).coerceIn(0f, 0.65f)
+        }
         currentLife += (targetLife - currentLife) * lifeMix
         if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife
     }
