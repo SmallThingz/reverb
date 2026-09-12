@@ -68,14 +68,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -1311,25 +1308,14 @@ private fun RetentionSection(
             RetentionModeSelector(activeMode, onModeSelected)
         }
 
-        val colors = MaterialTheme.colorScheme
-        val darkPalette = colors.surface.luminance() < 0.5f
         val chrome = appChrome()
         val cardShape = RoundedCornerShape(23.dp)
-        val cardStart = lerp(colors.surface, colors.primary, if (darkPalette) 0.075f else 0.035f)
-            .copy(alpha = if (darkPalette) 0.84f else 0.90f)
-        val cardEnd = lerp(colors.surface, colors.onSurfaceVariant, if (darkPalette) 0.045f else 0.025f)
-            .copy(alpha = if (darkPalette) 0.80f else 0.88f)
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(cardShape)
-                .background(Brush.linearGradient(listOf(cardStart, cardEnd)))
-                .border(
-                    width = 1.dp,
-                    color = chrome.border,
-                    shape = cardShape,
-                ),
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            color = chrome.field,
+            border = BorderStroke(1.dp, chrome.border),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(

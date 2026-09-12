@@ -18,17 +18,7 @@ import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalResources
-
-private val DarkField = Color(0xFF101927)
-private val DarkRaised = Color(0xFF1C2939)
-private val DarkInk = Color(0xFFEDF3F3)
-private val DarkMuted = Color(0xFFA0B1C0)
-private val LightField = Color(0xFFF0F5F5)
-private val LightRaised = Color(0xFFE5EEEE)
-private val LightInk = Color(0xFF182D34)
-private val LightMuted = Color(0xFF526872)
 
 internal data class AppChrome(
     val field: Color,
@@ -65,13 +55,12 @@ private object AppNoiseTile {
 @Composable
 internal fun appChrome(): AppChrome {
     val colors = MaterialTheme.colorScheme
-    val dark = colors.surface.luminance() < 0.5f
     return AppChrome(
-        field = (if (dark) DarkField else LightField).copy(alpha = if (dark) 0.82f else 0.88f),
-        raised = (if (dark) DarkRaised else LightRaised).copy(alpha = if (dark) 0.90f else 0.94f),
-        ink = if (dark) DarkInk else LightInk,
-        muted = if (dark) DarkMuted else LightMuted,
-        border = colors.outlineVariant.copy(alpha = if (dark) 0.34f else 0.42f),
+        field = colors.surfaceContainerLow,
+        raised = colors.surfaceContainerHigh,
+        ink = colors.onSurface,
+        muted = colors.onSurfaceVariant,
+        border = colors.outlineVariant,
     )
 }
 

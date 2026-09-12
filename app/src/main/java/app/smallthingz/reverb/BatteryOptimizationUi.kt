@@ -15,11 +15,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-
-private val BackgroundWarningColor = Color(0xFFF1C789)
 
 @Composable
 fun BackgroundOptimizationWarning(
@@ -44,7 +41,7 @@ fun BackgroundOptimizationWarning(
             Icon(
                 imageVector = AppIcons.backgroundWarning,
                 contentDescription = null,
-                tint = if (restricted) BackgroundWarningColor else MaterialTheme.colorScheme.primary,
+                tint = if (restricted) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp),
             )
             Text(

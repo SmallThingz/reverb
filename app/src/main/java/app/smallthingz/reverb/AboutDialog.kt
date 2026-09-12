@@ -38,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
@@ -133,12 +132,12 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                                 .align(Alignment.TopCenter)
                                 .size(104.dp),
                             shape = RoundedCornerShape(30.dp),
-                            color = Color(0xFF0D1324),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_brand_mark),
                                 contentDescription = resources.getString(R.string.app_name),
-                                tint = Color.Unspecified,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(12.dp),
                             )
                         }
