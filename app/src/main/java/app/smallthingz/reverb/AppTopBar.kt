@@ -23,13 +23,15 @@ import androidx.compose.ui.unit.dp
 internal fun AppTopBar(
     onBrandClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    applyStatusBarPadding: Boolean = true,
 ) {
+    val topBarModifier = Modifier
+        .fillMaxWidth()
+        .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
+        .height(66.dp)
+        .padding(horizontal = 14.dp)
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .height(66.dp)
-            .padding(horizontal = 14.dp),
+        modifier = topBarModifier,
     ) {
         Surface(
             onClick = onBrandClick,

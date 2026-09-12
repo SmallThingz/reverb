@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -48,10 +50,11 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,10 +83,15 @@ fun FilesScreen(
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
     onRecordingCountChanged: (Int) -> Unit = {},
+    onBrandClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {},
+    onDismissLibrary: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
 
     var recordings by remember { mutableStateOf(initialRecordings) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -330,8 +338,6 @@ fun FilesScreen(
                             IconButton(onClick = { renameSelected() }) {
                                 Icon(AppIcons.edit, contentDescription = stringResource(R.string.rename_recording))
                             }
-                        }
-                        if (selectedIds.size == 1) {
                             IconButton(onClick = { infoSelected() }) {
                                 Icon(AppIcons.info, contentDescription = stringResource(R.string.recording_info))
                             }
@@ -347,6 +353,12 @@ fun FilesScreen(
                         }
                     }
                 }
+            } else {
+                AppTopBar(
+                    onBrandClick = onBrandClick,
+                    onSettingsClick = onSettingsClick,
+                    applyStatusBarPadding = false,
+                )
             }
         },
     ) { innerPadding ->
@@ -415,6 +427,38 @@ fun FilesScreen(
                         item { Spacer(Modifier.height(84.dp)) }
                     }
                 }
+            }
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                fun Modifier.edgeDismissGesture(): Modifier = pointerInput(onDismissLibrary, edgeDismissDistancePx) {
+                    var downwardDrag = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { downwardDrag = 0f },
+                        onVerticalDrag = { _, amount ->
+                            if (amount > 0f) downwardDrag += amount
+                            else downwardDrag = (downwardDrag + amount).coerceAtLeast(0f)
+                        },
+                        onDragEnd = {
+                            if (downwardDrag >= edgeDismissDistancePx) onDismissLibrary()
+                            downwardDrag = 0f
+                        },
+                        onDragCancel = { downwardDrag = 0f },
+                    )
+                }
+
+                Box(
+                    Modifier
+                        .weight(0.13f)
+                        .fillMaxHeight()
+                        .edgeDismissGesture(),
+                )
+                Spacer(Modifier.weight(0.74f))
+                Box(
+                    Modifier
+                        .weight(0.13f)
+                        .fillMaxHeight()
+                        .edgeDismissGesture(),
+                )
             }
 
             notice?.let { current ->

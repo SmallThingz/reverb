@@ -36,7 +36,6 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -699,25 +698,43 @@ private fun MainScreen(
     }
 
     if (showLibrary && libraryCount > 0) {
+        fun closeLibrary() {
+            showLibrary = false
+            refreshLibrarySnapshot()
+        }
+
         ModalBottomSheet(
-            onDismissRequest = {
-                showLibrary = false
-                refreshLibrarySnapshot()
-            },
+            onDismissRequest = ::closeLibrary,
             sheetState = librarySheetState,
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            dragHandle = { BottomSheetDefaults.DragHandle() },
+            dragHandle = null,
+            sheetGesturesEnabled = false,
         ) {
             FilesScreen(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.88f),
+                    .fillMaxHeight(),
                 initialRecordings = librarySnapshot,
                 onRecordingCountChanged = { count ->
                     libraryCount = count
                     if (count == 0) {
                         librarySnapshot = emptyList()
                         showLibrary = false
+                    }
+                },
+                onBrandClick = { showAboutDialog = true },
+                onSettingsClick = {
+                    scope.launch {
+                        librarySheetState.hide()
+                        closeLibrary()
+                        settingsBufferTarget = null
+                        showSettings = true
+                    }
+                },
+                onDismissLibrary = {
+                    scope.launch {
+                        librarySheetState.hide()
+                        closeLibrary()
                     }
                 },
             )
