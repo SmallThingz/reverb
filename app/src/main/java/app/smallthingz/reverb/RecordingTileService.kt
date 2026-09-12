@@ -21,11 +21,11 @@ internal data class RecordingTileSnapshot(
 )
 
 internal enum class RecordingTileUiState {
-    RUNNING,
-    STOPPED,
+    RECORDING,
+    ACTIVE,
+    AVAILABLE,
     FULL,
     DISABLED,
-    BLOCKED,
 }
 
 internal fun recordingTileUiState(
@@ -39,9 +39,9 @@ internal fun recordingTileUiState(
     return when {
         !enabled -> RecordingTileUiState.DISABLED
         bufferSlot == ReverbService.BufferSlot.ONE_SHOT && snapshot.oneShotFull -> RecordingTileUiState.FULL
-        snapshot.listening && snapshot.activeBuffer == bufferSlot -> RecordingTileUiState.RUNNING
-        snapshot.listening && snapshot.activeBuffer != null -> RecordingTileUiState.BLOCKED
-        else -> RecordingTileUiState.STOPPED
+        snapshot.listening && snapshot.activeBuffer == bufferSlot -> RecordingTileUiState.RECORDING
+        snapshot.activeBuffer == bufferSlot -> RecordingTileUiState.ACTIVE
+        else -> RecordingTileUiState.AVAILABLE
     }
 }
 
@@ -99,17 +99,18 @@ abstract class RecordingTileService : TileService() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
 
         val snapshot = readRecordingTileSnapshot(this)
-        val action = when (recordingTileUiState(bufferSlot, snapshot)) {
-            RecordingTileUiState.RUNNING -> QuickTileActionActivity.ACTION_STOP
-            RecordingTileUiState.STOPPED -> QuickTileActionActivity.ACTION_START
+        when (recordingTileUiState(bufferSlot, snapshot)) {
             RecordingTileUiState.FULL,
             RecordingTileUiState.DISABLED,
-            RecordingTileUiState.BLOCKED,
             -> return
+            RecordingTileUiState.RECORDING -> return
+            RecordingTileUiState.ACTIVE,
+            RecordingTileUiState.AVAILABLE,
+            -> Unit
         }
         val launch = {
             val intent = Intent(this, QuickTileActionActivity::class.java)
-                .setAction(action)
+                .setAction(QuickTileActionActivity.ACTION_START)
                 .putExtra(QuickTileActionActivity.EXTRA_BUFFER_SLOT, bufferSlot.name)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -138,15 +139,12 @@ abstract class RecordingTileService : TileService() {
             getString(R.string.quick_tile_permission)
         } else {
             when (uiState) {
-                RecordingTileUiState.RUNNING -> getString(R.string.quick_tile_recording)
-                RecordingTileUiState.STOPPED -> getString(R.string.quick_tile_stopped)
+                RecordingTileUiState.RECORDING -> getString(R.string.quick_tile_recording)
+                RecordingTileUiState.ACTIVE,
+                RecordingTileUiState.AVAILABLE,
+                -> getString(R.string.quick_tile_stopped)
                 RecordingTileUiState.FULL -> getString(R.string.quick_tile_full)
                 RecordingTileUiState.DISABLED -> getString(R.string.quick_tile_off)
-                RecordingTileUiState.BLOCKED -> when (snapshot.activeBuffer) {
-                    ReverbService.BufferSlot.ONE_SHOT -> getString(R.string.quick_tile_one_shot_active)
-                    ReverbService.BufferSlot.LOOPING -> getString(R.string.quick_tile_looping_active)
-                    null -> getString(R.string.quick_tile_stopped)
-                }
             }
         }
         tile.label = getString(labelRes)
@@ -155,11 +153,12 @@ abstract class RecordingTileService : TileService() {
             Tile.STATE_UNAVAILABLE
         } else {
             when (uiState) {
-                RecordingTileUiState.RUNNING -> Tile.STATE_ACTIVE
-                RecordingTileUiState.STOPPED -> Tile.STATE_INACTIVE
+                RecordingTileUiState.RECORDING,
+                RecordingTileUiState.ACTIVE,
+                -> Tile.STATE_ACTIVE
+                RecordingTileUiState.AVAILABLE -> Tile.STATE_INACTIVE
                 RecordingTileUiState.FULL,
                 RecordingTileUiState.DISABLED,
-                RecordingTileUiState.BLOCKED,
                 -> Tile.STATE_UNAVAILABLE
             }
         }

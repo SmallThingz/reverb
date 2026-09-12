@@ -305,28 +305,25 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun quickTileUiState_distinguishesRecordingStoppedFullDisabledAndBlocked() {
-        val stopped = RecordingTileSnapshot(
+    fun quickTileUiState_tracksActiveDestinationAndOnlyDisablesUnavailableBuffers() {
+        val idleOneShot = RecordingTileSnapshot(
             listening = false,
-            activeBuffer = null,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
             oneShotEnabled = true,
             oneShotFull = false,
             loopingEnabled = true,
         )
-        assertEquals(RecordingTileUiState.STOPPED, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, stopped))
-        assertEquals(RecordingTileUiState.STOPPED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, stopped))
+        assertEquals(RecordingTileUiState.ACTIVE, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, idleOneShot))
+        assertEquals(RecordingTileUiState.AVAILABLE, recordingTileUiState(ReverbService.BufferSlot.LOOPING, idleOneShot))
 
-        val oneShotRunning = stopped.copy(
-            listening = true,
-            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
-        )
-        assertEquals(RecordingTileUiState.RUNNING, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, oneShotRunning))
-        assertEquals(RecordingTileUiState.BLOCKED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, oneShotRunning))
+        val oneShotRunning = idleOneShot.copy(listening = true)
+        assertEquals(RecordingTileUiState.RECORDING, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, oneShotRunning))
+        assertEquals(RecordingTileUiState.AVAILABLE, recordingTileUiState(ReverbService.BufferSlot.LOOPING, oneShotRunning))
 
-        val oneShotFull = stopped.copy(oneShotFull = true)
+        val oneShotFull = idleOneShot.copy(oneShotFull = true)
         assertEquals(RecordingTileUiState.FULL, recordingTileUiState(ReverbService.BufferSlot.ONE_SHOT, oneShotFull))
 
-        val loopingDisabled = stopped.copy(loopingEnabled = false)
+        val loopingDisabled = idleOneShot.copy(loopingEnabled = false)
         assertEquals(RecordingTileUiState.DISABLED, recordingTileUiState(ReverbService.BufferSlot.LOOPING, loopingDisabled))
     }
 

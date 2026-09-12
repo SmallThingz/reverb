@@ -70,16 +70,18 @@ class QuickTileActionActivity : ComponentActivity() {
                             oneShotFull = oneShotIsFull,
                             loopingEnabled = loopingIsEnabled,
                         )
-                        when (intent.action) {
-                            ACTION_START -> {
-                                if (recordingTileUiState(requestedBuffer, snapshot) == RecordingTileUiState.STOPPED) {
-                                    recorder.enableListening(requestedBuffer)
+                        if (intent.action == ACTION_START) {
+                            when (recordingTileUiState(requestedBuffer, snapshot)) {
+                                RecordingTileUiState.ACTIVE,
+                                RecordingTileUiState.AVAILABLE,
+                                -> {
+                                    if (listeningEnabled) recorder.selectCaptureBuffer(requestedBuffer)
+                                    else recorder.enableListening(requestedBuffer)
                                 }
-                            }
-                            ACTION_STOP -> {
-                                if (recordingTileUiState(requestedBuffer, snapshot) == RecordingTileUiState.RUNNING) {
-                                    recorder.disableListening()
-                                }
+                                RecordingTileUiState.RECORDING,
+                                RecordingTileUiState.FULL,
+                                RecordingTileUiState.DISABLED,
+                                -> Unit
                             }
                         }
                         RecordingQuickTiles.requestRefresh(this@QuickTileActionActivity)
@@ -91,7 +93,7 @@ class QuickTileActionActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (requestedBufferSlot() == null || (intent.action != ACTION_START && intent.action != ACTION_STOP)) {
+        if (requestedBufferSlot() == null || intent.action != ACTION_START) {
             finishAction()
             return
         }
@@ -128,7 +130,6 @@ class QuickTileActionActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_START = "app.smallthingz.reverb.quicktile.START"
-        const val ACTION_STOP = "app.smallthingz.reverb.quicktile.STOP"
         const val EXTRA_BUFFER_SLOT = "buffer_slot"
         private const val ACTION_TIMEOUT_MILLIS = 3_000L
     }
