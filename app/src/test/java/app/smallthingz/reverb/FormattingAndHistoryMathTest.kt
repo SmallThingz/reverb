@@ -1071,10 +1071,10 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun rangeTimeInput_displaysAtMostOneFractionDigit() {
-        assertEquals("0:00", formatRangeTimeInput(0.0))
+    fun rangeTimeInput_alwaysDisplaysOneFractionDigit() {
+        assertEquals("0:00.0", formatRangeTimeInput(0.0))
         assertEquals("0:00.1", formatRangeTimeInput(0.199))
-        assertEquals("1:01", formatRangeTimeInput(61.0))
+        assertEquals("1:01.0", formatRangeTimeInput(61.0))
         assertEquals("1:01.9", formatRangeTimeInput(61.999))
         assertEquals("1:01:01.1", formatRangeTimeInput(3661.199))
     }

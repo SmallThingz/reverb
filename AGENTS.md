@@ -31,3 +31,4 @@
 - Blob-to-range transitions may transform the containing UI, but must not modify `AudioBlobView` rendering semantics.
 - Range waveform construction is two-pass: a cheap coarse left-to-right materialization, then a finer fixed-budget left-to-right refinement; neither pass scales source reads with history duration.
 - Direct timeline gestures invalidate focused time drafts; focused time fields must relinquish focus and resync when playback/scrubbing moves their target, while explicit export commits a valid focused draft first.
+- Range timeline snapping is gesture-latched: once magnetism acquires, hold the snapped value for at least 1.25 s; a stationary held pointer may then resolve to its raw in-zone position, and must not re-snap until it exits and re-enters the magnetic zone.

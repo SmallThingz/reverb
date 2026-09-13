@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -99,6 +101,41 @@ internal data class RangeEditValues(
 internal data class RangeEditUpdate(
     val values: RangeEditValues,
     val snappedTo: RangeEditTarget?,
+)
+
+internal const val RANGE_SNAP_HOLD_MILLIS = 1_250L
+internal const val RANGE_SNAP_STATIONARY_MILLIS = 90L
+internal const val RANGE_SNAP_RELEASE_MULTIPLIER = 1.35f
+internal const val RANGE_SNAP_POINTER_JITTER_FRACTION = 0.08f
+
+internal fun rangeSnapReleaseThreshold(snapThresholdSeconds: Float): Float =
+    snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_RELEASE_MULTIPLIER
+
+internal fun rangeSnapReleaseAtMillis(acquiredAtMillis: Long, lastPointerMoveAtMillis: Long): Long =
+    maxOf(
+        acquiredAtMillis + RANGE_SNAP_HOLD_MILLIS,
+        lastPointerMoveAtMillis + RANGE_SNAP_STATIONARY_MILLIS,
+    )
+
+internal fun rangeSnapPointerInsideReleaseZone(
+    pointerSeconds: Float,
+    anchorSeconds: Float,
+    snapThresholdSeconds: Float,
+): Boolean = abs(pointerSeconds - anchorSeconds) <= rangeSnapReleaseThreshold(snapThresholdSeconds)
+
+internal fun rangeSnapPointerMoved(
+    previousSeconds: Float,
+    currentSeconds: Float,
+    snapThresholdSeconds: Float,
+): Boolean {
+    if (!previousSeconds.isFinite()) return true
+    val jitter = maxOf(0.0001f, snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_POINTER_JITTER_FRACTION)
+    return abs(currentSeconds - previousSeconds) > jitter
+}
+
+private data class RangeSnapLatch(
+    val snappedTo: RangeEditTarget,
+    val acquiredAtMillis: Long,
 )
 
 internal fun adjustRangeEditTarget(
@@ -222,10 +259,17 @@ internal fun rangeFineTuneDeltaSeconds(
     durationSeconds.coerceAtLeast(0f) *
     dtSeconds.coerceAtLeast(0f)
 
+internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
+    RangeEditTarget.START -> values.startSeconds
+    RangeEditTarget.CURSOR -> values.cursorSeconds
+    RangeEditTarget.END -> values.endSeconds
+}
+
 internal class RangeExportEditorState(
     initialDurationSeconds: Float,
 ) {
     private val previewController = TimelineAudioPreviewController()
+    private val snapHandler = Handler(Looper.getMainLooper())
 
     var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
         private set
@@ -267,6 +311,15 @@ internal class RangeExportEditorState(
 
     private var resumeAfterScrub = false
     private var lastAuditionAtMillis = 0L
+    private var snapInteractionTarget: RangeEditTarget? = null
+    private var snapLatch: RangeSnapLatch? = null
+    private var snapSuppressedTo: RangeEditTarget? = null
+    private var snapRawRequestedSeconds = 0f
+    private var snapThresholdSeconds = 0f
+    private var snapLastPointerSeconds = Float.NaN
+    private var snapLastPointerMoveAtMillis = 0L
+    private var snapGeneration = 0L
+    private var snapReleaseRunnable: Runnable? = null
 
     val selectionDurationSeconds: Float
         get() = (endSeconds - startSeconds).coerceAtLeast(0f)
@@ -356,25 +409,197 @@ internal class RangeExportEditorState(
         lastTarget = target
     }
 
+    fun beginSnapInteraction(target: RangeEditTarget) {
+        cancelSnapRelease()
+        snapGeneration++
+        snapInteractionTarget = target
+        snapLatch = null
+        snapSuppressedTo = null
+        snapRawRequestedSeconds = targetValue(target)
+        snapThresholdSeconds = 0f
+        snapLastPointerSeconds = snapRawRequestedSeconds
+        snapLastPointerMoveAtMillis = SystemClock.elapsedRealtime()
+        snappedTo = null
+    }
+
+    fun endSnapInteraction() {
+        cancelSnapRelease()
+        snapGeneration++
+        snapInteractionTarget = null
+        snapLatch = null
+        snapSuppressedTo = null
+        snapThresholdSeconds = 0f
+        snapLastPointerSeconds = Float.NaN
+        snappedTo = null
+    }
+
     fun setTarget(
         target: RangeEditTarget,
         requestedSeconds: Float,
         snapThresholdSeconds: Float,
     ): Boolean {
         lastTarget = target
-        val previousSnap = snappedTo
-        val update = adjustRangeEditTarget(
-            values = RangeEditValues(startSeconds, cursorSeconds, endSeconds),
+        return if (
+            snapInteractionTarget == target &&
+            snapThresholdSeconds > 0f
+        ) {
+            setTargetWithSnapLatch(target, requestedSeconds, snapThresholdSeconds)
+        } else {
+            val previousSnap = snappedTo
+            val update = adjustRangeEditTarget(
+                values = currentEditValues(),
+                target = target,
+                requestedSeconds = requestedSeconds,
+                durationSeconds = durationSeconds,
+                snapThresholdSeconds = snapThresholdSeconds,
+            )
+            applyEditUpdate(update)
+            update.snappedTo != null && update.snappedTo != previousSnap
+        }
+    }
+
+    private fun setTargetWithSnapLatch(
+        target: RangeEditTarget,
+        requestedSeconds: Float,
+        thresholdSeconds: Float,
+    ): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val threshold = thresholdSeconds.coerceAtLeast(0f)
+        val rawUpdate = adjustRangeEditTarget(
+            values = currentEditValues(),
             target = target,
             requestedSeconds = requestedSeconds,
             durationSeconds = durationSeconds,
-            snapThresholdSeconds = snapThresholdSeconds,
+            snapThresholdSeconds = 0f,
         )
+        val rawSeconds = editTargetValue(rawUpdate.values, target)
+        if (rangeSnapPointerMoved(snapLastPointerSeconds, rawSeconds, threshold)) {
+            snapLastPointerMoveAtMillis = now
+        }
+        snapLastPointerSeconds = rawSeconds
+        snapRawRequestedSeconds = rawSeconds
+        snapThresholdSeconds = threshold
+
+        val suppressed = snapSuppressedTo
+        if (suppressed != null) {
+            val anchor = targetValue(suppressed)
+            if (abs(rawSeconds - anchor) <= rangeSnapReleaseThreshold(threshold)) {
+                applyEditUpdate(rawUpdate.copy(snappedTo = null))
+                return false
+            }
+            snapSuppressedTo = null
+        }
+
+        val latch = snapLatch
+        if (latch != null) {
+            val anchor = targetValue(latch.snappedTo)
+            if (abs(rawSeconds - anchor) > rangeSnapReleaseThreshold(threshold)) {
+                cancelSnapRelease()
+                snapLatch = null
+            } else {
+                val releaseAt = rangeSnapReleaseAtMillis(
+                    latch.acquiredAtMillis,
+                    snapLastPointerMoveAtMillis,
+                )
+                if (now >= releaseAt) {
+                    releaseSnapToRaw(latch.snappedTo)
+                } else {
+                    val anchored = adjustRangeEditTarget(
+                        values = currentEditValues(),
+                        target = target,
+                        requestedSeconds = anchor,
+                        durationSeconds = durationSeconds,
+                        snapThresholdSeconds = 0f,
+                    )
+                    applyEditUpdate(anchored.copy(snappedTo = latch.snappedTo))
+                    scheduleSnapRelease()
+                }
+                return false
+            }
+        }
+
+        val candidate = adjustRangeEditTarget(
+            values = currentEditValues(),
+            target = target,
+            requestedSeconds = requestedSeconds,
+            durationSeconds = durationSeconds,
+            snapThresholdSeconds = threshold,
+        )
+        val snapped = candidate.snappedTo
+        applyEditUpdate(candidate)
+        if (snapped != null) {
+            snapLatch = RangeSnapLatch(snapped, now)
+            snapLastPointerMoveAtMillis = now
+            scheduleSnapRelease()
+            return true
+        }
+        return false
+    }
+
+    private fun scheduleSnapRelease() {
+        val latch = snapLatch ?: return
+        cancelSnapRelease()
+        val generation = snapGeneration
+        val releaseAt = rangeSnapReleaseAtMillis(
+            latch.acquiredAtMillis,
+            snapLastPointerMoveAtMillis,
+        )
+        val delayMillis = (releaseAt - SystemClock.elapsedRealtime()).coerceAtLeast(1L)
+        val runnable = Runnable {
+            snapReleaseRunnable = null
+            if (generation != snapGeneration || snapInteractionTarget == null) return@Runnable
+            val currentLatch = snapLatch ?: return@Runnable
+            val now = SystemClock.elapsedRealtime()
+            val nextReleaseAt = rangeSnapReleaseAtMillis(
+                currentLatch.acquiredAtMillis,
+                snapLastPointerMoveAtMillis,
+            )
+            if (now < nextReleaseAt) {
+                scheduleSnapRelease()
+                return@Runnable
+            }
+            val anchor = targetValue(currentLatch.snappedTo)
+            if (rangeSnapPointerInsideReleaseZone(
+                    snapRawRequestedSeconds,
+                    anchor,
+                    snapThresholdSeconds,
+                )
+            ) {
+                releaseSnapToRaw(currentLatch.snappedTo)
+            }
+        }
+        snapReleaseRunnable = runnable
+        snapHandler.postDelayed(runnable, delayMillis)
+    }
+
+    private fun releaseSnapToRaw(snappedTarget: RangeEditTarget) {
+        val target = snapInteractionTarget ?: return
+        cancelSnapRelease()
+        snapLatch = null
+        snapSuppressedTo = snappedTarget
+        val rawUpdate = adjustRangeEditTarget(
+            values = currentEditValues(),
+            target = target,
+            requestedSeconds = snapRawRequestedSeconds,
+            durationSeconds = durationSeconds,
+            snapThresholdSeconds = 0f,
+        )
+        applyEditUpdate(rawUpdate.copy(snappedTo = null))
+        if (target == RangeEditTarget.CURSOR && isScrubbing) auditionCursor(force = true)
+    }
+
+    private fun cancelSnapRelease() {
+        snapReleaseRunnable?.let(snapHandler::removeCallbacks)
+        snapReleaseRunnable = null
+    }
+
+    private fun currentEditValues() = RangeEditValues(startSeconds, cursorSeconds, endSeconds)
+
+    private fun applyEditUpdate(update: RangeEditUpdate) {
         startSeconds = update.values.startSeconds
         cursorSeconds = update.values.cursorSeconds
         endSeconds = update.values.endSeconds
         snappedTo = update.snappedTo
-        return update.snappedTo != null && update.snappedTo != previousSnap
     }
 
     fun commitTarget(target: RangeEditTarget, requestedSeconds: Float): Boolean {
@@ -410,6 +635,7 @@ internal class RangeExportEditorState(
 
     fun beginCursorScrub() {
         invalidateTextEditing()
+        beginSnapInteraction(RangeEditTarget.CURSOR)
         selectTarget(RangeEditTarget.CURSOR)
         resumeAfterScrub = isPlaying
         if (isPlaying) {
@@ -426,6 +652,7 @@ internal class RangeExportEditorState(
     }
 
     fun endCursorScrub() {
+        endSnapInteraction()
         isScrubbing = false
         previewController.stop()
         if (resumeAfterScrub) {
@@ -436,6 +663,7 @@ internal class RangeExportEditorState(
 
     fun beginFineAdjust() {
         invalidateTextEditing()
+        beginSnapInteraction(lastTarget)
         if (lastTarget == RangeEditTarget.CURSOR) {
             resumeAfterScrub = isPlaying
             if (isPlaying) {
@@ -456,6 +684,7 @@ internal class RangeExportEditorState(
     }
 
     fun endFineAdjust() {
+        endSnapInteraction()
         if (lastTarget == RangeEditTarget.CURSOR) {
             isScrubbing = false
             previewController.stop()
@@ -478,6 +707,8 @@ internal class RangeExportEditorState(
     }
 
     fun close() {
+        endSnapInteraction()
+        snapHandler.removeCallbacksAndMessages(null)
         previewController.close()
     }
 
@@ -513,11 +744,7 @@ internal class RangeExportEditorState(
         previewController.audition(readySnapshot, cursorSeconds.toDouble())
     }
 
-    private fun targetValue(target: RangeEditTarget): Float = when (target) {
-        RangeEditTarget.START -> startSeconds
-        RangeEditTarget.CURSOR -> cursorSeconds
-        RangeEditTarget.END -> endSeconds
-    }
+    private fun targetValue(target: RangeEditTarget): Float = editTargetValue(currentEditValues(), target)
 }
 
 @Composable
@@ -1263,14 +1490,20 @@ private fun RangeTimelineBar(
                             RangeEditTarget.END -> state.endSeconds
                         }
                         accumulatedDrag = 0f
-                        if (target == RangeEditTarget.CURSOR) state.beginCursorScrub()
-                        else state.beginBoundaryEdit(target)
+                        if (target == RangeEditTarget.CURSOR) {
+                            state.beginCursorScrub()
+                        } else {
+                            state.beginSnapInteraction(target)
+                            state.beginBoundaryEdit(target)
+                        }
                     },
                     onDragEnd = {
                         if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
+                        else state.endSnapInteraction()
                     },
                     onDragCancel = {
                         if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
+                        else state.endSnapInteraction()
                     },
                 ) { change, dragAmount ->
                     change.consume()

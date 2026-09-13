@@ -44,6 +44,17 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun snapLatchHoldsFor1250msThenAllowsStationaryReleaseInsideMagnetZone() {
+        assertEquals(1_250L, rangeSnapReleaseAtMillis(0L, 0L))
+        assertEquals(1_400L, rangeSnapReleaseAtMillis(0L, 1_310L))
+
+        assertTrue(rangeSnapPointerInsideReleaseZone(10.60f, 10f, 0.50f))
+        assertTrue(!rangeSnapPointerInsideReleaseZone(10.80f, 10f, 0.50f))
+        assertTrue(!rangeSnapPointerMoved(10f, 10.02f, 0.50f))
+        assertTrue(rangeSnapPointerMoved(10f, 10.05f, 0.50f))
+    }
+
+    @Test
     fun snappedTargetsCanMoveAwayWithSubThresholdFineSteps() {
         val cursorLeavesStart = adjustRangeEditTarget(
             values = RangeEditValues(startSeconds = 0f, cursorSeconds = 0f, endSeconds = 100f),

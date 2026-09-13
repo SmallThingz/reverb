@@ -41,7 +41,7 @@ fun formatShortTimer(seconds: Float): String {
 
 internal fun formatRangeTimeInput(seconds: Double): String {
     val safeSeconds = if (seconds.isFinite()) seconds.coerceAtLeast(0.0) else 0.0
-    // Display at most tenths, and floor rather than round so the rendered end time can
+    // Display exactly tenths, and floor rather than round so the rendered end time can
     // never jump beyond the actual retained audio boundary.
     val totalTenths = floor(safeSeconds * 10.0).toLong()
     val totalSeconds = totalTenths / 10L
@@ -54,7 +54,7 @@ internal fun formatRangeTimeInput(seconds: Double): String {
     } else {
         "${minutes}:${secs.toString().padStart(2, '0')}"
     }
-    return if (tenth == 0) base else "$base.$tenth"
+    return "$base.$tenth"
 }
 
 internal fun parseRangeTimeInput(value: String): Double? {
