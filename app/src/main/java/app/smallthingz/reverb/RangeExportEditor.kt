@@ -51,6 +51,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -73,9 +74,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.cosh
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sign
+import kotlin.math.tanh
 
 internal enum class RangeEditTarget { START, CURSOR, END }
 
@@ -109,10 +112,12 @@ internal fun adjustRangeEditTarget(
             var requested = requestedSeconds.coerceIn(0f, duration)
             val startDistance = abs(requested - start)
             val endDistance = abs(requested - end)
-            if (startDistance <= threshold && startDistance <= endDistance) {
+            val movingTowardStart = startDistance < abs(cursor - start)
+            val movingTowardEnd = endDistance < abs(cursor - end)
+            if (movingTowardStart && startDistance <= threshold && startDistance <= endDistance) {
                 requested = start
                 snappedTo = RangeEditTarget.START
-            } else if (endDistance <= threshold) {
+            } else if (movingTowardEnd && endDistance <= threshold) {
                 requested = end
                 snappedTo = RangeEditTarget.END
             }
@@ -120,7 +125,9 @@ internal fun adjustRangeEditTarget(
         }
         RangeEditTarget.START -> {
             var requested = requestedSeconds.coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
-            if (cursor <= end - minRangeSeconds && abs(requested - cursor) <= threshold) {
+            val cursorDistance = abs(requested - cursor)
+            val movingTowardCursor = cursorDistance < abs(start - cursor)
+            if (movingTowardCursor && cursor <= end - minRangeSeconds && cursorDistance <= threshold) {
                 requested = cursor
                 snappedTo = RangeEditTarget.CURSOR
             }
@@ -128,7 +135,9 @@ internal fun adjustRangeEditTarget(
         }
         RangeEditTarget.END -> {
             var requested = requestedSeconds.coerceIn((start + minRangeSeconds).coerceAtMost(duration), duration)
-            if (cursor >= start + minRangeSeconds && abs(requested - cursor) <= threshold) {
+            val cursorDistance = abs(requested - cursor)
+            val movingTowardCursor = cursorDistance < abs(end - cursor)
+            if (movingTowardCursor && cursor >= start + minRangeSeconds && cursorDistance <= threshold) {
                 requested = cursor
                 snappedTo = RangeEditTarget.CURSOR
             }
@@ -138,14 +147,71 @@ internal fun adjustRangeEditTarget(
     return RangeEditUpdate(RangeEditValues(start, cursor, end), snappedTo)
 }
 
-internal fun rangeFineTuneVelocity(normalizedPull: Float): Float {
-    val pull = normalizedPull.coerceIn(-1f, 1f)
+internal data class RangeFineTunePull(
+    val horizontal: Float,
+    val rawVertical: Float,
+)
+
+internal fun rangeFineTuneDragPull(
+    startHorizontal: Float,
+    startRawVertical: Float,
+    dragDeltaX: Float,
+    dragDeltaY: Float,
+    horizontalTravel: Float,
+    verticalTravel: Float,
+): RangeFineTunePull = RangeFineTunePull(
+    horizontal = (
+        startHorizontal + dragDeltaX / horizontalTravel.coerceAtLeast(1f)
+    ).coerceIn(-1f, 1f),
+    rawVertical = startRawVertical + dragDeltaY / verticalTravel.coerceAtLeast(1f),
+)
+
+internal fun rangeFineTuneConstrainedY(
+    rawVerticalPull: Float,
+    horizontalPull: Float,
+): Float {
+    val x = abs(horizontalPull.coerceIn(-1f, 1f))
+    val edgeStiffness = cosh(1.65f * x)
+    val localRadius = 0.72f / edgeStiffness.pow(0.28f)
+    val inputScale = localRadius * 1.18f * edgeStiffness.pow(0.72f)
+    return localRadius * tanh(rawVerticalPull / inputScale)
+}
+
+internal fun rangeFineTuneSpeedScale(verticalPull: Float): Float {
+    val y = verticalPull.coerceIn(-1f, 1f)
+    return if (y <= 0f) {
+        1f + 5f * (-y).pow(1.45f)
+    } else {
+        0.018f + 0.982f * (1f - y).pow(3.1f)
+    }
+}
+
+internal fun rangeFineTuneTimelineRate(
+    horizontalPull: Float,
+    verticalPull: Float = 0f,
+): Float {
+    val pull = horizontalPull.coerceIn(-1f, 1f)
     val magnitude = abs(pull)
     if (magnitude <= 0.002f) return 0f
     val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    val speed = 0.22f + 0.85f * normalized + 3.8f * normalized.pow(3) + 58f * normalized.pow(7)
-    return sign(pull) * speed
+    // Fraction of the whole timeline traversed per second. This deliberately
+    // contains no absolute seconds, so gesture feel scales with clip length.
+    val horizontalRate =
+        0.00002f +
+            0.00040f * normalized +
+            0.0040f * normalized.pow(3) +
+            0.055f * normalized.pow(7)
+    return sign(pull) * horizontalRate * rangeFineTuneSpeedScale(verticalPull)
 }
+
+internal fun rangeFineTuneDeltaSeconds(
+    horizontalPull: Float,
+    verticalPull: Float,
+    durationSeconds: Float,
+    dtSeconds: Float,
+): Float = rangeFineTuneTimelineRate(horizontalPull, verticalPull) *
+    durationSeconds.coerceAtLeast(0f) *
+    dtSeconds.coerceAtLeast(0f)
 
 internal class RangeExportEditorState(
     val snapshot: ReverbService.TimelineSnapshot,
@@ -408,11 +474,11 @@ internal fun RangeExportHomeContent(
                         .height(if (compact) 232.dp else 250.dp),
                 )
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
-                SpringFineAdjust(
+                FineTuneField(
                     state = state,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp),
+                        .height(if (compact) 120.dp else 132.dp),
                 )
                 if (state.selectionDurationSeconds > maxExportDurationSeconds) {
                     Text(
@@ -914,14 +980,49 @@ private fun TimelineTimeInput(
 }
 
 @Composable
-private fun SpringFineAdjust(
+private fun FineTuneField(
     state: RangeExportEditorState,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     var dragging by remember { mutableStateOf(false) }
-    var pull by remember { mutableFloatStateOf(0f) }
+    var horizontalPull by remember { mutableFloatStateOf(0f) }
+    var rawVerticalPull by remember { mutableFloatStateOf(0f) }
+    var dragStartHorizontal by remember { mutableFloatStateOf(0f) }
+    var dragStartRawVertical by remember { mutableFloatStateOf(0f) }
+    var dragDeltaX by remember { mutableFloatStateOf(0f) }
+    var dragDeltaY by remember { mutableFloatStateOf(0f) }
     var lastFrameNanos by remember { mutableLongStateOf(0L) }
+
+    val constrainedY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+
+    LaunchedEffect(dragging) {
+        if (dragging) return@LaunchedEffect
+        val startX = horizontalPull
+        val startY = rawVerticalPull
+        if (abs(startX) < 0.0001f && abs(startY) < 0.0001f) {
+            horizontalPull = 0f
+            rawVerticalPull = 0f
+            return@LaunchedEffect
+        }
+        val startNanos = withFrameNanos { it }
+        val durationNanos = 210_000_000L
+        val strength = 3.4f
+        val denominator = cosh(strength) - 1f
+        while (!dragging) {
+            val frameNanos = withFrameNanos { it }
+            val t = ((frameNanos - startNanos).toFloat() / durationNanos)
+                .coerceIn(0f, 1f)
+            val remaining = (cosh(strength * (1f - t)) - 1f) / denominator
+            horizontalPull = startX * remaining
+            rawVerticalPull = startY * remaining
+            if (t >= 1f) {
+                horizontalPull = 0f
+                rawVerticalPull = 0f
+                break
+            }
+        }
+    }
 
     LaunchedEffect(dragging) {
         if (!dragging) return@LaunchedEffect
@@ -931,10 +1032,17 @@ private fun SpringFineAdjust(
                 val previous = lastFrameNanos
                 lastFrameNanos = frameNanos
                 if (previous == 0L) return@withFrameNanos
-                val dtSeconds = ((frameNanos - previous).coerceAtMost(50_000_000L)) / 1_000_000_000f
-                val velocity = rangeFineTuneVelocity(pull)
-                if (velocity != 0f) {
-                    state.fineAdjust(velocity * dtSeconds, snapThresholdSeconds = 0.04f)
+                val dtSeconds =
+                    ((frameNanos - previous).coerceAtMost(50_000_000L)) / 1_000_000_000f
+                val liveY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+                val deltaSeconds = rangeFineTuneDeltaSeconds(
+                    horizontalPull = horizontalPull,
+                    verticalPull = liveY,
+                    durationSeconds = state.durationSeconds,
+                    dtSeconds = dtSeconds,
+                )
+                if (deltaSeconds != 0f) {
+                    state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
                 }
             }
         }
@@ -943,63 +1051,146 @@ private fun SpringFineAdjust(
     Box(
         modifier = modifier.pointerInput(state.lastTarget) {
             detectDragGestures(
-                onDragStart = { offset ->
+                onDragStart = {
                     dragging = true
-                    pull = ((offset.x - size.width * 0.5f) / (size.width * 0.5f)).coerceIn(-1f, 1f)
+                    dragStartHorizontal = horizontalPull
+                    dragStartRawVertical = rawVerticalPull
+                    dragDeltaX = 0f
+                    dragDeltaY = 0f
                     state.beginFineAdjust()
                 },
                 onDragEnd = {
                     dragging = false
-                    pull = 0f
                     state.endFineAdjust()
                 },
                 onDragCancel = {
                     dragging = false
-                    pull = 0f
                     state.endFineAdjust()
                 },
-            ) { change, _ ->
+            ) { change, dragAmount ->
                 change.consume()
-                pull = ((change.position.x - size.width * 0.5f) / (size.width * 0.5f))
-                    .coerceIn(-1f, 1f)
+                dragDeltaX += dragAmount.x
+                dragDeltaY += dragAmount.y
+                val edgePadding = 10.dp.toPx()
+                val puckRadius = 16.dp.toPx()
+                val visualHorizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
+                    .coerceAtLeast(1f)
+                val visualVerticalTravel = (size.height * 0.5f - edgePadding - puckRadius)
+                    .coerceAtLeast(1f)
+                val horizontalInputTravel = visualHorizontalTravel * 0.62f
+                val verticalInputTravel = visualVerticalTravel * 2.35f
+                val pull = rangeFineTuneDragPull(
+                    startHorizontal = dragStartHorizontal,
+                    startRawVertical = dragStartRawVertical,
+                    dragDeltaX = dragDeltaX,
+                    dragDeltaY = dragDeltaY,
+                    horizontalTravel = horizontalInputTravel,
+                    verticalTravel = verticalInputTravel,
+                )
+                horizontalPull = pull.horizontal
+                rawVerticalPull = pull.rawVertical
             }
         },
         contentAlignment = Alignment.Center,
     ) {
-        val power = abs(pull).pow(0.72f)
         Canvas(Modifier.fillMaxSize()) {
             val center = Offset(size.width * 0.5f, size.height * 0.5f)
-            val edgePadding = 12.dp.toPx()
-            val puckX = center.x + pull * (size.width * 0.5f - edgePadding)
-            val puck = Offset(puckX, center.y)
+            val edgePadding = 10.dp.toPx()
+            val puckRadius = 16.dp.toPx()
+            val horizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
+                .coerceAtLeast(1f)
+            val verticalTravel = (size.height * 0.5f - edgePadding - puckRadius)
+                .coerceAtLeast(1f)
+            val puck = Offset(
+                x = center.x + horizontalPull * horizontalTravel,
+                y = center.y + constrainedY * verticalTravel,
+            )
+            val leftTipX = edgePadding
+            val rightTipX = size.width - edgePadding
+            val leftSpan = (puck.x - puckRadius - leftTipX).coerceAtLeast(1f)
+            val rightSpan = (rightTipX - puck.x - puckRadius).coerceAtLeast(1f)
+            val topY = puck.y - puckRadius
+            val bottomY = puck.y + puckRadius
 
-            if (dragging && abs(pull) > 0.001f) {
-                drawLine(
-                    color = colors.primary.copy(alpha = 0.22f + 0.60f * power),
-                    start = center,
-                    end = puck,
-                    strokeWidth = (1f + 2.4f * power).dp.toPx(),
-                    cap = StrokeCap.Round,
+            val field = Path().apply {
+                moveTo(leftTipX, center.y)
+                cubicTo(
+                    leftTipX + leftSpan * 0.30f,
+                    center.y,
+                    (puck.x - puckRadius - leftSpan * 0.28f).coerceAtLeast(leftTipX),
+                    topY,
+                    puck.x,
+                    topY,
                 )
+                cubicTo(
+                    (puck.x + puckRadius + rightSpan * 0.28f).coerceAtMost(rightTipX),
+                    topY,
+                    rightTipX - rightSpan * 0.30f,
+                    center.y,
+                    rightTipX,
+                    center.y,
+                )
+                cubicTo(
+                    rightTipX - rightSpan * 0.30f,
+                    center.y,
+                    (puck.x + puckRadius + rightSpan * 0.28f).coerceAtMost(rightTipX),
+                    bottomY,
+                    puck.x,
+                    bottomY,
+                )
+                cubicTo(
+                    (puck.x - puckRadius - leftSpan * 0.28f).coerceAtLeast(leftTipX),
+                    bottomY,
+                    leftTipX + leftSpan * 0.30f,
+                    center.y,
+                    leftTipX,
+                    center.y,
+                )
+                close()
+            }
+
+            val horizontalPower = abs(horizontalPull).pow(0.72f)
+            val yMagnitude = (abs(constrainedY) / 0.72f).coerceIn(0f, 1f)
+            val fieldColor = when {
+                constrainedY < 0f -> lerp(colors.primary, colors.tertiary, yMagnitude)
+                constrainedY > 0f -> lerp(colors.primary, colors.secondary, yMagnitude)
+                else -> colors.primary
+            }
+            val fieldAlpha = 0.12f + 0.13f * horizontalPower + 0.06f * yMagnitude
+            drawPath(
+                path = field,
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        fieldColor.copy(alpha = 0.018f),
+                        fieldColor.copy(alpha = fieldAlpha),
+                        fieldColor.copy(alpha = 0.018f),
+                    ),
+                    startX = leftTipX,
+                    endX = rightTipX,
+                ),
+            )
+            drawPath(
+                path = field,
+                color = fieldColor.copy(alpha = 0.035f + 0.045f * yMagnitude),
+            )
+
+            drawCircle(
+                color = colors.onSurfaceVariant.copy(alpha = if (dragging) 0.20f else 0.13f),
+                radius = 1.6.dp.toPx(),
+                center = center,
+            )
+            if (dragging) {
                 drawCircle(
-                    color = colors.primary.copy(alpha = 0.08f + 0.13f * power),
-                    radius = (12f + 9f * power).dp.toPx(),
+                    color = fieldColor.copy(alpha = 0.055f + 0.055f * horizontalPower),
+                    radius = puckRadius * 1.42f,
                     center = puck,
                 )
             }
+            // The puck itself always stays the Material foreground color. Only
+            // the surrounding field communicates fast/fine mode through color.
             drawCircle(
-                color = colors.onSurfaceVariant.copy(alpha = if (dragging) 0.45f else 0.28f),
-                radius = 3.dp.toPx(),
-                center = center,
-            )
-            drawCircle(
-                color = colors.primary,
-                radius = (if (dragging) 8f + 2f * power else 7f).dp.toPx(),
-                center = puck,
-            )
-            drawCircle(
-                color = colors.onPrimary.copy(alpha = 0.82f),
-                radius = 2.dp.toPx(),
+                color = colors.onSurface,
+                radius = puckRadius,
                 center = puck,
             )
         }
