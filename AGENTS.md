@@ -12,6 +12,8 @@
 - The Library action is always visible and must open even when the library is empty.
 - Both buffer readouts use the configured retention mode for their primary metric.
 
+- Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
+
 # Reverb durability invariants
 
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.

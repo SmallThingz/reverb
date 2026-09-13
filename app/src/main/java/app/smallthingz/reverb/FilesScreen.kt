@@ -100,6 +100,7 @@ fun FilesScreen(
     onRecordingCountChanged: (Int) -> Unit = {},
     onVisibleRecordingsChanged: (List<RecordingEntity>) -> Unit = {},
     onParentRefreshRequested: () -> Unit = {},
+    showNormalTopBar: Boolean = true,
     onBrandClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     onDismissLibrary: () -> Unit = {},
@@ -393,7 +394,7 @@ fun FilesScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(58.dp)
+                            .height(AppTopBarContentHeight)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -433,13 +434,14 @@ fun FilesScreen(
                         }
                     }
                 }
-            } else {
+            } else if (showNormalTopBar) {
                 AppTopBar(
                     onBrandClick = onBrandClick,
                     onSettingsClick = onSettingsClick,
                     applyStatusBarPadding = false,
-                    barHeight = 58.dp,
                 )
+            } else {
+                Spacer(Modifier.height(AppTopBarContentHeight))
             }
         },
     ) { innerPadding ->

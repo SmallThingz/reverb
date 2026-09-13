@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -799,6 +800,51 @@ internal fun isCaptureBlockedByOtherBuffer(
     activeBuffer: ReverbService.BufferSlot?,
 ): Boolean = isListening && activeBuffer != null && activeBuffer != bufferSlot
 
+internal fun oppositeBufferSlot(bufferSlot: ReverbService.BufferSlot): ReverbService.BufferSlot =
+    when (bufferSlot) {
+        ReverbService.BufferSlot.ONE_SHOT -> ReverbService.BufferSlot.LOOPING
+        ReverbService.BufferSlot.LOOPING -> ReverbService.BufferSlot.ONE_SHOT
+    }
+
+internal fun bufferSwipeProgress(
+    source: ReverbService.BufferSlot,
+    horizontalDragPx: Float,
+    viewportWidthPx: Float,
+): Float {
+    if (viewportWidthPx <= 0f) return 0f
+    val forwardDistance = when (source) {
+        ReverbService.BufferSlot.ONE_SHOT -> -horizontalDragPx
+        ReverbService.BufferSlot.LOOPING -> horizontalDragPx
+    }
+    return (forwardDistance / viewportWidthPx).coerceIn(0f, 1f)
+}
+
+private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
+
+internal fun shouldCommitBufferSwipe(progress: Float): Boolean =
+    progress.coerceIn(0f, 1f) >= BUFFER_SWIPE_COMMIT_PROGRESS
+
+internal fun bufferTransitionDisplayedSlot(
+    source: ReverbService.BufferSlot,
+    target: ReverbService.BufferSlot,
+    progress: Float,
+): ReverbService.BufferSlot = if (progress.coerceIn(0f, 1f) >= 0.5f) target else source
+
+internal fun bufferTransitionFlipDegrees(
+    source: ReverbService.BufferSlot,
+    target: ReverbService.BufferSlot,
+    progress: Float,
+): Float {
+    if (source == target) return 0f
+    val p = progress.coerceIn(0f, 1f)
+    val direction = if (source == ReverbService.BufferSlot.ONE_SHOT) -1f else 1f
+    return if (p <= 0.5f) {
+        direction * p * 180f
+    } else {
+        direction * (p - 1f) * 180f
+    }
+}
+
 @Composable
 private fun MainCaptureContent(
     selectedBuffer: ReverbService.BufferSlot,
@@ -823,34 +869,69 @@ private fun MainCaptureContent(
     onOpenLibrary: () -> Unit,
 ) {
     var displayedBuffer by remember { mutableStateOf(selectedBuffer) }
-    val flipDegrees = remember { androidx.compose.animation.core.Animatable(0f) }
-    val density = LocalDensity.current
-    val swipeThresholdPx = with(density) { 56.dp.toPx() }
+    var transitionTarget by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
+    var pendingNavigationCommit by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
+    var bufferDragging by remember { mutableStateOf(false) }
+    var dragProgress by remember { mutableFloatStateOf(0f) }
+    var transitionProgressTarget by remember { mutableFloatStateOf(0f) }
+
+    val transitionProgress by animateFloatAsState(
+        targetValue = if (bufferDragging) dragProgress else transitionProgressTarget,
+        animationSpec = if (bufferDragging) snap() else tween(durationMillis = 180),
+        label = "buffer-transition-progress",
+        finishedListener = { settledProgress ->
+            val target = transitionTarget ?: return@animateFloatAsState
+            if (bufferDragging) return@animateFloatAsState
+            when {
+                settledProgress >= 0.999f -> {
+                    val shouldCommit = pendingNavigationCommit == target
+                    displayedBuffer = target
+                    pendingNavigationCommit = null
+                    transitionTarget = null
+                    transitionProgressTarget = 0f
+                    dragProgress = 0f
+                    if (shouldCommit) onSelectBuffer(target)
+                }
+                settledProgress <= 0.001f && transitionProgressTarget <= 0f -> {
+                    pendingNavigationCommit = null
+                    transitionTarget = null
+                    dragProgress = 0f
+                }
+            }
+        },
+    )
 
     LaunchedEffect(selectedBuffer) {
-        if (displayedBuffer == selectedBuffer) {
-            if (flipDegrees.value != 0f) {
-                flipDegrees.animateTo(0f, tween(durationMillis = 120))
-            }
-            return@LaunchedEffect
-        }
-        flipDegrees.snapTo(0f)
-        flipDegrees.animateTo(90f, tween(durationMillis = 140))
-        displayedBuffer = selectedBuffer
-        flipDegrees.snapTo(-90f)
-        flipDegrees.animateTo(0f, tween(durationMillis = 180))
+        if (selectedBuffer == displayedBuffer) return@LaunchedEffect
+        bufferDragging = false
+        dragProgress = 0f
+        pendingNavigationCommit = null
+        transitionTarget = selectedBuffer
+        transitionProgressTarget = 1f
     }
 
-    val displayedMetrics = when (displayedBuffer) {
+    val targetBuffer = transitionTarget
+    val renderedBuffer = if (targetBuffer != null) {
+        bufferTransitionDisplayedSlot(displayedBuffer, targetBuffer, transitionProgress)
+    } else {
+        displayedBuffer
+    }
+    val flipDegrees = if (targetBuffer != null) {
+        bufferTransitionFlipDegrees(displayedBuffer, targetBuffer, transitionProgress)
+    } else {
+        0f
+    }
+
+    val displayedMetrics = when (renderedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
         ReverbService.BufferSlot.LOOPING -> loopingMetrics
     }
-    val displayedEnabled = when (displayedBuffer) {
+    val displayedEnabled = when (renderedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotEnabled
         ReverbService.BufferSlot.LOOPING -> loopingEnabled
     }
     val displayedUiState = captureBufferUiState(
-        bufferSlot = displayedBuffer,
+        bufferSlot = renderedBuffer,
         enabled = displayedEnabled,
         oneShotFull = oneShotFull,
         isListening = isListening,
@@ -859,8 +940,18 @@ private fun MainCaptureContent(
     val displayedRecording = displayedUiState == CaptureBufferUiState.RECORDING
     val serviceReady = service != null
     val hasHistory = displayedMetrics.seconds > 0f
-    val navigateToBuffer: (ReverbService.BufferSlot) -> Unit = { target ->
-        if (!isSaving && target != selectedBuffer) onSelectBuffer(target)
+
+    val requestBufferNavigation: (ReverbService.BufferSlot) -> Unit = { target ->
+        if (
+            !isSaving &&
+            !bufferDragging &&
+            transitionTarget == null &&
+            target != displayedBuffer
+        ) {
+            transitionTarget = target
+            pendingNavigationCommit = target
+            transitionProgressTarget = 1f
+        }
     }
 
     Column(
@@ -873,30 +964,61 @@ private fun MainCaptureContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .pointerInput(selectedBuffer, isSaving, swipeThresholdPx) {
+                .pointerInput(displayedBuffer, isSaving) {
                     var horizontalDrag = 0f
                     detectHorizontalDragGestures(
-                        onDragStart = { horizontalDrag = 0f },
-                        onHorizontalDrag = { _, amount -> horizontalDrag += amount },
+                        onDragStart = {
+                            horizontalDrag = 0f
+                            if (!isSaving && transitionTarget == null) {
+                                bufferDragging = true
+                                dragProgress = 0f
+                                transitionProgressTarget = 0f
+                                pendingNavigationCommit = null
+                                transitionTarget = oppositeBufferSlot(displayedBuffer)
+                            }
+                        },
+                        onHorizontalDrag = { change, amount ->
+                            if (bufferDragging) {
+                                horizontalDrag += amount
+                                dragProgress = bufferSwipeProgress(
+                                    source = displayedBuffer,
+                                    horizontalDragPx = horizontalDrag,
+                                    viewportWidthPx = size.width.toFloat(),
+                                )
+                                change.consume()
+                            }
+                        },
                         onDragEnd = {
-                            if (!isSaving) {
-                                when {
-                                    horizontalDrag <= -swipeThresholdPx &&
-                                        selectedBuffer == ReverbService.BufferSlot.ONE_SHOT ->
-                                        navigateToBuffer(ReverbService.BufferSlot.LOOPING)
-                                    horizontalDrag >= swipeThresholdPx &&
-                                        selectedBuffer == ReverbService.BufferSlot.LOOPING ->
-                                        navigateToBuffer(ReverbService.BufferSlot.ONE_SHOT)
+                            if (bufferDragging) {
+                                val target = transitionTarget
+                                val shouldCommit = target != null && shouldCommitBufferSwipe(dragProgress)
+                                bufferDragging = false
+                                if (shouldCommit) {
+                                    pendingNavigationCommit = target
+                                    transitionProgressTarget = 1f
+                                } else if (dragProgress <= 0.001f) {
+                                    pendingNavigationCommit = null
+                                    transitionTarget = null
+                                    transitionProgressTarget = 0f
+                                } else {
+                                    pendingNavigationCommit = null
+                                    transitionProgressTarget = 0f
                                 }
                             }
-                            horizontalDrag = 0f
                         },
-                        onDragCancel = { horizontalDrag = 0f },
+                        onDragCancel = {
+                            if (bufferDragging) {
+                                bufferDragging = false
+                                pendingNavigationCommit = null
+                                if (dragProgress <= 0.001f) transitionTarget = null
+                                transitionProgressTarget = 0f
+                            }
+                        },
                     )
                 },
         ) {
             BufferBlobPage(
-                bufferSlot = displayedBuffer,
+                bufferSlot = renderedBuffer,
                 activeBuffer = activeBuffer,
                 metrics = displayedMetrics,
                 bufferEnabled = displayedEnabled,
@@ -904,19 +1026,19 @@ private fun MainCaptureContent(
                 isListening = isListening,
                 isSaving = isSaving,
                 service = service,
-                blobController = when (displayedBuffer) {
+                blobController = when (renderedBuffer) {
                     ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController
                     ReverbService.BufferSlot.LOOPING -> loopingBlobController
                 },
-                flipDegrees = flipDegrees.value,
-                onListenToggle = { onListenToggle(displayedBuffer) },
-                onOpenBufferSettings = { onOpenBufferSettings(displayedBuffer) },
+                flipDegrees = flipDegrees,
+                onListenToggle = { onListenToggle(renderedBuffer) },
+                onOpenBufferSettings = { onOpenBufferSettings(renderedBuffer) },
                 visualizerVisible = visualizerVisible,
             )
         }
 
         CaptureControlCluster(
-            selectedBuffer = displayedBuffer,
+            selectedBuffer = renderedBuffer,
             activeBuffer = activeBuffer,
             isListening = isListening,
             oneShotEnabled = oneShotEnabled,
@@ -926,11 +1048,11 @@ private fun MainCaptureContent(
             isSaving = isSaving,
             hasHistory = hasHistory,
             selectedRecording = displayedRecording,
-            flipDegrees = flipDegrees.value,
-            onSelectBuffer = navigateToBuffer,
-            onExportFull = { onExportFull(displayedBuffer) },
-            onExportCustom = { onExportCustom(displayedBuffer) },
-            onClearBuffer = { onClearBuffer(displayedBuffer) },
+            flipDegrees = flipDegrees,
+            onSelectBuffer = requestBufferNavigation,
+            onExportFull = { onExportFull(renderedBuffer) },
+            onExportCustom = { onExportCustom(renderedBuffer) },
+            onClearBuffer = { onClearBuffer(renderedBuffer) },
             onOpenLibrary = onOpenLibrary,
         )
         Spacer(Modifier.height(18.dp))

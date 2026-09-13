@@ -13,6 +13,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,7 +68,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
@@ -80,6 +83,18 @@ private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission
 private const val STATE_STORAGE_PERMISSION_REQUESTED = "storage_permission_requested"
 private const val STATE_RECOVERY_PERMISSION_REQUESTED = "recovery_permission_requested"
 private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+private const val PANEL_COMMIT_PROGRESS = 0.12f
+private const val PANEL_SETTLE_DURATION_MS = 220
+
+private enum class MainPanelDragTarget { SETTINGS, LIBRARY }
+
+internal fun panelRevealProgress(dragDistancePx: Float, viewportHeightPx: Float): Float {
+    if (viewportHeightPx <= 0f) return 0f
+    return (dragDistancePx / viewportHeightPx).coerceIn(0f, 1f)
+}
+
+internal fun shouldCommitPanelReveal(progress: Float): Boolean =
+    progress.coerceIn(0f, 1f) >= PANEL_COMMIT_PROGRESS
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
@@ -682,14 +697,28 @@ private fun MainScreen(
     var settingsBufferTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
+    var librarySelectionActive by remember { mutableStateOf(false) }
+    var panelDragTarget by remember { mutableStateOf<MainPanelDragTarget?>(null) }
+    var settingsDragProgress by remember { mutableFloatStateOf(0f) }
+    var libraryDragProgress by remember { mutableFloatStateOf(0f) }
+    val settingsDragging = panelDragTarget == MainPanelDragTarget.SETTINGS
+    val libraryDragging = panelDragTarget == MainPanelDragTarget.LIBRARY
+    val settingsPanelProgress by animateFloatAsState(
+        targetValue = if (settingsDragging) settingsDragProgress else if (showSettings) 1f else 0f,
+        animationSpec = if (settingsDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
+        label = "settings-panel-progress",
+    )
+    val libraryPanelProgress by animateFloatAsState(
+        targetValue = if (libraryDragging) libraryDragProgress else if (showLibrary) 1f else 0f,
+        animationSpec = if (libraryDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
+        label = "library-panel-progress",
+    )
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
     val context = LocalContext.current.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
     val noiseBrush = rememberAppNoiseBrush()
-    val openPanelDistancePx = with(density) { 52.dp.toPx() }
 
     fun refreshLibrarySnapshot() {
         val generation = ++libraryRefreshGeneration[0]
@@ -733,13 +762,14 @@ private fun MainScreen(
     }
 
     val libraryTopPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val libraryContentTopPadding = libraryTopPadding + AppTopBarContentHeight
 
     Box(Modifier.fillMaxSize()) {
         SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
-                .zIndex(if (showSettings) 1f else -1f)
-                .graphicsLayer { alpha = if (showSettings) 1f else 0.01f }
+                .zIndex(0f)
+                .graphicsLayer { alpha = if (settingsPanelProgress > 0f || showSettings) 1f else 0.01f }
                 .semantics { if (!showSettings) hideFromAccessibility() },
             active = showSettings,
             onBack = {
@@ -755,43 +785,58 @@ private fun MainScreen(
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .zIndex(0f)
-                .graphicsLayer { alpha = if (showSettings) 0f else 1f }
+                .zIndex(1f)
+                .graphicsLayer { translationY = settingsPanelProgress * size.height }
+                .background(MaterialTheme.colorScheme.surface)
+                .appNoise(noiseBrush)
                 .semantics {
                     if (showSettings || showLibrary || showAboutDialog) hideFromAccessibility()
                 }
                 .pointerInput(showSettings, showLibrary, showAboutDialog) {
                     if (showSettings || showLibrary || showAboutDialog) return@pointerInput
-                    var dragStartY = 0f
-                    var downwardDrag = 0f
-                    var upwardDrag = 0f
-                    var triggered = false
                     detectVerticalDragGestures(
                         onDragStart = { offset ->
-                            dragStartY = offset.y
-                            downwardDrag = 0f
-                            upwardDrag = 0f
-                            triggered = false
-                        },
-                        onVerticalDrag = { _, amount ->
-                            if (!triggered) {
-                                val topRegionEnd = size.height * 0.48f
-                                val bottomRegionStart = size.height * 0.52f
-                                if (dragStartY <= topRegionEnd && amount > 0f) {
-                                    downwardDrag += amount
-                                    if (downwardDrag >= openPanelDistancePx) {
-                                        triggered = true
-                                        settingsBufferTarget = null
-                                        showSettings = true
-                                    }
-                                } else if (dragStartY >= bottomRegionStart && amount < 0f) {
-                                    upwardDrag -= amount
-                                    if (upwardDrag >= openPanelDistancePx) {
-                                        triggered = true
-                                        showLibrary = true
-                                    }
+                            settingsDragProgress = 0f
+                            libraryDragProgress = 0f
+                            panelDragTarget = when {
+                                offset.y <= size.height * 0.48f -> {
+                                    settingsBufferTarget = null
+                                    MainPanelDragTarget.SETTINGS
                                 }
+                                offset.y >= size.height * 0.52f -> MainPanelDragTarget.LIBRARY
+                                else -> null
                             }
+                        },
+                        onVerticalDrag = { change, amount ->
+                            when (panelDragTarget) {
+                                MainPanelDragTarget.SETTINGS -> {
+                                    val distance = settingsDragProgress * size.height + amount
+                                    settingsDragProgress = panelRevealProgress(distance, size.height.toFloat())
+                                    if (settingsDragProgress > 0f) change.consume()
+                                }
+                                MainPanelDragTarget.LIBRARY -> {
+                                    val distance = libraryDragProgress * size.height - amount
+                                    libraryDragProgress = panelRevealProgress(distance, size.height.toFloat())
+                                    if (libraryDragProgress > 0f) change.consume()
+                                }
+                                null -> Unit
+                            }
+                        },
+                        onDragEnd = {
+                            when (panelDragTarget) {
+                                MainPanelDragTarget.SETTINGS -> {
+                                    showSettings = shouldCommitPanelReveal(settingsDragProgress)
+                                    if (!showSettings) settingsBufferTarget = null
+                                }
+                                MainPanelDragTarget.LIBRARY -> {
+                                    showLibrary = shouldCommitPanelReveal(libraryDragProgress)
+                                }
+                                null -> Unit
+                            }
+                            panelDragTarget = null
+                        },
+                        onDragCancel = {
+                            panelDragTarget = null
                         },
                     )
                 },
@@ -870,28 +915,38 @@ private fun MainScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .zIndex(if (showLibrary) 3f else -2f)
-                .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f }
+                .zIndex(if (showLibrary || libraryPanelProgress > 0f) 3f else -2f)
+                .graphicsLayer { alpha = if (libraryPanelProgress > 0f || showLibrary) 1f else 0.01f }
                 .semantics { if (!showLibrary) hideFromAccessibility() },
         ) {
             Box(
                 Modifier
                     .fillMaxSize()
+                    .padding(top = libraryContentTopPadding)
+                    .graphicsLayer { alpha = libraryPanelProgress }
                     .background(BottomSheetDefaults.ScrimColor),
             )
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .padding(top = libraryTopPadding)
-                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .appNoise(noiseBrush),
+                    .fillMaxSize()
+                    .graphicsLayer { translationY = (1f - libraryPanelProgress) * size.height },
             ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = libraryContentTopPadding)
+                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .appNoise(noiseBrush),
+                )
                 FilesScreen(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = libraryTopPadding),
                     active = showLibrary,
                     initialRecordings = librarySnapshot,
+                    onSelectionActiveChange = { librarySelectionActive = it },
+                    showNormalTopBar = false,
                     onVisibleRecordingsChanged = { visible ->
                         if (librarySnapshot != visible) {
                             ++libraryRefreshGeneration[0]
@@ -906,6 +961,24 @@ private fun MainScreen(
                         showSettings = true
                     },
                     onDismissLibrary = ::closeLibrary,
+                )
+            }
+        }
+
+        if (!showSettings && libraryPanelProgress > 0f && !librarySelectionActive) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .zIndex(4f),
+            ) {
+                AppTopBar(
+                    onBrandClick = { showAboutDialog = true },
+                    onSettingsClick = {
+                        closeLibrary()
+                        settingsBufferTarget = null
+                        showSettings = true
+                    },
                 )
             }
         }

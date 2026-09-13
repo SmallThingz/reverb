@@ -968,4 +968,41 @@ class FormattingAndHistoryMathTest {
         assertEquals(existing.createdAtMillis, merged.createdAtMillis)
     }
 
+    @Test
+    fun panelRevealProgress_tracksDragDistanceContinuously() {
+        assertEquals(0f, panelRevealProgress(-10f, 100f), 0.0001f)
+        assertEquals(0.25f, panelRevealProgress(25f, 100f), 0.0001f)
+        assertEquals(1f, panelRevealProgress(150f, 100f), 0.0001f)
+        assertEquals(0f, panelRevealProgress(25f, 0f), 0.0001f)
+        assertFalse(shouldCommitPanelReveal(0.119f))
+        assertTrue(shouldCommitPanelReveal(0.12f))
+    }
+
+    @Test
+    fun bufferSwipeProgress_tracksOnlyTheForwardDirection() {
+        val oneShot = ReverbService.BufferSlot.ONE_SHOT
+        val looping = ReverbService.BufferSlot.LOOPING
+
+        assertEquals(0.25f, bufferSwipeProgress(oneShot, -25f, 100f), 0.0001f)
+        assertEquals(0f, bufferSwipeProgress(oneShot, 25f, 100f), 0.0001f)
+        assertEquals(0.25f, bufferSwipeProgress(looping, 25f, 100f), 0.0001f)
+        assertEquals(0f, bufferSwipeProgress(looping, -25f, 100f), 0.0001f)
+        assertEquals(0f, bufferSwipeProgress(oneShot, -25f, 0f), 0.0001f)
+        assertFalse(shouldCommitBufferSwipe(0.159f))
+        assertTrue(shouldCommitBufferSwipe(0.16f))
+    }
+
+    @Test
+    fun bufferFlip_tracksProgressAndChangesFaceAtTheMidpoint() {
+        val oneShot = ReverbService.BufferSlot.ONE_SHOT
+        val looping = ReverbService.BufferSlot.LOOPING
+
+        assertEquals(oneShot, bufferTransitionDisplayedSlot(oneShot, looping, 0.49f))
+        assertEquals(looping, bufferTransitionDisplayedSlot(oneShot, looping, 0.5f))
+        assertEquals(-45f, bufferTransitionFlipDegrees(oneShot, looping, 0.25f), 0.0001f)
+        assertEquals(-90f, bufferTransitionFlipDegrees(oneShot, looping, 0.5f), 0.0001f)
+        assertEquals(45f, bufferTransitionFlipDegrees(oneShot, looping, 0.75f), 0.0001f)
+        assertEquals(0f, bufferTransitionFlipDegrees(oneShot, looping, 1f), 0.0001f)
+        assertEquals(45f, bufferTransitionFlipDegrees(looping, oneShot, 0.25f), 0.0001f)
+    }
 }

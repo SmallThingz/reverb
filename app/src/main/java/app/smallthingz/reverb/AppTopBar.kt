@@ -18,12 +18,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+internal val AppTopBarContentHeight = 66.dp
+
 @Composable
 internal fun AppTopBar(
     onBrandClick: () -> Unit,
     onSettingsClick: () -> Unit,
     applyStatusBarPadding: Boolean = true,
-    barHeight: Dp = 66.dp,
+    barHeight: Dp = AppTopBarContentHeight,
 ) {
     val chrome = appChrome()
     val buttonShape = RoundedCornerShape(15.dp)
