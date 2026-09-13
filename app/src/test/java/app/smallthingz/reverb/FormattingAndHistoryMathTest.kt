@@ -382,6 +382,17 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun foregroundRestriction_blocksAutomaticRetry_withoutErasingDurableIntent() {
+        assertTrue(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = false))
+        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = true))
+        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = false))
+        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = true))
+        assertTrue(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = true, foregroundStartBlocked = true))
+        assertFalse(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = true, foregroundStartBlocked = false))
+        assertFalse(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = false, foregroundStartBlocked = true))
+    }
+
+    @Test
     fun logicalListeningState_followsNewestUserIntentDuringAsyncStop() {
         assertTrue(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = true))
         assertFalse(isLogicalListeningState(ReverbService.STATE_LISTENING, listeningIntentEnabled = false))
@@ -479,6 +490,14 @@ class FormattingAndHistoryMathTest {
                 activeBuffer = null,
             ),
         )
+    }
+
+    @Test
+    fun quickTileRecording_requiresBothDurableIntentAndActualRuntimeCapture() {
+        assertTrue(isTileCaptureActuallyRecording(listeningIntentEnabled = true, runtimeCaptureActive = true))
+        assertFalse(isTileCaptureActuallyRecording(listeningIntentEnabled = true, runtimeCaptureActive = false))
+        assertFalse(isTileCaptureActuallyRecording(listeningIntentEnabled = false, runtimeCaptureActive = true))
+        assertFalse(isTileCaptureActuallyRecording(listeningIntentEnabled = false, runtimeCaptureActive = false))
     }
 
     @Test

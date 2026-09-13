@@ -90,6 +90,9 @@ class ReverbService : Service() {
     private val listeningIntentLock = Any()
 
     @Volatile
+    private var foregroundStartBlocked = false
+
+    @Volatile
     private var activeExportToken: ExportCancellationToken? = null
 
     @Volatile
@@ -148,6 +151,7 @@ class ReverbService : Service() {
             overwriteOldest = false,
         )
         createNotificationChannel()
+        setQuickTileRecordingActive(active = false, refreshTiles = false)
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -171,7 +175,10 @@ class ReverbService : Service() {
                 return@post
             }
             mainHandler.post {
-                if (isListeningEnabled()) {
+                if (
+                    state != STATE_LISTENING &&
+                    shouldAttemptAutomaticListeningStart(isListeningEnabled(), foregroundStartBlocked)
+                ) {
                     innerStartListening()
                 }
             }
@@ -183,6 +190,7 @@ class ReverbService : Service() {
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
+        setQuickTileRecordingActive(active = false)
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
         releaseWakeLock()
@@ -210,7 +218,20 @@ class ReverbService : Service() {
         audioHandler.post { checkpointPersistentStore("low-memory checkpoint") }
     }
 
-    override fun onBind(intent: Intent): IBinder = BackgroundRecorderBinder()
+    override fun onBind(intent: Intent): IBinder {
+        val retryGeneration = synchronized(listeningIntentLock) {
+            if (shouldRetryBlockedListeningOnForegroundBind(isListeningEnabled(), foregroundStartBlocked)) {
+                foregroundStartBlocked = false
+                listeningCommandGeneration.get()
+            } else {
+                null
+            }
+        }
+        if (retryGeneration != null) {
+            mainHandler.post { innerStartListening(retryGeneration) }
+        }
+        return BackgroundRecorderBinder()
+    }
 
     override fun onUnbind(intent: Intent): Boolean {
         setVisualizationCallback(null)
@@ -357,6 +378,7 @@ class ReverbService : Service() {
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val slotChanged = enabled && requestedSlot != activeBufferSlot
             if (previousEnabled == enabled && !slotChanged) {
+                if (enabled) foregroundStartBlocked = false
                 listeningCommandGeneration.get()
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
@@ -369,7 +391,10 @@ class ReverbService : Service() {
                     }.apply()
                     null
                 } else {
-                    if (enabled) activeBufferSlot = requestedSlot
+                    if (enabled) {
+                        activeBufferSlot = requestedSlot
+                        foregroundStartBlocked = false
+                    }
                     listeningCommandGeneration.incrementAndGet()
                 }
             }
@@ -438,6 +463,19 @@ class ReverbService : Service() {
             if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = generation
         }
         if (notifyTiles) RecordingQuickTiles.requestRefresh(this)
+    }
+
+    private fun setQuickTileRecordingActive(
+        active: Boolean,
+        refreshTiles: Boolean = true,
+    ) {
+        val prefs = getRecorderPreferences(this)
+        if (prefs.getBoolean(PrefKey.QUICK_TILE_RECORDING_ACTIVE, false) != active) {
+            if (!prefs.edit().putBoolean(PrefKey.QUICK_TILE_RECORDING_ACTIVE, active).commit()) {
+                prefs.edit().putBoolean(PrefKey.QUICK_TILE_RECORDING_ACTIVE, active).apply()
+            }
+        }
+        if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
     }
 
     private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
@@ -612,43 +650,52 @@ class ReverbService : Service() {
     }
 
     private fun innerStartListening(generation: Long = listeningCommandGeneration.get()) {
-        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
+        if (
+            generation != listeningCommandGeneration.get() ||
+            !isListeningEnabled() ||
+            foregroundStartBlocked
+        ) return
         state = STATE_LISTENING
         updateWakeLockState()
         try {
             ContextCompat.startForegroundService(this, Intent(this, javaClass))
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to start recorder foreground service", error)
-            failListeningStart(generation)
+            pauseListeningAfterForegroundStartFailure(generation, error)
             return
         }
         RecordingQuickTiles.requestRefresh(this)
-        audioHandler.post {
-            if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return@post
-            state = STATE_LISTENING
-            updateWakeLockState()
-            startAudioInputOnAudioThread(generation)
-        }
     }
 
-    private fun failListeningStart(generation: Long) {
-        val persisted = synchronized(listeningIntentLock) {
+    private fun pauseListeningAfterForegroundStartFailure(
+        generation: Long,
+        error: RuntimeException,
+    ) {
+        synchronized(listeningIntentLock) {
             if (generation != listeningCommandGeneration.get()) return
-            val prefs = getRecorderPreferences(this)
-            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
-            // A fatal recorder failure must invalidate the active capture even if the
-            // preference write cannot reach disk. SharedPreferences has already applied
-            // the value to its in-memory map when commit() returns false, so rolling it
-            // back to true here would leave the stopped service claiming listening is
-            // enabled. A later process may retry the user's durable intent if disk still
-            // contains true.
+            // Android 14+ can reject microphone-FGS promotion while the app is in the
+            // background even though the user's durable capture intent is still valid.
+            // Preserve that intent and retry only after a fresh service instance or an
+            // explicit user start; otherwise a transient platform restriction silently
+            // turns recording off forever.
+            foregroundStartBlocked = true
             listeningCommandGeneration.incrementAndGet()
-            state = STATE_READY
-            committed
+            state = STATE_PAUSED
+        }
+        audioHandler.post {
+            audioHandler.removeCallbacks(audioReader)
+            try {
+                sealActiveChunks()
+            } catch (sealError: Exception) {
+                reportPersistentStoreFailure("seal after foreground start restriction", sealError)
+            } finally {
+                releaseAudioRecord()
+                updateWakeLockState()
+            }
         }
         updateWakeLockState()
-        RecordingQuickTiles.requestRefresh(this)
-        reportError(getString(if (persisted) R.string.audio_input_init_failed else R.string.recorder_state_persist_failed))
+        setQuickTileRecordingActive(active = false)
+        reportError(userFacingError(getString(R.string.audio_input_init_failed), error))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -710,7 +757,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
-        RecordingQuickTiles.requestRefresh(this)
+        setQuickTileRecordingActive(active = true)
         audioHandler.post(audioReader)
     }
 
@@ -727,7 +774,7 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
-            RecordingQuickTiles.requestRefresh(this)
+            setQuickTileRecordingActive(active = false)
             try {
                 sealActiveChunks()
             } catch (error: Exception) {
@@ -1441,7 +1488,7 @@ class ReverbService : Service() {
         if (!persisted) {
             reportError(getString(R.string.recorder_state_persist_failed))
         }
-        RecordingQuickTiles.requestRefresh(this)
+        setQuickTileRecordingActive(active = false)
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -1604,7 +1651,7 @@ class ReverbService : Service() {
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
         updateWakeLockState()
-        RecordingQuickTiles.requestRefresh(this)
+        setQuickTileRecordingActive(active = false)
         reportError(
             if (!persisted) getString(R.string.recorder_state_persist_failed)
             else if (error == null) message
@@ -1777,11 +1824,15 @@ class ReverbService : Service() {
         // listening state immediately so the foreground-service deadline is met;
         // the queued audio work remains ordered behind initial configuration.
         val listeningEnabled = isListeningEnabled()
+        val generation = listeningCommandGeneration.get()
+        if (listeningEnabled && foregroundStartBlocked) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (state != STATE_LISTENING && listeningEnabled) {
-            val generation = listeningCommandGeneration.get()
             state = STATE_LISTENING
             updateWakeLockState()
-            audioHandler.post { startAudioInputOnAudioThread(generation) }
         }
         if (listeningEnabled && state == STATE_LISTENING) {
             try {
@@ -1796,9 +1847,10 @@ class ReverbService : Service() {
                 }
             } catch (error: RuntimeException) {
                 Log.e(TAG, "Unable to enter microphone foreground state", error)
-                failListeningStart(listeningCommandGeneration.get())
+                pauseListeningAfterForegroundStartFailure(generation, error)
                 return START_NOT_STICKY
             }
+            audioHandler.post { startAudioInputOnAudioThread(generation) }
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -2276,6 +2328,15 @@ class ReverbService : Service() {
 
 }
 
+internal fun shouldAttemptAutomaticListeningStart(
+    listeningIntentEnabled: Boolean,
+    foregroundStartBlocked: Boolean,
+): Boolean = listeningIntentEnabled && !foregroundStartBlocked
+
+internal fun shouldRetryBlockedListeningOnForegroundBind(
+    listeningIntentEnabled: Boolean,
+    foregroundStartBlocked: Boolean,
+): Boolean = listeningIntentEnabled && foregroundStartBlocked
 
 internal enum class CaptureReaderTransition {
     IGNORE,

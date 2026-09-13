@@ -45,13 +45,21 @@ internal fun recordingTileUiState(
     }
 }
 
+internal fun isTileCaptureActuallyRecording(
+    listeningIntentEnabled: Boolean,
+    runtimeCaptureActive: Boolean,
+): Boolean = listeningIntentEnabled && runtimeCaptureActive
+
 internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot {
     val prefs = getRecorderPreferences(context)
     val activeBuffer = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)?.let { stored ->
         runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
     }
     return RecordingTileSnapshot(
-        listening = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+        listening = isTileCaptureActuallyRecording(
+            listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+            runtimeCaptureActive = prefs.getBoolean(PrefKey.QUICK_TILE_RECORDING_ACTIVE, false),
+        ),
         activeBuffer = activeBuffer,
         oneShotEnabled = isConfiguredOneShotBufferEnabled(context),
         oneShotFull = prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
