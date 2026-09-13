@@ -13,8 +13,11 @@
 - Both buffer readouts use the configured retention mode for their primary metric.
 - Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
 
+- Library recording playback expands the tapped recording card vertically in place; never replace it with a player dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim.
+
 # Reverb durability invariants
 
+- Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or replace the source recording as part of trim.
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation.

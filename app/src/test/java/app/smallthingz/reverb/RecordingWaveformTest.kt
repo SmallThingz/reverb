@@ -1,0 +1,139 @@
+package app.smallthingz.reverb
+
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import kotlin.math.roundToInt
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RecordingWaveformTest {
+    @Test
+    fun wavLayoutParsesPcm16Frames() {
+        val file = writePcm16Wav(
+            sampleRate = 8_000,
+            samples = ShortArray(8_000) { 2_000 },
+        )
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                assertEquals(8_000, layout.sampleRate)
+                assertEquals(1, layout.channelCount)
+                assertEquals(PcmSampleFormat.PCM_16, layout.sampleFormat)
+                assertEquals(8_000L, layout.frameCount)
+                assertEquals(1.0, layout.durationSeconds, 0.000_001)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun savedRecordingWaveformUsesRangeExportShapeAndFindsLouderRegion() {
+        val samples = ShortArray(12_000) { index ->
+            if (index < 6_000) 500 else 28_000
+        }
+        val file = writePcm16Wav(sampleRate = 12_000, samples = samples)
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                val envelope = sampleWavWaveformEnvelopeProgressive(
+                    channel = channel,
+                    layout = layout,
+                    pass = RangeWaveformPass.COARSE,
+                    onBucket = { _, _ -> true },
+                )
+                assertEquals(RANGE_WAVEFORM_COARSE_BUCKETS, envelope.size)
+                assertTrue(envelope.all { it in 0f..1f })
+                val firstHalf = envelope.take(envelope.size / 2).average()
+                val secondHalf = envelope.drop(envelope.size / 2).average()
+                assertTrue("loud half should remain visibly louder", secondHalf > firstHalf + 0.12)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun progressiveWaveformStopsAtRequestedFrontier() {
+        val file = writePcm16Wav(
+            sampleRate = 8_000,
+            samples = ShortArray(8_000) { 12_000 },
+        )
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                val stopAfter = 11
+                val envelope = sampleWavWaveformEnvelopeProgressive(
+                    channel = channel,
+                    layout = layout,
+                    pass = RangeWaveformPass.COARSE,
+                    onBucket = { index, _ -> index < stopAfter },
+                )
+                assertTrue(envelope.take(stopAfter + 1).all { it > 0f })
+                assertTrue(envelope.drop(stopAfter + 1).all { it == 0f })
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun wavLayoutRejectsNonWaveInput() {
+        val file = testFile("not-wave.bin")
+        file.writeBytes(ByteArray(64) { it.toByte() })
+        try {
+            val failure = runCatching {
+                FileInputStream(file).channel.use(::readWavPcmLayout)
+            }.exceptionOrNull()
+            assertTrue(failure is IOException)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun trimNameKeepsOriginalStemAndDoesNotOverwriteOriginal() {
+        assertEquals("17892961950114 trim", trimmedRecordingBaseName("17892961950114.wav"))
+        assertEquals("meeting notes trim", trimmedRecordingBaseName("meeting notes.wav"))
+    }
+
+    @Test
+    fun sharedPcmMagnitudeMatchesExpectedScale() {
+        val sample = (0.5f * Short.MAX_VALUE).roundToInt().toShort()
+        val bytes = byteArrayOf(
+            (sample.toInt() and 0xff).toByte(),
+            ((sample.toInt() ushr 8) and 0xff).toByte(),
+        )
+        assertEquals(0.5f, waveformSampleMagnitude(bytes, 0, PcmSampleFormat.PCM_16), 0.001f)
+    }
+
+    private fun writePcm16Wav(sampleRate: Int, samples: ShortArray): File {
+        val payload = ByteArray(samples.size * 2)
+        samples.forEachIndexed { index, sample ->
+            payload[index * 2] = (sample.toInt() and 0xff).toByte()
+            payload[index * 2 + 1] = ((sample.toInt() ushr 8) and 0xff).toByte()
+        }
+        val file = testFile("wave-${System.nanoTime()}.wav")
+        FileOutputStream(file).use { output ->
+            output.write(
+                buildWavHeaderBytes(
+                    sampleRate = sampleRate,
+                    channelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    dataSize = payload.size.toLong(),
+                ),
+            )
+            output.write(payload)
+        }
+        return file
+    }
+
+    private fun testFile(name: String): File {
+        val directory = File("build/tmp/recording-waveform-tests")
+        check(directory.exists() || directory.mkdirs())
+        return File(directory, name)
+    }
+}

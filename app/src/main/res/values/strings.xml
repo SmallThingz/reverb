@@ -168,6 +168,10 @@
     <string name="player_pause">Pause</string>
     <string name="player_seek_back">Back 10 seconds</string>
     <string name="player_seek_forward">Forward 10 seconds</string>
+    <string name="trim_recording">Trim</string>
+    <string name="trim_save_copy">Save copy</string>
+    <string name="trim_saving">Saving trim…</string>
+    <string name="trim_failed">Couldn\'t save trimmed recording.</string>
     <string name="cancel">Cancel</string>
     <string name="settings_title">Settings</string>
     <string name="close">Close</string>

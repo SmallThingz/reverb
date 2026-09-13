@@ -1,11 +1,20 @@
 package app.smallthingz.reverb
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +48,8 @@ internal fun RecordingEntityCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     onIconLongClick: (() -> Unit)? = null,
+    expanded: Boolean = false,
+    expandedContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     RecordingSummaryCard(
@@ -52,6 +63,8 @@ internal fun RecordingEntityCard(
         onClick = onClick,
         onLongClick = onLongClick,
         onIconLongClick = onIconLongClick,
+        expanded = expanded,
+        expandedContent = expandedContent,
     )
 }
 
@@ -95,6 +108,8 @@ private fun RecordingSummaryCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     onIconLongClick: (() -> Unit)? = null,
+    expanded: Boolean = false,
+    expandedContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val chrome = appChrome()
     val bgColor by animateColorAsState(
@@ -111,7 +126,9 @@ private fun RecordingSummaryCard(
         label = "recordingCardIconTint",
     )
     Surface(
-        modifier = modifier,
+        modifier = modifier.animateContentSize(
+            animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        ),
         shape = RoundedCornerShape(16.dp),
         color = bgColor,
         border = BorderStroke(1.dp, chrome.border),
@@ -133,12 +150,15 @@ private fun RecordingSummaryCard(
         } else {
             Modifier
         }
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .alpha(if (selectionActive && !isSelected) 0.75f else 1f),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             Box(
                 modifier = Modifier
                     .width(72.dp)
@@ -215,6 +235,18 @@ private fun RecordingSummaryCard(
                             )
                         }
                     }
+                }
+            }
+            }
+            AnimatedVisibility(
+                visible = expanded && expandedContent != null,
+                enter = expandVertically(animationSpec = tween(320, easing = FastOutSlowInEasing)) +
+                    fadeIn(animationSpec = tween(220, delayMillis = 70)),
+                exit = shrinkVertically(animationSpec = tween(260, easing = FastOutSlowInEasing)) +
+                    fadeOut(animationSpec = tween(140)),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    expandedContent?.invoke(this)
                 }
             }
         }

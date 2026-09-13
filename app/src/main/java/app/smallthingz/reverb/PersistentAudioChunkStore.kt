@@ -687,30 +687,7 @@ internal class PersistentAudioChunkStore internal constructor(
             return low.coerceIn(0, segments.lastIndex)
         }
 
-        private fun waveformSampleMagnitude(
-            bytes: ByteArray,
-            offset: Int,
-            format: PcmSampleFormat,
-        ): Float = when (format) {
-            PcmSampleFormat.PCM_8 ->
-                kotlin.math.abs(((bytes[offset].toInt() and 0xff) - 128) / 128f)
-            PcmSampleFormat.PCM_16 -> {
-                val value = (
-                    (bytes[offset].toInt() and 0xff) or
-                        (bytes[offset + 1].toInt() shl 8)
-                    ).toShort().toInt()
-                kotlin.math.abs(value / 32768f)
-            }
-            PcmSampleFormat.PCM_FLOAT -> {
-                val bits =
-                    (bytes[offset].toInt() and 0xff) or
-                        ((bytes[offset + 1].toInt() and 0xff) shl 8) or
-                        ((bytes[offset + 2].toInt() and 0xff) shl 16) or
-                        (bytes[offset + 3].toInt() shl 24)
-                val value = Float.fromBits(bits)
-                if (value.isFinite()) kotlin.math.abs(value).coerceIn(0f, 1f) else 0f
-            }
-        }
+
 
         @Synchronized
         override fun close() {

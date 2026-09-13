@@ -123,8 +123,7 @@ fun FilesScreen(
     var renameRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var infoRecording by remember { mutableStateOf<RecordingEntity?>(null) }
-    var showPlayerDialog by remember { mutableStateOf(false) }
-    var playerRecording by remember { mutableStateOf<RecordingEntity?>(null) }
+    var expandedRecordingId by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<LibraryNotice?>(null) }
     var deletionJob by remember { mutableStateOf<Job?>(null) }
     var deletionsCommittedInBackground by remember { mutableStateOf(false) }
@@ -140,8 +139,7 @@ fun FilesScreen(
         if (renameRecording == null) showRenameDialog = false
         infoRecording = infoRecording?.let { storedById[it.id] }
         if (infoRecording == null) showInfoDialog = false
-        playerRecording = playerRecording?.let { storedById[it.id] }
-        if (playerRecording == null) showPlayerDialog = false
+        expandedRecordingId = expandedRecordingId?.takeIf { it in storedById }
     }
 
     fun refresh(showSpinner: Boolean = true) {
@@ -206,8 +204,7 @@ fun FilesScreen(
             renameRecording = null
             showInfoDialog = false
             infoRecording = null
-            showPlayerDialog = false
-            playerRecording = null
+            expandedRecordingId = null
             notice = null
             onSelectionActiveChange(false)
             return@LaunchedEffect
@@ -320,6 +317,7 @@ fun FilesScreen(
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
         if (isDeleting || targets.isEmpty()) return
+        if (targets.any { it.id == expandedRecordingId }) expandedRecordingId = null
         isDeleting = true
         deletionsCommittedInBackground = false
         targets.forEach { pendingDeletions[it.id] = it }
@@ -376,7 +374,10 @@ fun FilesScreen(
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
     DisposableEffect(Unit) { onDispose { onSelectionActiveChange(false) } }
     BackHandler(enabled = active && selectionActive) { clearSelection() }
-    BackHandler(enabled = active && !selectionActive) { onDismissLibrary() }
+    BackHandler(enabled = active && !selectionActive && expandedRecordingId != null) {
+        expandedRecordingId = null
+    }
+    BackHandler(enabled = active && !selectionActive && expandedRecordingId == null) { onDismissLibrary() }
 
     Scaffold(
         modifier = modifier,
@@ -515,6 +516,7 @@ fun FilesScreen(
                                         isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
                                         menuExpanded = contextMenuRecordingId == recording.id,
+                                        expanded = expandedRecordingId == recording.id,
                                         onClick = {
                                             contextMenuRecordingId = null
                                             if (selectionActive) {
@@ -524,27 +526,36 @@ fun FilesScreen(
                                                     selectedIds[recording.id] = recording
                                                 }
                                             } else {
-                                                playerRecording = recording
-                                                showPlayerDialog = true
+                                                expandedRecordingId = if (expandedRecordingId == recording.id) {
+                                                    null
+                                                } else {
+                                                    recording.id
+                                                }
                                             }
                                         },
                                         onIconLongClick = {
                                             contextMenuRecordingId = null
+                                            expandedRecordingId = null
                                             if (selectedIds.containsKey(recording.id)) {
                                                 selectedIds.remove(recording.id)
                                             } else {
                                                 selectedIds[recording.id] = recording
                                             }
                                         },
-                                        onLongClick = { contextMenuRecordingId = recording.id },
+                                        onLongClick = {
+                                            expandedRecordingId = null
+                                            contextMenuRecordingId = recording.id
+                                        },
                                         onDismissMenu = { contextMenuRecordingId = null },
                                         onRename = {
                                             contextMenuRecordingId = null
+                                            expandedRecordingId = null
                                             renameRecording = recording
                                             showRenameDialog = true
                                         },
                                         onInfo = {
                                             contextMenuRecordingId = null
+                                            expandedRecordingId = null
                                             infoRecording = recording
                                             showInfoDialog = true
                                         },
@@ -555,7 +566,26 @@ fun FilesScreen(
                                         onDelete = { deleteRecordings(listOf(recording)) },
                                         onMultiSelect = {
                                             contextMenuRecordingId = null
+                                            expandedRecordingId = null
                                             selectedIds[recording.id] = recording
+                                        },
+                                        onCollapse = { expandedRecordingId = null },
+                                        onTrimSaved = { refresh(showSpinner = false) },
+                                        onPlaybackFailed = {
+                                            expandedRecordingId = null
+                                            try {
+                                                context.startActivity(buildOpenRecordingIntent(context, recording))
+                                            } catch (_: ActivityNotFoundException) {
+                                                showPassiveNotice(
+                                                    resources.getString(R.string.no_app_available),
+                                                    FeedbackTone.ERROR,
+                                                )
+                                            } catch (_: RuntimeException) {
+                                                showPassiveNotice(
+                                                    resources.getString(R.string.no_app_available),
+                                                    FeedbackTone.ERROR,
+                                                )
+                                            }
                                         },
                                     )
                                 }
@@ -621,35 +651,7 @@ fun FilesScreen(
         }
     }
 
-    if (showPlayerDialog) {
-        if (playerRecording == null) {
-            showPlayerDialog = false
-        } else {
-            val currentRecording = playerRecording ?: return
-            RecordingPlayerDialog(
-                recording = currentRecording,
-                onDismiss = { showPlayerDialog = false; playerRecording = null },
-                onInfoClick = {
-                    showPlayerDialog = false
-                    playerRecording = null
-                    infoRecording = currentRecording
-                    showInfoDialog = true
-                },
-                onShareClick = { shareRecordings(listOf(currentRecording)) },
-                onPlaybackFailed = {
-                    showPlayerDialog = false
-                    playerRecording = null
-                    try {
-                        context.startActivity(buildOpenRecordingIntent(context, currentRecording))
-                    } catch (_: ActivityNotFoundException) {
-                        showPassiveNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
-                    } catch (_: RuntimeException) {
-                        showPassiveNotice(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
-                    }
-                },
-            )
-        }
-    }
+
 }
 
 @Composable
@@ -687,6 +689,7 @@ private fun RecordingItem(
     isSelected: Boolean,
     selectionActive: Boolean,
     menuExpanded: Boolean,
+    expanded: Boolean,
     onClick: () -> Unit,
     onIconLongClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -696,6 +699,9 @@ private fun RecordingItem(
     onShare: () -> Unit,
     onDelete: () -> Unit,
     onMultiSelect: () -> Unit,
+    onCollapse: () -> Unit,
+    onTrimSaved: (RecordingEntity) -> Unit,
+    onPlaybackFailed: () -> Unit,
 ) {
     val chrome = appChrome()
     Box {
@@ -709,6 +715,15 @@ private fun RecordingItem(
             onClick = onClick,
             onLongClick = onLongClick,
             onIconLongClick = onIconLongClick,
+            expanded = expanded,
+            expandedContent = {
+                RecordingInlinePlayer(
+                    recording = item.recording,
+                    onTrimSaved = onTrimSaved,
+                    onCollapse = onCollapse,
+                    onPlaybackFailed = onPlaybackFailed,
+                )
+            },
         )
         DropdownMenu(
             expanded = menuExpanded,

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Devices
@@ -42,6 +43,7 @@ internal object AppIcons {
     val edit: ImageVector = Icons.Rounded.Edit
     val info: ImageVector = Icons.Rounded.Info
     val close: ImageVector = Icons.Rounded.Close
+    val trim: ImageVector = Icons.Rounded.ContentCut
     val back: ImageVector = Icons.AutoMirrored.Rounded.ArrowBack
     val check: ImageVector = Icons.Rounded.Check
     val multiSelect: ImageVector = Icons.Rounded.SelectAll
