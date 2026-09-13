@@ -11,13 +11,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,7 +59,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -435,7 +439,41 @@ fun FilesScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .pointerInput(onDismissLibrary, edgeDismissDistancePx) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        val edgeWidth = size.width * 0.13f
+                        val startedInEdge = down.position.x <= edgeWidth ||
+                            down.position.x >= size.width - edgeWidth
+                        if (!startedInEdge) return@awaitEachGesture
+
+                        var downwardDrag = 0f
+                        var accepted = false
+                        val dragStart = awaitVerticalTouchSlopOrCancellation(down.id) { change, overSlop ->
+                            if (overSlop > 0f) {
+                                accepted = true
+                                downwardDrag += overSlop
+                                change.consume()
+                            }
+                        } ?: return@awaitEachGesture
+                        if (!accepted) return@awaitEachGesture
+
+                        verticalDrag(dragStart.id) { change ->
+                            val deltaY = change.positionChange().y
+                            downwardDrag = if (deltaY >= 0f) {
+                                downwardDrag + deltaY
+                            } else {
+                                (downwardDrag + deltaY).coerceAtLeast(0f)
+                            }
+                            change.consume()
+                        }
+                        if (downwardDrag >= edgeDismissDistancePx) onDismissLibrary()
+                    }
+                },
         ) {
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
@@ -524,37 +562,6 @@ fun FilesScreen(
                 }
             }
 
-            Row(modifier = Modifier.fillMaxSize()) {
-                fun Modifier.edgeDismissGesture(): Modifier = pointerInput(onDismissLibrary, edgeDismissDistancePx) {
-                    var downwardDrag = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { downwardDrag = 0f },
-                        onVerticalDrag = { _, amount ->
-                            if (amount > 0f) downwardDrag += amount
-                            else downwardDrag = (downwardDrag + amount).coerceAtLeast(0f)
-                        },
-                        onDragEnd = {
-                            if (downwardDrag >= edgeDismissDistancePx) onDismissLibrary()
-                            downwardDrag = 0f
-                        },
-                        onDragCancel = { downwardDrag = 0f },
-                    )
-                }
-
-                Box(
-                    Modifier
-                        .weight(0.15f)
-                        .fillMaxHeight()
-                        .edgeDismissGesture(),
-                )
-                Spacer(Modifier.weight(0.70f))
-                Box(
-                    Modifier
-                        .weight(0.15f)
-                        .fillMaxHeight()
-                        .edgeDismissGesture(),
-                )
-            }
 
             notice?.let { current ->
                 FeedbackCard(

@@ -1249,7 +1249,7 @@ private fun ReverbSwitch(
         ) {
             Box(
                 modifier = Modifier
-                    .offset(x = thumbOffset)
+                    .offset { androidx.compose.ui.unit.IntOffset(thumbOffset.roundToPx(), 0) }
                     .size(18.dp)
                     .background(thumbColor, RoundedCornerShape(50)),
             )

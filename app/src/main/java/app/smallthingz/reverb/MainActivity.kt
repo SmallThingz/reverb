@@ -37,6 +37,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -64,6 +65,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -163,12 +166,18 @@ class MainActivity : ComponentActivity() {
                                 }
                                 startActivity(intent)
                             },
-                            onExit = { finish() },
+                            onDismiss = { showPermissionDenied = false },
                         )
                     }
                     MainScreen(
                         permissionsGranted = permissionsGranted,
                         showPermissionDenied = showPermissionDenied,
+                        onReviewMicrophonePermission = {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
+                            }
+                            startActivity(intent)
+                        },
                         onThemeChanged = { themeMode = it },
                     )
                 }
@@ -526,10 +535,10 @@ private fun OnboardingProgressDot(active: Boolean) {
 @Composable
 private fun PermissionDeniedDialog(
     onAllow: () -> Unit,
-    onExit: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
     AlertDialog(
-        onDismissRequest = {},
+        onDismissRequest = onDismiss,
         shape = RoundedCornerShape(18.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = { Text(stringResource(R.string.permission_required)) },
@@ -540,8 +549,8 @@ private fun PermissionDeniedDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onExit) {
-                Text(stringResource(R.string.exit))
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
             }
         },
     )
@@ -552,6 +561,7 @@ private fun PermissionDeniedDialog(
 private fun MainScreen(
     permissionsGranted: Boolean,
     showPermissionDenied: Boolean,
+    onReviewMicrophonePermission: () -> Unit,
     onThemeChanged: (AppThemeMode) -> Unit,
 ) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -615,7 +625,8 @@ private fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(if (showSettings) 1f else -1f)
-                .graphicsLayer { alpha = if (showSettings) 1f else 0.01f },
+                .graphicsLayer { alpha = if (showSettings) 1f else 0.01f }
+                .semantics { if (!showSettings) hideFromAccessibility() },
             active = showSettings,
             onBack = {
                 showSettings = false
@@ -632,8 +643,11 @@ private fun MainScreen(
                 .fillMaxSize()
                 .zIndex(0f)
                 .graphicsLayer { alpha = if (showSettings) 0f else 1f }
-                .pointerInput(permissionsGranted, showSettings, showLibrary, showAboutDialog) {
-                    if (!permissionsGranted || showSettings || showLibrary || showAboutDialog) return@pointerInput
+                .semantics {
+                    if (showSettings || showLibrary || showAboutDialog) hideFromAccessibility()
+                }
+                .pointerInput(showSettings, showLibrary, showAboutDialog) {
+                    if (showSettings || showLibrary || showAboutDialog) return@pointerInput
                     var dragStartY = 0f
                     var downwardDrag = 0f
                     var upwardDrag = 0f
@@ -691,12 +705,40 @@ private fun MainScreen(
                     )
                 } else if (!showPermissionDenied) {
                     Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = stringResource(R.string.permission_required_message),
-                                modifier = Modifier.padding(24.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        Box(Modifier.fillMaxSize()) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.permission_required_message),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(onClick = onReviewMicrophonePermission) {
+                                    Text(stringResource(R.string.allow))
+                                }
+                            }
+                            Surface(
+                                onClick = { showLibrary = true },
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 22.dp)
+                                    .size(54.dp),
+                                shape = RoundedCornerShape(18.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = AppIcons.library,
+                                        contentDescription = stringResource(R.string.files_tab),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(25.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -715,7 +757,8 @@ private fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(if (showLibrary) 3f else -2f)
-                .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f },
+                .graphicsLayer { alpha = if (showLibrary) 1f else 0.01f }
+                .semantics { if (!showLibrary) hideFromAccessibility() },
         ) {
             Box(
                 Modifier
