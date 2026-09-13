@@ -60,7 +60,7 @@ internal fun appChrome(): AppChrome {
         raised = colors.surfaceContainerHigh,
         ink = colors.onSurface,
         muted = colors.onSurfaceVariant,
-        border = colors.outlineVariant,
+        border = colors.onSurface.copy(alpha = 0.14f),
     )
 }
 

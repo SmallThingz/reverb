@@ -54,6 +54,7 @@ fun RecordingPlayerDialog(
     onShareClick: () -> Unit,
     onPlaybackFailed: () -> Unit,
 ) {
+    val chrome = appChrome()
     val context = LocalContext.current.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     var mediaPlayer by remember(recording.id) { mutableStateOf<MediaPlayer?>(null) }
@@ -299,7 +300,7 @@ fun RecordingPlayerDialog(
                     Surface(
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = BorderStroke(1.dp, chrome.border),
                     ) {
                         IconButton(
                             onClick = seekBack,
@@ -336,7 +337,7 @@ fun RecordingPlayerDialog(
                     Surface(
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = BorderStroke(1.dp, chrome.border),
                     ) {
                         IconButton(
                             onClick = seekForward,

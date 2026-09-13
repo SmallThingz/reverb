@@ -1844,10 +1844,11 @@ private fun RangeTimeField(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    val chrome = appChrome()
     val borderColor = when {
         error != null -> MaterialTheme.colorScheme.error
         focused -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.outlineVariant
+        else -> chrome.border
     }
 
     Surface(
