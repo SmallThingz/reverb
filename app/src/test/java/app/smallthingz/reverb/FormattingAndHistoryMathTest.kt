@@ -591,6 +591,68 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileClick_keepsPreBindUserIntentAcrossRecorderRecovery() {
+        val idleOneShot = RecordingTileSnapshot(
+            listening = false,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+        )
+        val oneShotRunning = idleOneShot.copy(listening = true)
+        val loopingRunning = oneShotRunning.copy(activeBuffer = ReverbService.BufferSlot.LOOPING)
+
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = oneShotRunning,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.SWITCH,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = loopingRunning,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.START,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.SWITCH,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = idleOneShot,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.STOP,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = loopingRunning,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.STOP,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.STOP,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = oneShotRunning,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = idleOneShot.copy(oneShotFull = true),
+            ),
+        )
+    }
+
+    @Test
     fun oneShotFullCache_isInvalidatedWhenSettingsCanMakeAFullBufferWritableAgain() {
         assertTrue(
             shouldInvalidateCachedOneShotFull(

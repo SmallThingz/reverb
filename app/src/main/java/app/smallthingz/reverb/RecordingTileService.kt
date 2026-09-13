@@ -80,6 +80,33 @@ internal fun recordingTileClickAction(
     -> RecordingTileClickAction.NONE
 }
 
+internal fun revalidateRecordingTileClickAction(
+    requestedAction: RecordingTileClickAction,
+    bufferSlot: ReverbService.BufferSlot,
+    liveSnapshot: RecordingTileSnapshot,
+): RecordingTileClickAction {
+    val liveState = recordingTileUiState(bufferSlot, liveSnapshot)
+    return when (requestedAction) {
+        RecordingTileClickAction.NONE -> RecordingTileClickAction.NONE
+        RecordingTileClickAction.STOP -> {
+            if (liveState == RecordingTileUiState.RECORDING) RecordingTileClickAction.STOP
+            else RecordingTileClickAction.NONE
+        }
+        RecordingTileClickAction.START,
+        RecordingTileClickAction.SWITCH,
+        -> when (liveState) {
+            RecordingTileUiState.FULL,
+            RecordingTileUiState.DISABLED,
+            -> RecordingTileClickAction.NONE
+            RecordingTileUiState.RECORDING -> RecordingTileClickAction.NONE
+            RecordingTileUiState.ACTIVE,
+            RecordingTileUiState.AVAILABLE,
+            -> if (liveSnapshot.listening) RecordingTileClickAction.SWITCH
+            else RecordingTileClickAction.START
+        }
+    }
+}
+
 internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot {
     val prefs = getRecorderPreferences(context)
     val activeBuffer = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)?.let { stored ->
@@ -141,11 +168,13 @@ abstract class RecordingTileService : TileService() {
             updateTile(readRecordingTileSnapshot(this))
             return
         }
-        if (recordingTileClickAction(bufferSlot, readRecordingTileSnapshot(this)) == RecordingTileClickAction.NONE) {
-            updateTile(readRecordingTileSnapshot(this))
+        val snapshot = readRecordingTileSnapshot(this)
+        val requestedAction = recordingTileClickAction(bufferSlot, snapshot)
+        if (requestedAction == RecordingTileClickAction.NONE) {
+            updateTile(snapshot)
             return
         }
-        val action = { beginTileAction() }
+        val action = { beginTileAction(requestedAction) }
         if (isLocked) unlockAndRun(action) else action()
     }
 
@@ -154,15 +183,9 @@ abstract class RecordingTileService : TileService() {
         super.onDestroy()
     }
 
-    private fun beginTileAction() {
+    private fun beginTileAction(requestedAction: RecordingTileClickAction) {
         if (actionConnection != null) return
-        val snapshot = readRecordingTileSnapshot(this)
-        if (recordingTileClickAction(bufferSlot, snapshot) == RecordingTileClickAction.NONE) {
-            updateTile(snapshot)
-            return
-        }
-
-        val connection = TileActionConnection()
+        val connection = TileActionConnection(requestedAction)
         actionConnection = connection
         val bound = runCatching {
             bindService(Intent(this, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
@@ -188,7 +211,9 @@ abstract class RecordingTileService : TileService() {
         RecordingQuickTiles.requestRefresh(this)
     }
 
-    private inner class TileActionConnection : ServiceConnection {
+    private inner class TileActionConnection(
+        private val requestedAction: RecordingTileClickAction,
+    ) : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             val recorder = (binder as? ReverbService.BackgroundRecorderBinder)?.service
             if (recorder == null || actionConnection !== this) {
@@ -217,7 +242,11 @@ abstract class RecordingTileService : TileService() {
                             oneShotFull = oneShotIsFull,
                             loopingEnabled = loopingIsEnabled,
                         )
-                        val action = recordingTileClickAction(bufferSlot, snapshot)
+                        val action = revalidateRecordingTileClickAction(
+                            requestedAction = requestedAction,
+                            bufferSlot = bufferSlot,
+                            liveSnapshot = snapshot,
+                        )
                         when (action) {
                             RecordingTileClickAction.START -> recorder.enableListening(bufferSlot)
                             RecordingTileClickAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
