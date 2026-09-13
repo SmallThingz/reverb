@@ -50,7 +50,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import java.io.File
+import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -73,30 +73,40 @@ internal fun RecordingInlinePlayer(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
+    val recordingRevisionKey = remember(
+        recording.id,
+        recording.fileIdentity,
+        recording.sizeBytes,
+        recording.durationMillis,
+        recording.lastSeenAtMillis,
+    ) {
+        "${recording.id}|${recording.fileIdentity}|${recording.sizeBytes}|${recording.durationMillis}|${recording.lastSeenAtMillis}"
+    }
 
-    var mediaPlayer by remember(recording.id) { mutableStateOf<MediaPlayer?>(null) }
-    var prepared by remember(recording.id) { mutableStateOf(false) }
-    var isPlaying by remember(recording.id) { mutableStateOf(false) }
-    var currentPosition by remember(recording.id) { mutableIntStateOf(0) }
-    var duration by remember(recording.id) {
+    var mediaPlayer by remember(recordingRevisionKey) { mutableStateOf<MediaPlayer?>(null) }
+    var prepared by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var isPlaying by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var currentPosition by remember(recordingRevisionKey) { mutableIntStateOf(0) }
+    var duration by remember(recordingRevisionKey) {
         mutableIntStateOf(recording.durationMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt())
     }
-    var isScrubbing by remember(recording.id) { mutableStateOf(false) }
-    var resumeAfterScrub by remember(recording.id) { mutableStateOf(false) }
-    var released by remember(recording.id) { mutableStateOf(false) }
-    var trimMode by remember(recording.id) { mutableStateOf(false) }
-    var trimStartMillis by remember(recording.id) { mutableIntStateOf(0) }
-    var trimEndMillis by remember(recording.id) { mutableIntStateOf(duration) }
-    var trimSaving by remember(recording.id) { mutableStateOf(false) }
-    var trimError by remember(recording.id) { mutableStateOf(false) }
+    var isScrubbing by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var resumeAfterScrub by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var released by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var pinnedFileInput by remember(recordingRevisionKey) { mutableStateOf<FileInputStream?>(null) }
+    var trimMode by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var trimStartMillis by remember(recordingRevisionKey) { mutableIntStateOf(0) }
+    var trimEndMillis by remember(recordingRevisionKey) { mutableIntStateOf(duration) }
+    var trimSaving by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
 
-    var coarseWaveform by remember(recording.id) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
-    var coarseBuiltCount by remember(recording.id) { mutableIntStateOf(0) }
-    var detailWaveform by remember(recording.id) { mutableStateOf(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)) }
-    var detailBuiltCount by remember(recording.id) { mutableIntStateOf(0) }
-    var waveformPass by remember(recording.id) { mutableStateOf(RangeWaveformPass.COARSE) }
-    var waveformLoading by remember(recording.id) { mutableStateOf(true) }
-    var waveformMorphStarted by remember(recording.id) { mutableStateOf(false) }
+    var coarseWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
+    var coarseBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
+    var detailWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)) }
+    var detailBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
+    var waveformPass by remember(recordingRevisionKey) { mutableStateOf(RangeWaveformPass.COARSE) }
+    var waveformLoading by remember(recordingRevisionKey) { mutableStateOf(true) }
+    var waveformMorphStarted by remember(recordingRevisionKey) { mutableStateOf(false) }
     val waveformMorph by animateFloatAsState(
         targetValue = if (waveformMorphStarted) 1f else 0f,
         animationSpec = tween(durationMillis = 760, easing = FastOutSlowInEasing),
@@ -118,6 +128,8 @@ internal fun RecordingInlinePlayer(
         mediaPlayer?.runCatching { stop() }
         mediaPlayer?.release()
         mediaPlayer = null
+        runCatching { pinnedFileInput?.close() }
+        pinnedFileInput = null
         prepared = false
         isPlaying = false
     }
@@ -136,7 +148,7 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    DisposableEffect(recording.id) {
+    DisposableEffect(recordingRevisionKey) {
         var disposed = false
         released = false
         val player = MediaPlayer()
@@ -176,7 +188,12 @@ internal fun RecordingInlinePlayer(
         }
         try {
             when (resolveRecordingStorageType(recording)) {
-                RecordingStorageType.FILE -> player.setDataSource(File(recording.id).absolutePath)
+                RecordingStorageType.FILE -> {
+                    val stream = openVerifiedFileInputStream(recording)
+                        ?: throw IllegalStateException("Recording changed on disk")
+                    pinnedFileInput = stream
+                    player.setDataSource(stream.fd)
+                }
                 RecordingStorageType.DOCUMENT,
                 RecordingStorageType.MEDIASTORE,
                 -> player.setDataSource(appContext, recording.id.toUri())
@@ -186,6 +203,8 @@ internal fun RecordingInlinePlayer(
             mediaPlayer = player
         } catch (_: Exception) {
             player.release()
+            runCatching { pinnedFileInput?.close() }
+            pinnedFileInput = null
             released = true
             onPlaybackFailed()
         }
@@ -196,7 +215,7 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    DisposableEffect(lifecycleOwner, recording.id) {
+    DisposableEffect(lifecycleOwner, recordingRevisionKey) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE && isPlaying) {
                 runCatching { mediaPlayer?.pause() }
@@ -207,7 +226,7 @@ internal fun RecordingInlinePlayer(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(isPlaying, isScrubbing, recording.id) {
+    LaunchedEffect(isPlaying, isScrubbing, recordingRevisionKey) {
         if (isPlaying && !isScrubbing) {
             while (true) {
                 delay(INLINE_PROGRESS_UPDATE_INTERVAL_MS)
@@ -219,7 +238,7 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    LaunchedEffect(recording.id) {
+    LaunchedEffect(recordingRevisionKey) {
         waveformMorphStarted = true
         coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
         detailWaveform = FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)
@@ -327,7 +346,7 @@ internal fun RecordingInlinePlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(128.dp)
-                .pointerInput(recording.id, duration, prepared, trimMode) {
+                .pointerInput(recordingRevisionKey, duration, prepared, trimMode) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (!prepared || trimSaving || size.width <= 0) return@awaitEachGesture

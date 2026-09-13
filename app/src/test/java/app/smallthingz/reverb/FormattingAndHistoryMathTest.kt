@@ -451,18 +451,63 @@ class FormattingAndHistoryMathTest {
 
     @Test
     fun foregroundRestriction_blocksAutomaticRetry_withoutErasingDurableIntent() {
-        assertTrue(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = false))
-        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = true))
-        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = false))
-        assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = true))
+        assertTrue(
+            shouldAttemptAutomaticListeningStart(
+                listeningIntentEnabled = true,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldAttemptAutomaticListeningStart(
+                listeningIntentEnabled = true,
+                foregroundStartBlocked = true,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldAttemptAutomaticListeningStart(
+                listeningIntentEnabled = true,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = true,
+            ),
+        )
+        assertFalse(
+            shouldAttemptAutomaticListeningStart(
+                listeningIntentEnabled = false,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = false,
+            ),
+        )
     }
 
     @Test
     fun foregroundBind_retriesSuspendedDurableIntent() {
-        assertTrue(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = true, foregroundServiceTimedOut = false))
-        assertTrue(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = false, foregroundServiceTimedOut = true))
-        assertFalse(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = false, foregroundServiceTimedOut = false))
-        assertFalse(shouldRetrySuspendedListeningOnForegroundBind(false, foregroundStartBlocked = true, foregroundServiceTimedOut = true))
+        assertTrue(
+            shouldRetrySuspendedListeningOnForegroundBind(
+                true, foregroundStartBlocked = true, foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+            ),
+        )
+        assertTrue(
+            shouldRetrySuspendedListeningOnForegroundBind(
+                true, foregroundStartBlocked = false, foregroundServiceTimedOut = true, persistenceFailureBlocked = false,
+            ),
+        )
+        assertTrue(
+            shouldRetrySuspendedListeningOnForegroundBind(
+                true, foregroundStartBlocked = false, foregroundServiceTimedOut = false, persistenceFailureBlocked = true,
+            ),
+        )
+        assertFalse(
+            shouldRetrySuspendedListeningOnForegroundBind(
+                true, foregroundStartBlocked = false, foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldRetrySuspendedListeningOnForegroundBind(
+                false, foregroundStartBlocked = true, foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+            ),
+        )
     }
 
     @Test

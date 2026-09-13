@@ -13,11 +13,13 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.system.Os
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -29,6 +31,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import java.util.UUID
 
 private val TAG = "RecordingFiles"
@@ -160,6 +163,7 @@ fun buildRecordingUri(
 ): Uri {
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
+            check(recordingFileIdentityMatches(recording)) { "Recording changed on disk: ${recording.id}" }
             val file = File(recording.id)
             FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         }
@@ -825,7 +829,82 @@ fun buildRecordingEntity(
         codecSummary = codecSummary,
         storageType = target.storageType.name,
         directoryId = target.directoryId,
+        fileIdentity = if (target.storageType == RecordingStorageType.FILE) {
+            target.file?.let(::resolveFileIdentity).orEmpty()
+        } else {
+            ""
+        },
     )
+}
+
+internal fun resolveFileIdentity(file: File): String {
+    val attributes = runCatching {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+    }.getOrNull()
+    val birthNanos = attributes?.creationTime()?.let { time ->
+        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+    } ?: 0L
+
+    val statIdentity = runCatching {
+        val stat = Os.stat(file.absolutePath)
+        if (stat.st_ino == 0L) "" else buildStatFileIdentity(
+            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, birthNanos,
+        )
+    }.getOrDefault("")
+    if (statIdentity.isNotBlank()) return statIdentity
+
+    return runCatching {
+        val key = attributes?.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
+        val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
+        "nio:$encodedKey:$birthNanos"
+    }.getOrDefault("")
+}
+
+internal fun resolveFileDescriptorIdentity(descriptor: FileDescriptor): String = runCatching {
+    val stat = Os.fstat(descriptor)
+    if (stat.st_ino == 0L) "" else "statfd:${stat.st_dev}:${stat.st_ino}:${stat.st_ctim.tv_sec}:${stat.st_ctim.tv_nsec}"
+}.getOrDefault("")
+
+private fun buildStatFileIdentity(
+    dev: Long,
+    ino: Long,
+    ctimeSeconds: Long,
+    ctimeNanos: Long,
+    birthNanos: Long,
+): String = "stat:$dev:$ino:$ctimeSeconds:$ctimeNanos:$birthNanos"
+
+internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String): Boolean =
+    storedIdentity.isNotBlank() && currentIdentity.isNotBlank() && storedIdentity == currentIdentity
+
+internal fun sameFileObjectAcrossRename(before: String, after: String): Boolean {
+    if (before.isBlank() || after.isBlank()) return false
+    val beforeParts = before.split(':')
+    val afterParts = after.split(':')
+    return when {
+        beforeParts.size == 6 && afterParts.size == 6 && beforeParts[0] == "stat" && afterParts[0] == "stat" -> {
+            val sameBase = beforeParts[1] == afterParts[1] && beforeParts[2] == afterParts[2]
+            val beforeBirth = beforeParts[5].toLongOrNull() ?: 0L
+            val afterBirth = afterParts[5].toLongOrNull() ?: 0L
+            sameBase && (beforeBirth == 0L || afterBirth == 0L || beforeBirth == afterBirth)
+        }
+        beforeParts.size == 3 && afterParts.size == 3 && beforeParts[0] == "nio" && afterParts[0] == "nio" ->
+            beforeParts[1] == afterParts[1] && beforeParts[2] == afterParts[2]
+        else -> false
+    }
+}
+
+internal fun fileDescriptorIdentityMatches(storedIdentity: String, descriptorIdentity: String): Boolean {
+    val stored = storedIdentity.split(':')
+    val descriptor = descriptorIdentity.split(':')
+    return stored.size == 6 && descriptor.size == 5 &&
+        stored[0] == "stat" && descriptor[0] == "statfd" &&
+        stored[1] == descriptor[1] && stored[2] == descriptor[2] &&
+        stored[3] == descriptor[3] && stored[4] == descriptor[4]
+}
+
+internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
+    if (resolveRecordingStorageType(recording) != RecordingStorageType.FILE) return true
+    return fileIdentityMatches(recording.fileIdentity, resolveFileIdentity(File(recording.id)))
 }
 
 internal fun recordingAssetState(
@@ -887,10 +966,9 @@ fun deleteRecordingAsset(
     }
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
-            val file = File(recording.id)
-            runCatching { file.delete() }
-                .onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }
-                .getOrDefault(false)
+            // FILE deletion must go through RecordingRepository's journaled rename-to-claim
+            // transaction. A raw path delete cannot close the check-to-delete reuse race.
+            false
         }
 
         RecordingStorageType.DOCUMENT -> runCatching {
@@ -1024,6 +1102,11 @@ fun copyRecordingToConfiguredDirectory(
             sizeBytes = verifiedTargetSize,
             storageType = finalizedTarget.storageType.name,
             directoryId = finalizedTarget.directoryId,
+            fileIdentity = if (finalizedTarget.storageType == RecordingStorageType.FILE) {
+                finalizedTarget.file?.let(::resolveFileIdentity).orEmpty()
+            } else {
+                ""
+            },
         )
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
@@ -1130,12 +1213,27 @@ internal fun sha256Range(
 
 internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
     when (resolveRecordingStorageType(recording)) {
-        RecordingStorageType.FILE -> FileInputStream(File(recording.id))
+        RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> context.contentResolver.openInputStream(recording.id.toUri())
         null -> null
     }
+
+internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputStream? {
+    if (resolveRecordingStorageType(recording) != RecordingStorageType.FILE || recording.fileIdentity.isBlank()) return null
+    val stream = try {
+        FileInputStream(File(recording.id))
+    } catch (_: Exception) {
+        return null
+    }
+    val openedIdentity = resolveFileDescriptorIdentity(stream.fd)
+    if (!fileDescriptorIdentityMatches(recording.fileIdentity, openedIdentity)) {
+        runCatching { stream.close() }
+        return null
+    }
+    return stream
+}
 
 internal fun recordingsHaveSameContent(
     context: Context,
@@ -1336,10 +1434,12 @@ private fun listFileDirectoryRecordings(
         .map { file ->
             val id = file.absolutePath
             val size = file.length()
+            val identity = resolveFileIdentity(file)
             val existing = knownRecordings[id]
             if (
                 existing != null && existing.durationMillis > 0L &&
-                existing.displayName == file.name && existing.sizeBytes == size
+                existing.displayName == file.name && existing.sizeBytes == size &&
+                fileIdentityMatches(existing.fileIdentity, identity)
             ) {
                 existing
             } else {
@@ -1354,6 +1454,7 @@ private fun listFileDirectoryRecordings(
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.FILE.name,
                     directoryId = directory.absolutePath,
+                    fileIdentity = identity,
                 )
             }
         }
@@ -1730,15 +1831,23 @@ private fun renameFileRecording(
         val target = File(parent, uniqueName)
         try {
             Files.move(source.toPath(), target.toPath())
+            val renamedIdentity = resolveFileIdentity(target)
+            if (!sameFileObjectAcrossRename(recording.fileIdentity, renamedIdentity)) {
+                preserveUnexpectedRenameTarget(source, target, recording.displayName)
+                throw IllegalStateException("Recording changed on disk during rename")
+            }
             if (parent.absolutePath == getSharedMusicRecordingsDirectory().absolutePath) {
                 MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(recording.mimeType), null)
             }
             return recording.copy(
                 id = target.absolutePath,
                 displayName = uniqueName,
+                fileIdentity = renamedIdentity,
             )
         } catch (_: FileAlreadyExistsException) {
             suffix++
+        } catch (error: IllegalStateException) {
+            throw error
         } catch (_: IOException) {
             return null
         } catch (_: SecurityException) {
@@ -1746,6 +1855,36 @@ private fun renameFileRecording(
         }
     }
     return null
+}
+
+private fun preserveUnexpectedRenameTarget(source: File, moved: File, originalDisplayName: String) {
+    try {
+        Files.move(moved.toPath(), source.toPath())
+        return
+    } catch (_: FileAlreadyExistsException) {
+        // A new file owns the original path. Preserve the object we accidentally moved
+        // under a separate visible recovery name rather than overwrite either object.
+    } catch (_: IOException) {
+        // Fall through to recovery-name publication.
+    } catch (_: SecurityException) {
+        // Fall through to recovery-name publication.
+    }
+
+    val parent = moved.parentFile ?: return
+    val extension = originalDisplayName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
+    val suffix = extension?.let { ".$it" }.orEmpty()
+    val base = "recovered-rename-race-${System.currentTimeMillis()}"
+    for (index in 0 until 10_000) {
+        val name = if (index == 0) "$base$suffix" else "$base-$index$suffix"
+        try {
+            Files.move(moved.toPath(), File(parent, name).toPath())
+            return
+        } catch (_: FileAlreadyExistsException) {
+            continue
+        } catch (_: Exception) {
+            return
+        }
+    }
 }
 
 private fun renameMediaStoreRecording(

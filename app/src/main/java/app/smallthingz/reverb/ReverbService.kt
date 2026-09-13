@@ -111,6 +111,9 @@ class ReverbService : Service() {
     private var foregroundServiceTimedOut = false
 
     @Volatile
+    private var persistenceFailureBlocked = false
+
+    @Volatile
     private var cachedRetentionSampleBytes = 0L
 
     @Volatile
@@ -199,7 +202,11 @@ class ReverbService : Service() {
             mainHandler.post {
                 if (
                     state != STATE_LISTENING &&
-                    shouldAttemptAutomaticListeningStart(isListeningEnabled(), foregroundStartBlocked)
+                    shouldAttemptAutomaticListeningStart(
+                        listeningIntentEnabled = isListeningEnabled(),
+                        foregroundStartBlocked = foregroundStartBlocked,
+                        persistenceFailureBlocked = persistenceFailureBlocked,
+                    )
                 ) {
                     innerStartListening()
                 }
@@ -250,10 +257,12 @@ class ReverbService : Service() {
                     listeningIntentEnabled = isListeningEnabled(),
                     foregroundStartBlocked = foregroundStartBlocked,
                     foregroundServiceTimedOut = foregroundServiceTimedOut,
+                    persistenceFailureBlocked = persistenceFailureBlocked,
                 )
             ) {
                 foregroundStartBlocked = false
                 foregroundServiceTimedOut = false
+                persistenceFailureBlocked = false
                 listeningCommandGeneration.get()
             } else {
                 null
@@ -423,6 +432,7 @@ class ReverbService : Service() {
                     activeBufferSlot = requestedSlot
                     foregroundStartBlocked = false
                     foregroundServiceTimedOut = false
+                    persistenceFailureBlocked = false
                 }
                 if (runtimeSlotChanged) listeningCommandGeneration.incrementAndGet()
                 else listeningCommandGeneration.get()
@@ -443,6 +453,7 @@ class ReverbService : Service() {
                         activeBufferSlot = requestedSlot
                         foregroundStartBlocked = false
                         foregroundServiceTimedOut = false
+                        persistenceFailureBlocked = false
                     }
                     listeningCommandGeneration.incrementAndGet()
                 }
@@ -725,7 +736,8 @@ class ReverbService : Service() {
         if (
             generation != listeningCommandGeneration.get() ||
             !isListeningEnabled() ||
-            foregroundStartBlocked
+            foregroundStartBlocked ||
+            persistenceFailureBlocked
         ) return
         state = STATE_LISTENING
         updateWakeLockState()
@@ -1689,7 +1701,33 @@ class ReverbService : Service() {
                 store.syncActivePayloadToDisk()
             }
         } catch (error: Exception) {
-            reportPersistentStoreFailure("periodic payload sync", error)
+            pauseListeningAfterPersistenceFailure("periodic payload sync", error)
+        }
+    }
+
+    private fun pauseListeningAfterPersistenceFailure(operation: String, error: Exception) {
+        val generation = synchronized(listeningIntentLock) {
+            if (state != STATE_LISTENING || !isListeningEnabled()) {
+                reportPersistentStoreFailure(operation, error)
+                return
+            }
+            persistenceFailureBlocked = true
+            val nextGeneration = listeningCommandGeneration.incrementAndGet()
+            state = STATE_PAUSED
+            nextGeneration
+        }
+        reportPersistentStoreFailure(operation, error)
+        audioHandler.post {
+            if (generation != listeningCommandGeneration.get() || state == STATE_LISTENING) return@post
+            audioHandler.removeCallbacks(audioReader)
+            runCatching { sealActiveChunks() }
+                .onFailure { sealError -> reportPersistentStoreFailure("seal after persistence failure", sealError) }
+            releaseAudioRecord()
+            updateWakeLockState()
+            setQuickTileRecordingActive(active = false)
+            mainHandler.post {
+                if (state != STATE_LISTENING) requestServiceStopWhenExportIdle()
+            }
         }
     }
 
@@ -2024,7 +2062,7 @@ class ReverbService : Service() {
         // the queued audio work remains ordered behind initial configuration.
         val listeningEnabled = isListeningEnabled()
         val generation = listeningCommandGeneration.get()
-        if (listeningEnabled && foregroundStartBlocked) {
+        if (listeningEnabled && (foregroundStartBlocked || persistenceFailureBlocked)) {
             requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
@@ -2118,7 +2156,7 @@ class ReverbService : Service() {
         pendingError.set(message)
     }
 
-    private fun reportPersistentStoreFailure(operation: String, error: Exception) {
+    private fun reportPersistentStoreFailure(operation: String, error: Throwable) {
         Log.e(TAG, "Persistent audio store $operation failed", error)
         reportError(userFacingError(getString(R.string.recorder_state_persist_failed), error))
     }
@@ -2606,13 +2644,16 @@ internal fun captureIntentNeedsPersistence(
 internal fun shouldAttemptAutomaticListeningStart(
     listeningIntentEnabled: Boolean,
     foregroundStartBlocked: Boolean,
-): Boolean = listeningIntentEnabled && !foregroundStartBlocked
+    persistenceFailureBlocked: Boolean,
+): Boolean = listeningIntentEnabled && !foregroundStartBlocked && !persistenceFailureBlocked
 
 internal fun shouldRetrySuspendedListeningOnForegroundBind(
     listeningIntentEnabled: Boolean,
     foregroundStartBlocked: Boolean,
     foregroundServiceTimedOut: Boolean,
-): Boolean = listeningIntentEnabled && (foregroundStartBlocked || foregroundServiceTimedOut)
+    persistenceFailureBlocked: Boolean,
+): Boolean = listeningIntentEnabled &&
+    (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
 
 internal enum class CaptureReaderTransition {
     IGNORE,

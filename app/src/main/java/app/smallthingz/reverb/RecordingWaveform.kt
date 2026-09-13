@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import androidx.core.net.toUri
-import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -27,7 +26,11 @@ internal fun <T> withRecordingWavChannel(
     recording: RecordingEntity,
     block: (FileChannel) -> T,
 ): T = when (resolveRecordingStorageType(recording)) {
-    RecordingStorageType.FILE -> FileInputStream(File(recording.id)).channel.use(block)
+    RecordingStorageType.FILE -> {
+        val input = openVerifiedFileInputStream(recording)
+            ?: throw IOException("Recording changed on disk")
+        input.use { source -> source.channel.use(block) }
+    }
     RecordingStorageType.DOCUMENT,
     RecordingStorageType.MEDIASTORE,
     -> {

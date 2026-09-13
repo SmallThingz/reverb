@@ -367,6 +367,7 @@ fun FilesScreen(
             showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
         } catch (_: RuntimeException) {
             showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+            refresh(showSpinner = false)
         }
     }
 
@@ -582,9 +583,10 @@ fun FilesScreen(
                                                 )
                                             } catch (_: RuntimeException) {
                                                 showPassiveNotice(
-                                                    resources.getString(R.string.no_app_available),
+                                                    resources.getString(R.string.recording_unavailable),
                                                     FeedbackTone.ERROR,
                                                 )
+                                                refresh(showSpinner = false)
                                             }
                                         },
                                     )

@@ -23,6 +23,7 @@ class DurabilityInvariantTest {
             listOf(
                 RecordingDatabaseMigrationStep.ADD_LAST_SEEN,
                 RecordingDatabaseMigrationStep.ADD_MISSING_SINCE,
+                RecordingDatabaseMigrationStep.ADD_FILE_IDENTITY,
             ),
             steps,
         )
@@ -35,14 +36,19 @@ class DurabilityInvariantTest {
         }
         assertTrue(sql.any { RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS in it })
         assertTrue(sql.any { RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS in it })
+        assertTrue(sql.any { RecordingDatabase.COLUMN_FILE_IDENTITY in it })
     }
 
     @Test
     fun databaseMigration_refusesDowngradeAndUnknownVersions() {
         assertEquals(emptyList<RecordingDatabaseMigrationStep>(), recordingDatabaseMigrationSteps(2, 2))
+        assertEquals(
+            listOf(RecordingDatabaseMigrationStep.ADD_FILE_IDENTITY),
+            recordingDatabaseMigrationSteps(2, 3),
+        )
         assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(2, 1) }
         assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(0, 2) }
-        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(2, 3) }
+        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(3, 4) }
     }
 
     @Test
@@ -205,6 +211,46 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun fileIdentity_requiresKnownExactObjectIdentity() {
+        val original = "stat:1:2:100:5:77"
+        assertTrue(fileIdentityMatches(original, original))
+        assertFalse(fileIdentityMatches(original, "stat:1:2:101:6:77"))
+        assertFalse(fileIdentityMatches(original, "stat:1:3:100:5:78"))
+        assertFalse(fileIdentityMatches("", original))
+        assertFalse(fileIdentityMatches(original, ""))
+
+        assertTrue(sameFileObjectAcrossRename(original, "stat:1:2:101:6:77"))
+        assertFalse(sameFileObjectAcrossRename(original, "stat:1:2:101:6:78"))
+        assertFalse(sameFileObjectAcrossRename(original, "stat:1:3:101:6:77"))
+        assertTrue(fileDescriptorIdentityMatches(original, "statfd:1:2:100:5"))
+        assertFalse(fileDescriptorIdentityMatches(original, "statfd:1:2:101:5"))
+    }
+
+    @Test
+    fun fileIdentity_tracksObjectAcrossRenameAndRejectsPathReplacement() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "file-identity-").toFile()
+        try {
+            val original = File(directory, "original.wav").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val identity = resolveFileIdentity(original)
+            assertTrue(identity.isNotBlank())
+            val renamed = File(directory, "renamed.wav")
+            Files.move(original.toPath(), renamed.toPath())
+            assertTrue(fileIdentityMatches(identity, resolveFileIdentity(renamed)))
+
+            val replacement = File(directory, "replacement.tmp").apply { writeBytes(byteArrayOf(9, 8, 7, 6)) }
+            Files.move(
+                replacement.toPath(),
+                renamed.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+            assertFalse(fileIdentityMatches(identity, resolveFileIdentity(renamed)))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun pendingDeletionIntent_roundTripsAndTracksPhysicalDeletionPhase() {
         val planned = PendingDeletionIntent(
             id = "content://provider/tree/a|b/%20",
@@ -217,6 +263,96 @@ class DurabilityInvariantTest {
 
         val deleted = planned.copy(assetDeleted = true)
         assertEquals(deleted, decodePendingDeletionIntent(encodePendingDeletionIntent(deleted)))
+    }
+
+    @Test
+    fun pendingDeletionV2_roundTripsFileClaimIdentity() {
+        val intent = PendingDeletionIntent(
+            id = "/storage/emulated/0/Music/Reverb/clip.wav",
+            byteCount = 9_999L,
+            sha256Hex = "cd".repeat(32),
+            assetDeleted = false,
+            storageType = RecordingStorageType.FILE.name,
+            claimToken = "00000000-0000-0000-0000-000000000123",
+            fileIdentity = "stat:1:42:100:7:55",
+        )
+        val encoded = encodePendingDeletionIntent(intent)
+        assertTrue(encoded.startsWith("v2|"))
+        assertEquals(intent, decodePendingDeletionIntent(encoded))
+        assertTrue(requireNotNull(deletionClaimFile(intent)).name.startsWith(".reverb-delete-"))
+        val malformedToken = encoded.split('|').toMutableList().also { it[6] = "not-a-uuid" }.joinToString("|")
+        assertEquals(null, decodePendingDeletionIntent(malformedToken))
+    }
+
+    @Test
+    fun claimedFileDeletion_neverDeletesAReplacementPath() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "delete-claim-").toFile()
+        try {
+            val originalBytes = ByteArray(4_096) { index -> ((index * 11 + 5) and 0xff).toByte() }
+            val replacementBytes = ByteArray(4_096) { index -> ((index * 17 + 9) and 0xff).toByte() }
+            val source = File(directory, "clip.wav").apply { writeBytes(originalBytes) }
+            val originalIdentity = resolveFileIdentity(source)
+            assertTrue(originalIdentity.isNotBlank())
+            val digest = sha256(ByteArrayInputStream(originalBytes))
+            val intent = PendingDeletionIntent(
+                id = source.absolutePath,
+                byteCount = digest.byteCount,
+                sha256Hex = digest.sha256.toHexString(),
+                assetDeleted = false,
+                storageType = RecordingStorageType.FILE.name,
+                claimToken = "00000000-0000-0000-0000-000000000124",
+                fileIdentity = originalIdentity,
+            )
+
+            // Simulate another actor replacing the directory entry after Reverb observed it.
+            val replacement = File(directory, "replacement.tmp").apply { writeBytes(replacementBytes) }
+            Files.move(
+                replacement.toPath(),
+                source.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+            assertFalse(fileIdentityMatches(originalIdentity, resolveFileIdentity(source)))
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, deleteClaimedFile(intent))
+            assertArrayEquals(replacementBytes, source.readBytes())
+            assertFalse(requireNotNull(deletionClaimFile(intent)).exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun claimedFileDeletion_replayDeletesOnlyTheClaimedOriginalAfterPathReuse() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "delete-replay-").toFile()
+        try {
+            val originalBytes = ByteArray(8_192) { index -> ((index * 23 + 3) and 0xff).toByte() }
+            val replacementBytes = ByteArray(8_192) { index -> ((index * 29 + 7) and 0xff).toByte() }
+            val source = File(directory, "clip.wav").apply { writeBytes(originalBytes) }
+            val originalIdentity = resolveFileIdentity(source)
+            assertTrue(originalIdentity.isNotBlank())
+            val digest = sha256(ByteArrayInputStream(originalBytes))
+            val intent = PendingDeletionIntent(
+                id = source.absolutePath,
+                byteCount = digest.byteCount,
+                sha256Hex = digest.sha256.toHexString(),
+                assetDeleted = false,
+                storageType = RecordingStorageType.FILE.name,
+                claimToken = "00000000-0000-0000-0000-000000000125",
+                fileIdentity = originalIdentity,
+            )
+            val claim = requireNotNull(deletionClaimFile(intent))
+            Files.move(source.toPath(), claim.toPath())
+            source.writeBytes(replacementBytes)
+            assertFalse(fileIdentityMatches(originalIdentity, resolveFileIdentity(source)))
+            assertTrue(fileIdentityMatches(originalIdentity, resolveFileIdentity(claim)))
+
+            assertEquals(FileDeletionClaimResult.DELETED, replayClaimedFileDeletion(intent, claim))
+            assertFalse(claim.exists())
+            assertArrayEquals(replacementBytes, source.readBytes())
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 
     @Test
