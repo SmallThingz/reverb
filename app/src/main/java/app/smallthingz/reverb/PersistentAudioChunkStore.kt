@@ -417,7 +417,17 @@ internal class PersistentAudioChunkStore internal constructor(
             ensureLoadedLocked()
             val record = activeRecord ?: return 0L
             if (record.payloadBytes <= activeDurablePayloadBytes) return 0L
-            ActivePayloadSyncSnapshot(record.id, record.file, record.payloadBytes)
+            ActivePayloadSyncSnapshot(
+                identity = RetiredChunkIdentity(
+                    id = record.id,
+                    createdAtMillis = record.createdAtMillis,
+                    sampleRate = record.sampleRate,
+                    channelCount = record.channelCount,
+                    sampleFormat = record.sampleFormat,
+                ),
+                file = record.file,
+                payloadBytes = record.payloadBytes,
+            )
         }
 
         try {
@@ -434,7 +444,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
         synchronized(this) {
             val record = activeRecord
-            if (record != null && record.id == snapshot.id) {
+            if (record != null && snapshot.identity.matches(record)) {
                 activeDurablePayloadBytes = maxOf(
                     activeDurablePayloadBytes,
                     minOf(snapshot.payloadBytes, record.payloadBytes),
@@ -862,9 +872,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun retirementTombstoneFile(id: UInt): File = File(retiredDirectory, id.toString())
 
     private fun persistRetirementTombstoneLocked(record: ChunkRecord) {
-        if (!retiredDirectory.exists() && !retiredDirectory.mkdirs() && !retiredDirectory.exists()) {
-            throw IOException("Unable to create retired chunk directory: ${retiredDirectory.absolutePath}")
-        }
+        ensureRetiredDirectoryDurableLocked()
         val target = retirementTombstoneFile(record.id)
         val temp = File(retiredDirectory, "${record.id}.tmp")
         val payload = buildString {
@@ -889,6 +897,7 @@ internal class PersistentAudioChunkStore internal constructor(
         } catch (_: AtomicMoveNotSupportedException) {
             Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
+        forceDirectoryDurable(retiredDirectory)
     }
 
     private fun readRetirementTombstonesLocked(): MutableMap<UInt, RetiredChunkIdentity?> {
@@ -927,15 +936,26 @@ internal class PersistentAudioChunkStore internal constructor(
         while (iterator.hasNext()) {
             val id = iterator.next()
             if (!File(chunksDirectory, id.toString()).exists()) {
-                deleteRetirementTombstoneLocked(id)
-                iterator.remove()
+                // Make the observed absence durable before forgetting why that chunk must
+                // remain absent. If this force fails, recovery aborts with the marker intact.
+                forceDirectoryDurable(chunksDirectory)
+                if (deleteRetirementTombstoneLocked(id)) iterator.remove()
             }
         }
     }
 
-    private fun deleteRetirementTombstoneLocked(id: UInt) {
-        runCatching { Files.deleteIfExists(retirementTombstoneFile(id).toPath()) }
-    }
+    private fun deleteRetirementTombstoneLocked(id: UInt): Boolean = runCatching {
+        val marker = retirementTombstoneFile(id)
+        val existed = Files.deleteIfExists(marker.toPath())
+        if (existed && retiredDirectory.exists()) forceDirectoryDurable(retiredDirectory)
+        true
+    }.getOrDefault(false)
+
+    private fun deleteChunkFileDurablyLocked(file: File): Boolean = runCatching {
+        Files.deleteIfExists(file.toPath())
+        forceDirectoryDurable(chunksDirectory)
+        true
+    }.getOrDefault(false)
 
     private fun scanChunkFilesLocked(
         retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
@@ -964,8 +984,7 @@ internal class PersistentAudioChunkStore internal constructor(
             if (retirementTombstones.containsKey(id)) {
                 val retiredIdentity = retirementTombstones[id]
                 if (retiredIdentity?.matches(record) == true) {
-                    if (runCatching { Files.deleteIfExists(file.toPath()) }.getOrDefault(false)) {
-                        deleteRetirementTombstoneLocked(id)
+                    if (deleteChunkFileDurablyLocked(file) && deleteRetirementTombstoneLocked(id)) {
                         retirementTombstones.remove(id)
                     }
                     continue
@@ -976,8 +995,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 // the user explicitly cleared. Legitimate id reuse clears stale markers before
                 // creating the replacement chunk.
                 preserveUnrecognizedChunkLocked(file, "retired-ambiguous")
-                deleteRetirementTombstoneLocked(id)
-                retirementTombstones.remove(id)
+                if (deleteRetirementTombstoneLocked(id)) retirementTombstones.remove(id)
                 continue
             }
             if (result.put(id, record) != null) {
@@ -1194,11 +1212,10 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         val staleRetirement = retirementTombstoneFile(id)
         if (staleRetirement.exists()) {
-            val cleared = runCatching {
-                Files.deleteIfExists(staleRetirement.toPath())
-                true
-            }.getOrDefault(false)
-            if (!cleared) {
+            // A prior delete may have removed the chunk in memory but not reached stable
+            // storage. Force the directory's current absence before removing its tombstone.
+            forceDirectoryDurable(chunksDirectory)
+            if (!deleteRetirementTombstoneLocked(id)) {
                 throw IOException("Unable to clear stale retirement marker for chunk id $id")
             }
         }
@@ -1519,7 +1536,9 @@ internal class PersistentAudioChunkStore internal constructor(
             activeDurablePayloadBytes = 0L
         }
         if (!removeChunkLocked(record)) {
-            deleteRetirementTombstoneLocked(record.id)
+            if (!deleteRetirementTombstoneLocked(record.id)) {
+                throw IOException("Unable to roll back retirement marker for chunk ${record.id}")
+            }
             return false
         }
         retirePreparedRecordLocked(record)
@@ -1547,12 +1566,11 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun tryDeleteRetiredRecordLocked(record: ChunkRecord): Boolean {
-        val deleted = runCatching {
-            Files.deleteIfExists(record.file.toPath())
-            true
-        }.getOrDefault(false)
+        val deleted = deleteChunkFileDurablyLocked(record.file)
         if (deleted) {
             retiredById.remove(record.id)
+            // If marker cleanup fails, keep the stale marker on disk. Reuse refuses to
+            // claim this numeric id until that marker can itself be removed durably.
             deleteRetirementTombstoneLocked(record.id)
         } else {
             retiredById[record.id] = record
@@ -1935,6 +1953,14 @@ internal class PersistentAudioChunkStore internal constructor(
         return crc.value.toInt()
     }
 
+    private fun ensureRetiredDirectoryDurableLocked() {
+        val existed = retiredDirectory.exists()
+        if (!existed && !retiredDirectory.mkdirs() && !retiredDirectory.exists()) {
+            throw IOException("Unable to create retired chunk directory: ${retiredDirectory.absolutePath}")
+        }
+        if (!existed) forceDirectoryDurable(rootDirectory)
+    }
+
     private fun ensureQuarantineDirectoryDurableLocked() {
         val existed = quarantineDirectory.exists()
         if (!existed && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
@@ -1950,7 +1976,7 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private data class ActivePayloadSyncSnapshot(
-        val id: UInt,
+        val identity: RetiredChunkIdentity,
         val file: File,
         val payloadBytes: Long,
     )

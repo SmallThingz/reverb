@@ -25,9 +25,11 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Base64
@@ -684,6 +686,7 @@ internal fun publishStagedFile(source: File, finalDisplayName: String): File {
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
             // when a racing destination exists its replacement semantics are provider-specific.
             Files.move(source.toPath(), destination.toPath())
+            forceRecordingDirectoryDurable(parent)
             return destination
         } catch (_: FileAlreadyExistsException) {
             continue
@@ -782,21 +785,15 @@ private fun publishStagedDocumentByVerifiedCopy(
             ) {
                 throw IOException("Final output document verification failed")
             }
-            val stagingDeleted = runCatching {
-                DocumentFile.fromSingleUri(context, sourceUri)?.delete() == true
-            }.onFailure { Log.w(TAG, "Unable to remove published staging document $sourceUri", it) }
-                .getOrDefault(false)
+            val stagingDeleted = suppressAndDeleteOutputTarget(context, target)
             if (!stagingDeleted) {
-                Log.w(TAG, "Published staging document retained for safety: $sourceUri")
+                Log.w(TAG, "Published staging document retained under cleanup journal: $sourceUri")
             }
             return finalTarget
         } catch (error: Exception) {
-            val finalDeleted = runCatching {
-                DocumentFile.fromSingleUri(context, finalUri)?.delete() == true
-            }.onFailure { Log.w(TAG, "Unable to remove failed final document $finalUri", it) }
-                .getOrDefault(false)
+            val finalDeleted = suppressAndDeleteOutputTarget(context, finalTarget)
             if (!finalDeleted) {
-                Log.w(TAG, "Failed final document retained alongside verified staging copy: $finalUri")
+                Log.w(TAG, "Failed final document retained under cleanup journal: $finalUri")
             }
             throw if (error is IOException) error else IOException("Unable to publish verified staging document", error)
         }
@@ -1110,18 +1107,11 @@ fun copyRecordingToConfiguredDirectory(
         )
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
-        runCatching {
-            when (target?.storageType) {
-                RecordingStorageType.FILE -> target.file?.delete()
-                RecordingStorageType.DOCUMENT -> {
-                    target.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
-                }
-                RecordingStorageType.MEDIASTORE -> {
-                    target.uri?.let { context.contentResolver.delete(it, null, null) }
-                }
-                null -> Unit
+        target?.let { cleanupTarget ->
+            if (!suppressAndDeleteOutputTarget(context, cleanupTarget)) {
+                Log.w(TAG, "Deferred cleanup for partial copied recording ${cleanupTarget.id}")
             }
-        }.onFailure { Log.w(TAG, "Failed to clean up partial export for ${target?.displayName}", it) }
+        }
         null
     }
 }
@@ -1305,32 +1295,45 @@ internal fun listOutputDirectoryRecordings(
     treeUri: Uri?,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
+    retryPendingOutputCleanup(context)
+    val suppressedIds = pendingOutputCleanupIds(context)
     if (treeUri == null) {
         return if (usesMediaStoreDefaultStorage()) {
-            listMediaStoreRecordings(context, knownRecordings)
+            listMediaStoreRecordings(context, knownRecordings, suppressedIds)
         } else {
-            listFileDirectoryRecordings(context, getSharedMusicRecordingsDirectory(), knownRecordings)
+            listFileDirectoryRecordings(
+                context,
+                getSharedMusicRecordingsDirectory(),
+                knownRecordings,
+                suppressedIds,
+            )
         }
     }
-    return listDocumentTreeRecordings(context, treeUri, knownRecordings)
+    return listDocumentTreeRecordings(context, treeUri, knownRecordings, suppressedIds)
 }
 
 internal fun listLegacyAppStorageRecordings(
     context: Context,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
-): List<RecordingEntity> = listFileDirectoryRecordings(
-    context,
-    getSavedRecordingsDirectory(context),
-    knownRecordings,
-)
+): List<RecordingEntity> {
+    retryPendingOutputCleanup(context)
+    return listFileDirectoryRecordings(
+        context,
+        getSavedRecordingsDirectory(context),
+        knownRecordings,
+        pendingOutputCleanupIds(context),
+    )
+}
 
 private fun recoverStagedFileOutputs(
     context: Context,
     directory: File,
     files: Array<File>,
+    suppressedIds: Set<String>,
 ): Boolean {
     var changed = false
     files.forEach { file ->
+        if (file.absolutePath in suppressedIds) return@forEach
         val name = file.name
         if (!file.isFile || !isStagingOutputName(name)) return@forEach
         val metadata = parseStagingOutputMetadata(name) ?: return@forEach
@@ -1362,20 +1365,28 @@ private fun recoverStagedDocumentOutputs(
     context: Context,
     treeUri: Uri,
     files: Array<DocumentFile>,
+    suppressedIds: Set<String>,
 ): Boolean {
     var changed = false
     files.forEach { file ->
+        if (file.uri.toString() in suppressedIds) return@forEach
         val name = file.name ?: return@forEach
         if (!file.isFile || !isStagingOutputName(name)) return@forEach
         val metadata = parseStagingOutputMetadata(name) ?: return@forEach
         if (!shouldRecoverStagingOutput(metadata)) return@forEach
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
-        if (hasMatchingPublishedDocument(context, file, metadata.finalDisplayName, files)) return@forEach
         val duration = runCatching {
             context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
         }.onFailure { Log.w(TAG, "Unable to inspect staging document ${file.uri}", it) }
             .getOrDefault(0L)
         if (duration <= 0L) return@forEach
+        if (hasMatchingPublishedDocument(context, file, metadata.finalDisplayName, files)) {
+            val removed = runCatching { file.delete() }
+                .onFailure { Log.w(TAG, "Unable to remove redundant staging document ${file.uri}", it) }
+                .getOrDefault(false)
+            changed = changed || removed
+            return@forEach
+        }
         val modified = file.lastModified().coerceAtLeast(0L)
         val target = RecordingOutputTarget(
             id = file.uri.toString(),
@@ -1419,19 +1430,21 @@ private fun listFileDirectoryRecordings(
     context: Context,
     directory: File,
     knownRecordings: Map<String, RecordingEntity>,
+    suppressedIds: Set<String>,
 ): List<RecordingEntity> {
     var files = directory.listFiles() ?: if (!directory.exists()) {
         emptyArray()
     } else {
         throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
     }
-    if (recoverStagedFileOutputs(context, directory, files)) {
+    if (recoverStagedFileOutputs(context, directory, files, suppressedIds)) {
         files = directory.listFiles() ?: throw IOException("Unable to relist recordings directory: ${directory.absolutePath}")
     }
     return files.asSequence()
         .filter { it.isFile && it.length() > 0L && !it.isHidden }
+        .filter { it.absolutePath !in suppressedIds }
         .filter { isSupportedRecordingName(it.name) }
-        .map { file ->
+        .mapNotNull { file ->
             val id = file.absolutePath
             val size = file.length()
             val identity = resolveFileIdentity(file)
@@ -1443,13 +1456,20 @@ private fun listFileDirectoryRecordings(
             ) {
                 existing
             } else {
+                val strictDuration = runCatching {
+                    FileInputStream(file).use { input ->
+                        structurallyCompleteRecordingDurationMillis(file.name, input)
+                    }
+                }.onFailure { Log.w(TAG, "Unable to validate discovered recording $file", it) }
+                    .getOrDefault(0L)
+                if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(file)
                 RecordingEntity(
                     id = id,
                     displayName = file.name,
                     mimeType = guessMimeType(file.name),
                     startedAtMillis = resolveRecordingStartTimeMillis(file),
-                    durationMillis = media.durationMillis.coerceAtLeast(0L),
+                    durationMillis = strictDuration,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.FILE.name,
@@ -1465,15 +1485,17 @@ private fun listDocumentTreeRecordings(
     context: Context,
     treeUri: Uri,
     knownRecordings: Map<String, RecordingEntity>,
+    suppressedIds: Set<String>,
 ): List<RecordingEntity> = runCatching {
     val tree = DocumentFile.fromTreeUri(context, treeUri)
         ?: throw IOException("Unable to access output directory $treeUri")
     var files = tree.listFiles()
-    if (recoverStagedDocumentOutputs(context, treeUri, files)) {
+    if (recoverStagedDocumentOutputs(context, treeUri, files, suppressedIds)) {
         files = tree.listFiles()
     }
     files.asSequence()
         .filter { it.isFile }
+        .filter { file -> file.uri.toString() !in suppressedIds }
         .filter { file -> !isDocumentPublishInProgress(file.uri) }
         .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
         .mapNotNull { file ->
@@ -1487,13 +1509,20 @@ private fun listDocumentTreeRecordings(
             ) {
                 existing
             } else {
+                val strictDuration = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        structurallyCompleteRecordingDurationMillis(name, input)
+                    } ?: 0L
+                }.onFailure { Log.w(TAG, "Unable to validate discovered recording $uri", it) }
+                    .getOrDefault(0L)
+                if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(context, uri, name)
                 RecordingEntity(
                     id = uri.toString(),
                     displayName = name,
                     mimeType = file.type ?: guessMimeType(name),
                     startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
-                    durationMillis = media.durationMillis.coerceAtLeast(0L),
+                    durationMillis = strictDuration,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.DOCUMENT.name,
@@ -1507,6 +1536,7 @@ private fun listDocumentTreeRecordings(
 private fun listMediaStoreRecordings(
     context: Context,
     knownRecordings: Map<String, RecordingEntity>,
+    suppressedIds: Set<String>,
 ): List<RecordingEntity> {
     if (!usesMediaStoreDefaultStorage()) return emptyList()
     val resolver = context.contentResolver
@@ -1539,6 +1569,7 @@ private fun listMediaStoreRecordings(
                 while (cursor.moveToNext()) {
                     val storedName = cursor.getString(nameIndex) ?: continue
                     val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
+                    if (uri.toString() in suppressedIds) continue
                     val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
                     val pending = cursor.getInt(pendingIndex) != 0
                     val reportedDuration = cursor.getLong(durationIndex).coerceAtLeast(0L)
@@ -1779,6 +1810,28 @@ internal fun shouldRecoverStagingOutput(
 internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
     sizeBytes > 0L && durationMillis > 0L
 
+private fun forceRecordingDirectoryDurable(directory: File) {
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+        channel.force(true)
+    }
+}
+
+internal fun deleteFileRecordingDurably(file: File): Boolean = runCatching {
+    val parent = file.parentFile ?: return@runCatching false
+    if (!Files.deleteIfExists(file.toPath())) return@runCatching false
+    forceRecordingDirectoryDurable(parent)
+    true
+}.onFailure { Log.w(TAG, "Unable to durably delete recording $file", it) }
+    .getOrDefault(false)
+
+internal fun confirmMissingFileRecordingDurable(file: File): Boolean = runCatching {
+    if (file.exists()) return@runCatching false
+    val parent = file.parentFile?.takeIf { it.isDirectory } ?: return@runCatching false
+    forceRecordingDirectoryDurable(parent)
+    true
+}.onFailure { Log.w(TAG, "Unable to confirm recording deletion for $file", it) }
+    .getOrDefault(false)
+
 private fun createLocalOutputTarget(
     context: Context,
     requestedDisplayName: String,
@@ -1787,8 +1840,12 @@ private fun createLocalOutputTarget(
     storageDir: File = getSavedRecordingsDirectory(context),
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
-    if (!storageDir.exists() && !storageDir.mkdirs() && !storageDir.exists()) {
+    val storageDirectoryExisted = storageDir.exists()
+    if (!storageDirectoryExisted && !storageDir.mkdirs() && !storageDir.exists()) {
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
+    }
+    if (!storageDirectoryExisted) {
+        storageDir.parentFile?.takeIf { it.isDirectory }?.let(::forceRecordingDirectoryDurable)
     }
 
     // Document-provider display names are metadata, not trusted filesystem paths.
@@ -1799,7 +1856,17 @@ private fun createLocalOutputTarget(
     var file: File
     while (true) {
         file = File(storageDir, stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind))
-        if (file.createNewFile()) break
+        if (!file.createNewFile()) continue
+        try {
+            forceRecordingDirectoryDurable(storageDir)
+        } catch (error: Exception) {
+            runCatching {
+                Files.deleteIfExists(file.toPath())
+                forceRecordingDirectoryDurable(storageDir)
+            }
+            throw if (error is IOException) error else IOException("Unable to persist output staging entry", error)
+        }
+        break
     }
     return RecordingOutputTarget(
         id = file.absolutePath,
@@ -1835,6 +1902,24 @@ private fun renameFileRecording(
             if (!sameFileObjectAcrossRename(recording.fileIdentity, renamedIdentity)) {
                 preserveUnexpectedRenameTarget(source, target, recording.displayName)
                 throw IllegalStateException("Recording changed on disk during rename")
+            }
+            try {
+                forceRecordingDirectoryDurable(parent)
+            } catch (durabilityError: Exception) {
+                val rolledBack = runCatching {
+                    Files.move(target.toPath(), source.toPath())
+                    forceRecordingDirectoryDurable(parent)
+                    true
+                }.getOrDefault(false)
+                if (rolledBack) {
+                    Log.w(TAG, "File rename durability failed; restored original name ${recording.id}", durabilityError)
+                    return null
+                }
+                // The exact object was verified after the rename, but the directory entry is
+                // not known durable and rollback failed. Keep the visible target identity so
+                // reconciliation can recover either power-loss outcome without touching a
+                // different object that later reuses the original path.
+                Log.w(TAG, "File rename durability uncertain; retaining visible renamed asset $target", durabilityError)
             }
             if (parent.absolutePath == getSharedMusicRecordingsDirectory().absolutePath) {
                 MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(recording.mimeType), null)
@@ -2094,6 +2179,14 @@ private fun readWavDurationMillis(input: InputStream): Long {
         }
         0L
     }.onFailure { Log.w(TAG, "readWavDurationMillis(input) failed", it) }.getOrDefault(0L)
+}
+
+internal fun structurallyCompleteRecordingDurationMillis(
+    displayName: String,
+    input: InputStream,
+): Long = when (displayName.substringAfterLast('.', "").lowercase()) {
+    ExportFormat.WAV.extension -> readRecoverableStagingWavDurationMillis(input)
+    else -> 0L
 }
 
 internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long = runCatching {

@@ -258,6 +258,25 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun pendingOutputCleanup_roundTripsAndRejectsReplacementIdentity() {
+        val hash = "ab".repeat(32)
+        val record = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "recordings/path-with-delimiters.wav",
+            byteCount = 1234L,
+            sha256Hex = hash,
+            fileKey = "stat:1:2:100:5:77",
+        )
+        val encoded = encodePendingOutputCleanupRecord(record)
+        assertEquals(record, decodePendingOutputCleanupRecord(encoded))
+        assertTrue(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:2:100:5:77"))
+        assertFalse(pendingOutputCleanupMatches(record, 1235L, hash, "stat:1:2:100:5:77"))
+        assertFalse(pendingOutputCleanupMatches(record, 1234L, "cd".repeat(32), "stat:1:2:100:5:77"))
+        assertFalse(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:3:100:5:78"))
+        assertEquals(null, decodePendingOutputCleanupRecord("v1|FILE|broken|12|short|"))
+    }
+
+    @Test
     fun pendingDeletionIntent_roundTripsAndTracksPhysicalDeletionPhase() {
         val planned = PendingDeletionIntent(
             id = "content://provider/tree/a|b/%20",

@@ -1554,23 +1554,9 @@ class ReverbService : Service() {
     }
 
     private fun deleteOutputTarget(target: RecordingOutputTarget?) {
-        if (target == null) {
-            return
-        }
-        runCatching {
-            when (target.storageType) {
-                RecordingStorageType.FILE -> target.file?.delete()
-                RecordingStorageType.DOCUMENT -> {
-                    val uri = target.uri ?: return@runCatching
-                    androidx.documentfile.provider.DocumentFile.fromSingleUri(this, uri)?.delete()
-                }
-                RecordingStorageType.MEDIASTORE -> {
-                    val uri = target.uri ?: return@runCatching
-                    contentResolver.delete(uri, null, null)
-                }
-            }
-        }.onFailure { error ->
-            Log.w(TAG, "Failed to delete export target ${target.id}", error)
+        if (target == null) return
+        if (!suppressAndDeleteOutputTarget(this, target)) {
+            Log.w(TAG, "Deferred cleanup for export target ${target.id}")
         }
     }
 

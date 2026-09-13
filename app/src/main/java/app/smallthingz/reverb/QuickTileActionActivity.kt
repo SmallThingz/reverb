@@ -86,6 +86,10 @@ class QuickTileActionActivity : ComponentActivity() {
                     loopingIsEnabled: Boolean,
                 ) {
                     if (finished) return
+                    if (!resumed) {
+                        finishAction()
+                        return
+                    }
                     val usable = canActivateCaptureBuffer(
                         requested = requestedBuffer,
                         oneShotEnabled = oneShotIsEnabled,
