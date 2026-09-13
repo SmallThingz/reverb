@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
 import android.database.Cursor
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
@@ -57,8 +58,9 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         oldVersion: Int,
         newVersion: Int,
     ) {
-        // Alpha policy: schema changes are destructive. Do not carry migration chains yet.
-        db.recreateSchema()
+        for (step in recordingDatabaseMigrationSteps(oldVersion, newVersion)) {
+            recordingDatabaseMigrationSql(step).forEach(db::execSQL)
+        }
     }
 
     override fun onDowngrade(
@@ -66,7 +68,9 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         oldVersion: Int,
         newVersion: Int,
     ) {
-        db.recreateSchema()
+        throw SQLiteException(
+            "Refusing destructive recording database downgrade from $oldVersion to $newVersion",
+        )
     }
 
     override fun onOpen(db: SQLiteDatabase) {
@@ -126,8 +130,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
 
     companion object {
         private const val DATABASE_NAME = ReverbConfig.DATABASE_FILE_NAME
-        // Alpha schema mismatches are rebuilt destructively; no migration chain is retained.
-        private const val DATABASE_VERSION = 2
+        internal const val DATABASE_VERSION = 2
         internal const val TABLE_RECORDINGS = "recordings"
         internal const val COLUMN_ID = "id"
         internal const val COLUMN_DISPLAY_NAME = "displayName"
@@ -212,9 +215,42 @@ private fun SQLiteDatabase.createIndexes() {
     )
 }
 
-private fun SQLiteDatabase.recreateSchema() {
-    execSQL("DROP TABLE IF EXISTS ${RecordingDatabase.TABLE_RECORDINGS}")
-    createSchema()
+internal enum class RecordingDatabaseMigrationStep {
+    ADD_LAST_SEEN,
+    ADD_MISSING_SINCE,
+}
+
+internal fun recordingDatabaseMigrationSteps(
+    oldVersion: Int,
+    newVersion: Int,
+): List<RecordingDatabaseMigrationStep> {
+    require(oldVersion > 0) { "Invalid recording database version: $oldVersion" }
+    require(newVersion >= oldVersion) { "Database downgrade is not a migration" }
+    require(newVersion <= RecordingDatabase.DATABASE_VERSION) {
+        "Unsupported future recording database version: $newVersion"
+    }
+    if (oldVersion == newVersion) return emptyList()
+    return buildList {
+        if (oldVersion < 2 && newVersion >= 2) {
+            add(RecordingDatabaseMigrationStep.ADD_LAST_SEEN)
+            add(RecordingDatabaseMigrationStep.ADD_MISSING_SINCE)
+        }
+    }
+}
+
+internal fun recordingDatabaseMigrationSql(
+    step: RecordingDatabaseMigrationStep,
+): List<String> = when (step) {
+    RecordingDatabaseMigrationStep.ADD_LAST_SEEN -> listOf(
+        "ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS} " +
+            "ADD COLUMN ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} INTEGER NOT NULL DEFAULT 0",
+        "UPDATE ${RecordingDatabase.TABLE_RECORDINGS} " +
+            "SET ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} = ${RecordingDatabase.COLUMN_CREATED_AT_MILLIS}",
+    )
+    RecordingDatabaseMigrationStep.ADD_MISSING_SINCE -> listOf(
+        "ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS} " +
+            "ADD COLUMN ${RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS} INTEGER",
+    )
 }
 
 private fun RecordingEntity.toContentValues(): ContentValues {

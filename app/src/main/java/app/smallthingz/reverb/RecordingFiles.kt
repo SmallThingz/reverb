@@ -19,10 +19,12 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
 
 private val TAG = "RecordingFiles"
 private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
@@ -610,7 +612,7 @@ internal fun recordingAssetState(
             }
         }
 
-        null -> RecordingAssetState.MISSING
+        null -> RecordingAssetState.UNAVAILABLE
     }
 }
 
@@ -635,7 +637,7 @@ fun deleteRecordingAsset(
             val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
             document?.delete() == true || recordingAssetState(context, recording) == RecordingAssetState.MISSING
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
-        null -> true
+        null -> false
     }
 }
 
@@ -687,24 +689,25 @@ fun copyRecordingToConfiguredDirectory(
             RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(recording.id.toUri())
             null -> throw IOException("Unknown recording storage type: ${recording.storageType}")
         } ?: throw IOException("Unable to open source recording")
-        var copiedBytes = 0L
+        lateinit var sourceDigest: CopyDigest
         input.use { source ->
             when (resolvedTarget.storageType) {
                 RecordingStorageType.FILE -> {
                     FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
-                        copiedBytes = source.copyTo(output, FILE_COPY_BUFFER_BYTES)
+                        sourceDigest = copyWithSha256(source, output)
                         output.fd.sync()
                     }
                 }
 
                 RecordingStorageType.DOCUMENT -> {
                     context.contentResolver.openOutputStream(requireNotNull(resolvedTarget.uri), "w")?.use { output ->
-                        copiedBytes = source.copyTo(output, FILE_COPY_BUFFER_BYTES)
+                        sourceDigest = copyWithSha256(source, output)
                         output.flush()
                     } ?: throw IOException("Unable to open target output stream")
                 }
             }
         }
+        val copiedBytes = sourceDigest.byteCount
         if (copiedBytes <= 0L) {
             throw IOException("Recording source was empty")
         }
@@ -719,6 +722,15 @@ fun copyRecordingToConfiguredDirectory(
         }
         if (verifiedTargetSize != copiedBytes) {
             throw IOException("Recording copy size mismatch: copied=$copiedBytes target=$verifiedTargetSize")
+        }
+        val targetInput = when (resolvedTarget.storageType) {
+            RecordingStorageType.FILE -> FileInputStream(requireNotNull(resolvedTarget.file))
+            RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(requireNotNull(resolvedTarget.uri))
+                ?: throw IOException("Unable to reopen copied recording")
+        }
+        val targetDigest = targetInput.use(::sha256)
+        if (targetDigest.byteCount != copiedBytes || !targetDigest.sha256.contentEquals(sourceDigest.sha256)) {
+            throw IOException("Recording copy content verification failed")
         }
 
         recording.copy(
@@ -741,6 +753,62 @@ fun copyRecordingToConfiguredDirectory(
         }.onFailure { Log.w(TAG, "Failed to clean up partial export for ${target?.displayName}", it) }
         null
     }
+}
+
+internal data class CopyDigest(
+    val byteCount: Long,
+    val sha256: ByteArray,
+)
+
+internal fun copyWithSha256(
+    input: InputStream,
+    output: OutputStream,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest {
+    require(bufferSize > 0) { "Copy buffer must be positive" }
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(bufferSize)
+    var total = 0L
+    while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        if (count == 0) {
+            val value = input.read()
+            if (value < 0) break
+            output.write(value)
+            digest.update(value.toByte())
+            total++
+            continue
+        }
+        output.write(buffer, 0, count)
+        digest.update(buffer, 0, count)
+        total += count.toLong()
+    }
+    return CopyDigest(total, digest.digest())
+}
+
+internal fun sha256(
+    input: InputStream,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest {
+    require(bufferSize > 0) { "Digest buffer must be positive" }
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(bufferSize)
+    var total = 0L
+    while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        if (count == 0) {
+            val value = input.read()
+            if (value < 0) break
+            digest.update(value.toByte())
+            total++
+            continue
+        }
+        digest.update(buffer, 0, count)
+        total += count.toLong()
+    }
+    return CopyDigest(total, digest.digest())
 }
 
 fun listCurrentOutputDirectoryRecordings(

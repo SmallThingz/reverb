@@ -332,11 +332,9 @@ object RecordingRepository {
         mutex.withLock {
             val keep = mutableSetOf<String>()
             getConfiguredExportTreeUri(context)?.toString()?.let(keep::add)
-            RecordingDatabase.getInstance(context).recordingDao().listAll().asSequence()
-                .filter { resolveRecordingStorageType(it) == RecordingStorageType.DOCUMENT }
-                .map { it.directoryId }
-                .filter { it.isNotBlank() }
-                .forEach(keep::add)
+            keep += recordingDirectoryIdsToRetain(
+                RecordingDatabase.getInstance(context).recordingDao().listAll(),
+            )
             synchronized(pendingDirectoryIds) {
                 keep += pendingDirectoryIds
             }
@@ -368,6 +366,16 @@ object RecordingRepository {
         val removedMissing: Int = 0,
     )
 }
+
+internal fun recordingDirectoryIdsToRetain(
+    recordings: List<RecordingEntity>,
+): Set<String> = recordings.asSequence()
+    // Unknown/future storage types must retain their directory grant too. A local path simply
+    // will not match a persisted content-URI permission, while dropping an unknown SAF grant
+    // could make the only surviving audio unreachable.
+    .map { it.directoryId }
+    .filter { it.isNotBlank() }
+    .toSet()
 
 internal fun mergeObservedRecording(
     existing: RecordingEntity?,

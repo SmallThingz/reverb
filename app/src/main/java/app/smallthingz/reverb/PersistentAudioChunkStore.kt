@@ -95,17 +95,31 @@ internal fun oneShotRetainedChunkBytesForTime(
  * Completed chunks are immutable. The only mutable audio file is the newest ACTIVE chunk.
  * Chronology lives in [chunks], not in numeric filename ordering, so UInt32 wrap is harmless.
  */
-internal class PersistentAudioChunkStore(
-    context: Context,
-    cacheFolderName: String = ReverbConfig.BUFFER_CACHE_FOLDER_NAME,
-    legacyCacheFolderName: String? = ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME,
-    private val overwriteOldest: Boolean = true,
+internal class PersistentAudioChunkStore internal constructor(
+    private val rootDirectory: File,
+    private val legacyDirectory: File?,
+    private val overwriteOldest: Boolean,
 ) : Closeable {
-    private val rootDirectory = File(context.noBackupFilesDir, cacheFolderName)
+    constructor(
+        context: Context,
+        cacheFolderName: String = ReverbConfig.BUFFER_CACHE_FOLDER_NAME,
+        legacyCacheFolderName: String? = ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME,
+        overwriteOldest: Boolean = true,
+    ) : this(
+        rootDirectory = File(context.noBackupFilesDir, cacheFolderName),
+        legacyDirectory = legacyCacheFolderName?.let { File(context.noBackupFilesDir, it) },
+        overwriteOldest = overwriteOldest,
+    )
+
+    internal constructor(
+        rootDirectory: File,
+        overwriteOldest: Boolean = true,
+    ) : this(rootDirectory, legacyDirectory = null, overwriteOldest = overwriteOldest)
+
     private val chunksDirectory = File(rootDirectory, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
     private val indexA = File(rootDirectory, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
     private val indexB = File(rootDirectory, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
-    private val legacyDirectory = legacyCacheFolderName?.let { File(context.noBackupFilesDir, it) }
+    private val quarantineDirectory = File(rootDirectory, "preserved")
 
     private val chunks = ArrayDeque<ChunkRecord>()
     private val liveChunkIds = HashSet<UInt>()
@@ -658,10 +672,12 @@ internal class PersistentAudioChunkStore(
             throw IllegalStateException("Unable to create chunks directory: ${chunksDirectory.absolutePath}")
         }
 
-        // Alpha builds intentionally discard obsolete private storage instead of migrating it.
+        // Never delete an older buffer format automatically. Even if this version cannot
+        // decode it, those bytes may be the only surviving copy after a downgrade/upgrade.
+        // A future explicit migration can consume it; user data must not be cleanup collateral.
         legacyDirectory?.let { legacy ->
             if (legacy != rootDirectory && legacy.exists()) {
-                runCatching { legacy.deleteRecursively() }
+                // Intentionally preserved.
             }
         }
         runCatching { File(rootDirectory, indexA.name + ".tmp").delete() }
@@ -696,11 +712,7 @@ internal class PersistentAudioChunkStore(
             if (!file.isFile) continue
             val id = file.name.toUIntOrNull()
             if (id == null || file.name != id.toString()) {
-                try {
-                    Files.deleteIfExists(file.toPath())
-                } catch (error: IOException) {
-                    throw IOException("Unable to remove invalid chunk artifact ${file.absolutePath}", error)
-                }
+                preserveUnrecognizedChunkLocked(file, "unrecognized")
                 continue
             }
             val record = try {
@@ -711,11 +723,7 @@ internal class PersistentAudioChunkStore(
                 throw IOException("Unable to inspect chunk ${file.absolutePath}", error)
             }
             if (record == null) {
-                try {
-                    Files.deleteIfExists(file.toPath())
-                } catch (error: IOException) {
-                    throw IOException("Unable to remove corrupt chunk ${file.absolutePath}", error)
-                }
+                preserveUnrecognizedChunkLocked(file, "corrupt")
                 continue
             }
             if (result.put(id, record) != null) {
@@ -723,6 +731,49 @@ internal class PersistentAudioChunkStore(
             }
         }
         return result
+    }
+
+    private fun preserveUnrecognizedChunkLocked(file: File, reason: String) {
+        if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
+            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
+        }
+        var suffix = 0
+        while (true) {
+            val suffixText = if (suffix == 0) "" else ".$suffix"
+            val target = File(quarantineDirectory, "${file.name}.$reason$suffixText")
+            if (target.exists()) {
+                suffix++
+                continue
+            }
+            try {
+                Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(file.toPath(), target.toPath())
+            }
+            return
+        }
+    }
+
+    private fun preserveFileCopyLocked(file: File, reason: String) {
+        if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
+            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
+        }
+        var suffix = 0
+        while (true) {
+            val suffixText = if (suffix == 0) "" else ".$suffix"
+            val target = File(quarantineDirectory, "${file.name}.$reason$suffixText")
+            if (target.exists()) {
+                suffix++
+                continue
+            }
+            FileInputStream(file).use { input ->
+                FileOutputStream(target).use { output ->
+                    input.copyTo(output)
+                    output.fd.sync()
+                }
+            }
+            return
+        }
     }
 
     private fun restoreFromIndexLocked(
@@ -761,9 +812,11 @@ internal class PersistentAudioChunkStore(
             nextChunkId += (furthestDistance + 1L).toUInt()
         }
 
-        // Anything not reachable from the committed end-cap is stale cleanup from a prior crash.
+        // The index says these chunks are no longer in the live timeline, but a crash can
+        // make that metadata newer than the user's last recoverable audio. Preserve rather
+        // than delete; intentional retention cleanup only destroys chunks while the store is live.
         for (stale in scanned.values) {
-            retireRecordLocked(stale)
+            preserveUnrecognizedChunkLocked(stale.file, "stale-index")
         }
     }
 
@@ -807,7 +860,8 @@ internal class PersistentAudioChunkStore(
         if (actualPayload > CHUNK_PAYLOAD_BYTES.toLong()) return null
         val alignedActualPayload = actualPayload - actualPayload % frameBytes.toLong()
         if (alignedActualPayload <= 0L) {
-            runCatching { file.delete() }
+            // No complete frame can be recovered, but preserve the bytes for forensic/future
+            // recovery instead of silently deleting a crash-torn write.
             return null
         }
 
@@ -836,7 +890,12 @@ internal class PersistentAudioChunkStore(
         }
 
         // ACTIVE metadata can lag the payload after a crash. The immutable prefix is
-        // independently checksummed, so payload geometry can be reconstructed safely.
+        // independently checksummed, so payload geometry can be reconstructed safely. If
+        // the crash tore the final frame, preserve the original bytes before aligning the
+        // live copy; even undecodable trailing bytes are never silently destroyed.
+        if (actualPayload != alignedActualPayload) {
+            preserveFileCopyLocked(file, "partial-frame")
+        }
         RandomAccessFile(file, "rw").use { access ->
             access.setLength(header.payloadOffsetBytes + alignedActualPayload)
         }
@@ -1033,8 +1092,8 @@ internal class PersistentAudioChunkStore(
 
         if (record === activeRecord) finalizeActiveLocked()
         val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
-        if (temp.exists() && !temp.delete()) {
-            throw IOException("Unable to remove stale truncation artifact: ${temp.absolutePath}")
+        if (temp.exists()) {
+            preserveUnrecognizedChunkLocked(temp, "stale-truncation")
         }
 
         val replacement = ChunkRecord(
