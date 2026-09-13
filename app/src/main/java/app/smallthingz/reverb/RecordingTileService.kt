@@ -1,14 +1,16 @@
 package app.smallthingz.reverb
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import java.util.UUID
@@ -27,6 +29,13 @@ internal enum class RecordingTileUiState {
     AVAILABLE,
     FULL,
     DISABLED,
+}
+
+internal enum class RecordingTileClickAction {
+    START,
+    SWITCH,
+    STOP,
+    NONE,
 }
 
 internal fun recordingTileUiState(
@@ -58,6 +67,19 @@ internal fun isTileCaptureActuallyRecording(
     runtimeCaptureActive: Boolean,
 ): Boolean = listeningIntentEnabled && runtimeCaptureActive
 
+internal fun recordingTileClickAction(
+    bufferSlot: ReverbService.BufferSlot,
+    snapshot: RecordingTileSnapshot,
+): RecordingTileClickAction = when (recordingTileUiState(bufferSlot, snapshot)) {
+    RecordingTileUiState.RECORDING -> RecordingTileClickAction.STOP
+    RecordingTileUiState.ACTIVE,
+    RecordingTileUiState.AVAILABLE,
+    -> if (snapshot.listening) RecordingTileClickAction.SWITCH else RecordingTileClickAction.START
+    RecordingTileUiState.FULL,
+    RecordingTileUiState.DISABLED,
+    -> RecordingTileClickAction.NONE
+}
+
 internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot {
     val prefs = getRecorderPreferences(context)
     val activeBuffer = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)?.let { stored ->
@@ -83,10 +105,7 @@ internal object RecordingQuickTiles {
         val appContext = context.applicationContext
         for (tileService in TILE_SERVICES) {
             runCatching {
-                TileService.requestListeningState(
-                    appContext,
-                    ComponentName(appContext, tileService),
-                )
+                TileService.requestListeningState(appContext, ComponentName(appContext, tileService))
             }
         }
     }
@@ -102,6 +121,10 @@ abstract class RecordingTileService : TileService() {
     protected abstract val labelRes: Int
     protected abstract val iconRes: Int
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var actionConnection: TileActionConnection? = null
+    private var actionTimeout: Runnable? = null
+
     override fun onTileAdded() {
         super.onTileAdded()
         updateTile(readRecordingTileSnapshot(this))
@@ -112,41 +135,104 @@ abstract class RecordingTileService : TileService() {
         updateTile(readRecordingTileSnapshot(this))
     }
 
-    @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
         super.onClick()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            updateTile(readRecordingTileSnapshot(this))
+            return
+        }
+        if (recordingTileClickAction(bufferSlot, readRecordingTileSnapshot(this)) == RecordingTileClickAction.NONE) {
+            updateTile(readRecordingTileSnapshot(this))
+            return
+        }
+        val action = { beginTileAction() }
+        if (isLocked) unlockAndRun(action) else action()
+    }
 
+    override fun onDestroy() {
+        actionConnection?.let(::finishTileAction)
+        super.onDestroy()
+    }
+
+    private fun beginTileAction() {
+        if (actionConnection != null) return
         val snapshot = readRecordingTileSnapshot(this)
-        when (recordingTileUiState(bufferSlot, snapshot)) {
-            RecordingTileUiState.FULL,
-            RecordingTileUiState.DISABLED,
-            -> return
-            RecordingTileUiState.RECORDING -> return
-            RecordingTileUiState.ACTIVE,
-            RecordingTileUiState.AVAILABLE,
-            -> Unit
+        if (recordingTileClickAction(bufferSlot, snapshot) == RecordingTileClickAction.NONE) {
+            updateTile(snapshot)
+            return
         }
-        val launch = {
-            val intent = Intent(this, QuickTileActionActivity::class.java)
-                .setAction(QuickTileActionActivity.ACTION_START)
-                .putExtra(QuickTileActionActivity.EXTRA_BUFFER_SLOT, bufferSlot.name)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val requestCode = if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) 701 else 702
-                val pendingIntent = PendingIntent.getActivity(
-                    this,
-                    requestCode,
-                    intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                startActivityAndCollapse(pendingIntent)
-            } else {
-                @Suppress("DEPRECATION")
-                startActivityAndCollapse(intent)
+
+        val connection = TileActionConnection()
+        actionConnection = connection
+        val bound = runCatching {
+            bindService(Intent(this, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+        if (!bound) {
+            finishTileAction(connection)
+            return
+        }
+        val timeout = Runnable {
+            if (actionConnection === connection) finishTileAction(connection)
+        }
+        actionTimeout = timeout
+        mainHandler.postDelayed(timeout, ACTION_TIMEOUT_MILLIS)
+    }
+
+    private fun finishTileAction(connection: TileActionConnection) {
+        if (actionConnection !== connection) return
+        actionTimeout?.let(mainHandler::removeCallbacks)
+        actionTimeout = null
+        actionConnection = null
+        runCatching { unbindService(connection) }
+        updateTile(readRecordingTileSnapshot(this))
+        RecordingQuickTiles.requestRefresh(this)
+    }
+
+    private inner class TileActionConnection : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            val recorder = (binder as? ReverbService.BackgroundRecorderBinder)?.service
+            if (recorder == null || actionConnection !== this) {
+                finishTileAction(this)
+                return
             }
+            recorder.getState(
+                object : ReverbService.StateCallback {
+                    override fun state(
+                        commandGeneration: Long,
+                        listeningEnabled: Boolean,
+                        activeBufferSlot: ReverbService.BufferSlot?,
+                        oneShotSeconds: Float,
+                        oneShotBytes: Long,
+                        loopingSeconds: Float,
+                        loopingBytes: Long,
+                        oneShotIsEnabled: Boolean,
+                        oneShotIsFull: Boolean,
+                        loopingIsEnabled: Boolean,
+                    ) {
+                        if (actionConnection !== this@TileActionConnection) return
+                        val snapshot = RecordingTileSnapshot(
+                            listening = listeningEnabled,
+                            activeBuffer = activeBufferSlot,
+                            oneShotEnabled = oneShotIsEnabled,
+                            oneShotFull = oneShotIsFull,
+                            loopingEnabled = loopingIsEnabled,
+                        )
+                        val action = recordingTileClickAction(bufferSlot, snapshot)
+                        when (action) {
+                            RecordingTileClickAction.START -> recorder.enableListening(bufferSlot)
+                            RecordingTileClickAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
+                            RecordingTileClickAction.STOP -> recorder.disableListening()
+                            RecordingTileClickAction.NONE -> Unit
+                        }
+                        finishTileAction(this@TileActionConnection)
+                    }
+                },
+            )
         }
-        if (isLocked) unlockAndRun(launch) else launch()
+
+        override fun onServiceDisconnected(name: ComponentName) = finishTileAction(this)
+        override fun onBindingDied(name: ComponentName) = finishTileAction(this)
+        override fun onNullBinding(name: ComponentName) = finishTileAction(this)
     }
 
     private fun updateTile(snapshot: RecordingTileSnapshot) {
@@ -159,11 +245,9 @@ abstract class RecordingTileService : TileService() {
         } else {
             when (uiState) {
                 RecordingTileUiState.RECORDING -> getString(R.string.quick_tile_recording)
-                RecordingTileUiState.ACTIVE -> when (bufferSlot) {
-                    ReverbService.BufferSlot.ONE_SHOT -> getString(R.string.quick_tile_one_shot_active)
-                    ReverbService.BufferSlot.LOOPING -> getString(R.string.quick_tile_looping_active)
-                }
-                RecordingTileUiState.AVAILABLE -> getString(R.string.quick_tile_stopped)
+                RecordingTileUiState.ACTIVE,
+                RecordingTileUiState.AVAILABLE,
+                -> getString(R.string.quick_tile_stopped)
                 RecordingTileUiState.FULL -> getString(R.string.quick_tile_full)
                 RecordingTileUiState.DISABLED -> getString(R.string.quick_tile_off)
             }
@@ -174,19 +258,23 @@ abstract class RecordingTileService : TileService() {
             Tile.STATE_UNAVAILABLE
         } else {
             when (uiState) {
-                RecordingTileUiState.RECORDING,
+                RecordingTileUiState.RECORDING -> Tile.STATE_ACTIVE
                 RecordingTileUiState.ACTIVE,
-                -> Tile.STATE_ACTIVE
-                RecordingTileUiState.AVAILABLE -> Tile.STATE_INACTIVE
+                RecordingTileUiState.AVAILABLE,
+                -> Tile.STATE_INACTIVE
                 RecordingTileUiState.FULL,
                 RecordingTileUiState.DISABLED,
                 -> Tile.STATE_UNAVAILABLE
             }
         }
         tile.contentDescription = "${tile.label}, $status"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = status
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) tile.stateDescription = status
         tile.updateTile()
+    }
+
+    companion object {
+        private const val ACTION_TIMEOUT_MILLIS = 3_000L
     }
 }
 

@@ -15,11 +15,4 @@
         <item name="android:windowBackground">@drawable/reverb_window_background</item>
     </style>
 
-    <style name="Theme.Reverb.QuickTileAction" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:colorAccent">@android:color/transparent</item>
-        <item name="android:windowDisablePreview">true</item>
-    </style>
 </resources>
