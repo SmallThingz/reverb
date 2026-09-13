@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Reverb" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="Theme.Reverb" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@drawable/reverb_window_background</item>
+    </style>
+
+    <style name="Theme.Reverb.Light" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@drawable/reverb_window_background</item>
+    </style>
+
+    <style name="Theme.Reverb.Dark" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@drawable/reverb_window_background</item>
     </style>

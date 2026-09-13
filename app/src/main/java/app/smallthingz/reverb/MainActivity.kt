@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -123,6 +124,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyPhonePortraitOnly()
+        applyConfiguredPlatformTheme()
         super.onCreate(savedInstanceState)
         microphonePermissionRequested =
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
@@ -309,6 +311,13 @@ class MainActivity : ComponentActivity() {
         notificationPermissionRequested = true
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         return true
+    }
+
+    private fun applyConfiguredPlatformTheme() {
+        val systemDark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
+        val dark = getConfiguredThemeMode(this).isDark(systemDark)
+        setTheme(if (dark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
     }
 
     private fun applyPhonePortraitOnly() {
