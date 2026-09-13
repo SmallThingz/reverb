@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -13,7 +15,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import java.util.UUID
 
 internal data class RecordingTileSnapshot(
     val listening: Boolean,
@@ -55,12 +56,8 @@ internal fun recordingTileUiState(
     }
 }
 
-internal val recordingRuntimeSessionId: String = UUID.randomUUID().toString()
-
-internal fun isCurrentRecordingRuntimeSession(
-    storedSessionId: String?,
-    currentSessionId: String,
-): Boolean = storedSessionId != null && storedSessionId == currentSessionId
+@Volatile
+internal var recordingRuntimeCaptureActive: Boolean = false
 
 internal fun isTileCaptureActuallyRecording(
     listeningIntentEnabled: Boolean,
@@ -115,10 +112,7 @@ internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot 
     return RecordingTileSnapshot(
         listening = isTileCaptureActuallyRecording(
             listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
-            runtimeCaptureActive = isCurrentRecordingRuntimeSession(
-                storedSessionId = prefs.getString(PrefKey.QUICK_TILE_RECORDING_SESSION, null),
-                currentSessionId = recordingRuntimeSessionId,
-            ),
+            runtimeCaptureActive = recordingRuntimeCaptureActive,
         ),
         activeBuffer = activeBuffer,
         oneShotEnabled = isConfiguredOneShotBufferEnabled(context),
@@ -174,13 +168,40 @@ abstract class RecordingTileService : TileService() {
             updateTile(snapshot)
             return
         }
-        val action = { beginTileAction(requestedAction) }
+        val action = {
+            if (requestedAction == RecordingTileClickAction.START) {
+                beginForegroundTileStart()
+            } else {
+                beginTileAction(requestedAction)
+            }
+        }
         if (isLocked) unlockAndRun(action) else action()
     }
 
     override fun onDestroy() {
         actionConnection?.let(::finishTileAction)
         super.onDestroy()
+    }
+
+    @SuppressLint("StartActivityAndCollapseDeprecated")
+    private fun beginForegroundTileStart() {
+        val intent = Intent(this, QuickTileActionActivity::class.java)
+            .setAction(QuickTileActionActivity.ACTION_START)
+            .putExtra(QuickTileActionActivity.EXTRA_BUFFER_SLOT, bufferSlot.name)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val requestCode = if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) 701 else 702
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                requestCode,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            startActivityAndCollapse(pendingIntent)
+        } else {
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
+        }
     }
 
     private fun beginTileAction(requestedAction: RecordingTileClickAction) {

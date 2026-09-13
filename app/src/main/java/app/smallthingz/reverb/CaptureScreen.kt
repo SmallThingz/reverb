@@ -553,7 +553,7 @@ fun CaptureScreen(
             }
         }
         val onActivateBuffer = remember(
-            service, isSaving, activeBuffer, oneShotEnabled, oneShotFull, loopingEnabled,
+            service, isSaving, oneShotEnabled, oneShotFull, loopingEnabled,
         ) {
             { bufferSlot: ReverbService.BufferSlot ->
                 selectedBuffer = bufferSlot
@@ -564,7 +564,7 @@ fun CaptureScreen(
                     oneShotFull = oneShotFull,
                     loopingEnabled = loopingEnabled,
                 )
-                if (recorder != null && !isSaving && canActivate && activeBuffer != bufferSlot) {
+                if (recorder != null && !isSaving && canActivate) {
                     val result = recorder.selectCaptureBuffer(bufferSlot)
                     if (result.accepted) {
                         latestListeningCommandGeneration = maxOf(

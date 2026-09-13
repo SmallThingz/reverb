@@ -486,15 +486,7 @@ class ReverbService : Service() {
         active: Boolean,
         refreshTiles: Boolean = true,
     ) {
-        val prefs = getRecorderPreferences(this)
-        val storedSessionId = prefs.getString(PrefKey.QUICK_TILE_RECORDING_SESSION, null)
-        val desiredSessionId = recordingRuntimeSessionId.takeIf { active }
-        if (storedSessionId != desiredSessionId) {
-            prefs.edit().apply {
-                if (desiredSessionId == null) remove(PrefKey.QUICK_TILE_RECORDING_SESSION)
-                else putString(PrefKey.QUICK_TILE_RECORDING_SESSION, desiredSessionId)
-            }.apply()
-        }
+        recordingRuntimeCaptureActive = active
         if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
     }
 

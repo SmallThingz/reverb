@@ -6,7 +6,7 @@
 - Library normal and selection top bars use the same 58dp content height; multi-select uses `SelectAll`.
 - Library vertical gestures reserve 13% on each side for close and the center 74% for pull-to-refresh.
 - The currently displayed buffer page owns the selector highlight; the other buffer stays visually dimmed even if it is the active capture destination. Disabled buffers remain viewable, show Off, and cannot become active.
-- Quick Settings buffer tiles act directly without opening the app: tapping a usable idle tile starts/switches capture there, tapping the recording tile stops capture, disabled/full is unavailable, and long-press opens Reverb.
+- Quick Settings tile taps must never surface MainActivity: usable tiles start/switch capture, the recording tile stops, disabled/full is unavailable, and long-press opens Reverb. On modern Android, cold OFF→ON may use the transparent no-history QuickTileActionActivity only until microphone capture is actually active.
 - Brand marks keep the main stroke on the current foreground color and derive echo/accent strokes from the Material primary color; Android 12+ launcher accents use system Material You colors and Android 13+ keeps a monochrome themed-icon mask.
 - Buffer selector taps navigate and activate the tapped usable buffer; horizontal swipes navigate only. Only the blob starts or stops recording.
 - The Library action is always visible and must open even when the library is empty.
