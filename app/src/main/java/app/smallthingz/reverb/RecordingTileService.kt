@@ -11,6 +11,7 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import java.util.UUID
 
 internal data class RecordingTileSnapshot(
     val listening: Boolean,
@@ -45,6 +46,13 @@ internal fun recordingTileUiState(
     }
 }
 
+internal val recordingRuntimeSessionId: String = UUID.randomUUID().toString()
+
+internal fun isCurrentRecordingRuntimeSession(
+    storedSessionId: String?,
+    currentSessionId: String,
+): Boolean = storedSessionId != null && storedSessionId == currentSessionId
+
 internal fun isTileCaptureActuallyRecording(
     listeningIntentEnabled: Boolean,
     runtimeCaptureActive: Boolean,
@@ -58,7 +66,10 @@ internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot 
     return RecordingTileSnapshot(
         listening = isTileCaptureActuallyRecording(
             listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
-            runtimeCaptureActive = prefs.getBoolean(PrefKey.QUICK_TILE_RECORDING_ACTIVE, false),
+            runtimeCaptureActive = isCurrentRecordingRuntimeSession(
+                storedSessionId = prefs.getString(PrefKey.QUICK_TILE_RECORDING_SESSION, null),
+                currentSessionId = recordingRuntimeSessionId,
+            ),
         ),
         activeBuffer = activeBuffer,
         oneShotEnabled = isConfiguredOneShotBufferEnabled(context),

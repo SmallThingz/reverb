@@ -493,6 +493,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileRuntimeSession_rejectsMarkersFromPreviousProcesses() {
+        assertTrue(isCurrentRecordingRuntimeSession("session-a", "session-a"))
+        assertFalse(isCurrentRecordingRuntimeSession("session-a", "session-b"))
+        assertFalse(isCurrentRecordingRuntimeSession(null, "session-a"))
+    }
+
+    @Test
     fun quickTileRecording_requiresBothDurableIntentAndActualRuntimeCapture() {
         assertTrue(isTileCaptureActuallyRecording(listeningIntentEnabled = true, runtimeCaptureActive = true))
         assertFalse(isTileCaptureActuallyRecording(listeningIntentEnabled = true, runtimeCaptureActive = false))
