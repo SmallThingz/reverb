@@ -46,6 +46,14 @@
         </activity>
 
         <activity
+            android:name=".RecordingOpenActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Reverb.QuickTileAction" />
+
+        <activity
             android:name=".QuickTileActionActivity"
             android:excludeFromRecents="true"
             android:exported="false"

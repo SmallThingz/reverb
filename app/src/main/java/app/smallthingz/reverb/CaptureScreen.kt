@@ -130,8 +130,13 @@ fun buildCaptureNotification(context: Context, recording: RecordingEntity): Noti
             NotificationManager.IMPORTANCE_DEFAULT,
         ),
     )
-    val intent = buildOpenRecordingIntent(context, recording)
-    val pendingIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+    val intent = RecordingOpenActivity.intentFor(context, recording)
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
     return NotificationCompat.Builder(context, ReverbService.NOTIFICATION_CHANNEL_ID)
         .setContentTitle(context.getString(R.string.recording_saved))
         .setContentText(recording.displayName)
