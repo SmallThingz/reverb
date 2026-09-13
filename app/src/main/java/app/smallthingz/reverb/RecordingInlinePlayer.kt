@@ -63,7 +63,10 @@ private const val INLINE_SEEK_JUMP_MS = 10_000
 @Composable
 internal fun RecordingInlinePlayer(
     recording: RecordingEntity,
+    trimRequested: Boolean,
+    onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
+    onWaveformCached: (RecordingEntity) -> Unit,
     onCollapse: () -> Unit,
     onPlaybackFailed: () -> Unit,
     modifier: Modifier = Modifier,
@@ -148,6 +151,27 @@ internal fun RecordingInlinePlayer(
         }
     }
 
+    fun enterTrimMode() {
+        if (trimSaving) return
+        if (isPlaying) {
+            runCatching { mediaPlayer?.pause() }
+            isPlaying = false
+        }
+        trimStartMillis = 0
+        trimEndMillis = duration
+        currentPosition = 0
+        seekTo(0)
+        trimError = false
+        trimMode = true
+    }
+
+    LaunchedEffect(trimRequested, recordingRevisionKey) {
+        if (trimRequested) {
+            enterTrimMode()
+            onTrimRequestConsumed()
+        }
+    }
+
     DisposableEffect(recordingRevisionKey) {
         var disposed = false
         released = false
@@ -161,8 +185,9 @@ internal fun RecordingInlinePlayer(
         player.setOnPreparedListener { preparedPlayer ->
             if (released || disposed) return@setOnPreparedListener
             prepared = true
+            val previousDuration = duration
             duration = preparedPlayer.duration.coerceAtLeast(1)
-            if (!trimMode) trimEndMillis = duration
+            if (!trimMode || trimEndMillis >= previousDuration - 1) trimEndMillis = duration
             currentPosition = currentPosition.coerceIn(0, duration)
             if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
                 preparedPlayer.start()
@@ -240,6 +265,22 @@ internal fun RecordingInlinePlayer(
 
     LaunchedEffect(recordingRevisionKey) {
         waveformMorphStarted = true
+        val expectedRevision = recordingWaveformRevision(recording)
+        val cachedDetail = if (recording.waveformRevision == expectedRevision) {
+            decodeRecordingWaveform(recording.waveformData)
+        } else {
+            null
+        }
+        if (cachedDetail != null) {
+            detailWaveform = cachedDetail
+            detailBuiltCount = cachedDetail.size
+            coarseWaveform = coarseWaveformFromDetail(cachedDetail)
+            coarseBuiltCount = coarseWaveform.size
+            waveformPass = RangeWaveformPass.DETAIL
+            waveformLoading = false
+            return@LaunchedEffect
+        }
+
         coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
         detailWaveform = FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)
         coarseBuiltCount = 0
@@ -291,6 +332,21 @@ internal fun RecordingInlinePlayer(
             delay(280L)
             waveformPass = RangeWaveformPass.DETAIL
             constructPass(RangeWaveformPass.DETAIL)
+            val encoded = encodeRecordingWaveform(detailWaveform)
+            if (encoded.isNotBlank() && RecordingRepository.cacheWaveform(
+                    context = appContext,
+                    recording = recording,
+                    waveformData = encoded,
+                    waveformRevision = expectedRevision,
+                )
+            ) {
+                onWaveformCached(
+                    recording.copy(
+                        waveformData = encoded,
+                        waveformRevision = expectedRevision,
+                    ),
+                )
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -312,7 +368,7 @@ internal fun RecordingInlinePlayer(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+            .padding(start = 14.dp, end = 14.dp),
     ) {
         if (trimMode) {
             Row(
@@ -490,7 +546,7 @@ internal fun RecordingInlinePlayer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 10.dp),
+                    .padding(top = 10.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -545,43 +601,6 @@ internal fun RecordingInlinePlayer(
                 )
             }
 
-            Surface(
-                onClick = {
-                    if (isPlaying) {
-                        runCatching { mediaPlayer?.pause() }
-                        isPlaying = false
-                    }
-                    trimStartMillis = 0
-                    trimEndMillis = duration
-                    currentPosition = 0
-                    seekTo(0)
-                    trimError = false
-                    trimMode = true
-                },
-                modifier = Modifier
-                    .align(Alignment.End)
-                    .padding(top = 8.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = AppIcons.trim,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(7.dp))
-                    Text(
-                        text = stringResource(R.string.trim_recording),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
         } else {
             if (trimError) {
                 Text(

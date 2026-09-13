@@ -6,7 +6,50 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.util.Base64
 import kotlin.math.abs
+
+
+private const val RECORDING_WAVEFORM_CACHE_VERSION = 1
+
+internal fun recordingWaveformRevision(recording: RecordingEntity): String = buildString {
+    append(RECORDING_WAVEFORM_CACHE_VERSION)
+    append('|')
+    append(recording.storageType)
+    append('|')
+    append(recording.fileIdentity.ifBlank { recording.id })
+    append('|')
+    append(recording.sizeBytes)
+    append('|')
+    append(recording.durationMillis)
+}
+
+internal fun encodeRecordingWaveform(values: FloatArray): String {
+    if (values.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return ""
+    val bytes = ByteArray(values.size) { index ->
+        (values[index].coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+    }
+    return Base64.getEncoder().withoutPadding().encodeToString(bytes)
+}
+
+internal fun decodeRecordingWaveform(data: String): FloatArray? {
+    if (data.isBlank()) return null
+    val bytes = runCatching { Base64.getDecoder().decode(data) }.getOrNull() ?: return null
+    if (bytes.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return null
+    return FloatArray(bytes.size) { index -> (bytes[index].toInt() and 0xff) / 255f }
+}
+
+internal fun coarseWaveformFromDetail(detail: FloatArray): FloatArray {
+    if (detail.isEmpty()) return FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
+    return FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS) { bucket ->
+        val start = detail.size * bucket / RANGE_WAVEFORM_COARSE_BUCKETS
+        val end = maxOf(start + 1, detail.size * (bucket + 1) / RANGE_WAVEFORM_COARSE_BUCKETS)
+            .coerceAtMost(detail.size)
+        var peak = 0f
+        for (index in start until end) peak = maxOf(peak, detail[index])
+        peak
+    }
+}
 
 internal data class WavPcmLayout(
     val sampleRate: Int,

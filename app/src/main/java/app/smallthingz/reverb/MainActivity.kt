@@ -32,13 +32,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity() {
                     )
                 } else {
                     if (showPermissionDenied) {
-                        PermissionDeniedDialog(
+                        PermissionDeniedSheet(
                             message = requiredPermissionMessage(),
                             onAllow = {
                                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -661,26 +661,25 @@ private fun OnboardingProgressDot(active: Boolean) {
 }
 
 @Composable
-private fun PermissionDeniedDialog(
+private fun PermissionDeniedSheet(
     message: String,
     onAllow: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(18.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        title = { Text(stringResource(R.string.permission_required)) },
-        text = { Text(message) },
-        confirmButton = {
-            TextButton(onClick = onAllow) {
-                Text(stringResource(R.string.allow))
-            }
+    ReverbActionSheet(
+        title = stringResource(R.string.permission_required),
+        onDismiss = onDismiss,
+        content = {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.close))
-            }
+        actions = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onAllow) { Text(stringResource(R.string.allow)) }
         },
     )
 }

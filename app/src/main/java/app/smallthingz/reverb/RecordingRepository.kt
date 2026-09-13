@@ -160,6 +160,24 @@ object RecordingRepository {
         }
     }
 
+    suspend fun cacheWaveform(
+        context: Context,
+        recording: RecordingEntity,
+        waveformData: String,
+        waveformRevision: String,
+    ): Boolean {
+        if (waveformData.isBlank() || waveformRevision.isBlank()) return false
+        return withContext(Dispatchers.IO) {
+            mutex.withLock {
+                RecordingDatabase.getInstance(context).recordingDao().updateWaveformCache(
+                    recording = recording,
+                    waveformData = waveformData,
+                    waveformRevision = waveformRevision,
+                )
+            }
+        }
+    }
+
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
@@ -951,7 +969,7 @@ internal fun mergeObservedRecording(
     observed: RecordingEntity,
     nowMillis: Long,
 ): RecordingEntity {
-    return observed.copy(
+    val merged = observed.copy(
         mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: existing?.mimeType.orEmpty(),
         durationMillis = observed.durationMillis.takeIf { it > 0L } ?: existing?.durationMillis ?: 0L,
         sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: existing?.sizeBytes ?: 0L,
@@ -964,6 +982,12 @@ internal fun mergeObservedRecording(
             existing.lastSeenAtMillis
         },
         missingSinceMillis = null,
+    )
+    val revision = recordingWaveformRevision(merged)
+    val preserveWaveform = existing?.waveformRevision == revision && existing.waveformData.isNotBlank()
+    return merged.copy(
+        waveformData = if (preserveWaveform) existing.waveformData else "",
+        waveformRevision = if (preserveWaveform) revision else "",
     )
 }
 

@@ -155,6 +155,25 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun mergeObservedRecording_preservesOnlyMatchingWaveformCache() {
+        val base = RecordingEntity(
+            id = "id", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 500L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
+            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+        )
+        val revision = recordingWaveformRevision(base)
+        val cached = base.copy(waveformData = "cached", waveformRevision = revision)
+        val observed = base.copy(waveformData = "", waveformRevision = "")
+        val preserved = mergeObservedRecording(cached, observed, nowMillis = 40L)
+        assertEquals("cached", preserved.waveformData)
+        assertEquals(revision, preserved.waveformRevision)
+
+        val changed = mergeObservedRecording(cached, observed.copy(fileIdentity = "stat:b"), nowMillis = 40L)
+        assertEquals("", changed.waveformData)
+        assertEquals("", changed.waveformRevision)
+    }
+
+    @Test
     fun mergeObservedRecording_doesNotRewriteHealthyLastSeenTimestamp() {
         val existing = RecordingEntity(
             id = "id",

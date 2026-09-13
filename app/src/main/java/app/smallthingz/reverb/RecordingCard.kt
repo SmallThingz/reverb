@@ -54,9 +54,9 @@ internal fun RecordingEntityCard(
     val context = LocalContext.current
     RecordingSummaryCard(
         title = recording.displayName,
-        subtitle = "${formatSavedRecordingDuration(context, recording.durationMillis)} \u2022 ${recording.codecSummary}",
+        subtitle = "${formatSavedRecordingDuration(context, recording.durationMillis)} \u2022 ${formatShortFileSize(recording.sizeBytes)}",
         trailingTop = formatRecordingStartTimestamp(context, recording.startedAtMillis),
-        trailingBottom = formatShortFileSize(recording.sizeBytes),
+        trailingBottom = null,
         modifier = modifier,
         isSelected = isSelected,
         selectionActive = selectionActive,

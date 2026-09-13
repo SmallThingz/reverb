@@ -110,6 +110,34 @@ class RecordingWaveformTest {
         assertEquals(0.5f, waveformSampleMagnitude(bytes, 0, PcmSampleFormat.PCM_16), 0.001f)
     }
 
+    @Test
+    fun waveformCacheRoundTripsQuantizedDetailAndBuildsCoarseShape() {
+        val detail = FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { index ->
+            index.toFloat() / (RANGE_WAVEFORM_DETAIL_BUCKETS - 1).toFloat()
+        }
+        val encoded = encodeRecordingWaveform(detail)
+        val decoded = requireNotNull(decodeRecordingWaveform(encoded))
+        assertEquals(RANGE_WAVEFORM_DETAIL_BUCKETS, decoded.size)
+        decoded.indices.forEach { index ->
+            assertEquals(detail[index], decoded[index], 1f / 255f + 0.0001f)
+        }
+        val coarse = coarseWaveformFromDetail(decoded)
+        assertEquals(RANGE_WAVEFORM_COARSE_BUCKETS, coarse.size)
+        assertTrue(coarse.first() < coarse.last())
+    }
+
+    @Test
+    fun waveformRevisionChangesWhenPhysicalContentIdentityChanges() {
+        val base = RecordingEntity(
+            id = "id", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
+            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+        )
+        assertEquals(recordingWaveformRevision(base), recordingWaveformRevision(base.copy(displayName = "renamed.wav")))
+        assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(fileIdentity = "stat:b")))
+        assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(sizeBytes = 4_001L)))
+    }
+
     private fun writePcm16Wav(sampleRate: Int, samples: ShortArray): File {
         val payload = ByteArray(samples.size * 2)
         samples.forEachIndexed { index, sample ->

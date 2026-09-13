@@ -24,6 +24,7 @@ class DurabilityInvariantTest {
                 RecordingDatabaseMigrationStep.ADD_LAST_SEEN,
                 RecordingDatabaseMigrationStep.ADD_MISSING_SINCE,
                 RecordingDatabaseMigrationStep.ADD_FILE_IDENTITY,
+                RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE,
             ),
             steps,
         )
@@ -37,6 +38,8 @@ class DurabilityInvariantTest {
         assertTrue(sql.any { RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS in it })
         assertTrue(sql.any { RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS in it })
         assertTrue(sql.any { RecordingDatabase.COLUMN_FILE_IDENTITY in it })
+        assertTrue(sql.any { RecordingDatabase.COLUMN_WAVEFORM_DATA in it })
+        assertTrue(sql.any { RecordingDatabase.COLUMN_WAVEFORM_REVISION in it })
     }
 
     @Test
@@ -48,7 +51,11 @@ class DurabilityInvariantTest {
         )
         assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(2, 1) }
         assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(0, 2) }
-        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(3, 4) }
+        assertEquals(
+            listOf(RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE),
+            recordingDatabaseMigrationSteps(3, 4),
+        )
+        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(4, 5) }
     }
 
     @Test

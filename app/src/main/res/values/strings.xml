@@ -8,6 +8,7 @@
     <string name="clear_buffer">Clear</string>
     <string name="clear_one_shot_title">Discard one-shot?</string>
     <string name="clear_loop_title">Discard loop?</string>
+    <string name="clear_buffer_confirmation">This permanently removes the buffered audio.</string>
     <string name="buffer_one_shot">One-shot</string>
     <string name="buffer_loop">Looping</string>
     <string name="buffer_disabled">Off</string>

@@ -43,7 +43,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -498,7 +499,7 @@ fun CaptureScreen(
     }
 
     pendingClearBuffer?.let { bufferSlot ->
-        ClearBufferDialog(
+        ClearBufferSheet(
             bufferSlot = bufferSlot,
             onConfirm = {
                 pendingClearBuffer = null
@@ -512,11 +513,11 @@ fun CaptureScreen(
         if (pendingExportRange == null) {
             showExportClampDialog = false
         } else {
-            ExportClampDialog(
+            ExportClampSheet(
                 clampedDurationSeconds = clampWarningSeconds,
                 onProceed = {
                     showExportClampDialog = false
-                    val range = pendingExportRange ?: return@ExportClampDialog
+                    val range = pendingExportRange ?: return@ExportClampSheet
                     val snapshot = pendingExportSnapshot
                     pendingExportRange = null
                     pendingExportSnapshot = null
@@ -799,7 +800,7 @@ fun CaptureScreen(
     }
 
     errorMessage?.let { msg ->
-        ErrorDialog(
+        ErrorSheet(
             message = msg,
             onDismiss = { errorMessage = null },
         )
@@ -1744,46 +1745,28 @@ private fun AudioBlobControl(
 }
 
 @Composable
-private fun ErrorDialog(
+private fun ErrorSheet(
     message: String,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.error),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = AppIcons.close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        text = {
+    ReverbActionSheet(
+        title = stringResource(R.string.error),
+        onDismiss = onDismiss,
+        content = {
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        confirmButton = {},
+        actions = {
+            Button(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+        },
     )
 }
 
 @Composable
-private fun ClearBufferDialog(
+private fun ClearBufferSheet(
     bufferSlot: ReverbService.BufferSlot,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -1792,82 +1775,58 @@ private fun ClearBufferDialog(
         ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.clear_one_shot_title)
         ReverbService.BufferSlot.LOOPING -> stringResource(R.string.clear_loop_title)
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = AppIcons.close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+    ReverbActionSheet(
+        title = title,
+        onDismiss = onDismiss,
+        content = {
+            Text(
+                text = stringResource(R.string.clear_buffer_confirmation),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
+        actions = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+            ) {
                 Icon(
                     imageVector = AppIcons.delete,
-                    contentDescription = stringResource(R.string.clear_buffer),
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(22.dp),
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp),
                 )
+                Spacer(Modifier.width(7.dp))
+                Text(stringResource(R.string.clear_buffer))
             }
         },
     )
 }
 
 @Composable
-private fun ExportClampDialog(
+private fun ExportClampSheet(
     clampedDurationSeconds: Float,
     onProceed: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(18.dp),
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.export_limit_dialog_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = AppIcons.close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        text = {
+    ReverbActionSheet(
+        title = stringResource(R.string.export_limit_dialog_title),
+        onDismiss = onDismiss,
+        content = {
             Text(
                 text = stringResource(R.string.export_limit_dialog_message, formatShortTimer(clampedDurationSeconds)),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        confirmButton = {
-            TextButton(onClick = onProceed) {
-                Text(stringResource(R.string.export))
-            }
+        actions = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onProceed) { Text(stringResource(R.string.export)) }
         },
     )
 }

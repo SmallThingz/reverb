@@ -19,6 +19,8 @@ data class RecordingEntity(
     val storageType: String,
     val directoryId: String,
     val fileIdentity: String = "",
+    val waveformData: String = "",
+    val waveformRevision: String = "",
     val createdAtMillis: Long = System.currentTimeMillis(),
     // Last successful observation/import of this asset. Used to keep rows stable
     // across short provider/file-system visibility gaps.
@@ -33,6 +35,12 @@ interface RecordingDao {
     suspend fun listByDirectory(directoryId: String): List<RecordingEntity>
 
     suspend fun upsert(recording: RecordingEntity)
+
+    suspend fun updateWaveformCache(
+        recording: RecordingEntity,
+        waveformData: String,
+        waveformRevision: String,
+    ): Boolean
 
     suspend fun deleteById(id: String)
 
@@ -110,6 +118,29 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             writableDatabase.upsertRecording(recording)
         }
 
+        override suspend fun updateWaveformCache(
+            recording: RecordingEntity,
+            waveformData: String,
+            waveformRevision: String,
+        ): Boolean {
+            val values = ContentValues(2).apply {
+                put(COLUMN_WAVEFORM_DATA, waveformData)
+                put(COLUMN_WAVEFORM_REVISION, waveformRevision)
+            }
+            return writableDatabase.update(
+                TABLE_RECORDINGS,
+                values,
+                "$COLUMN_ID = ? AND $COLUMN_FILE_IDENTITY = ? AND $COLUMN_SIZE_BYTES = ? AND " +
+                    "$COLUMN_DURATION_MILLIS = ?",
+                arrayOf(
+                    recording.id,
+                    recording.fileIdentity,
+                    recording.sizeBytes.toString(),
+                    recording.durationMillis.toString(),
+                ),
+            ) == 1
+        }
+
         override suspend fun deleteById(id: String) {
             writableDatabase.delete(TABLE_RECORDINGS, "$COLUMN_ID = ?", arrayOf(id))
         }
@@ -131,7 +162,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
 
     companion object {
         private const val DATABASE_NAME = ReverbConfig.DATABASE_FILE_NAME
-        internal const val DATABASE_VERSION = 3
+        internal const val DATABASE_VERSION = 4
         internal const val TABLE_RECORDINGS = "recordings"
         internal const val COLUMN_ID = "id"
         internal const val COLUMN_DISPLAY_NAME = "displayName"
@@ -143,6 +174,8 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         internal const val COLUMN_STORAGE_TYPE = "storageType"
         internal const val COLUMN_DIRECTORY_ID = "directoryId"
         internal const val COLUMN_FILE_IDENTITY = "fileIdentity"
+        internal const val COLUMN_WAVEFORM_DATA = "waveformData"
+        internal const val COLUMN_WAVEFORM_REVISION = "waveformRevision"
         internal const val COLUMN_CREATED_AT_MILLIS = "createdAtMillis"
         internal const val COLUMN_LAST_SEEN_AT_MILLIS = "lastSeenAtMillis"
         internal const val COLUMN_MISSING_SINCE_MILLIS = "missingSinceMillis"
@@ -193,6 +226,8 @@ private fun SQLiteDatabase.createSchema() {
             ${RecordingDatabase.COLUMN_STORAGE_TYPE} TEXT NOT NULL,
             ${RecordingDatabase.COLUMN_DIRECTORY_ID} TEXT NOT NULL,
             ${RecordingDatabase.COLUMN_FILE_IDENTITY} TEXT NOT NULL,
+            ${RecordingDatabase.COLUMN_WAVEFORM_DATA} TEXT NOT NULL,
+            ${RecordingDatabase.COLUMN_WAVEFORM_REVISION} TEXT NOT NULL,
             ${RecordingDatabase.COLUMN_CREATED_AT_MILLIS} INTEGER NOT NULL,
             ${RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS} INTEGER NOT NULL,
             ${RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS} INTEGER
@@ -222,6 +257,7 @@ internal enum class RecordingDatabaseMigrationStep {
     ADD_LAST_SEEN,
     ADD_MISSING_SINCE,
     ADD_FILE_IDENTITY,
+    ADD_WAVEFORM_CACHE,
 }
 
 internal fun recordingDatabaseMigrationSteps(
@@ -241,6 +277,9 @@ internal fun recordingDatabaseMigrationSteps(
         }
         if (oldVersion < 3 && newVersion >= 3) {
             add(RecordingDatabaseMigrationStep.ADD_FILE_IDENTITY)
+        }
+        if (oldVersion < 4 && newVersion >= 4) {
+            add(RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE)
         }
     }
 }
@@ -262,10 +301,16 @@ internal fun recordingDatabaseMigrationSql(
         "ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS} " +
             "ADD COLUMN ${RecordingDatabase.COLUMN_FILE_IDENTITY} TEXT NOT NULL DEFAULT ''",
     )
+    RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE -> listOf(
+        "ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS} " +
+            "ADD COLUMN ${RecordingDatabase.COLUMN_WAVEFORM_DATA} TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE ${RecordingDatabase.TABLE_RECORDINGS} " +
+            "ADD COLUMN ${RecordingDatabase.COLUMN_WAVEFORM_REVISION} TEXT NOT NULL DEFAULT ''",
+    )
 }
 
 private fun RecordingEntity.toContentValues(): ContentValues {
-    return ContentValues(13).apply {
+    return ContentValues(15).apply {
         put(RecordingDatabase.COLUMN_ID, id)
         put(RecordingDatabase.COLUMN_DISPLAY_NAME, displayName)
         put(RecordingDatabase.COLUMN_MIME_TYPE, mimeType)
@@ -276,6 +321,8 @@ private fun RecordingEntity.toContentValues(): ContentValues {
         put(RecordingDatabase.COLUMN_STORAGE_TYPE, storageType)
         put(RecordingDatabase.COLUMN_DIRECTORY_ID, directoryId)
         put(RecordingDatabase.COLUMN_FILE_IDENTITY, fileIdentity)
+        put(RecordingDatabase.COLUMN_WAVEFORM_DATA, waveformData)
+        put(RecordingDatabase.COLUMN_WAVEFORM_REVISION, waveformRevision)
         put(RecordingDatabase.COLUMN_CREATED_AT_MILLIS, createdAtMillis)
         put(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS, lastSeenAtMillis)
         put(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS, missingSinceMillis)
@@ -293,6 +340,8 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val storageTypeIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_STORAGE_TYPE)
     val directoryIdIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_DIRECTORY_ID)
     val fileIdentityIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_FILE_IDENTITY)
+    val waveformDataIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_WAVEFORM_DATA)
+    val waveformRevisionIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_WAVEFORM_REVISION)
     val createdAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_CREATED_AT_MILLIS)
     val lastSeenAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS)
     val missingSinceMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS)
@@ -311,6 +360,8 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
                 storageType = cursor.getString(storageTypeIndex),
                 directoryId = cursor.getString(directoryIdIndex),
                 fileIdentity = cursor.getString(fileIdentityIndex),
+                waveformData = cursor.getString(waveformDataIndex),
+                waveformRevision = cursor.getString(waveformRevisionIndex),
                 createdAtMillis = cursor.getLong(createdAtMillisIndex),
                 lastSeenAtMillis = cursor.getLong(lastSeenAtMillisIndex),
                 missingSinceMillis =
