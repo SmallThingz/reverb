@@ -1,18 +1,21 @@
 package app.smallthingz.reverb
 
 import android.content.ClipData
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
-import androidx.core.content.edit
 import androidx.core.net.toUri
 import java.io.File
 import java.io.FileInputStream
@@ -30,11 +33,14 @@ private val TAG = "RecordingFiles"
 private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
+internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
+private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/"
 
 
 enum class RecordingStorageType {
     FILE,
     DOCUMENT,
+    MEDIASTORE,
 }
 
 internal enum class RecordingAssetState {
@@ -58,11 +64,22 @@ data class RecordingOutputTarget(
     val uri: Uri? = null,
 )
 
+/** Legacy app-private location used by older Reverb builds; always scanned for recovery. */
 fun getSavedRecordingsDirectory(context: Context): File {
     val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         ?: File(context.filesDir, "recordings")
     return File(baseDir, ReverbConfig.APP_STORAGE_FOLDER_NAME)
 }
+
+@Suppress("DEPRECATION")
+internal fun getSharedMusicRecordingsDirectory(): File =
+    File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), ReverbConfig.APP_STORAGE_FOLDER_NAME)
+
+internal fun usesMediaStoreDefaultStorage(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+    sdkInt >= Build.VERSION_CODES.Q
+
+internal fun requiresLegacyPublicStoragePermission(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+    sdkInt < Build.VERSION_CODES.Q
 
 fun getConfiguredExportTreeUri(context: Context): Uri? {
     val raw = getRecorderPreferences(context).getString(PrefKey.EXPORT_DIRECTORY_URI, null) ?: return null
@@ -72,14 +89,14 @@ fun getConfiguredExportTreeUri(context: Context): Uri? {
 fun setConfiguredExportTreeUri(
     context: Context,
     treeUri: Uri?,
-) {
-    getRecorderPreferences(context).edit {
-        if (treeUri != null) {
-            putString(PrefKey.EXPORT_DIRECTORY_URI, treeUri.toString())
-        } else {
-            remove(PrefKey.EXPORT_DIRECTORY_URI)
-        }
+): Boolean {
+    val editor = getRecorderPreferences(context).edit()
+    if (treeUri != null) {
+        editor.putString(PrefKey.EXPORT_DIRECTORY_URI, treeUri.toString())
+    } else {
+        editor.remove(PrefKey.EXPORT_DIRECTORY_URI)
     }
+    return editor.commit()
 }
 
 fun getConfiguredOutputDirectoryId(context: Context): String {
@@ -90,7 +107,12 @@ fun getOutputDirectoryId(
     context: Context,
     treeUri: Uri?,
 ): String {
-    return treeUri?.toString() ?: getSavedRecordingsDirectory(context).absolutePath
+    if (treeUri != null) return treeUri.toString()
+    return if (usesMediaStoreDefaultStorage()) {
+        MEDIA_STORE_DIRECTORY_ID
+    } else {
+        getSharedMusicRecordingsDirectory().absolutePath
+    }
 }
 
 fun describeConfiguredOutputDirectory(context: Context): String {
@@ -102,7 +124,7 @@ fun describeOutputDirectory(
     treeUri: Uri?,
 ): String {
     if (treeUri == null) {
-        return "${context.getString(R.string.app_storage_label)}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}"
+        return "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}"
     }
     val documentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
     return documentId
@@ -123,7 +145,9 @@ fun buildRecordingUri(
             FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         }
 
-        RecordingStorageType.DOCUMENT -> recording.id.toUri()
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> recording.id.toUri()
         null -> throw IllegalArgumentException("Unknown recording storage type: ${recording.storageType}")
     }
 }
@@ -439,6 +463,7 @@ fun describeRecordingLocation(
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> describeFileRecordingLocation(context, File(recording.id))
         RecordingStorageType.DOCUMENT -> describeDocumentRecordingLocation(context, recording)
+        RecordingStorageType.MEDIASTORE -> "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/${recording.displayName}"
         null -> recording.directoryId
     }
 }
@@ -488,7 +513,14 @@ fun createOutputTarget(
 ): RecordingOutputTarget {
     val treeUri = getConfiguredExportTreeUri(context)
     return if (treeUri == null) {
-        createLocalOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis)
+        if (usesMediaStoreDefaultStorage()) {
+            createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis)
+        } else {
+            createLocalOutputTarget(
+                context, requestedDisplayName, mimeType, startedAtMillis,
+                storageDir = getSharedMusicRecordingsDirectory(),
+            )
+        }
     } else {
         createDocumentOutputTarget(context, treeUri, requestedDisplayName, mimeType, startedAtMillis)
     }
@@ -508,8 +540,10 @@ fun openWritableParcelFileDescriptor(
             )
         }
 
-        RecordingStorageType.DOCUMENT -> {
-                context.contentResolver.openFileDescriptor(requireNotNull(target.uri), "rw")
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
+            context.contentResolver.openFileDescriptor(requireNotNull(target.uri), "rw")
                 ?: throw IOException("Unable to open output document: ${target.id}")
         }
     }
@@ -521,14 +555,18 @@ fun resolveOutputTargetSize(
 ): Long {
     return when (target.storageType) {
         RecordingStorageType.FILE -> target.file?.length() ?: 0L
-        RecordingStorageType.DOCUMENT -> {
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
             val uri = requireNotNull(target.uri)
-            val documentSize = runCatching { DocumentFile.fromSingleUri(context, uri)?.length() ?: 0L }
-                .onFailure { Log.w(TAG, "Document size query failed for $uri", it) }
-                .getOrDefault(0L)
-            if (documentSize > 0L) {
-                documentSize
+            val reportedSize = if (target.storageType == RecordingStorageType.DOCUMENT) {
+                runCatching { DocumentFile.fromSingleUri(context, uri)?.length() ?: 0L }
+                    .onFailure { Log.w(TAG, "Document size query failed for $uri", it) }
+                    .getOrDefault(0L)
             } else {
+                queryContentSize(context, uri)
+            }
+            if (reportedSize > 0L) reportedSize else {
                 runCatching {
                     context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
                         descriptor.statSize.coerceAtLeast(0L)
@@ -550,6 +588,20 @@ internal fun verifyOutputTargetSize(
     val reportedSize = resolveOutputTargetSize(context, target)
     if (reportedSize == expectedBytes) return reportedSize
     return countOutputTargetBytes(context, target, expectedBytes)
+}
+
+@Throws(IOException::class)
+fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget) {
+    when (target.storageType) {
+        RecordingStorageType.MEDIASTORE -> publishMediaStoreUri(context, requireNotNull(target.uri))
+        RecordingStorageType.FILE -> {
+            val file = target.file
+            if (file != null && target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
+                MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(target.mimeType), null)
+            }
+        }
+        RecordingStorageType.DOCUMENT -> Unit
+    }
 }
 
 fun buildRecordingEntity(
@@ -596,20 +648,23 @@ internal fun recordingAssetState(
         RecordingStorageType.DOCUMENT -> {
             val uri = runCatching { recording.id.toUri() }.getOrNull()
                 ?: return RecordingAssetState.MISSING
-            try {
-                context.contentResolver.query(
-                    uri,
-                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-                    null,
-                    null,
-                    null,
-                )?.use { cursor ->
-                    if (cursor.moveToFirst()) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
-                } ?: RecordingAssetState.UNAVAILABLE
-            } catch (error: Exception) {
-                Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
-                RecordingAssetState.UNAVAILABLE
-            }
+            queryUriAssetState(
+                context = context,
+                uri = uri,
+                projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                logId = recording.id,
+            )
+        }
+
+        RecordingStorageType.MEDIASTORE -> {
+            val uri = runCatching { recording.id.toUri() }.getOrNull()
+                ?: return RecordingAssetState.MISSING
+            queryUriAssetState(
+                context = context,
+                uri = uri,
+                projection = arrayOf(MediaStore.MediaColumns._ID),
+                logId = recording.id,
+            )
         }
 
         null -> RecordingAssetState.UNAVAILABLE
@@ -621,21 +676,25 @@ fun deleteRecordingAsset(
     recording: RecordingEntity,
 ): Boolean {
     when (recordingAssetState(context, recording)) {
-        RecordingAssetState.MISSING -> return true
-        RecordingAssetState.UNAVAILABLE -> return false
+        RecordingAssetState.MISSING,
+        RecordingAssetState.UNAVAILABLE,
+        -> return false
         RecordingAssetState.PRESENT -> Unit
     }
     return when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> {
             val file = File(recording.id)
-            runCatching { file.delete() || !file.exists() }
+            runCatching { file.delete() }
                 .onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }
                 .getOrDefault(false)
         }
 
         RecordingStorageType.DOCUMENT -> runCatching {
             val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
-            document?.delete() == true || recordingAssetState(context, recording) == RecordingAssetState.MISSING
+            document?.delete() == true
+        }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
+        RecordingStorageType.MEDIASTORE -> runCatching {
+            context.contentResolver.delete(recording.id.toUri(), null, null) > 0
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
         null -> false
     }
@@ -657,8 +716,9 @@ fun renameRecordingAsset(
     }
     if (sanitized == recording.displayName) return recording
     return when (resolveRecordingStorageType(recording)) {
-        RecordingStorageType.FILE -> renameFileRecording(recording, sanitized)
+        RecordingStorageType.FILE -> renameFileRecording(context, recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
+        RecordingStorageType.MEDIASTORE -> renameMediaStoreRecording(context, recording, sanitized)
         null -> null
     }
 }
@@ -681,14 +741,13 @@ fun copyRecordingToConfiguredDirectory(
                 ?.takeIf { it > 0L }
             // Document-provider size metadata may lag behind the stream contents.
             // The destination is verified against the bytes actually copied below.
-            RecordingStorageType.DOCUMENT -> null
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> null
             null -> null
         }
-        val input = when (resolveRecordingStorageType(recording)) {
-            RecordingStorageType.FILE -> FileInputStream(File(recording.id))
-            RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(recording.id.toUri())
-            null -> throw IOException("Unknown recording storage type: ${recording.storageType}")
-        } ?: throw IOException("Unable to open source recording")
+        val input = openRecordingInputStream(context, recording)
+            ?: throw IOException("Unable to open source recording: ${recording.storageType}")
         lateinit var sourceDigest: CopyDigest
         input.use { source ->
             when (resolvedTarget.storageType) {
@@ -699,11 +758,15 @@ fun copyRecordingToConfiguredDirectory(
                     }
                 }
 
-                RecordingStorageType.DOCUMENT -> {
-                    context.contentResolver.openOutputStream(requireNotNull(resolvedTarget.uri), "w")?.use { output ->
-                        sourceDigest = copyWithSha256(source, output)
-                        output.flush()
-                    } ?: throw IOException("Unable to open target output stream")
+                RecordingStorageType.DOCUMENT,
+                RecordingStorageType.MEDIASTORE,
+                -> {
+                    openWritableParcelFileDescriptor(context, resolvedTarget).use { descriptor ->
+                        FileOutputStream(descriptor.fileDescriptor).use { output ->
+                            sourceDigest = copyWithSha256(source, output)
+                            output.fd.sync()
+                        }
+                    }
                 }
             }
         }
@@ -725,13 +788,30 @@ fun copyRecordingToConfiguredDirectory(
         }
         val targetInput = when (resolvedTarget.storageType) {
             RecordingStorageType.FILE -> FileInputStream(requireNotNull(resolvedTarget.file))
-            RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(requireNotNull(resolvedTarget.uri))
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> context.contentResolver.openInputStream(requireNotNull(resolvedTarget.uri))
                 ?: throw IOException("Unable to reopen copied recording")
         }
         val targetDigest = targetInput.use(::sha256)
         if (targetDigest.byteCount != copiedBytes || !targetDigest.sha256.contentEquals(sourceDigest.sha256)) {
             throw IOException("Recording copy content verification failed")
         }
+        val sourceAfterCopy = runCatching {
+            openRecordingInputStream(context, recording)?.use(::sha256)
+        }.onFailure {
+            // The verified target may now be the only surviving copy. Do not turn source
+            // disappearance/provider failure into target cleanup.
+            Log.w(TAG, "Unable to recheck source after verified copy ${recording.id}", it)
+        }.getOrNull()
+        if (
+            sourceAfterCopy != null &&
+            (sourceAfterCopy.byteCount != sourceDigest.byteCount ||
+                !sourceAfterCopy.sha256.contentEquals(sourceDigest.sha256))
+        ) {
+            throw IOException("Recording source changed during copy")
+        }
+        finalizeOutputTarget(context, resolvedTarget)
 
         recording.copy(
             id = resolvedTarget.id,
@@ -747,6 +827,9 @@ fun copyRecordingToConfiguredDirectory(
                 RecordingStorageType.FILE -> target.file?.delete()
                 RecordingStorageType.DOCUMENT -> {
                     target.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
+                }
+                RecordingStorageType.MEDIASTORE -> {
+                    target.uri?.let { context.contentResolver.delete(it, null, null) }
                 }
                 null -> Unit
             }
@@ -787,10 +870,7 @@ internal fun copyWithSha256(
     return CopyDigest(total, digest.digest())
 }
 
-internal fun sha256(
-    input: InputStream,
-    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
-): CopyDigest {
+internal fun sha256(input: InputStream, bufferSize: Int = FILE_COPY_BUFFER_BYTES): CopyDigest {
     require(bufferSize > 0) { "Digest buffer must be positive" }
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(bufferSize)
@@ -811,95 +891,398 @@ internal fun sha256(
     return CopyDigest(total, digest.digest())
 }
 
+internal fun sha256Range(
+    input: InputStream,
+    offsetBytes: Long,
+    byteCount: Long,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest {
+    require(offsetBytes >= 0L && byteCount >= 0L)
+    require(bufferSize > 0) { "Digest buffer must be positive" }
+    if (!input.skipFully(offsetBytes)) throw IOException("Unable to reach recording payload")
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(bufferSize)
+    var remaining = byteCount
+    var total = 0L
+    while (remaining > 0L) {
+        val requested = minOf(buffer.size.toLong(), remaining).toInt()
+        val count = input.read(buffer, 0, requested)
+        if (count < 0) throw IOException("Unexpected EOF verifying recording payload")
+        if (count == 0) {
+            val value = input.read()
+            if (value < 0) throw IOException("Unexpected EOF verifying recording payload")
+            digest.update(value.toByte())
+            total++
+            remaining--
+            continue
+        }
+        digest.update(buffer, 0, count)
+        total += count.toLong()
+        remaining -= count.toLong()
+    }
+    return CopyDigest(total, digest.digest())
+}
+
+internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
+    when (resolveRecordingStorageType(recording)) {
+        RecordingStorageType.FILE -> FileInputStream(File(recording.id))
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> context.contentResolver.openInputStream(recording.id.toUri())
+        null -> null
+    }
+
+internal fun recordingsHaveSameContent(
+    context: Context,
+    first: RecordingEntity,
+    second: RecordingEntity,
+): Boolean {
+    if (first.sizeBytes > 0L && second.sizeBytes > 0L && first.sizeBytes != second.sizeBytes) return false
+    return runCatching {
+        val firstDigest = openRecordingInputStream(context, first)?.use(::sha256) ?: return@runCatching false
+        val secondDigest = openRecordingInputStream(context, second)?.use(::sha256) ?: return@runCatching false
+        firstDigest.byteCount == secondDigest.byteCount &&
+            firstDigest.sha256.contentEquals(secondDigest.sha256)
+    }.onFailure { Log.w(TAG, "Unable to compare recordings ${first.id} and ${second.id}", it) }
+        .getOrDefault(false)
+}
+
+@Throws(IOException::class)
+internal fun verifyOutputTargetPrefix(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedPrefix: ByteArray,
+) {
+    val input = when (target.storageType) {
+        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
+    } ?: throw IOException("Unable to reopen exported recording")
+    val observed = ByteArray(expectedPrefix.size)
+    input.use { source ->
+        if (!source.readFully(observed)) throw IOException("Unexpected EOF verifying recording header")
+    }
+    if (!observed.contentEquals(expectedPrefix)) {
+        throw IOException("Export header verification failed: ${target.displayName}")
+    }
+}
+
+@Throws(IOException::class)
+internal fun verifyOutputTargetPayloadDigest(
+    context: Context,
+    target: RecordingOutputTarget,
+    payloadOffsetBytes: Long,
+    payloadBytes: Long,
+    expectedSha256: ByteArray,
+) {
+    val input = when (target.storageType) {
+        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
+    } ?: throw IOException("Unable to reopen exported recording")
+    val observed = input.use { sha256Range(it, payloadOffsetBytes, payloadBytes) }
+    if (observed.byteCount != payloadBytes || !observed.sha256.contentEquals(expectedSha256)) {
+        throw IOException("Export payload verification failed: ${target.displayName}")
+    }
+}
+
 fun listCurrentOutputDirectoryRecordings(
     context: Context,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
+): List<RecordingEntity> = listOutputDirectoryRecordings(
+    context = context,
+    treeUri = getConfiguredExportTreeUri(context),
+    knownRecordings = knownRecordings,
+)
+
+internal fun listOutputDirectoryRecordings(
+    context: Context,
+    treeUri: Uri?,
+    knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
-    val treeUri = getConfiguredExportTreeUri(context)
-    return if (treeUri == null) {
-        val directory = getSavedRecordingsDirectory(context)
-        val files = directory.listFiles() ?: if (!directory.exists()) {
-            emptyArray()
+    if (treeUri == null) {
+        return if (usesMediaStoreDefaultStorage()) {
+            listMediaStoreRecordings(context, knownRecordings)
         } else {
-            throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
+            listFileDirectoryRecordings(context, getSharedMusicRecordingsDirectory(), knownRecordings)
         }
-        files.asSequence()
-            .filter { it.isFile && it.length() > 0L && !it.isHidden }
-            .filter { it.extension.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
-            .mapNotNull { file ->
-                val id = file.absolutePath
-                val size = file.length()
-                val existing = knownRecordings[id]
-                if (
-                    existing != null && existing.durationMillis > 0L &&
-                    existing.displayName == file.name && existing.sizeBytes == size
-                ) {
-                    existing
-                } else {
-                    val media = inspectRecordingMedia(file)
-                    if (media.durationMillis <= 0L) return@mapNotNull null
-                    RecordingEntity(
-                        id = id,
-                        displayName = file.name,
-                        mimeType = guessMimeType(file.name),
-                        startedAtMillis = resolveRecordingStartTimeMillis(file),
-                        durationMillis = media.durationMillis,
-                        sizeBytes = size,
-                        codecSummary = media.codecSummary,
-                        storageType = RecordingStorageType.FILE.name,
-                        directoryId = directory.absolutePath,
-                    )
-                }
-            }
-            .toList()
+    }
+    return listDocumentTreeRecordings(context, treeUri, knownRecordings)
+}
+
+internal fun listLegacyAppStorageRecordings(
+    context: Context,
+    knownRecordings: Map<String, RecordingEntity> = emptyMap(),
+): List<RecordingEntity> = listFileDirectoryRecordings(
+    context,
+    getSavedRecordingsDirectory(context),
+    knownRecordings,
+)
+
+private fun listFileDirectoryRecordings(
+    context: Context,
+    directory: File,
+    knownRecordings: Map<String, RecordingEntity>,
+): List<RecordingEntity> {
+    val files = directory.listFiles() ?: if (!directory.exists()) {
+        emptyArray()
     } else {
-        runCatching {
-            val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@runCatching emptyList()
-            tree.listFiles()
-                .asSequence()
-                .filter { it.isFile }
-                .filter { file -> file.name?.substringAfterLast('.', "")?.lowercase() in SUPPORTED_RECORDING_EXTENSIONS }
-                .mapNotNull { file ->
-                    val uri = file.uri
-                    val name = file.name ?: return@mapNotNull null
+        throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
+    }
+    return files.asSequence()
+        .filter { it.isFile && it.length() > 0L && !it.isHidden }
+        .filter { isSupportedRecordingName(it.name) }
+        .map { file ->
+            val id = file.absolutePath
+            val size = file.length()
+            val existing = knownRecordings[id]
+            if (
+                existing != null && existing.durationMillis > 0L &&
+                existing.displayName == file.name && existing.sizeBytes == size
+            ) {
+                existing
+            } else {
+                val media = inspectRecordingMedia(file)
+                RecordingEntity(
+                    id = id,
+                    displayName = file.name,
+                    mimeType = guessMimeType(file.name),
+                    startedAtMillis = resolveRecordingStartTimeMillis(file),
+                    durationMillis = media.durationMillis.coerceAtLeast(0L),
+                    sizeBytes = size,
+                    codecSummary = media.codecSummary,
+                    storageType = RecordingStorageType.FILE.name,
+                    directoryId = directory.absolutePath,
+                )
+            }
+        }
+        .toList()
+}
+
+private fun listDocumentTreeRecordings(
+    context: Context,
+    treeUri: Uri,
+    knownRecordings: Map<String, RecordingEntity>,
+): List<RecordingEntity> = runCatching {
+    val tree = DocumentFile.fromTreeUri(context, treeUri)
+        ?: throw IOException("Unable to access output directory $treeUri")
+    tree.listFiles()
+        .asSequence()
+        .filter { it.isFile }
+        .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
+        .mapNotNull { file ->
+            val uri = file.uri
+            val name = file.name ?: return@mapNotNull null
+            val size = file.length().coerceAtLeast(0L)
+            val existing = knownRecordings[uri.toString()]
+            if (
+                existing != null && existing.durationMillis > 0L && existing.displayName == name &&
+                (size == 0L || existing.sizeBytes == size)
+            ) {
+                existing
+            } else {
+                val media = inspectRecordingMedia(context, uri, name)
+                RecordingEntity(
+                    id = uri.toString(),
+                    displayName = name,
+                    mimeType = file.type ?: guessMimeType(name),
+                    startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
+                    durationMillis = media.durationMillis.coerceAtLeast(0L),
+                    sizeBytes = size,
+                    codecSummary = media.codecSummary,
+                    storageType = RecordingStorageType.DOCUMENT.name,
+                    directoryId = treeUri.toString(),
+                )
+            }
+        }
+        .toList()
+}.onFailure { Log.w(TAG, "Unable to list recording directory $treeUri", it) }.getOrDefault(emptyList())
+
+private fun listMediaStoreRecordings(
+    context: Context,
+    knownRecordings: Map<String, RecordingEntity>,
+): List<RecordingEntity> {
+    if (!usesMediaStoreDefaultStorage()) return emptyList()
+    val resolver = context.contentResolver
+    val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(
+        MediaStore.MediaColumns._ID,
+        MediaStore.MediaColumns.DISPLAY_NAME,
+        MediaStore.MediaColumns.MIME_TYPE,
+        MediaStore.MediaColumns.SIZE,
+        MediaStore.MediaColumns.DATE_MODIFIED,
+        MediaStore.Audio.AudioColumns.DURATION,
+        MediaStore.MediaColumns.IS_PENDING,
+    )
+    return runCatching {
+        resolver.query(
+            collection,
+            projection,
+            "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+            arrayOf(MEDIA_STORE_RELATIVE_PATH),
+            "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+            val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+            val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DURATION)
+            val pendingIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
+            buildList {
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(nameIndex) ?: continue
+                    if (!isSupportedRecordingName(name)) continue
+                    val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
+                    val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                    val pending = cursor.getInt(pendingIndex) != 0
+                    val reportedDuration = cursor.getLong(durationIndex).coerceAtLeast(0L)
+                    // Pending rows are crash artifacts until the audio itself proves complete.
+                    // Never publish a merely non-empty partial file.
+                    val media = if (pending || reportedDuration <= 0L) {
+                        inspectRecordingMedia(context, uri, name)
+                    } else {
+                        null
+                    }
+                    if (pending) {
+                        if (!canRecoverPendingMedia(size, media?.durationMillis ?: 0L)) continue
+                        val published = runCatching { publishMediaStoreUri(context, uri) }
+                            .onFailure { Log.w(TAG, "Unable to republish recovered recording $uri", it) }
+                            .isSuccess
+                        if (!published) continue
+                    }
                     val id = uri.toString()
-                    // A number of SAF providers use zero to mean "unknown size". Do not
-                    // discard a readable recording just because metadata is incomplete.
-                    val size = file.length().coerceAtLeast(0L)
                     val existing = knownRecordings[id]
                     if (
-                        existing != null && existing.durationMillis > 0L && existing.displayName == name &&
-                        (size == 0L || existing.sizeBytes == size)
+                        existing != null && existing.durationMillis > 0L &&
+                        existing.displayName == name && (size == 0L || existing.sizeBytes == size)
                     ) {
-                        existing
-                    } else {
-                        val media = inspectRecordingMedia(context, uri, name)
-                        if (media.durationMillis <= 0L) return@mapNotNull null
+                        add(existing)
+                        continue
+                    }
+                    add(
                         RecordingEntity(
                             id = id,
                             displayName = name,
-                            mimeType = file.type ?: guessMimeType(name),
-                            startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
-                            durationMillis = media.durationMillis,
+                            mimeType = cursor.getString(mimeIndex) ?: guessMimeType(name),
+                            startedAtMillis = resolveRecordingStartTimeMillis(
+                                name,
+                                cursor.getLong(modifiedIndex).coerceAtLeast(0L) * 1000L,
+                            ),
+                            durationMillis = reportedDuration.takeIf { it > 0L }
+                                ?: media?.durationMillis?.coerceAtLeast(0L)
+                                ?: 0L,
                             sizeBytes = size,
-                            codecSummary = media.codecSummary,
-                            storageType = RecordingStorageType.DOCUMENT.name,
-                            directoryId = treeUri.toString(),
-                        )
-                    }
+                            codecSummary = media?.codecSummary ?: resolveRecordingCodecInfo(
+                                extension = name.substringAfterLast('.', ""),
+                                bitrate = null,
+                                sampleRate = null,
+                            ),
+                            storageType = RecordingStorageType.MEDIASTORE.name,
+                            directoryId = MEDIA_STORE_DIRECTORY_ID,
+                        ),
+                    )
                 }
-                .toList()
-        }.onFailure { Log.w(TAG, "Unable to list configured output directory $treeUri", it) }.getOrDefault(emptyList())
+            }
+        } ?: emptyList()
+    }.onFailure { Log.w(TAG, "Unable to list MediaStore recordings", it) }.getOrDefault(emptyList())
+}
+
+
+private fun queryUriAssetState(
+    context: Context,
+    uri: Uri,
+    projection: Array<String>,
+    logId: String,
+): RecordingAssetState = try {
+    context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+    } ?: RecordingAssetState.UNAVAILABLE
+} catch (error: Exception) {
+    Log.w(TAG, "Unable to inspect recording $logId", error)
+    RecordingAssetState.UNAVAILABLE
+}
+
+private fun queryContentSize(context: Context, uri: Uri): Long = runCatching {
+    context.contentResolver.query(
+        uri,
+        arrayOf(MediaStore.MediaColumns.SIZE),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        if (!cursor.moveToFirst()) 0L else cursor.getLong(0).coerceAtLeast(0L)
+    } ?: 0L
+}.onFailure { Log.w(TAG, "Unable to query content size for $uri", it) }.getOrDefault(0L)
+
+
+private fun mediaStoreNameExists(context: Context, displayName: String): Boolean {
+    if (!usesMediaStoreDefaultStorage()) return false
+    return context.contentResolver.query(
+        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+        arrayOf(MediaStore.MediaColumns._ID),
+        "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+        arrayOf(MEDIA_STORE_RELATIVE_PATH, displayName),
+        null,
+    )?.use { it.moveToFirst() } == true
+}
+
+private fun queryContentDisplayName(context: Context, uri: Uri): String? = runCatching {
+    context.contentResolver.query(
+        uri,
+        arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+}.getOrNull()
+
+private fun publishMediaStoreUri(context: Context, uri: Uri) {
+    if (!usesMediaStoreDefaultStorage()) return
+    val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+    if (context.contentResolver.update(uri, values, null, null) <= 0) {
+        throw IOException("Unable to publish MediaStore recording: $uri")
     }
 }
+
+internal enum class RecoverableDirectoryState {
+    HAS_RECORDINGS,
+    EMPTY_OF_RECORDINGS,
+    UNAVAILABLE,
+}
+
+internal fun inspectRecoverableDocumentDirectory(
+    context: Context,
+    treeUri: Uri,
+): RecoverableDirectoryState {
+    return try {
+        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return RecoverableDirectoryState.UNAVAILABLE
+        if (tree.listFiles().any { it.isFile && isSupportedRecordingName(it.name.orEmpty()) }) {
+            RecoverableDirectoryState.HAS_RECORDINGS
+        } else {
+            RecoverableDirectoryState.EMPTY_OF_RECORDINGS
+        }
+    } catch (error: Exception) {
+        Log.w(TAG, "Unable to inspect recording directory $treeUri", error)
+        RecoverableDirectoryState.UNAVAILABLE
+    }
+}
+
+internal fun isSupportedRecordingName(name: String): Boolean =
+    name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
+
+internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
+    sizeBytes > 0L && durationMillis > 0L
 
 private fun createLocalOutputTarget(
     context: Context,
     requestedDisplayName: String,
     mimeType: String,
     startedAtMillis: Long,
+    storageDir: File = getSavedRecordingsDirectory(context),
 ): RecordingOutputTarget {
-    val storageDir = getSavedRecordingsDirectory(context)
     if (!storageDir.exists() && !storageDir.mkdirs() && !storageDir.exists()) {
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
     }
@@ -932,6 +1315,7 @@ private fun createLocalOutputTarget(
 }
 
 private fun renameFileRecording(
+    context: Context,
     recording: RecordingEntity,
     displayName: String,
 ): RecordingEntity? {
@@ -948,6 +1332,9 @@ private fun renameFileRecording(
         val target = File(parent, uniqueName)
         try {
             Files.move(source.toPath(), target.toPath())
+            if (parent.absolutePath == getSharedMusicRecordingsDirectory().absolutePath) {
+                MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(recording.mimeType), null)
+            }
             return recording.copy(
                 id = target.absolutePath,
                 displayName = uniqueName,
@@ -962,6 +1349,23 @@ private fun renameFileRecording(
     }
     return null
 }
+
+private fun renameMediaStoreRecording(
+    context: Context,
+    recording: RecordingEntity,
+    displayName: String,
+): RecordingEntity? = runCatching {
+    val uri = recording.id.toUri()
+    val uniqueName = findAvailableDisplayName(displayName) { candidate ->
+        candidate != recording.displayName && mediaStoreNameExists(context, candidate)
+    }
+    if (uniqueName == recording.displayName) return@runCatching recording
+    val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName) }
+    if (context.contentResolver.update(uri, values, null, null) <= 0) return@runCatching null
+    recording.copy(
+        displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
+    )
+}.onFailure { Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", it) }.getOrNull()
 
 private fun renameDocumentRecording(
     context: Context,
@@ -984,6 +1388,36 @@ private fun renameDocumentRecording(
             displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
         )
     }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
+}
+
+private fun createMediaStoreOutputTarget(
+    context: Context,
+    requestedDisplayName: String,
+    mimeType: String,
+    startedAtMillis: Long,
+): RecordingOutputTarget {
+    check(usesMediaStoreDefaultStorage()) { "MediaStore output requires Android 10+" }
+    val safeDisplayName = sanitizeBaseName(requestedDisplayName)
+    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
+        mediaStoreNameExists(context, candidate)
+    }
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName)
+        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+        put(MediaStore.MediaColumns.RELATIVE_PATH, MEDIA_STORE_RELATIVE_PATH)
+        put(MediaStore.MediaColumns.IS_PENDING, 1)
+    }
+    val uri = context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+        ?: throw IOException("Unable to create MediaStore recording")
+    return RecordingOutputTarget(
+        id = uri.toString(),
+        displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
+        mimeType = mimeType,
+        storageType = RecordingStorageType.MEDIASTORE,
+        directoryId = MEDIA_STORE_DIRECTORY_ID,
+        startedAtMillis = startedAtMillis,
+        uri = uri,
+    )
 }
 
 private fun createDocumentOutputTarget(
@@ -1123,7 +1557,9 @@ private fun countOutputTargetBytes(
 ): Long {
     val input = when (target.storageType) {
         RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
-        RecordingStorageType.DOCUMENT -> context.contentResolver.openInputStream(requireNotNull(target.uri))
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
     } ?: throw IOException("Unable to reopen copied recording")
     input.use { source ->
         val buffer = ByteArray(FILE_COPY_BUFFER_BYTES)

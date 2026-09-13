@@ -557,7 +557,7 @@ fun SettingsScreen(
                     if (previousExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
                     else putString(PrefKey.EXPORT_DIRECTORY_URI, previousExportDirectoryUri)
                 }
-                .apply()
+                .commit()
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }

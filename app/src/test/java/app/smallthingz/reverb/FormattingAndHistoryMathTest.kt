@@ -103,10 +103,8 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun missingRecordingTtl_startsFromFirstObservedMiss_notCreationTime() {
-        val createdAt = 1_000L
-        val firstMissingAt = createdAt + RecordingRepository.MISSING_RECORDING_TTL_MILLIS - 1L
-        val oldRecording = RecordingEntity(
+    fun missingRecordingMarker_isStableUntilTheAssetReturns() {
+        val recording = RecordingEntity(
             id = "id",
             displayName = "clip.wav",
             mimeType = "audio/wav",
@@ -116,23 +114,18 @@ class FormattingAndHistoryMathTest {
             codecSummary = "PCM 16-bit",
             storageType = RecordingStorageType.FILE.name,
             directoryId = "dir",
-            createdAtMillis = createdAt,
-            lastSeenAtMillis = createdAt,
-            missingSinceMillis = firstMissingAt,
+            createdAtMillis = 1_000L,
+            lastSeenAtMillis = 1_000L,
         )
 
-        assertFalse(
-            isMissingRecordingExpired(
-                oldRecording,
-                firstMissingAt + RecordingRepository.MISSING_RECORDING_TTL_MILLIS - 1L,
-            ),
-        )
-        assertTrue(
-            isMissingRecordingExpired(
-                oldRecording,
-                firstMissingAt + RecordingRepository.MISSING_RECORDING_TTL_MILLIS,
-            ),
-        )
+        val firstMissing = markRecordingMissing(recording, nowMillis = 2_000L)
+        val stillMissingMuchLater = markRecordingMissing(firstMissing, nowMillis = Long.MAX_VALUE)
+        val restored = markRecordingPresent(stillMissingMuchLater, nowMillis = Long.MAX_VALUE)
+
+        assertEquals(2_000L, firstMissing.missingSinceMillis)
+        assertEquals(firstMissing, stillMissingMuchLater)
+        assertEquals(null, restored.missingSinceMillis)
+        assertEquals(Long.MAX_VALUE, restored.lastSeenAtMillis)
     }
 
     @Test
@@ -952,6 +945,27 @@ class FormattingAndHistoryMathTest {
                 exactSizeBytes,
         )
         assertEquals(exactSizeBytes, snapshot.oneShotRetentionSizeBytes)
+    }
+
+    @Test
+    fun mergeObservedRecording_doesNotEraseKnownMetadataWhenInspectionIsIncomplete() {
+        val existing = RecordingEntity(
+            id = "id", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            directoryId = "dir", createdAtMillis = 10L, lastSeenAtMillis = 20L,
+        )
+        val partial = existing.copy(
+            mimeType = "", durationMillis = 0L, sizeBytes = 0L, codecSummary = "", createdAtMillis = 999L,
+        )
+
+        val merged = mergeObservedRecording(existing, partial, nowMillis = 30L)
+
+        assertEquals(existing.mimeType, merged.mimeType)
+        assertEquals(existing.durationMillis, merged.durationMillis)
+        assertEquals(existing.sizeBytes, merged.sizeBytes)
+        assertEquals(existing.codecSummary, merged.codecSummary)
+        assertEquals(existing.createdAtMillis, merged.createdAtMillis)
     }
 
 }

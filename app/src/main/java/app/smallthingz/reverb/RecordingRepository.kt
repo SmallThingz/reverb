@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +12,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 object RecordingRepository {
-    internal const val MISSING_RECORDING_TTL_MILLIS = 24L * 60L * 60L * 1000L
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pendingDirectoryIds = mutableSetOf<String>()
@@ -32,9 +30,14 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
-                syncConfiguredDirectory(context)
-                pruneMissingLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
-                RecordingDatabase.getInstance(context).recordingDao().listAll()
+                replayPendingDeletionsLocked(context)
+                syncRecoverableDirectories(context)
+                updateMissingStatesLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
+                val pending = pendingDeletionIds(context)
+                visibleCatalogRecordings(
+                    RecordingDatabase.getInstance(context).recordingDao().listAll(),
+                    pending,
+                )
             }
         }
     }
@@ -48,7 +51,11 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
-                RecordingDatabase.getInstance(context).recordingDao().listAll()
+                val pending = pendingDeletionIds(context)
+                visibleCatalogRecordings(
+                    RecordingDatabase.getInstance(context).recordingDao().listAll(),
+                    pending,
+                )
             }
         }
     }
@@ -82,10 +89,10 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
+                replayPendingDeletionsLocked(context)
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val nowMillis = System.currentTimeMillis()
                 val updates = mutableListOf<RecordingEntity>()
-                val expiredIds = mutableListOf<String>()
                 var movable = false
                 dao.listAll().forEach { recording ->
                     if (recording.directoryId == targetDirectoryId) return@forEach
@@ -97,12 +104,9 @@ object RecordingRepository {
                         RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                         RecordingAssetState.UNAVAILABLE -> recording
                     }
-                    when {
-                        isMissingRecordingExpired(updated, nowMillis) -> expiredIds += recording.id
-                        updated != recording -> updates += updated
-                    }
+                    if (updated != recording) updates += updated
                 }
-                dao.applyChanges(updates, expiredIds)
+                dao.applyChanges(updates, emptyList())
                 movable
             }
         }
@@ -123,11 +127,12 @@ object RecordingRepository {
         schedulePersistedPermissionCleanup(context)
     }
 
-    fun schedulePersistedPermissionCleanup(context: Context) {
-        val appContext = context.applicationContext
-        cleanupScope.launch {
-            cleanupPersistedDirectoryPermissions(appContext)
-        }
+    fun schedulePersistedPermissionCleanup(@Suppress("UNUSED_PARAMETER") context: Context) {
+        // Persisted SAF grants are part of the recovery path for recordings outside the
+        // currently selected directory. Provider scans can transiently report an empty
+        // directory, so automatically releasing a grant can make the only surviving audio
+        // unreachable. Keep grants until the user clears app data or an explicit, verified
+        // destructive workflow is introduced.
     }
 
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
@@ -146,12 +151,47 @@ object RecordingRepository {
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
+                if (!addPendingDeletionLocked(context, recording.id)) return@withLock false
                 if (!deleteRecordingAsset(context, recording)) return@withLock false
                 RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id)
+                removePendingDeletionLocked(context, recording.id)
                 schedulePersistedPermissionCleanup(context)
                 true
             }
         }
+    }
+
+    private suspend fun replayPendingDeletionsLocked(context: Context) {
+        val pendingIds = pendingDeletionIds(context)
+        if (pendingIds.isEmpty()) return
+        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val byId = dao.listAll().associateBy { it.id }
+        for (id in pendingIds) {
+            val recording = byId[id] ?: continue
+            if (!deleteRecordingAsset(context, recording)) continue
+            dao.deleteById(id)
+            removePendingDeletionLocked(context, id)
+        }
+    }
+
+    private fun pendingDeletionIds(context: Context): Set<String> =
+        getRecorderPreferences(context).getStringSet(PrefKey.PENDING_RECORDING_DELETIONS, emptySet())
+            ?.toSet()
+            .orEmpty()
+
+    private fun addPendingDeletionLocked(context: Context, id: String): Boolean {
+        val updated = pendingDeletionIds(context) + id
+        return getRecorderPreferences(context).edit()
+            .putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
+            .commit()
+    }
+
+    private fun removePendingDeletionLocked(context: Context, id: String): Boolean {
+        val updated = pendingDeletionIds(context) - id
+        val editor = getRecorderPreferences(context).edit()
+        if (updated.isEmpty()) editor.remove(PrefKey.PENDING_RECORDING_DELETIONS)
+        else editor.putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
+        return editor.commit()
     }
 
     suspend fun rename(
@@ -186,6 +226,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
+                replayPendingDeletionsLocked(context)
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val current = dao.listAll()
                 if (current.isEmpty()) {
@@ -193,7 +234,6 @@ object RecordingRepository {
                 }
 
                 val targetDirectoryId = getConfiguredOutputDirectoryId(context)
-                val missingDeletes = mutableListOf<String>()
                 val stateUpdates = mutableListOf<RecordingEntity>()
                 val moveCandidates = mutableListOf<RecordingEntity>()
                 var skipped = 0
@@ -204,11 +244,7 @@ object RecordingRepository {
                         RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                         RecordingAssetState.MISSING -> {
                             val missing = markRecordingMissing(recording, nowMillis)
-                            if (isMissingRecordingExpired(missing, nowMillis)) {
-                                missingDeletes += recording.id
-                            } else if (missing != recording) {
-                                stateUpdates += missing
-                            }
+                            if (missing != recording) stateUpdates += missing
                             skipped++
                             return@forEach
                         }
@@ -230,48 +266,133 @@ object RecordingRepository {
                 // Commit non-move reconciliation before copying. Moves themselves are
                 // committed one at a time so peak duplicate disk usage is bounded by a
                 // single recording rather than the entire library.
-                dao.applyChanges(stateUpdates, missingDeletes)
+                dao.applyChanges(stateUpdates, emptyList())
 
                 var moved = 0
+                val durableTargets = current.filter { it.directoryId == targetDirectoryId }.toMutableList()
                 moveCandidates.forEach { source ->
-                    val target = copyRecordingToConfiguredDirectory(context, source)
+                    val recoveredTarget = durableTargets.firstOrNull { candidate ->
+                        candidate.displayName == source.displayName &&
+                            recordingsHaveSameContent(context, source, candidate)
+                    }
+                    val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source)
                     if (target == null) {
                         skipped++
                         return@forEach
                     }
+                    if (recoveredTarget == null) durableTargets += target
                     try {
                         dao.applyChanges(
                             upserts = listOf(target),
                             deleteIds = listOf(source.id),
                         )
                     } catch (error: Exception) {
-                        deleteRecordingAsset(context, target)
+                        if (recoveredTarget == null) deleteRecordingAsset(context, target)
                         throw error
                     }
 
                     // Commit the catalog switch before deleting a source. If source cleanup
                     // fails, the verified target remains authoritative and the worst case is
-                    // an unindexed duplicate, never a catalog row pointing at deleted audio.
+                    // an extra recoverable copy, never a catalog row pointing at deleted audio.
                     deleteRecordingAsset(context, source)
                     moved++
                 }
 
-                MoveResult(moved = moved, skipped = skipped, removedMissing = missingDeletes.size).also {
-                    if (moved > 0 || missingDeletes.isNotEmpty()) {
-                        schedulePersistedPermissionCleanup(context)
-                    }
+                MoveResult(moved = moved, skipped = skipped).also {
+                    if (moved > 0) schedulePersistedPermissionCleanup(context)
                 }
             }
         }
     }
 
-    private suspend fun syncConfiguredDirectory(context: Context) {
+    private suspend fun syncRecoverableDirectories(context: Context) {
+        val directoryUris = LinkedHashMap<String, Uri?>()
+        directoryUris[getOutputDirectoryId(context, null)] = null
+        getConfiguredExportTreeUri(context)?.let { uri ->
+            directoryUris[getOutputDirectoryId(context, uri)] = uri
+        }
+        runCatching { context.contentResolver.persistedUriPermissions }
+            .getOrDefault(emptyList())
+            .asSequence()
+            .filter { it.isReadPermission }
+            .forEach { permission ->
+                directoryUris.putIfAbsent(permission.uri.toString(), permission.uri)
+            }
+
+        for (treeUri in directoryUris.values) {
+            syncRecoverableDirectory(context, treeUri)
+        }
+
+        // Pre-MediaStore builds saved into app-specific external/internal storage. Keep
+        // scanning it forever so upgrading never strands a recording in the old location.
+        val legacyDirectoryId = getSavedRecordingsDirectory(context).absolutePath
+        if (legacyDirectoryId !in directoryUris.keys) {
+            syncObservedDirectory(context, legacyDirectoryId) { known ->
+                listLegacyAppStorageRecordings(context, known)
+            }
+        }
+
+        // Older builds used app-specific external storage, which Android removes on
+        // uninstall. When the user is on the default destination, migrate those recordings
+        // to the durable shared Music/Reverb destination using verified copy-before-delete.
+        if (getConfiguredExportTreeUri(context) == null && legacyDirectoryId != getConfiguredOutputDirectoryId(context)) {
+            migrateLegacyAppStorageLocked(context, legacyDirectoryId)
+        }
+    }
+
+    private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
         val dao = RecordingDatabase.getInstance(context).recordingDao()
-        val currentDirectoryId = getConfiguredOutputDirectoryId(context)
-        val existing = dao.listByDirectory(currentDirectoryId)
+        val targetDirectoryId = getConfiguredOutputDirectoryId(context)
+        val durableTargets = dao.listByDirectory(targetDirectoryId).toMutableList()
+        val legacy = dao.listByDirectory(legacyDirectoryId)
+
+        for (source in legacy) {
+            if (recordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
+
+            // If a previous process died after publishing the target but before committing
+            // the catalog switch, reuse that byte-identical target instead of duplicating it.
+            val recoveredTarget = durableTargets.firstOrNull { candidate ->
+                candidate.displayName == source.displayName && recordingsHaveSameContent(context, source, candidate)
+            }
+            val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source) ?: continue
+
+            if (recoveredTarget == null) durableTargets += target
+            try {
+                dao.applyChanges(
+                    upserts = listOf(target),
+                    deleteIds = listOf(source.id),
+                )
+            } catch (error: Exception) {
+                if (recoveredTarget == null) deleteRecordingAsset(context, target)
+                throw error
+            }
+
+            // Deleting the source is strictly last. Failure leaves an extra copy which will
+            // be rediscovered and deduplicated on a later refresh; it never loses audio.
+            deleteRecordingAsset(context, source)
+        }
+    }
+
+    private suspend fun syncRecoverableDirectory(
+        context: Context,
+        treeUri: Uri?,
+    ) {
+        val directoryId = getOutputDirectoryId(context, treeUri)
+        syncObservedDirectory(context, directoryId) { known ->
+            listOutputDirectoryRecordings(context, treeUri, known)
+        }
+    }
+
+    private suspend fun syncObservedDirectory(
+        context: Context,
+        directoryId: String,
+        scan: (Map<String, RecordingEntity>) -> List<RecordingEntity>,
+    ) {
+        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val existing = dao.listByDirectory(directoryId)
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
-        val imported = listCurrentOutputDirectoryRecordings(context, existingById)
+        val imported = scan(existingById)
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
         val importedUpdates = ArrayList<RecordingEntity>()
@@ -281,29 +402,24 @@ object RecordingRepository {
             if (existingById[merged.id] != merged) importedUpdates += merged
         }
         val updates = mutableListOf<RecordingEntity>()
-        val staleIds = mutableListOf<String>()
 
         existing.asSequence()
             .filter { it.id !in importedIds }
             .forEach { recording ->
-                // Keep DB rows for files that still exist even if the directory scan
-                // did not rediscover them yet (for example, provider lag or format-
-                // specific scan gaps right after export).
+                // Never convert a scan gap into catalog deletion. Provider visibility,
+                // removable storage, and persisted permissions can all recover later.
                 val updated = when (recordingAssetState(context, recording)) {
                     RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                     RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                     RecordingAssetState.UNAVAILABLE -> recording
                 }
-                when {
-                    isMissingRecordingExpired(updated, nowMillis) -> staleIds += recording.id
-                    updated != recording -> updates += updated
-                }
+                if (updated != recording) updates += updated
             }
 
-        dao.applyChanges(importedUpdates + updates, staleIds)
+        dao.applyChanges(importedUpdates + updates, emptyList())
     }
 
-    private suspend fun pruneMissingLocked(
+    private suspend fun updateMissingStatesLocked(
         context: Context,
         skipDirectoryId: String? = null,
     ): Int {
@@ -311,7 +427,6 @@ object RecordingRepository {
         val all = dao.listAll()
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
-        val missingIds = mutableListOf<String>()
         all.forEach { recording ->
             if (recording.directoryId == skipDirectoryId) return@forEach
             val updated = when (recordingAssetState(context, recording)) {
@@ -319,45 +434,10 @@ object RecordingRepository {
                 RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                 RecordingAssetState.UNAVAILABLE -> recording
             }
-            when {
-                isMissingRecordingExpired(updated, nowMillis) -> missingIds += recording.id
-                updated != recording -> updates += updated
-            }
+            if (updated != recording) updates += updated
         }
-        dao.applyChanges(updates, missingIds)
-        return missingIds.size
-    }
-
-    private suspend fun cleanupPersistedDirectoryPermissions(context: Context) {
-        mutex.withLock {
-            val keep = mutableSetOf<String>()
-            getConfiguredExportTreeUri(context)?.toString()?.let(keep::add)
-            keep += recordingDirectoryIdsToRetain(
-                RecordingDatabase.getInstance(context).recordingDao().listAll(),
-            )
-            synchronized(pendingDirectoryIds) {
-                keep += pendingDirectoryIds
-            }
-
-            val permissions = runCatching { context.contentResolver.persistedUriPermissions }
-                .getOrElse { return@withLock }
-            permissions.forEach { permission ->
-                if (permission.uri.toString() in keep) return@forEach
-                var flags = 0
-                if (permission.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                if (permission.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                if (flags != 0) {
-                    synchronized(pendingDirectoryIds) {
-                        val permissionId = permission.uri.toString()
-                        val configuredId = getConfiguredExportTreeUri(context)?.toString()
-                        if (permissionId in pendingDirectoryIds || permissionId == configuredId) return@forEach
-                        runCatching {
-                            context.contentResolver.releasePersistableUriPermission(permission.uri, flags)
-                        }
-                    }
-                }
-            }
-        }
+        dao.applyChanges(updates, emptyList())
+        return 0
     }
 
     data class MoveResult(
@@ -370,12 +450,16 @@ object RecordingRepository {
 internal fun recordingDirectoryIdsToRetain(
     recordings: List<RecordingEntity>,
 ): Set<String> = recordings.asSequence()
-    // Unknown/future storage types must retain their directory grant too. A local path simply
-    // will not match a persisted content-URI permission, while dropping an unknown SAF grant
-    // could make the only surviving audio unreachable.
     .map { it.directoryId }
     .filter { it.isNotBlank() }
     .toSet()
+
+internal fun visibleCatalogRecordings(
+    recordings: List<RecordingEntity>,
+    pendingDeletionIds: Set<String> = emptySet(),
+): List<RecordingEntity> = recordings.filter { recording ->
+    recording.id !in pendingDeletionIds && recording.missingSinceMillis == null
+}
 
 internal fun mergeObservedRecording(
     existing: RecordingEntity?,
@@ -383,6 +467,10 @@ internal fun mergeObservedRecording(
     nowMillis: Long,
 ): RecordingEntity {
     return observed.copy(
+        mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: existing?.mimeType.orEmpty(),
+        durationMillis = observed.durationMillis.takeIf { it > 0L } ?: existing?.durationMillis ?: 0L,
+        sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: existing?.sizeBytes ?: 0L,
+        codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: existing?.codecSummary.orEmpty(),
         createdAtMillis = existing?.createdAtMillis ?: observed.createdAtMillis,
         lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null) {
             nowMillis
@@ -416,12 +504,4 @@ internal fun markRecordingMissing(
     } else {
         recording.copy(missingSinceMillis = nowMillis)
     }
-}
-
-internal fun isMissingRecordingExpired(
-    recording: RecordingEntity,
-    nowMillis: Long,
-): Boolean {
-    val missingSinceMillis = recording.missingSinceMillis ?: return false
-    return nowMillis - missingSinceMillis >= RecordingRepository.MISSING_RECORDING_TTL_MILLIS
 }

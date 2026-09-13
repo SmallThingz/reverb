@@ -3,6 +3,9 @@
     <external-files-path
         name="external_recordings"
         path="Music/Reverb/" />
+    <external-path
+        name="shared_recordings"
+        path="Music/Reverb/" />
     <files-path
         name="internal_recordings"
         path="recordings/Reverb/" />

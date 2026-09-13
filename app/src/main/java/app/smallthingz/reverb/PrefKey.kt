@@ -22,12 +22,14 @@ enum class PrefKey {
     INPUT_ROUTE,
     SAMPLE_RATE,
     THEME_MODE,
+    PENDING_RECORDING_DELETIONS,
 }
 
 fun SharedPreferences.getString(key: PrefKey, default: String?): String? = getString(key.name, default)
 fun SharedPreferences.getInt(key: PrefKey, default: Int): Int = getInt(key.name, default)
 fun SharedPreferences.getLong(key: PrefKey, default: Long): Long = getLong(key.name, default)
 fun SharedPreferences.getBoolean(key: PrefKey, default: Boolean): Boolean = getBoolean(key.name, default)
+fun SharedPreferences.getStringSet(key: PrefKey, default: Set<String>?): Set<String>? = getStringSet(key.name, default)
 fun SharedPreferences.contains(key: PrefKey): Boolean = contains(key.name)
 fun SharedPreferences.Editor.putString(key: PrefKey, value: String): SharedPreferences.Editor =
     putString(key.name, value)
@@ -35,4 +37,6 @@ fun SharedPreferences.Editor.putInt(key: PrefKey, value: Int): SharedPreferences
 fun SharedPreferences.Editor.putLong(key: PrefKey, value: Long): SharedPreferences.Editor = putLong(key.name, value)
 fun SharedPreferences.Editor.putBoolean(key: PrefKey, value: Boolean): SharedPreferences.Editor =
     putBoolean(key.name, value)
+fun SharedPreferences.Editor.putStringSet(key: PrefKey, value: Set<String>): SharedPreferences.Editor =
+    putStringSet(key.name, value)
 fun SharedPreferences.Editor.remove(key: PrefKey): SharedPreferences.Editor = remove(key.name)

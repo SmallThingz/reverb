@@ -76,11 +76,14 @@ import kotlinx.coroutines.CancellationException
 
 private const val URI_SCHEME_PACKAGE = "package"
 private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
+private const val STATE_STORAGE_PERMISSION_REQUESTED = "storage_permission_requested"
+private const val STATE_RECOVERY_PERMISSION_REQUESTED = "recovery_permission_requested"
 private const val STATE_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
     private var notificationPermissionGranted by mutableStateOf(false)
+    private var mediaRecoveryAllowed by mutableStateOf(false)
     private var batteryOptimizationAllowed by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
     private var showOnboarding by mutableStateOf(false)
@@ -88,10 +91,23 @@ class MainActivity : ComponentActivity() {
 
     private val microphonePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            permissionsGranted = granted
+            permissionsGranted = hasRequiredPermissions()
             showPermissionDenied = !granted && !showOnboarding
-            if (granted && !showOnboarding) {
-                maybeRequestNotificationPermission()
+            if (granted && !showOnboarding) beginPermissionFlow()
+        }
+
+    private val storagePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            permissionsGranted = hasRequiredPermissions()
+            showPermissionDenied = !granted && !showOnboarding
+            if (granted && !showOnboarding) beginPermissionFlow()
+        }
+
+    private val recoveryPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            mediaRecoveryAllowed = granted || hasMediaRecoveryPermission()
+            if (mediaRecoveryAllowed) {
+                AppFeedbackCenter.post(getString(R.string.recording_recovery_enabled), FeedbackTone.SUCCESS)
             }
         }
 
@@ -101,6 +117,8 @@ class MainActivity : ComponentActivity() {
         }
 
     private var microphonePermissionRequested = false
+    private var storagePermissionRequested = false
+    private var recoveryPermissionRequested = false
     private var notificationPermissionRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -108,10 +126,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         microphonePermissionRequested =
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
+        storagePermissionRequested =
+            savedInstanceState?.getBoolean(STATE_STORAGE_PERMISSION_REQUESTED) ?: false
+        recoveryPermissionRequested =
+            savedInstanceState?.getBoolean(STATE_RECOVERY_PERMISSION_REQUESTED) ?: false
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
         permissionsGranted = hasRequiredPermissions()
         notificationPermissionGranted = hasNotificationPermission()
+        mediaRecoveryAllowed = hasMediaRecoveryPermission()
         batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         showOnboarding = isOnboardingPending(this)
         RecordingRepository.schedulePersistedPermissionCleanup(this)
@@ -121,7 +144,11 @@ class MainActivity : ComponentActivity() {
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
                 if (showOnboarding) {
                     OnboardingScreen(
-                        microphoneAllowed = permissionsGranted,
+                        microphoneAllowed = hasMicrophonePermission(),
+                        storageAllowed = hasLegacyStoragePermission(),
+                        storagePermissionRequired = requiresLegacyStoragePermission(),
+                        recoveryAllowed = mediaRecoveryAllowed,
+                        recoveryPermissionRequired = mediaRecoveryPermission() != null,
                         notificationAllowed = notificationPermissionGranted,
                         notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
                         batteryOptimizationAllowed = batteryOptimizationAllowed,
@@ -130,6 +157,18 @@ class MainActivity : ComponentActivity() {
                         onRequestMicrophone = {
                             microphonePermissionRequested = true
                             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        onRequestStorage = {
+                            if (requiresLegacyStoragePermission()) {
+                                storagePermissionRequested = true
+                                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
+                        },
+                        onRequestRecovery = {
+                            mediaRecoveryPermission()?.let { permission ->
+                                recoveryPermissionRequested = true
+                                recoveryPermissionLauncher.launch(permission)
+                            }
                         },
                         onRequestNotifications = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -160,6 +199,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     if (showPermissionDenied) {
                         PermissionDeniedDialog(
+                            message = requiredPermissionMessage(),
                             onAllow = {
                                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                     data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
@@ -187,6 +227,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED, microphonePermissionRequested)
+        outState.putBoolean(STATE_STORAGE_PERMISSION_REQUESTED, storagePermissionRequested)
+        outState.putBoolean(STATE_RECOVERY_PERMISSION_REQUESTED, recoveryPermissionRequested)
         outState.putBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED, notificationPermissionRequested)
         super.onSaveInstanceState(outState)
     }
@@ -195,28 +237,62 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         permissionsGranted = hasRequiredPermissions()
         notificationPermissionGranted = hasNotificationPermission()
+        mediaRecoveryAllowed = hasMediaRecoveryPermission()
         batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         if (!showOnboarding) beginPermissionFlow()
     }
 
     private fun beginPermissionFlow() {
-        if (hasRequiredPermissions()) {
-            permissionsGranted = true
-            showPermissionDenied = false
-            maybeRequestNotificationPermission()
+        if (!hasMicrophonePermission()) {
+            permissionsGranted = false
+            if (microphonePermissionRequested) {
+                showPermissionDenied = true
+                return
+            }
+            microphonePermissionRequested = true
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        permissionsGranted = false
-        if (microphonePermissionRequested) {
-            showPermissionDenied = true
+        if (!hasLegacyStoragePermission()) {
+            permissionsGranted = false
+            if (storagePermissionRequested) {
+                showPermissionDenied = true
+                return
+            }
+            storagePermissionRequested = true
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             return
         }
-        microphonePermissionRequested = true
-        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        permissionsGranted = true
+        showPermissionDenied = false
+        maybeRequestNotificationPermission()
     }
 
-    private fun hasRequiredPermissions(): Boolean {
-        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    private fun hasRequiredPermissions(): Boolean =
+        hasMicrophonePermission() && hasLegacyStoragePermission()
+
+    private fun hasMicrophonePermission(): Boolean =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun requiresLegacyStoragePermission(): Boolean = requiresLegacyPublicStoragePermission()
+
+    private fun hasLegacyStoragePermission(): Boolean =
+        !requiresLegacyStoragePermission() ||
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun mediaRecoveryPermission(): String? = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> Manifest.permission.READ_MEDIA_AUDIO
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> Manifest.permission.READ_EXTERNAL_STORAGE
+        else -> null
+    }
+
+    private fun hasMediaRecoveryPermission(): Boolean =
+        mediaRecoveryPermission()?.let { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } ?: true
+
+    private fun requiredPermissionMessage(): String = when {
+        !hasMicrophonePermission() -> getString(R.string.permission_required_message)
+        !hasLegacyStoragePermission() -> getString(R.string.storage_permission_required_message)
+        else -> getString(R.string.permission_required_message)
     }
 
     private fun hasNotificationPermission(): Boolean {
@@ -254,12 +330,18 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
 @Composable
 private fun OnboardingScreen(
     microphoneAllowed: Boolean,
+    storageAllowed: Boolean,
+    storagePermissionRequired: Boolean,
+    recoveryAllowed: Boolean,
+    recoveryPermissionRequired: Boolean,
     notificationAllowed: Boolean,
     notificationPermissionRequired: Boolean,
     batteryOptimizationAllowed: Boolean,
     initialOneShotEnabled: Boolean,
     initialLoopingEnabled: Boolean,
     onRequestMicrophone: () -> Unit,
+    onRequestStorage: () -> Unit,
+    onRequestRecovery: () -> Unit,
     onRequestNotifications: () -> Unit,
     onReviewBatteryOptimization: () -> Unit,
     onFinish: (oneShotEnabled: Boolean, loopingEnabled: Boolean) -> Unit,
@@ -303,6 +385,28 @@ private fun OnboardingScreen(
                             canRequest = true,
                             onAllow = onRequestMicrophone,
                         )
+                        if (storagePermissionRequired) {
+                            Spacer(Modifier.height(12.dp))
+                            OnboardingPermissionCard(
+                                marker = "S",
+                                title = stringResource(R.string.storage_settings_title),
+                                body = stringResource(R.string.onboarding_storage_body),
+                                allowed = storageAllowed,
+                                canRequest = true,
+                                onAllow = onRequestStorage,
+                            )
+                        }
+                        if (recoveryPermissionRequired) {
+                            Spacer(Modifier.height(12.dp))
+                            OnboardingPermissionCard(
+                                marker = "R",
+                                title = stringResource(R.string.recording_recovery_title),
+                                body = stringResource(R.string.recording_recovery_body),
+                                allowed = recoveryAllowed,
+                                canRequest = true,
+                                onAllow = onRequestRecovery,
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                         OnboardingPermissionCard(
                             marker = "N",
@@ -534,6 +638,7 @@ private fun OnboardingProgressDot(active: Boolean) {
 
 @Composable
 private fun PermissionDeniedDialog(
+    message: String,
     onAllow: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -542,7 +647,7 @@ private fun PermissionDeniedDialog(
         shape = RoundedCornerShape(18.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = { Text(stringResource(R.string.permission_required)) },
-        text = { Text(stringResource(R.string.permission_required_message)) },
+        text = { Text(message) },
         confirmButton = {
             TextButton(onClick = onAllow) {
                 Text(stringResource(R.string.allow))

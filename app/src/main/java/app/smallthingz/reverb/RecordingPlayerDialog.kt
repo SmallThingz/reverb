@@ -117,7 +117,9 @@ fun RecordingPlayerDialog(
         try {
             when (resolveRecordingStorageType(recording)) {
                 RecordingStorageType.FILE -> player.setDataSource(File(recording.id).absolutePath)
-                RecordingStorageType.DOCUMENT -> player.setDataSource(context, recording.id.toUri())
+                RecordingStorageType.DOCUMENT,
+                RecordingStorageType.MEDIASTORE,
+                -> player.setDataSource(context, recording.id.toUri())
                 null -> throw IllegalArgumentException("Unknown recording storage type")
             }
             player.prepareAsync()

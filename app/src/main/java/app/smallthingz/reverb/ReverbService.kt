@@ -24,6 +24,7 @@ import android.util.Log
 
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
@@ -182,13 +183,13 @@ class ReverbService : Service() {
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
-        cancelCurrentExport()
+        // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
 
         if (::exportWorkExecutor.isInitialized) {
-            exportWorkExecutor.shutdownNow()
+            exportWorkExecutor.shutdown()
             try {
                 exportWorkExecutor.awaitTermination(2, TimeUnit.SECONDS)
             } catch (_: InterruptedException) {
@@ -1005,6 +1006,7 @@ class ReverbService : Service() {
                 Callable {
                     exportToken.started.set(true)
                     var outTarget: RecordingOutputTarget? = null
+                    var verifiedComplete = false
                     var committed = false
                     try {
                         ensureExportNotCancelled(exportToken)
@@ -1054,6 +1056,21 @@ class ReverbService : Service() {
                         }
                         val expectedOutputBytes = writer.totalFileBytesWritten
                         requireExportedOutput(target, expectedOutputBytes)
+                        verifyOutputTargetPrefix(
+                            context = this@ReverbService,
+                            target = target,
+                            expectedPrefix = writer.expectedHeaderBytes,
+                        )
+                        verifyOutputTargetPayloadDigest(
+                            context = this@ReverbService,
+                            target = target,
+                            payloadOffsetBytes = writer.payloadOffsetBytes,
+                            payloadBytes = writer.totalSampleBytesWritten,
+                            expectedSha256 = writer.payloadSha256,
+                        )
+                        verifiedComplete = true
+                        ensureExportNotCancelled(exportToken)
+                        finalizeOutputTarget(this@ReverbService, target)
                         ensureExportNotCancelled(exportToken)
                         val recording = buildRecordingEntity(
                             this@ReverbService,
@@ -1073,21 +1090,26 @@ class ReverbService : Service() {
                         if (!committed) {
                             throw InterruptedIOException("Export cancelled")
                         }
+                        // The verified file is now irrevocably committed. Catalog registration
+                        // is metadata: retry it, but never delete valid audio if SQLite fails.
                         val cataloguedRecording = runCatching {
                             runBlocking { RecordingRepository.register(this@ReverbService, recording) }
                         }.onFailure { error ->
                             Log.e(TAG, "Unable to register committed export ${recording.id}", error)
                         }.getOrDefault(recording)
-                        clearExportState(exportToken)
-                        notifyReceiver(receiver, cataloguedRecording)
+                        finishExportSuccess(exportToken, receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        if (!committed) deleteOutputTarget(outTarget)
+                        if (shouldDeleteExportTarget(cancelled = true, verifiedComplete, committed)) {
+                            deleteOutputTarget(outTarget)
+                        }
                         finishExportCancelled(exportToken, receiver)
                     } catch (e: Exception) {
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                            if (!committed) deleteOutputTarget(outTarget)
+                            if (shouldDeleteExportTarget(cancelled = true, verifiedComplete, committed)) {
+                                deleteOutputTarget(outTarget)
+                            }
                             finishExportCancelled(exportToken, receiver)
                             return@Callable Unit
                         }
@@ -1099,10 +1121,12 @@ class ReverbService : Service() {
                         )
                         reportError(message)
                         finishExportFailure(exportToken, receiver, message, e)
-                        if (!committed) deleteOutputTarget(outTarget)
+                        if (shouldDeleteExportTarget(cancelled = false, verifiedComplete, committed)) {
+                            deleteOutputTarget(outTarget)
+                        }
                     } finally {
                         closeLeaseOnce()
-                        if (exportToken.cancelled.get() && !committed) {
+                        if (shouldDeleteExportTarget(exportToken.cancelled.get(), verifiedComplete, committed)) {
                             deleteOutputTarget(outTarget)
                         }
                         clearExportState(exportToken)
@@ -1160,16 +1184,9 @@ class ReverbService : Service() {
 
     private fun markExportCommitted(token: ExportCancellationToken): Boolean =
         synchronized(exportStateLock) {
-            if (
-                activeExportToken !== token ||
-                token.cancelled.get() ||
-                !token.terminalDelivered.compareAndSet(false, true)
-            ) {
-                false
-            } else {
-                token.committed.set(true)
-                true
-            }
+            activeExportToken === token &&
+                !token.cancelled.get() &&
+                token.committed.compareAndSet(false, true)
         }
 
     private fun clearExportState(token: ExportCancellationToken) {
@@ -1249,6 +1266,16 @@ class ReverbService : Service() {
         mainHandler.post { receiver.fileCancelled() }
     }
 
+    private fun finishExportSuccess(
+        token: ExportCancellationToken,
+        receiver: AudioFileReceiver?,
+        recording: RecordingEntity,
+    ) {
+        if (token.terminalDelivered.compareAndSet(false, true)) {
+            notifyReceiver(receiver, recording)
+        }
+    }
+
     private fun finishExportFailure(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,
@@ -1290,6 +1317,10 @@ class ReverbService : Service() {
                 RecordingStorageType.DOCUMENT -> {
                     val uri = target.uri ?: return@runCatching
                     androidx.documentfile.provider.DocumentFile.fromSingleUri(this, uri)?.delete()
+                }
+                RecordingStorageType.MEDIASTORE -> {
+                    val uri = target.uri ?: return@runCatching
+                    contentResolver.delete(uri, null, null)
                 }
             }
         }.onFailure { error ->
@@ -1944,7 +1975,9 @@ class ReverbService : Service() {
                     ACTION_DEBUG_CLEAR_BUFFER -> loopingAudioChunkStore.clear()
                     ACTION_DEBUG_INJECT_BUFFER -> injectDebugBuffer(seconds)
                     ACTION_DEBUG_FORCE_APP_STORAGE_EXPORTS -> {
-                        setConfiguredExportTreeUri(this@ReverbService, null)
+                        check(setConfiguredExportTreeUri(this@ReverbService, null)) {
+                            "Unable to persist app-storage export directory"
+                        }
                         writeDebugReport("force-app-storage-exports")
                     }
                     ACTION_DEBUG_EXPORT_FULL -> exportDebug(FULL_BUFFER_SECONDS)
@@ -2260,6 +2293,12 @@ internal fun captureReaderTransition(
     recordRunning -> CaptureReaderTransition.ADOPT
     else -> CaptureReaderTransition.RESTART
 }
+
+internal fun shouldDeleteExportTarget(
+    cancelled: Boolean,
+    verifiedComplete: Boolean,
+    committed: Boolean,
+): Boolean = !committed && (cancelled || !verifiedComplete)
 
 internal fun isLogicalListeningState(
     recorderState: Int,

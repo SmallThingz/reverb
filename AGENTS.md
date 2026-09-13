@@ -11,3 +11,10 @@
 - Buffer selector taps are navigation-only and follow the same path as horizontal swipes; only the blob starts or stops recording.
 - The Library action is always visible and must open even when the library is empty.
 - Both buffer readouts use the configured retention mode for their primary metric.
+
+# Reverb durability invariants
+
+- Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
+- Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
+- Verified exports survive metadata/UI/service failures; service teardown is not user cancellation.
+- Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted.

@@ -5,6 +5,7 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.Files
+import java.util.Random
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -187,6 +188,106 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun clearBuffer_doesNotInvalidateAnExportLeaseAlreadyInFlight() = withStoreRoot { root ->
+        val expected = pcmBytes(32_000)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+
+        store.clear()
+        assertFalse(store.hasData())
+        assertArrayEquals(expected, readLease(lease))
+        lease.close()
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+    }
+
+    @Test
+    fun randomizedOneShotRetention_restartsAndResizesMatchByteModel() = withStoreRoot { root ->
+        val random = Random(0x5eedL)
+        var capacity = 16_384L
+        var expected = byteArrayOf()
+        var store = PersistentAudioChunkStore(root, overwriteOldest = false)
+        configure(store, capacity)
+        try {
+            repeat(160) { iteration ->
+                when (random.nextInt(5)) {
+                    0, 1, 2 -> {
+                        val count = (1 + random.nextInt(2_048)) * 2
+                        val bytes = ByteArray(count) { random.nextInt(256).toByte() }
+                        val writable = (capacity - expected.size.toLong()).coerceAtLeast(0L)
+                            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        val expectedWritten = minOf(count, writable) - minOf(count, writable) % 2
+                        val actual = store.append(bytes, 0, bytes.size)
+                        assertEquals("append at iteration $iteration", expectedWritten, actual)
+                        if (actual > 0) expected += bytes.copyOf(actual)
+                    }
+                    3 -> {
+                        capacity = (random.nextInt(8_193) * 2).toLong()
+                        configure(store, capacity)
+                        if (expected.size.toLong() > capacity) expected = expected.copyOf(capacity.toInt())
+                    }
+                    else -> {
+                        store.close()
+                        store = PersistentAudioChunkStore(root, overwriteOldest = false)
+                        configure(store, capacity)
+                    }
+                }
+                assertArrayEquals("timeline mismatch at iteration $iteration", expected, readAllOrEmpty(store))
+            }
+        } finally {
+            store.close()
+        }
+
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            configure(reopened, capacity)
+            assertArrayEquals(expected, readAllOrEmpty(reopened))
+        }
+    }
+
+    @Test
+    fun randomizedLoopingRetention_isAlwaysAnExactRecentSuffixAcrossRestarts() = withStoreRoot { root ->
+        val random = Random(0x10_0f_1aL)
+        var capacity = 8_192L
+        val completeHistory = ByteArrayOutputStream()
+        var store = PersistentAudioChunkStore(root, overwriteOldest = true)
+        configure(store, capacity)
+        try {
+            repeat(220) { iteration ->
+                when (random.nextInt(6)) {
+                    0, 1, 2, 3 -> {
+                        val count = (1 + random.nextInt(2_048)) * 2
+                        val bytes = ByteArray(count) { random.nextInt(256).toByte() }
+                        assertEquals("looping append at $iteration", count, store.append(bytes, 0, count))
+                        completeHistory.write(bytes)
+                    }
+                    4 -> {
+                        capacity = ((256 + random.nextInt(8_000)) * 2).toLong()
+                        configure(store, capacity)
+                    }
+                    else -> {
+                        store.close()
+                        store = PersistentAudioChunkStore(root, overwriteOldest = true)
+                        configure(store, capacity)
+                    }
+                }
+
+                val observed = readAllOrEmpty(store)
+                assertTrue("capacity exceeded at $iteration", observed.size.toLong() <= capacity)
+                val all = completeHistory.toByteArray()
+                assertTrue("retained data is not a suffix at $iteration", all.endsWithBytes(observed))
+            }
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
     fun checksumCorruption_isDetectedWithoutDeletingTheOnlyChunk() = withStoreRoot { root ->
         val expected = pcmBytes(16_000)
         PersistentAudioChunkStore(root).use { store ->
@@ -245,6 +346,15 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
         assertEquals(output.size().toLong(), result.sampleBytes)
         return output.toByteArray()
+    }
+
+    private fun ByteArray.endsWithBytes(suffix: ByteArray): Boolean {
+        if (suffix.size > size) return false
+        val start = size - suffix.size
+        for (index in suffix.indices) {
+            if (this[start + index] != suffix[index]) return false
+        }
+        return true
     }
 
     private fun simulateProcessDeath(store: PersistentAudioChunkStore) {

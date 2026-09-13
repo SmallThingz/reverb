@@ -27,6 +27,10 @@
     <string name="onboarding_permissions_body">Reverb needs these for background recording.</string>
     <string name="onboarding_microphone_title">Microphone</string>
     <string name="onboarding_microphone_body">Required to capture audio.</string>
+    <string name="onboarding_storage_body">On Android 9, required to save recordings in Music/Reverb so they survive app uninstall.</string>
+    <string name="recording_recovery_title">Recording recovery</string>
+    <string name="recording_recovery_body">Optional. Lets Reverb rediscover Music/Reverb recordings created by an earlier installation.</string>
+    <string name="recording_recovery_enabled">Recording recovery access enabled.</string>
     <string name="onboarding_notifications_title">Notifications</string>
     <string name="onboarding_notifications_body">Shows when Reverb is recording in the background.</string>
     <string name="onboarding_allowed">Allowed</string>
@@ -131,6 +135,7 @@
     <string name="custom_memory_size_invalid">Enter a valid number.</string>
     <string name="permission_required">Permission required</string>
     <string name="permission_required_message">Microphone access required.</string>
+    <string name="storage_permission_required_message">Storage access is required on Android 9 to save recordings durably in Music/Reverb.</string>
     <string name="recordings_refresh_failed">Couldn\'t refresh recordings.</string>
     <string name="delete_recording">Delete</string>
     <string name="rename_recording">Rename</string>
