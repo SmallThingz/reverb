@@ -208,6 +208,30 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retiredChunk_waitsForEveryConcurrentReadLeaseBeforeDeletion() = withStoreRoot { root ->
+        val expected = pcmBytes(32_000)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+        val duration = store.durationSeconds()
+        val first = requireNotNull(store.acquireRange(0.0, duration))
+        val second = requireNotNull(store.acquireRange(0.0, duration))
+
+        store.clear()
+        assertFalse(store.hasData())
+        first.close()
+        assertArrayEquals(expected, readLease(second))
+        second.close()
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+    }
+
+    @Test
     fun randomizedOneShotRetention_restartsAndResizesMatchByteModel() = withStoreRoot { root ->
         val random = Random(0x5eedL)
         var capacity = 16_384L

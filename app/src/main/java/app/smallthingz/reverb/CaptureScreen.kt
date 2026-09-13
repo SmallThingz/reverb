@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -68,6 +67,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.SolidColor
@@ -551,6 +552,31 @@ fun CaptureScreen(
                 }
             }
         }
+        val onActivateBuffer = remember(
+            service, isSaving, activeBuffer, oneShotEnabled, oneShotFull, loopingEnabled,
+        ) {
+            { bufferSlot: ReverbService.BufferSlot ->
+                selectedBuffer = bufferSlot
+                val recorder = service
+                val canActivate = canActivateCaptureBuffer(
+                    requested = bufferSlot,
+                    oneShotEnabled = oneShotEnabled,
+                    oneShotFull = oneShotFull,
+                    loopingEnabled = loopingEnabled,
+                )
+                if (recorder != null && !isSaving && canActivate && activeBuffer != bufferSlot) {
+                    val result = recorder.selectCaptureBuffer(bufferSlot)
+                    if (result.accepted) {
+                        latestListeningCommandGeneration = maxOf(
+                            latestListeningCommandGeneration,
+                            result.generation,
+                        )
+                        activeBuffer = bufferSlot
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    }
+                }
+            }
+        }
         val onClearBuffer = remember(isSaving) {
             { bufferSlot: ReverbService.BufferSlot ->
                 if (!isSaving) pendingClearBuffer = bufferSlot
@@ -677,6 +703,7 @@ fun CaptureScreen(
             onExportFull = onExportFull,
             onExportCustom = onExportCustom,
             onSelectBuffer = { selectedBuffer = it },
+            onActivateBuffer = onActivateBuffer,
             onOpenBufferSettings = onOpenBufferSettings,
             visualizerVisible = visualizerVisible,
             onOpenLibrary = onOpenLibrary,
@@ -864,6 +891,7 @@ private fun MainCaptureContent(
     onExportFull: (ReverbService.BufferSlot) -> Unit,
     onExportCustom: (ReverbService.BufferSlot) -> Unit,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
+    onActivateBuffer: (ReverbService.BufferSlot) -> Unit,
     onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit,
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
@@ -1049,7 +1077,7 @@ private fun MainCaptureContent(
             hasHistory = hasHistory,
             selectedRecording = displayedRecording,
             flipDegrees = flipDegrees,
-            onSelectBuffer = requestBufferNavigation,
+            onSelectBuffer = onActivateBuffer,
             onExportFull = { onExportFull(renderedBuffer) },
             onExportCustom = { onExportCustom(renderedBuffer) },
             onClearBuffer = { onClearBuffer(renderedBuffer) },
@@ -1282,24 +1310,24 @@ private fun BufferSegment(
     val chrome = appChrome()
     val containerColor = when {
         selected && recording -> colors.primary
-        selected && filled -> colors.tertiaryContainer.copy(alpha = 0.72f)
+        filled && selected -> colors.tertiary
+        filled -> colors.tertiaryContainer.copy(alpha = 0.58f)
         selected -> colors.primaryContainer.copy(alpha = 0.74f)
         else -> Color.Transparent
     }
     val contentColor = when {
         selected && recording -> colors.onPrimary
-        selected && filled -> colors.onTertiaryContainer
+        filled && selected -> colors.onTertiary
+        filled -> colors.onTertiaryContainer
         selected && !enabled -> colors.onPrimaryContainer.copy(alpha = 0.62f)
         selected -> colors.onPrimaryContainer
         else -> chrome.muted.copy(alpha = if (enabled) 0.52f else 0.30f)
     }
 
     Surface(
-        modifier = Modifier.selectable(
-            selected = selected,
-            role = Role.Tab,
-            onClick = onClick,
-        ),
+        modifier = Modifier
+            .clickable(role = Role.Tab, onClick = onClick)
+            .semantics { this.selected = selected },
         shape = RoundedCornerShape(16.dp),
         color = containerColor,
     ) {

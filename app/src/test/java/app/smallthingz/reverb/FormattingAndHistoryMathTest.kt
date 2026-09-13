@@ -554,6 +554,87 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileClick_togglesCurrentBufferAndSwitchesToOtherUsableBuffer() {
+        val idleOneShot = RecordingTileSnapshot(
+            listening = false,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+        )
+        assertEquals(
+            RecordingTileClickAction.START,
+            recordingTileClickAction(ReverbService.BufferSlot.ONE_SHOT, idleOneShot),
+        )
+        assertEquals(
+            RecordingTileClickAction.START,
+            recordingTileClickAction(ReverbService.BufferSlot.LOOPING, idleOneShot),
+        )
+
+        val oneShotRunning = idleOneShot.copy(listening = true)
+        assertEquals(
+            RecordingTileClickAction.STOP,
+            recordingTileClickAction(ReverbService.BufferSlot.ONE_SHOT, oneShotRunning),
+        )
+        assertEquals(
+            RecordingTileClickAction.SWITCH,
+            recordingTileClickAction(ReverbService.BufferSlot.LOOPING, oneShotRunning),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            recordingTileClickAction(ReverbService.BufferSlot.ONE_SHOT, idleOneShot.copy(oneShotFull = true)),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            recordingTileClickAction(ReverbService.BufferSlot.LOOPING, idleOneShot.copy(loopingEnabled = false)),
+        )
+    }
+
+    @Test
+    fun oneShotFullCache_isInvalidatedWhenSettingsCanMakeAFullBufferWritableAgain() {
+        assertTrue(
+            shouldInvalidateCachedOneShotFull(
+                previousMode = RetentionMode.SIZE, newMode = RetentionMode.SIZE,
+                previousTimeSeconds = 60, newTimeSeconds = 60,
+                previousSizeBytes = 64L, newSizeBytes = 128L,
+                previousSampleRate = 48_000, newSampleRate = 48_000,
+                previousChannelMode = ChannelMode.MONO, newChannelMode = ChannelMode.MONO,
+                previousSampleFormat = PcmSampleFormat.PCM_16, newSampleFormat = PcmSampleFormat.PCM_16,
+            ),
+        )
+        assertFalse(
+            shouldInvalidateCachedOneShotFull(
+                previousMode = RetentionMode.SIZE, newMode = RetentionMode.SIZE,
+                previousTimeSeconds = 60, newTimeSeconds = 60,
+                previousSizeBytes = 128L, newSizeBytes = 64L,
+                previousSampleRate = 48_000, newSampleRate = 48_000,
+                previousChannelMode = ChannelMode.MONO, newChannelMode = ChannelMode.MONO,
+                previousSampleFormat = PcmSampleFormat.PCM_16, newSampleFormat = PcmSampleFormat.PCM_16,
+            ),
+        )
+        assertTrue(
+            shouldInvalidateCachedOneShotFull(
+                previousMode = RetentionMode.TIME, newMode = RetentionMode.TIME,
+                previousTimeSeconds = 60, newTimeSeconds = 120,
+                previousSizeBytes = 64L, newSizeBytes = 64L,
+                previousSampleRate = 48_000, newSampleRate = 48_000,
+                previousChannelMode = ChannelMode.MONO, newChannelMode = ChannelMode.MONO,
+                previousSampleFormat = PcmSampleFormat.PCM_16, newSampleFormat = PcmSampleFormat.PCM_16,
+            ),
+        )
+        assertTrue(
+            shouldInvalidateCachedOneShotFull(
+                previousMode = RetentionMode.TIME, newMode = RetentionMode.SIZE,
+                previousTimeSeconds = 60, newTimeSeconds = 60,
+                previousSizeBytes = 64L, newSizeBytes = 64L,
+                previousSampleRate = 48_000, newSampleRate = 48_000,
+                previousChannelMode = ChannelMode.MONO, newChannelMode = ChannelMode.MONO,
+                previousSampleFormat = PcmSampleFormat.PCM_16, newSampleFormat = PcmSampleFormat.PCM_16,
+            ),
+        )
+    }
+
+    @Test
     fun oneShotWritableBytes_stopsAtCapacity_withoutOverwriting() {
         assertEquals(
             4L,

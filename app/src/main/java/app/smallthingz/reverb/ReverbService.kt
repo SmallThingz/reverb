@@ -498,6 +498,16 @@ class ReverbService : Service() {
         if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
     }
 
+    private fun clearOneShotFullQuickTileCacheOnAudioThread() {
+        check(audioHandler.looper == Looper.myLooper())
+        val prefs = getRecorderPreferences(this)
+        if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
+            if (!prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).commit()) {
+                prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).apply()
+            }
+        }
+    }
+
     private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
         check(audioHandler.looper == Looper.myLooper())
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
@@ -1490,24 +1500,9 @@ class ReverbService : Service() {
     }
 
     private fun deleteOutputTarget(target: RecordingOutputTarget?) {
-        if (target == null) {
-            return
-        }
-        runCatching {
-            when (target.storageType) {
-                RecordingStorageType.FILE -> target.file?.delete()
-                RecordingStorageType.DOCUMENT -> {
-                    val uri = target.uri ?: return@runCatching
-                    androidx.documentfile.provider.DocumentFile.fromSingleUri(this, uri)?.delete()
-                }
-                RecordingStorageType.MEDIASTORE -> {
-                    val uri = target.uri ?: return@runCatching
-                    contentResolver.delete(uri, null, null)
-                }
-            }
-        }.onFailure { error ->
-            Log.w(TAG, "Failed to delete export target ${target.id}", error)
-        }
+        if (target == null) return
+        runCatching { deleteOutputTargetAsset(this, target) }
+            .onFailure { error -> Log.w(TAG, "Failed to delete export target ${target.id}", error) }
     }
 
     @Throws(IOException::class)
@@ -1921,6 +1916,9 @@ class ReverbService : Service() {
 
     fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING) {
         audioHandler.post {
+            if (bufferSlot == BufferSlot.ONE_SHOT) {
+                clearOneShotFullQuickTileCacheOnAudioThread()
+            }
             try {
                 chunkStore(bufferSlot).clear()
             } catch (error: Exception) {

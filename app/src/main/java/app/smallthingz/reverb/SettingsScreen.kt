@@ -132,6 +132,32 @@ data class SettingsSnapshot(
     }
 }
 
+internal fun shouldInvalidateCachedOneShotFull(
+    previousMode: RetentionMode,
+    newMode: RetentionMode,
+    previousTimeSeconds: Int,
+    newTimeSeconds: Int,
+    previousSizeBytes: Long,
+    newSizeBytes: Long,
+    previousSampleRate: Int,
+    newSampleRate: Int,
+    previousChannelMode: ChannelMode?,
+    newChannelMode: ChannelMode,
+    previousSampleFormat: PcmSampleFormat,
+    newSampleFormat: PcmSampleFormat,
+): Boolean {
+    if (previousMode != newMode) return true
+    if (
+        previousSampleRate != newSampleRate ||
+        previousChannelMode != newChannelMode ||
+        previousSampleFormat != newSampleFormat
+    ) return true
+    return when (newMode) {
+        RetentionMode.TIME -> newTimeSeconds > previousTimeSeconds
+        RetentionMode.SIZE -> newSizeBytes > previousSizeBytes
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -515,7 +541,23 @@ fun SettingsScreen(
         oneShotRetentionTimeSecondsValue = oneShotRetentionTime
         loopingRetentionTimeSecondsValue = loopingRetentionTime
 
-        val settingsEditor = getRecorderPreferences(context).edit()
+        val preferences = getRecorderPreferences(context)
+        val previousCachedOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+        val invalidateCachedOneShotFull = shouldInvalidateCachedOneShotFull(
+            previousMode = originalSnapshot.retentionMode,
+            newMode = activeRetentionMode,
+            previousTimeSeconds = originalSnapshot.oneShotRetentionTime,
+            newTimeSeconds = oneShotRetentionTime,
+            previousSizeBytes = originalSnapshot.oneShotRetentionSizeBytes,
+            newSizeBytes = requestedOneShotSizeBytes,
+            previousSampleRate = originalSnapshot.sampleRate,
+            newSampleRate = sampleRate,
+            previousChannelMode = originalSnapshot.channelMode,
+            newChannelMode = channelMode,
+            previousSampleFormat = originalSnapshot.sampleFormat,
+            newSampleFormat = sampleFormat,
+        )
+        val settingsEditor = preferences.edit()
             .putInt(PrefKey.RETENTION_MODE, activeRetentionMode.ordinal)
             .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, oneShotRetentionTime.toLong())
             .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, requestedOneShotSizeBytes)
@@ -530,6 +572,9 @@ fun SettingsScreen(
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
             .putBoolean(PrefKey.WAKE_LOCK_ENABLED, currentSnapshot.wakeLockEnabled)
             .putString(PrefKey.THEME_MODE, selectedTheme.prefValue)
+        if (invalidateCachedOneShotFull) {
+            settingsEditor.putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+        }
         if (selectedExportTreeUri != null) {
             settingsEditor.putString(PrefKey.EXPORT_DIRECTORY_URI, selectedExportTreeUri.toString())
         } else {
@@ -552,6 +597,7 @@ fun SettingsScreen(
                 .putInt(PrefKey.SAMPLE_RATE, previous.sampleRate)
                 .putBoolean(PrefKey.WAKE_LOCK_ENABLED, previous.wakeLockEnabled)
                 .putString(PrefKey.THEME_MODE, previous.themeMode.prefValue)
+                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, previousCachedOneShotFull)
                 .apply {
                     val previousExportDirectoryUri = previous.exportDirectoryUri
                     if (previousExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)

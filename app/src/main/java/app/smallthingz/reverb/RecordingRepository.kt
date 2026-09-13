@@ -308,6 +308,7 @@ object RecordingRepository {
                 replayPendingDeletionsLocked(context)
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val current = dao.listAll()
+                val pendingIds = pendingDeletionIds(context)
                 if (current.isEmpty()) {
                     return@withLock MoveResult()
                 }
@@ -319,6 +320,10 @@ object RecordingRepository {
                 val nowMillis = System.currentTimeMillis()
 
                 current.forEach { recording ->
+                    if (!isRecordingEligibleForMove(recording.id, pendingIds)) {
+                        skipped++
+                        return@forEach
+                    }
                     val present = when (recordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                         RecordingAssetState.MISSING -> {
@@ -348,7 +353,9 @@ object RecordingRepository {
                 dao.applyChanges(stateUpdates, emptyList())
 
                 var moved = 0
-                val durableTargets = current.filter { it.directoryId == targetDirectoryId }.toMutableList()
+                val durableTargets = current
+                    .filter { it.directoryId == targetDirectoryId && isRecordingEligibleForMove(it.id, pendingIds) }
+                    .toMutableList()
                 moveCandidates.forEach { source ->
                     val recoveredTarget = durableTargets.firstOrNull { candidate ->
                         candidate.displayName == source.displayName &&
@@ -359,22 +366,19 @@ object RecordingRepository {
                         skipped++
                         return@forEach
                     }
-                    if (recoveredTarget == null) durableTargets += target
-                    try {
-                        dao.applyChanges(
-                            upserts = listOf(target),
-                            deleteIds = listOf(source.id),
-                        )
-                    } catch (error: Exception) {
-                        if (recoveredTarget == null) deleteRecordingAsset(context, target)
-                        throw error
+                    val committed = commitVerifiedMoveLocked(
+                        context = context,
+                        dao = dao,
+                        source = source,
+                        target = target,
+                        targetCreatedByThisMove = recoveredTarget == null,
+                    )
+                    if (committed) {
+                        if (recoveredTarget == null) durableTargets += target
+                        moved++
+                    } else {
+                        skipped++
                     }
-
-                    // Commit the catalog switch before deleting a source. If source cleanup
-                    // fails, the verified target remains authoritative and the worst case is
-                    // an extra recoverable copy, never a catalog row pointing at deleted audio.
-                    deleteRecordingAsset(context, source)
-                    moved++
                 }
 
                 MoveResult(moved = moved, skipped = skipped).also {
@@ -382,6 +386,36 @@ object RecordingRepository {
                 }
             }
         }
+    }
+
+    private suspend fun commitVerifiedMoveLocked(
+        context: Context,
+        dao: RecordingDao,
+        source: RecordingEntity,
+        target: RecordingEntity,
+        targetCreatedByThisMove: Boolean,
+    ): Boolean {
+        try {
+            // The verified target becomes recoverable before the source is touched.
+            dao.upsert(target)
+        } catch (error: Exception) {
+            if (targetCreatedByThisMove) deleteRecordingAsset(context, target)
+            throw error
+        }
+
+        if (!deleteRecordingAsset(context, source)) {
+            // Preserve the original recording if cleanup fails. Roll the new target back when
+            // possible; if rollback also fails, both valid copies remain catalogued/recoverable.
+            if (targetCreatedByThisMove && deleteRecordingAsset(context, target)) {
+                runCatching { dao.deleteById(target.id) }
+            }
+            return false
+        }
+
+        // Only retire source metadata after physical source deletion succeeds. If this DB
+        // write fails, refresh will hide the now-missing source row while retaining target.
+        dao.deleteById(source.id)
+        return true
     }
 
     private suspend fun syncRecoverableDirectories(context: Context) {
@@ -422,10 +456,14 @@ object RecordingRepository {
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
         val dao = RecordingDatabase.getInstance(context).recordingDao()
         val targetDirectoryId = getConfiguredOutputDirectoryId(context)
-        val durableTargets = dao.listByDirectory(targetDirectoryId).toMutableList()
+        val pendingIds = pendingDeletionIds(context)
+        val durableTargets = dao.listByDirectory(targetDirectoryId)
+            .filter { isRecordingEligibleForMove(it.id, pendingIds) }
+            .toMutableList()
         val legacy = dao.listByDirectory(legacyDirectoryId)
 
         for (source in legacy) {
+            if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
             if (recordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
 
             // If a previous process died after publishing the target but before committing
@@ -435,20 +473,14 @@ object RecordingRepository {
             }
             val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source) ?: continue
 
-            if (recoveredTarget == null) durableTargets += target
-            try {
-                dao.applyChanges(
-                    upserts = listOf(target),
-                    deleteIds = listOf(source.id),
-                )
-            } catch (error: Exception) {
-                if (recoveredTarget == null) deleteRecordingAsset(context, target)
-                throw error
-            }
-
-            // Deleting the source is strictly last. Failure leaves an extra copy which will
-            // be rediscovered and deduplicated on a later refresh; it never loses audio.
-            deleteRecordingAsset(context, source)
+            val committed = commitVerifiedMoveLocked(
+                context = context,
+                dao = dao,
+                source = source,
+                target = target,
+                targetCreatedByThisMove = recoveredTarget == null,
+            )
+            if (committed && recoveredTarget == null) durableTargets += target
         }
     }
 
@@ -591,6 +623,9 @@ internal fun pendingDeletionReplayAction(
 }
 
 internal fun ByteArray.toHexString(): String = joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+internal fun isRecordingEligibleForMove(id: String, pendingDeletionIds: Set<String>): Boolean =
+    id !in pendingDeletionIds
 
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,
