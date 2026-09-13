@@ -6,6 +6,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -99,6 +100,13 @@ class RecordingWaveformTest {
         assertEquals("17892961950114 trim", trimmedRecordingBaseName("17892961950114.wav"))
         assertEquals("meeting notes trim", trimmedRecordingBaseName("meeting notes.wav"))
     }
+    @Test
+    fun inlineTrim_requiresPreparedRealDuration() {
+        assertFalse(canEnterInlineTrim(prepared = false, durationMillis = 120_000))
+        assertFalse(canEnterInlineTrim(prepared = true, durationMillis = 0))
+        assertTrue(canEnterInlineTrim(prepared = true, durationMillis = 120_000))
+    }
+
 
     @Test
     fun sharedPcmMagnitudeMatchesExpectedScale() {

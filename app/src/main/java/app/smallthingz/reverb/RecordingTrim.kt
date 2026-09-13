@@ -2,9 +2,9 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.util.Log
-import androidx.documentfile.provider.DocumentFile
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToLong
 
@@ -18,12 +18,12 @@ internal suspend fun saveTrimmedRecordingCopy(
     endMillis: Int,
 ): RecordingEntity {
     val appContext = context.applicationContext
-    val created = withContext(Dispatchers.IO) {
-        writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
+    return withContext(Dispatchers.IO + NonCancellable) {
+        val created = writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
+        runCatching { RecordingRepository.register(appContext, created) }
+            .onFailure { Log.w(TRIM_TAG, "Trim was saved but catalog registration failed", it) }
+            .getOrDefault(created)
     }
-    return runCatching { RecordingRepository.register(appContext, created) }
-        .onFailure { Log.w(TRIM_TAG, "Trim was saved but catalog registration failed", it) }
-        .getOrDefault(created)
 }
 
 internal fun trimmedRecordingBaseName(displayName: String): String {
@@ -146,11 +146,7 @@ private fun copyFrameRange(
 
 private fun cleanupTrimTarget(context: Context, target: RecordingOutputTarget?) {
     val current = target ?: return
-    runCatching {
-        when (current.storageType) {
-            RecordingStorageType.FILE -> current.file?.delete()
-            RecordingStorageType.DOCUMENT -> current.uri?.let { DocumentFile.fromSingleUri(context, it)?.delete() }
-            RecordingStorageType.MEDIASTORE -> current.uri?.let { context.contentResolver.delete(it, null, null) }
-        }
-    }.onFailure { Log.w(TRIM_TAG, "Unable to clean up failed trim ${current.displayName}", it) }
+    if (!suppressAndDeleteOutputTarget(context, current)) {
+        Log.w(TRIM_TAG, "Deferred cleanup for failed trim ${current.displayName}")
+    }
 }

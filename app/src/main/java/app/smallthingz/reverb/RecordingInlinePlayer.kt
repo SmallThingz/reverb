@@ -64,6 +64,9 @@ import kotlin.math.roundToInt
 private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
 private const val INLINE_SEEK_JUMP_MS = 10_000
 
+internal fun canEnterInlineTrim(prepared: Boolean, durationMillis: Int): Boolean =
+    prepared && durationMillis > 0
+
 @Composable
 internal fun RecordingInlinePlayer(
     recording: RecordingEntity,
@@ -166,8 +169,8 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    fun enterTrimMode() {
-        if (trimSaving) return
+    fun enterTrimMode(): Boolean {
+        if (trimSaving || !canEnterInlineTrim(prepared, duration)) return false
         if (isPlaying) {
             runCatching { mediaPlayer?.pause() }
             isPlaying = false
@@ -178,11 +181,11 @@ internal fun RecordingInlinePlayer(
         seekTo(0)
         trimError = false
         trimMode = true
+        return true
     }
 
-    LaunchedEffect(trimRequested, recordingRevisionKey) {
-        if (trimRequested) {
-            enterTrimMode()
+    LaunchedEffect(trimRequested, recordingRevisionKey, prepared, duration) {
+        if (trimRequested && enterTrimMode()) {
             onTrimRequestConsumed()
         }
     }
@@ -688,18 +691,19 @@ internal fun RecordingInlinePlayer(
                             trimSaving = true
                             trimError = false
                             scope.launch {
-                                runCatching {
-                                    saveTrimmedRecordingCopy(
+                                try {
+                                    val trimmed = saveTrimmedRecordingCopy(
                                         context = appContext,
                                         recording = recording,
                                         startMillis = trimStartMillis,
                                         endMillis = trimEndMillis,
                                     )
-                                }.onSuccess { trimmed ->
                                     trimSaving = false
                                     trimMode = false
                                     onTrimSaved(trimmed)
-                                }.onFailure {
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (_: Exception) {
                                     trimSaving = false
                                     trimError = true
                                 }
