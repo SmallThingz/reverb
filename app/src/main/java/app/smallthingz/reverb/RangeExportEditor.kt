@@ -474,8 +474,9 @@ internal fun RangeExportHomeContent(
                         .height(if (compact) 232.dp else 250.dp),
                 )
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
-                FineTuneField(
+                SpringFineAdjust(
                     state = state,
+                    enabled = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(if (compact) 120.dp else 132.dp),
@@ -980,8 +981,9 @@ private fun TimelineTimeInput(
 }
 
 @Composable
-private fun FineTuneField(
+private fun SpringFineAdjust(
     state: RangeExportEditorState,
+    enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -995,6 +997,17 @@ private fun FineTuneField(
     var lastFrameNanos by remember { mutableLongStateOf(0L) }
 
     val constrainedY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+
+    LaunchedEffect(enabled) {
+        if (!enabled) {
+            dragging = false
+            horizontalPull = 0f
+            rawVerticalPull = 0f
+            dragDeltaX = 0f
+            dragDeltaY = 0f
+            state.endFineAdjust()
+        }
+    }
 
     LaunchedEffect(dragging) {
         if (dragging) return@LaunchedEffect
@@ -1048,8 +1061,8 @@ private fun FineTuneField(
         }
     }
 
-    Box(
-        modifier = modifier.pointerInput(state.lastTarget) {
+    val gestureModifier = if (enabled) {
+        Modifier.pointerInput(state.lastTarget) {
             detectDragGestures(
                 onDragStart = {
                     dragging = true
@@ -1090,7 +1103,13 @@ private fun FineTuneField(
                 horizontalPull = pull.horizontal
                 rawVerticalPull = pull.rawVertical
             }
-        },
+        }
+    } else {
+        Modifier
+    }
+
+    Box(
+        modifier = modifier.then(gestureModifier),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
