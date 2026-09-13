@@ -274,6 +274,12 @@ class DurabilityInvariantTest {
         assertFalse(pendingOutputCleanupMatches(record, 1234L, "cd".repeat(32), "stat:1:2:100:5:77"))
         assertFalse(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:3:100:5:78"))
         assertEquals(null, decodePendingOutputCleanupRecord("v1|FILE|broken|12|short|"))
+        val firstIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
+        val secondIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
+        assertEquals(record.id, firstIntent.id)
+        assertEquals(record.fileKey, firstIntent.fileIdentity)
+        assertEquals(firstIntent.claimToken, secondIntent.claimToken)
+        assertTrue(requireNotNull(deletionClaimFile(firstIntent)).name.startsWith(".reverb-delete-"))
     }
 
     @Test
@@ -308,6 +314,33 @@ class DurabilityInvariantTest {
         assertTrue(requireNotNull(deletionClaimFile(intent)).name.startsWith(".reverb-delete-"))
         val malformedToken = encoded.split('|').toMutableList().also { it[6] = "not-a-uuid" }.joinToString("|")
         assertEquals(null, decodePendingDeletionIntent(malformedToken))
+    }
+
+    @Test
+    fun claimedFileDeletion_deletesExactObservedObject() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "delete-exact-").toFile()
+        try {
+            val bytes = ByteArray(6_144) { index -> ((index * 31 + 13) and 0xff).toByte() }
+            val source = File(directory, "clip.wav").apply { writeBytes(bytes) }
+            val identity = resolveFileIdentity(source)
+            val digest = sha256(ByteArrayInputStream(bytes))
+            val intent = PendingDeletionIntent(
+                id = source.absolutePath,
+                byteCount = digest.byteCount,
+                sha256Hex = digest.sha256.toHexString(),
+                assetDeleted = false,
+                storageType = RecordingStorageType.FILE.name,
+                claimToken = "00000000-0000-0000-0000-000000000126",
+                fileIdentity = identity,
+            )
+
+            assertEquals(FileDeletionClaimResult.DELETED, deleteClaimedFile(intent))
+            assertFalse(source.exists())
+            assertFalse(requireNotNull(deletionClaimFile(intent)).exists())
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 
     @Test

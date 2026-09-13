@@ -246,45 +246,54 @@ object RecordingRepository {
             if (claim?.isFile == true) {
                 when (replayClaimedFileDeletion(intent, claim)) {
                     FileDeletionClaimResult.RETRY -> continue
-                    FileDeletionClaimResult.MISMATCH_PRESERVED -> {
-                        // The catalogued object identity is no longer at this path. The
-                        // mismatched bytes were preserved; drop only stale catalog metadata.
+                    FileDeletionClaimResult.MISMATCH_PRESERVED,
+                    FileDeletionClaimResult.DELETED,
+                    -> {
+                        // Rename/delete/recovery changes must be durable before the journal
+                        // that explains them can disappear. A current source-path occupant,
+                        // if any, is a different object and reconciliation will import it.
+                        if (!confirmFileDirectoryStateDurable(File(intent.id))) continue
                         if (recording != null) dao.deleteById(intent.id)
                         removePendingDeletionLocked(context, intent.id)
                         continue
                     }
-                    FileDeletionClaimResult.DELETED -> {
-                        // The exact claimed object was removed. A current path occupant, if
-                        // any, is a different object and will be imported by reconciliation.
+                }
+            }
+            if (intent.storageType == RecordingStorageType.FILE.name && intent.fileIdentity != null) {
+                val source = File(intent.id)
+                when (fileRecordingAssetState(source)) {
+                    RecordingAssetState.UNAVAILABLE -> continue
+                    RecordingAssetState.MISSING -> {
+                        if (!confirmMissingFileRecordingDurable(source)) continue
                         if (recording != null) dao.deleteById(intent.id)
                         removePendingDeletionLocked(context, intent.id)
                         continue
+                    }
+                    RecordingAssetState.PRESENT -> {
+                        val currentIdentity = resolveFileIdentity(source)
+                        if (!fileIdentityMatches(intent.fileIdentity, currentIdentity)) {
+                            if (!confirmFileDirectoryStateDurable(source)) continue
+                            if (recording != null) dao.deleteById(intent.id)
+                            removePendingDeletionLocked(context, intent.id)
+                            continue
+                        }
+                        when (deleteClaimedFile(intent)) {
+                            FileDeletionClaimResult.RETRY -> continue
+                            FileDeletionClaimResult.MISMATCH_PRESERVED,
+                            FileDeletionClaimResult.DELETED,
+                            -> {
+                                if (!confirmFileDirectoryStateDurable(source)) continue
+                                if (recording != null) dao.deleteById(intent.id)
+                                removePendingDeletionLocked(context, intent.id)
+                                continue
+                            }
+                        }
                     }
                 }
             }
             if (recording == null) {
                 removePendingDeletionLocked(context, intent.id)
                 continue
-            }
-            if (intent.storageType == RecordingStorageType.FILE.name && intent.fileIdentity != null) {
-                when (recordingAssetState(context, recording)) {
-                    RecordingAssetState.UNAVAILABLE -> continue
-                    RecordingAssetState.MISSING -> {
-                        dao.deleteById(intent.id)
-                        removePendingDeletionLocked(context, intent.id)
-                        continue
-                    }
-                    RecordingAssetState.PRESENT -> {
-                        val currentIdentity = resolveFileIdentity(File(intent.id))
-                        if (!fileIdentityMatches(intent.fileIdentity, currentIdentity)) {
-                            // The selected object is gone and this pathname now belongs to
-                            // different bytes. Drop only stale metadata; never touch that file.
-                            dao.deleteById(intent.id)
-                        }
-                        removePendingDeletionLocked(context, intent.id)
-                        continue
-                    }
-                }
             }
             when (pendingDeletionReplayAction(intent, recordingAssetState(context, recording))) {
                 PendingDeletionReplayAction.WAIT -> continue
@@ -858,6 +867,7 @@ internal fun deleteClaimedFile(intent: PendingDeletionIntent): FileDeletionClaim
     val claim = deletionClaimFile(intent) ?: return FileDeletionClaimResult.RETRY
     try {
         Files.move(source.toPath(), claim.toPath())
+        if (!confirmFileDirectoryStateDurable(source)) return FileDeletionClaimResult.RETRY
     } catch (_: NoSuchFileException) {
         return if (claim.isFile) replayClaimedFileDeletion(intent, claim) else FileDeletionClaimResult.RETRY
     } catch (_: FileAlreadyExistsException) {
@@ -891,7 +901,8 @@ internal fun replayClaimedFileDeletion(
         return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
     }
     return try {
-        Files.deleteIfExists(resolvedClaim.toPath())
+        if (!Files.deleteIfExists(resolvedClaim.toPath())) return FileDeletionClaimResult.RETRY
+        if (!confirmFileDirectoryStateDurable(resolvedClaim)) return FileDeletionClaimResult.RETRY
         FileDeletionClaimResult.DELETED
     } catch (error: IOException) {
         Log.w("RecordingRepository", "Unable to delete claimed recording: ${resolvedClaim.absolutePath}", error)
@@ -906,7 +917,7 @@ private fun restoreOrPublishMismatchedClaim(intent: PendingDeletionIntent, claim
     val original = File(intent.id)
     try {
         Files.move(claim.toPath(), original.toPath())
-        return true
+        return confirmFileDirectoryStateDurable(original)
     } catch (_: FileAlreadyExistsException) {
         // A new object now owns the original path. Preserve the claimed replacement under
         // a visible recovery name rather than overwriting either object.
@@ -926,7 +937,7 @@ private fun restoreOrPublishMismatchedClaim(intent: PendingDeletionIntent, claim
         val candidate = File(parent, candidateName)
         try {
             Files.move(claim.toPath(), candidate.toPath())
-            return true
+            return confirmFileDirectoryStateDurable(candidate)
         } catch (_: FileAlreadyExistsException) {
             index++
         } catch (error: IOException) {

@@ -904,26 +904,25 @@ internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     return fileIdentityMatches(recording.fileIdentity, resolveFileIdentity(File(recording.id)))
 }
 
+internal fun fileRecordingAssetState(file: File): RecordingAssetState = try {
+    val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+    if (attributes.isRegularFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+} catch (_: NoSuchFileException) {
+    RecordingAssetState.MISSING
+} catch (error: IOException) {
+    Log.w(TAG, "Unable to inspect recording $file", error)
+    RecordingAssetState.UNAVAILABLE
+} catch (error: SecurityException) {
+    Log.w(TAG, "Unable to inspect recording $file", error)
+    RecordingAssetState.UNAVAILABLE
+}
+
 internal fun recordingAssetState(
     context: Context,
     recording: RecordingEntity,
 ): RecordingAssetState {
     return when (resolveRecordingStorageType(recording)) {
-        RecordingStorageType.FILE -> try {
-            val attributes = Files.readAttributes(
-                File(recording.id).toPath(),
-                BasicFileAttributes::class.java,
-            )
-            if (attributes.isRegularFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
-        } catch (_: NoSuchFileException) {
-            RecordingAssetState.MISSING
-        } catch (error: IOException) {
-            Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
-            RecordingAssetState.UNAVAILABLE
-        } catch (error: SecurityException) {
-            Log.w(TAG, "Unable to inspect recording ${recording.id}", error)
-            RecordingAssetState.UNAVAILABLE
-        }
+        RecordingStorageType.FILE -> fileRecordingAssetState(File(recording.id))
 
         RecordingStorageType.DOCUMENT -> {
             val uri = runCatching { recording.id.toUri() }.getOrNull()
@@ -1824,13 +1823,15 @@ internal fun deleteFileRecordingDurably(file: File): Boolean = runCatching {
 }.onFailure { Log.w(TAG, "Unable to durably delete recording $file", it) }
     .getOrDefault(false)
 
-internal fun confirmMissingFileRecordingDurable(file: File): Boolean = runCatching {
-    if (file.exists()) return@runCatching false
+internal fun confirmFileDirectoryStateDurable(file: File): Boolean = runCatching {
     val parent = file.parentFile?.takeIf { it.isDirectory } ?: return@runCatching false
     forceRecordingDirectoryDurable(parent)
     true
-}.onFailure { Log.w(TAG, "Unable to confirm recording deletion for $file", it) }
+}.onFailure { Log.w(TAG, "Unable to persist recording directory state for $file", it) }
     .getOrDefault(false)
+
+internal fun confirmMissingFileRecordingDurable(file: File): Boolean =
+    !file.exists() && confirmFileDirectoryStateDurable(file)
 
 private fun createLocalOutputTarget(
     context: Context,
@@ -1906,13 +1907,26 @@ private fun renameFileRecording(
             try {
                 forceRecordingDirectoryDurable(parent)
             } catch (durabilityError: Exception) {
-                val rolledBack = runCatching {
+                var rollbackMoved = false
+                var rollbackDurable = false
+                try {
                     Files.move(target.toPath(), source.toPath())
-                    forceRecordingDirectoryDurable(parent)
-                    true
-                }.getOrDefault(false)
-                if (rolledBack) {
-                    Log.w(TAG, "File rename durability failed; restored original name ${recording.id}", durabilityError)
+                    rollbackMoved = true
+                    rollbackDurable = runCatching {
+                        forceRecordingDirectoryDurable(parent)
+                        true
+                    }.getOrDefault(false)
+                } catch (_: Exception) {
+                    // The renamed path remains the best current identity when rollback itself fails.
+                }
+                if (rollbackMoved) {
+                    if (rollbackDurable) {
+                        Log.w(TAG, "File rename durability failed; restored original name ${recording.id}", durabilityError)
+                    } else {
+                        Log.w(TAG, "File rename rollback is visible but not durably synced: ${recording.id}", durabilityError)
+                    }
+                    // Runtime/catalog state must follow the path that actually exists now. A
+                    // later recovery scan can reconcile either outcome after sudden power loss.
                     return null
                 }
                 // The exact object was verified after the rename, but the directory entry is
@@ -1945,6 +1959,9 @@ private fun renameFileRecording(
 private fun preserveUnexpectedRenameTarget(source: File, moved: File, originalDisplayName: String) {
     try {
         Files.move(moved.toPath(), source.toPath())
+        source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
+            runCatching { forceRecordingDirectoryDurable(parent) }
+        }
         return
     } catch (_: FileAlreadyExistsException) {
         // A new file owns the original path. Preserve the object we accidentally moved
@@ -1963,6 +1980,7 @@ private fun preserveUnexpectedRenameTarget(source: File, moved: File, originalDi
         val name = if (index == 0) "$base$suffix" else "$base-$index$suffix"
         try {
             Files.move(moved.toPath(), File(parent, name).toPath())
+            runCatching { forceRecordingDirectoryDurable(parent) }
             return
         } catch (_: FileAlreadyExistsException) {
             continue

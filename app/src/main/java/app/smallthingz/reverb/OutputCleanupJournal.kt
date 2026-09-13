@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.Base64
+import java.util.UUID
 
 private const val OUTPUT_CLEANUP_RECORD_VERSION = "v1"
 private val outputCleanupJournalLock = Any()
@@ -60,7 +61,7 @@ internal fun pendingOutputCleanupMatches(
     fileKey: String?,
 ): Boolean {
     if (record.byteCount != byteCount || !record.sha256Hex.equals(sha256Hex, ignoreCase = true)) return false
-    return record.fileKey == null || record.fileKey == fileKey
+    return record.fileKey == null || (fileKey != null && fileIdentityMatches(record.fileKey, fileKey))
 }
 
 internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchronized(outputCleanupJournalLock) {
@@ -71,6 +72,12 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
 
 internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOutputTarget): Boolean {
     val id = target.id
+    val existing = pendingOutputCleanupRecord(context, id)
+    if (existing != null) {
+        val cleaned = deletePendingOutputAsset(context, existing)
+        if (cleaned) removePendingOutputCleanup(context, id)
+        return cleaned
+    }
     when (outputCleanupAssetState(context, target.storageType, id)) {
         OutputCleanupAssetState.MISSING -> {
             if (target.storageType == RecordingStorageType.FILE &&
@@ -92,10 +99,10 @@ internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOu
         sha256Hex = fingerprint.digest.sha256.toHexString(),
         fileKey = fingerprint.fileKey,
     )
-    val journaled = putPendingOutputCleanup(context, record)
-    val deleted = deletePendingOutputAsset(context, record.storageType, record.id)
-    if (deleted && journaled) removePendingOutputCleanup(context, id)
-    return deleted
+    if (!putPendingOutputCleanup(context, record)) return false
+    val cleaned = deletePendingOutputAsset(context, record)
+    if (cleaned) removePendingOutputCleanup(context, id)
+    return cleaned
 }
 
 internal fun retryPendingOutputCleanup(context: Context) {
@@ -104,6 +111,10 @@ internal fun retryPendingOutputCleanup(context: Context) {
         val record = decodePendingOutputCleanupRecord(raw)
         if (record == null) {
             removePendingOutputCleanupRaw(context, raw)
+            continue
+        }
+        if (record.storageType == RecordingStorageType.FILE && outputCleanupClaimFile(record)?.isFile == true) {
+            if (deletePendingOutputAsset(context, record)) removePendingOutputCleanup(context, record.id)
             continue
         }
         when (outputCleanupAssetState(context, record.storageType, record.id)) {
@@ -128,11 +139,17 @@ internal fun retryPendingOutputCleanup(context: Context) {
             )
         ) {
             // The path/URI now identifies different bytes. The old cleanup intent must not
-            // delete a replacement recording that reused the same external identity.
+            // delete a replacement recording that reused the same external identity. For a
+            // FILE claim, first make any restore/recovery rename durable.
+            if (record.storageType == RecordingStorageType.FILE &&
+                !confirmFileDirectoryStateDurable(File(record.id))
+            ) {
+                continue
+            }
             removePendingOutputCleanup(context, record.id)
             continue
         }
-        if (deletePendingOutputAsset(context, record.storageType, record.id)) {
+        if (deletePendingOutputAsset(context, record)) {
             removePendingOutputCleanup(context, record.id)
         }
     }
@@ -142,6 +159,13 @@ private fun pendingOutputCleanupEntriesLocked(context: Context): Set<String> =
     getRecorderPreferences(context).getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, emptySet())
         ?.toSet()
         .orEmpty()
+
+private fun pendingOutputCleanupRecord(context: Context, id: String): PendingOutputCleanupRecord? =
+    synchronized(outputCleanupJournalLock) {
+        pendingOutputCleanupEntriesLocked(context).firstNotNullOfOrNull { raw ->
+            decodePendingOutputCleanupRecord(raw)?.takeIf { it.id == id }
+        }
+    }
 
 private fun putPendingOutputCleanup(context: Context, record: PendingOutputCleanupRecord): Boolean =
     synchronized(outputCleanupJournalLock) {
@@ -188,7 +212,7 @@ private fun readOutputCleanupFingerprint(
     }
     val digest = input.use(::sha256)
     val fileKey = if (storageType == RecordingStorageType.FILE) {
-        Files.readAttributes(File(id).toPath(), BasicFileAttributes::class.java).fileKey()?.toString()
+        resolveFileIdentity(File(id)).takeIf { it.isNotBlank() } ?: return@runCatching null
     } else {
         null
     }
@@ -238,21 +262,67 @@ private fun outputCleanupAssetState(
 
 private fun deletePendingOutputAsset(
     context: Context,
-    storageType: RecordingStorageType,
-    id: String,
-): Boolean = when (storageType) {
-    RecordingStorageType.FILE -> {
-        val file = File(id)
-        if (!file.exists()) true else deleteFileRecordingDurably(file)
-    }
+    record: PendingOutputCleanupRecord,
+): Boolean = when (record.storageType) {
+    RecordingStorageType.FILE -> deletePendingFileOutput(record)
     RecordingStorageType.DOCUMENT -> runCatching {
-        val document = DocumentFile.fromSingleUri(context, id.toUri())
+        val document = DocumentFile.fromSingleUri(context, record.id.toUri())
         document?.let { !it.exists() || it.delete() } ?: false
     }.getOrDefault(false)
     RecordingStorageType.MEDIASTORE -> runCatching {
-        if (context.contentResolver.delete(id.toUri(), null, null) > 0) true
-        else outputCleanupAssetState(context, storageType, id) == OutputCleanupAssetState.MISSING
+        if (context.contentResolver.delete(record.id.toUri(), null, null) > 0) true
+        else outputCleanupAssetState(context, record.storageType, record.id) == OutputCleanupAssetState.MISSING
     }.getOrDefault(false)
+}
+
+private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean {
+    val intent = pendingOutputCleanupFileIntent(record) ?: return false
+    val identity = requireNotNull(intent.fileIdentity)
+    val claim = deletionClaimFile(intent)
+    val result = if (claim?.isFile == true) {
+        replayClaimedFileDeletion(intent, claim)
+    } else {
+        deleteClaimedFile(intent)
+    }
+    return when (result) {
+        FileDeletionClaimResult.RETRY -> false
+        FileDeletionClaimResult.MISMATCH_PRESERVED ->
+            confirmFileDirectoryStateDurable(File(record.id))
+        FileDeletionClaimResult.DELETED -> {
+            val source = File(record.id)
+            if (!confirmFileDirectoryStateDurable(source)) return false
+            if (!source.exists()) true
+            else !fileIdentityMatches(identity, resolveFileIdentity(source))
+        }
+    }
+}
+
+internal fun pendingOutputCleanupFileIntent(record: PendingOutputCleanupRecord): PendingDeletionIntent? {
+    if (record.storageType != RecordingStorageType.FILE) return null
+    val identity = record.fileKey?.takeIf { it.isNotBlank() } ?: return null
+    return PendingDeletionIntent(
+        id = record.id,
+        byteCount = record.byteCount,
+        sha256Hex = record.sha256Hex,
+        assetDeleted = false,
+        storageType = RecordingStorageType.FILE.name,
+        claimToken = outputCleanupClaimToken(record),
+        fileIdentity = identity,
+    )
+}
+
+private fun outputCleanupClaimFile(record: PendingOutputCleanupRecord): File? =
+    pendingOutputCleanupFileIntent(record)?.let(::deletionClaimFile)
+
+private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord): String {
+    val seed = buildString {
+        append(record.storageType.name).append('|')
+        append(record.id).append('|')
+        append(record.byteCount).append('|')
+        append(record.sha256Hex).append('|')
+        append(record.fileKey.orEmpty())
+    }.toByteArray(StandardCharsets.UTF_8)
+    return UUID.nameUUIDFromBytes(seed).toString()
 }
 
 private fun encodeCleanupField(value: String): String = Base64.getUrlEncoder().withoutPadding()
