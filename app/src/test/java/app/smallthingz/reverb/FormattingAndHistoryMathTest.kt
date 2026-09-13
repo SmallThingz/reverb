@@ -1,11 +1,96 @@
 package app.smallthingz.reverb
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FormattingAndHistoryMathTest {
+    @Test
+    fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
+        val steps = recordingDatabaseMigrationSteps(1, 2)
+        assertEquals(
+            listOf(
+                RecordingDatabaseMigrationStep.ADD_LAST_SEEN,
+                RecordingDatabaseMigrationStep.ADD_MISSING_SINCE,
+            ),
+            steps,
+        )
+        val sql = steps.flatMap(::recordingDatabaseMigrationSql)
+        assertTrue(sql.any { it.contains(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS) })
+        assertTrue(sql.any { it.contains(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS) })
+        assertFalse(sql.any { it.contains("DROP TABLE", ignoreCase = true) })
+        assertTrue(recordingDatabaseMigrationSteps(2, 2).isEmpty())
+    }
+
+
+    @Test
+    fun recordingCopyDigest_copiesEveryByteAcrossBoundarySizes() {
+        val source = ByteArray(262_147) { index -> ((index * 37 + 11) and 0xff).toByte() }
+        val expectedDigest = sha256(ByteArrayInputStream(source)).sha256
+
+        for (bufferSize in listOf(1, 3, 4_096, 131_072)) {
+            val output = ByteArrayOutputStream(source.size)
+            val digest = copyWithSha256(ByteArrayInputStream(source), output, bufferSize)
+            assertEquals(source.size.toLong(), digest.byteCount)
+            assertTrue(source.contentEquals(output.toByteArray()))
+            assertTrue(expectedDigest.contentEquals(digest.sha256))
+        }
+    }
+
+    @Test
+    fun recordingCopyDigest_makesProgressWhenBulkReadReturnsZero() {
+        val expected = byteArrayOf(1, 2, 3, 4, 5)
+        val source = object : ByteArrayInputStream(expected) {
+            var returnedZero = false
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                if (!returnedZero) {
+                    returnedZero = true
+                    return 0
+                }
+                return super.read(buffer, offset, length)
+            }
+        }
+        val output = ByteArrayOutputStream()
+        val digest = copyWithSha256(source, output, 4)
+        assertEquals(expected.size.toLong(), digest.byteCount)
+        assertTrue(expected.contentEquals(output.toByteArray()))
+    }
+
+    @Test
+    fun recordingCopyDigest_detectsSameSizeContentCorruption() {
+        val source = ByteArray(65_536) { index -> (index xor (index ushr 8)).toByte() }
+        val altered = source.copyOf().also { bytes ->
+            bytes[bytes.lastIndex / 2] = (bytes[bytes.lastIndex / 2].toInt() xor 0x40).toByte()
+        }
+        val sourceDigest = sha256(ByteArrayInputStream(source))
+        val alteredDigest = sha256(ByteArrayInputStream(altered))
+        assertEquals(sourceDigest.byteCount, alteredDigest.byteCount)
+        assertFalse(sourceDigest.sha256.contentEquals(alteredDigest.sha256))
+    }
+
+    @Test
+    fun cataloguedUnknownStorage_keepsItsDirectoryRecoveryGrant() {
+        val unknown = RecordingEntity(
+            id = "content://provider/document/audio",
+            displayName = "clip.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 1L,
+            durationMillis = 2L,
+            sizeBytes = 3L,
+            codecSummary = "PCM",
+            storageType = "FUTURE_STORAGE",
+            directoryId = "content://provider/tree/recordings",
+        )
+        assertEquals(
+            setOf("content://provider/tree/recordings"),
+            recordingDirectoryIdsToRetain(listOf(unknown)),
+        )
+        assertEquals(null, resolveRecordingStorageType(unknown))
+    }
+
     @Test
     fun missingRecordingTtl_startsFromFirstObservedMiss_notCreationTime() {
         val createdAt = 1_000L
@@ -197,6 +282,46 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun availableCaptureTarget_fallsBackWhenThePersistedTargetBecomesUnavailable() {
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            resolveAvailableCaptureBufferSlot(
+                preferred = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            resolveAvailableCaptureBufferSlot(
+                preferred = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.ONE_SHOT,
+            resolveAvailableCaptureBufferSlot(
+                preferred = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = false,
+            ),
+        )
+        assertEquals(
+            null,
+            resolveAvailableCaptureBufferSlot(
+                preferred = ReverbService.BufferSlot.ONE_SHOT,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = false,
+            ),
+        )
+    }
+
+    @Test
     fun captureTarget_activationRequiresTheRequestedBufferToBeUsable() {
         assertTrue(
             canActivateCaptureBuffer(
@@ -229,6 +354,26 @@ class FormattingAndHistoryMathTest {
                 oneShotFull = false,
                 loopingEnabled = true,
             ),
+        )
+    }
+
+    @Test
+    fun captureReaderTransition_adoptsNewGenerationWithoutSilentlyStoppingCapture() {
+        assertEquals(
+            CaptureReaderTransition.ADOPT,
+            captureReaderTransition(8L, 8L, listening = true, recordRunning = true),
+        )
+        assertEquals(
+            CaptureReaderTransition.RESTART,
+            captureReaderTransition(8L, 8L, listening = true, recordRunning = false),
+        )
+        assertEquals(
+            CaptureReaderTransition.IGNORE,
+            captureReaderTransition(7L, 8L, listening = true, recordRunning = true),
+        )
+        assertEquals(
+            CaptureReaderTransition.IGNORE,
+            captureReaderTransition(8L, 8L, listening = false, recordRunning = true),
         )
     }
 
