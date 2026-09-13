@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
 import android.os.IBinder
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -694,6 +695,9 @@ fun CaptureScreen(
             rangeSnapshot = null
             rangeSnapshotBuffer = null
             invalidateCustomRangePreparation()
+        }
+        BackHandler(enabled = rangeSnapshotBuffer != null) {
+            dismissRangeExport()
         }
         val submitRangeExport: (Float, Float) -> Unit = submitRange@ { startSeconds, endSeconds ->
             val snapshot = rangeSnapshot ?: return@submitRange
