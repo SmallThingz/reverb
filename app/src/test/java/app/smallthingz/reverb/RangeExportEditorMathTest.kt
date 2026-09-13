@@ -122,25 +122,30 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun fineTuneGestureSensitivityFavorsHorizontalOverVertical() {
-        val horizontal = rangeFineTuneDragPull(
-            startHorizontal = 0f,
+    fun fineTunePuckTracksTouchXWithoutVisualGain() {
+        val width = 200f
+        val travel = 80f
+        val pointerX = 142f
+        val pull = rangeFineTuneHorizontalTouchPull(pointerX, width, travel)
+        val puckX = width * 0.5f + pull * travel
+        assertEquals(pointerX, puckX, 0.0001f)
+
+        val beyondRight = rangeFineTuneHorizontalTouchPull(199f, width, travel)
+        val clampedPuckX = width * 0.5f + beyondRight * travel
+        assertTrue(clampedPuckX < 199f)
+        assertEquals(180f, clampedPuckX, 0.0001f)
+    }
+
+    @Test
+    fun fineTuneSeekGainIsSeparateFromPuckGeometry() {
+        assertEquals(0.5f, rangeFineTuneSeekPull(0.31f), 0.0001f)
+        assertEquals(1f, rangeFineTuneSeekPull(0.80f), 0f)
+        val vertical = rangeFineTuneVerticalDragPull(
             startRawVertical = 0f,
-            dragDeltaX = 30f,
-            dragDeltaY = 0f,
-            horizontalTravel = 100f * 0.62f,
-            verticalTravel = 40f * 2.35f,
-        )
-        val vertical = rangeFineTuneDragPull(
-            startHorizontal = 0f,
-            startRawVertical = 0f,
-            dragDeltaX = 0f,
             dragDeltaY = 30f,
-            horizontalTravel = 100f * 0.62f,
             verticalTravel = 40f * 2.35f,
         )
-        assertTrue(horizontal.horizontal > 0.45f)
-        assertTrue(vertical.rawVertical < 0.35f)
+        assertTrue(vertical < 0.35f)
     }
 
     @Test
@@ -155,28 +160,17 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun fineTuneDragUsesRelativeDeltaWithoutSnappingToPointer() {
-        val unchanged = rangeFineTuneDragPull(
-            startHorizontal = 0.31f,
-            startRawVertical = -0.22f,
-            dragDeltaX = 0f,
-            dragDeltaY = 0f,
-            horizontalTravel = 100f,
-            verticalTravel = 40f,
+    fun fineTuneVerticalDragRemainsRelativeAndLowSensitivity() {
+        assertEquals(
+            -0.22f,
+            rangeFineTuneVerticalDragPull(-0.22f, 0f, 40f),
+            0f,
         )
-        assertEquals(0.31f, unchanged.horizontal, 0f)
-        assertEquals(-0.22f, unchanged.rawVertical, 0f)
-
-        val moved = rangeFineTuneDragPull(
-            startHorizontal = 0.31f,
-            startRawVertical = -0.22f,
-            dragDeltaX = 10f,
-            dragDeltaY = 8f,
-            horizontalTravel = 100f,
-            verticalTravel = 40f,
+        assertEquals(
+            -0.02f,
+            rangeFineTuneVerticalDragPull(-0.22f, 8f, 40f),
+            0.0001f,
         )
-        assertEquals(0.41f, moved.horizontal, 0.0001f)
-        assertEquals(-0.02f, moved.rawVertical, 0.0001f)
     }
 
     @Test

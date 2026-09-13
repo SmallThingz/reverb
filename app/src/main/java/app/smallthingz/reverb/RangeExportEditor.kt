@@ -147,24 +147,25 @@ internal fun adjustRangeEditTarget(
     return RangeEditUpdate(RangeEditValues(start, cursor, end), snappedTo)
 }
 
-internal data class RangeFineTunePull(
-    val horizontal: Float,
-    val rawVertical: Float,
-)
+private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
 
-internal fun rangeFineTuneDragPull(
-    startHorizontal: Float,
-    startRawVertical: Float,
-    dragDeltaX: Float,
-    dragDeltaY: Float,
+internal fun rangeFineTuneHorizontalTouchPull(
+    pointerX: Float,
+    width: Float,
     horizontalTravel: Float,
+): Float {
+    val centerX = width * 0.5f
+    return ((pointerX - centerX) / horizontalTravel.coerceAtLeast(1f)).coerceIn(-1f, 1f)
+}
+
+internal fun rangeFineTuneSeekPull(horizontalVisualPull: Float): Float =
+    (horizontalVisualPull * RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN).coerceIn(-1f, 1f)
+
+internal fun rangeFineTuneVerticalDragPull(
+    startRawVertical: Float,
+    dragDeltaY: Float,
     verticalTravel: Float,
-): RangeFineTunePull = RangeFineTunePull(
-    horizontal = (
-        startHorizontal + dragDeltaX / horizontalTravel.coerceAtLeast(1f)
-    ).coerceIn(-1f, 1f),
-    rawVertical = startRawVertical + dragDeltaY / verticalTravel.coerceAtLeast(1f),
-)
+): Float = startRawVertical + dragDeltaY / verticalTravel.coerceAtLeast(1f)
 
 internal fun rangeFineTuneConstrainedY(
     rawVerticalPull: Float,
@@ -990,10 +991,7 @@ private fun SpringFineAdjust(
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
-    var dragStartHorizontal by remember { mutableFloatStateOf(0f) }
     var dragStartRawVertical by remember { mutableFloatStateOf(0f) }
-    var dragDeltaX by remember { mutableFloatStateOf(0f) }
-    var dragDeltaY by remember { mutableFloatStateOf(0f) }
     var lastFrameNanos by remember { mutableLongStateOf(0L) }
 
     val constrainedY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
@@ -1003,8 +1001,6 @@ private fun SpringFineAdjust(
             dragging = false
             horizontalPull = 0f
             rawVerticalPull = 0f
-            dragDeltaX = 0f
-            dragDeltaY = 0f
             state.endFineAdjust()
         }
     }
@@ -1049,7 +1045,7 @@ private fun SpringFineAdjust(
                     ((frameNanos - previous).coerceAtMost(50_000_000L)) / 1_000_000_000f
                 val liveY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
                 val deltaSeconds = rangeFineTuneDeltaSeconds(
-                    horizontalPull = horizontalPull,
+                    horizontalPull = rangeFineTuneSeekPull(horizontalPull),
                     verticalPull = liveY,
                     durationSeconds = state.durationSeconds,
                     dtSeconds = dtSeconds,
@@ -1063,45 +1059,49 @@ private fun SpringFineAdjust(
 
     val gestureModifier = if (enabled) {
         Modifier.pointerInput(state.lastTarget) {
-            detectDragGestures(
-                onDragStart = {
-                    dragging = true
-                    dragStartHorizontal = horizontalPull
-                    dragStartRawVertical = rawVerticalPull
-                    dragDeltaX = 0f
-                    dragDeltaY = 0f
-                    state.beginFineAdjust()
-                },
-                onDragEnd = {
-                    dragging = false
-                    state.endFineAdjust()
-                },
-                onDragCancel = {
-                    dragging = false
-                    state.endFineAdjust()
-                },
-            ) { change, dragAmount ->
-                change.consume()
-                dragDeltaX += dragAmount.x
-                dragDeltaY += dragAmount.y
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
                 val edgePadding = 10.dp.toPx()
                 val puckRadius = 16.dp.toPx()
                 val visualHorizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
                     .coerceAtLeast(1f)
                 val visualVerticalTravel = (size.height * 0.5f - edgePadding - puckRadius)
                     .coerceAtLeast(1f)
-                val horizontalInputTravel = visualHorizontalTravel * 0.62f
                 val verticalInputTravel = visualVerticalTravel * 2.35f
-                val pull = rangeFineTuneDragPull(
-                    startHorizontal = dragStartHorizontal,
-                    startRawVertical = dragStartRawVertical,
-                    dragDeltaX = dragDeltaX,
-                    dragDeltaY = dragDeltaY,
-                    horizontalTravel = horizontalInputTravel,
-                    verticalTravel = verticalInputTravel,
+
+                dragging = true
+                dragStartRawVertical = rawVerticalPull
+                horizontalPull = rangeFineTuneHorizontalTouchPull(
+                    pointerX = down.position.x,
+                    width = size.width.toFloat(),
+                    horizontalTravel = visualHorizontalTravel,
                 )
-                horizontalPull = pull.horizontal
-                rawVerticalPull = pull.rawVertical
+                state.beginFineAdjust()
+                down.consume()
+
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        horizontalPull = rangeFineTuneHorizontalTouchPull(
+                            pointerX = change.position.x,
+                            width = size.width.toFloat(),
+                            horizontalTravel = visualHorizontalTravel,
+                        )
+                        rawVerticalPull = rangeFineTuneVerticalDragPull(
+                            startRawVertical = dragStartRawVertical,
+                            dragDeltaY = change.position.y - down.position.y,
+                            verticalTravel = verticalInputTravel,
+                        )
+                        change.consume()
+                    }
+                } finally {
+                    if (dragging) {
+                        dragging = false
+                        state.endFineAdjust()
+                    }
+                }
             }
         }
     } else {
