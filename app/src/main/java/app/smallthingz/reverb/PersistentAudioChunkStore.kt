@@ -559,6 +559,116 @@ internal class PersistentAudioChunkStore internal constructor(
             return ReadResult(totalOutputBytes, cumulativeDuration)
         }
 
+        /**
+         * Samples a small set of source frames across the leased timeline for UI waveform drawing.
+         * This deliberately avoids export normalization/checksum scans: export and playback still use
+         * [readNormalized], while this read-only preview path is bounded and never mutates storage.
+         */
+        @Synchronized
+        fun sampleWaveformEnvelope(
+            bucketCount: Int,
+            probesPerBucket: Int = 3,
+            framesPerProbe: Int = 32,
+        ): FloatArray {
+            check(!closedLease) { "RangeLease is closed" }
+            val buckets = bucketCount.coerceIn(16, 512)
+            val probes = probesPerBucket.coerceIn(1, 64)
+            val frames = framesPerProbe.coerceIn(1, 128)
+            val envelope = FloatArray(buckets)
+            if (durationSeconds <= 0.0 || segments.isEmpty()) return envelope
+
+            val scratch = ByteArray(frames * MAX_CHANNEL_COUNT * PcmSampleFormat.PCM_FLOAT.bytesPerSample)
+            var segmentIndex = 0
+            var segmentTimelineStart = 0.0
+            var currentFile: File? = null
+            var currentAccess: RandomAccessFile? = null
+            try {
+                for (bucket in 0 until buckets) {
+                    val bucketStart = durationSeconds * bucket.toDouble() / buckets.toDouble()
+                    val bucketEnd = durationSeconds * (bucket + 1).toDouble() / buckets.toDouble()
+                    var peak = 0f
+                    repeat(probes) { probe ->
+                        val timelineSeconds = bucketStart +
+                            (bucketEnd - bucketStart) * (probe.toDouble() + 0.5) / probes.toDouble()
+                        while (segmentIndex < segments.lastIndex) {
+                            val segment = segments[segmentIndex]
+                            val rate = segment.record.sampleRate.coerceAtLeast(1)
+                            val segmentDuration = segment.frameCount.toDouble() / rate.toDouble()
+                            if (timelineSeconds < segmentTimelineStart + segmentDuration) break
+                            segmentTimelineStart += segmentDuration
+                            segmentIndex++
+                        }
+
+                        val segment = segments[segmentIndex]
+                        val record = segment.record
+                        if (record.sampleRate <= 0 || record.frameBytes <= 0 || segment.frameCount <= 0L) {
+                            return@repeat
+                        }
+                        val localSeconds = (timelineSeconds - segmentTimelineStart).coerceAtLeast(0.0)
+                        val centerFrame = (localSeconds * record.sampleRate.toDouble()).toLong()
+                            .coerceIn(0L, segment.frameCount - 1L)
+                        val readFrames = minOf(frames.toLong(), segment.frameCount).toInt()
+                        val localStartFrame = (centerFrame - readFrames / 2L)
+                            .coerceIn(0L, segment.frameCount - readFrames.toLong())
+                        val absoluteStartFrame = segment.startFrame + localStartFrame
+                        val byteOffset = absoluteStartFrame * record.frameBytes.toLong()
+                        val readBytes = readFrames * record.frameBytes
+                        if (
+                            byteOffset < 0L ||
+                            byteOffset + readBytes.toLong() > segment.payloadBytesAtAcquire
+                        ) {
+                            return@repeat
+                        }
+
+                        if (currentFile != record.file) {
+                            runCatching { currentAccess?.close() }
+                            currentFile = record.file
+                            currentAccess = RandomAccessFile(record.file, "r")
+                        }
+                        val access = currentAccess ?: return@repeat
+                        access.seek(segment.payloadOffsetBytes + byteOffset)
+                        access.readFully(scratch, 0, readBytes)
+                        var offset = 0
+                        repeat(readFrames) {
+                            repeat(record.channelCount) {
+                                peak = maxOf(peak, waveformSampleMagnitude(scratch, offset, record.sampleFormat))
+                                offset += record.sampleFormat.bytesPerSample
+                            }
+                        }
+                    }
+                    envelope[bucket] = peak.coerceIn(0f, 1f)
+                }
+            } finally {
+                runCatching { currentAccess?.close() }
+            }
+            return envelope
+        }
+
+        private fun waveformSampleMagnitude(
+            bytes: ByteArray,
+            offset: Int,
+            format: PcmSampleFormat,
+        ): Float = when (format) {
+            PcmSampleFormat.PCM_8 ->
+                kotlin.math.abs(((bytes[offset].toInt() and 0xff) - 128) / 128f)
+            PcmSampleFormat.PCM_16 -> {
+                val value = (
+                    (bytes[offset].toInt() and 0xff) or
+                        (bytes[offset + 1].toInt() shl 8)
+                    ).toShort().toInt()
+                kotlin.math.abs(value / 32768f)
+            }
+            PcmSampleFormat.PCM_FLOAT -> {
+                val bits =
+                    (bytes[offset].toInt() and 0xff) or
+                        ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                        ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                        (bytes[offset + 3].toInt() shl 24)
+                val value = Float.fromBits(bits)
+                if (value.isFinite()) kotlin.math.abs(value).coerceIn(0f, 1f) else 0f
+            }
+        }
+
         @Synchronized
         override fun close() {
             synchronized(store) {

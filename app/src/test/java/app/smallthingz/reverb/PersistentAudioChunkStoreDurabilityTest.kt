@@ -337,6 +337,27 @@ class PersistentAudioChunkStoreDurabilityTest {
         assertArrayEquals(corruptedBytes, chunk.readBytes())
     }
 
+    @Test
+    fun waveformSampling_isBoundedReadOnlyAndDetectsSignal() = withStoreRoot { root ->
+        val expected = pcmBytes(96_000)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+            val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            try {
+                val envelope = lease.sampleWaveformEnvelope(64)
+                assertEquals(64, envelope.size)
+                assertTrue(envelope.all { it in 0f..1f })
+                assertTrue(envelope.any { it > 0.05f })
+                assertTrue(envelope.distinct().size > 1)
+            } finally {
+                lease.close()
+            }
+            assertArrayEquals(expected, readAll(store))
+        }
+    }
+
     private fun configure(store: PersistentAudioChunkStore, retentionBytes: Long) {
         store.configure(
             requestedRetentionMode = RetentionMode.SIZE,
