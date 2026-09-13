@@ -107,21 +107,13 @@ class NotifyFileReceiver(
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
         backgroundRecordingResultScope.launch {
-            val registration = runCatching { RecordingRepository.register(appContext, recording) }
-            val saved = registration.getOrElse {
-                AppFeedbackCenter.post(
-                    appContext.getString(R.string.library_update_failed),
-                    FeedbackTone.ERROR,
-                )
-                recording
-            }
             if (
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
             ) return@launch
             runCatching {
-                NotificationManagerCompat.from(appContext).notify(43, buildCaptureNotification(appContext, saved))
+                NotificationManagerCompat.from(appContext).notify(43, buildCaptureNotification(appContext, recording))
             }
         }
     }
@@ -1976,21 +1968,10 @@ private class SaveResultReceiver(
 
     override fun fileReady(recording: RecordingEntity) {
         setSaving(false)
-        backgroundRecordingResultScope.launch {
-            runCatching { RecordingRepository.register(appContext, recording) }
-                .onSuccess { saved ->
-                    scope.launch {
-                        onStatus(CaptureSaveStatus.Saved(saved))
-                        onSaved()
-                    }
-                }
-                .onFailure {
-                    scope.launch {
-                        onStatus(null)
-                        onError(appContext.getString(R.string.library_update_failed))
-                    }
-                }
-            }
+        scope.launch {
+            onStatus(CaptureSaveStatus.Saved(recording))
+            onSaved()
+        }
     }
 
     override fun fileFailed(message: String, error: Throwable?) {

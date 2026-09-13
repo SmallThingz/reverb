@@ -40,6 +40,7 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -258,6 +259,15 @@ class ReverbService : Service() {
     }
 
     fun enableListening(bufferSlot: BufferSlot): ListeningCommandResult {
+        if (!canActivateCaptureBuffer(
+                requested = bufferSlot,
+                oneShotEnabled = oneShotBufferEnabled,
+                oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
+                loopingEnabled = loopingBufferEnabled,
+            )
+        ) {
+            return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
+        }
         if (isLogicalListeningState(state, isListeningEnabled()) && activeBufferSlot != bufferSlot) {
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
@@ -280,13 +290,23 @@ class ReverbService : Service() {
         }
 
         val prefs = getRecorderPreferences(this)
+        var targetChanged = false
         val generation = synchronized(listeningIntentLock) {
-            if (activeBufferSlot == bufferSlot && persistedCaptureBufferSlot() == bufferSlot) {
+            val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
+            if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot.name) {
                 listeningCommandGeneration.get()
             } else if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
+                prefs.edit().apply {
+                    if (previousStoredSlot == null) remove(PrefKey.CAPTURE_BUFFER_SLOT)
+                    else putString(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot)
+                }.apply()
                 null
             } else {
                 activeBufferSlot = bufferSlot
+                targetChanged = true
+                // Target selection is observable state even while idle, so version it too. The
+                // stop path follows the durable listening=false intent and is intentionally not
+                // cancelled by an unrelated target version change.
                 listeningCommandGeneration.incrementAndGet()
             }
         }
@@ -294,8 +314,35 @@ class ReverbService : Service() {
             reportError(getString(R.string.recorder_state_persist_failed))
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
+        if (targetChanged && isLogicalListeningState(state, isListeningEnabled())) {
+            audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
+        }
         RecordingQuickTiles.requestRefresh(this)
         return ListeningCommandResult(accepted = true, generation = generation)
+    }
+
+    private fun adoptCaptureGenerationOnAudioThread(generation: Long) {
+        check(audioHandler.looper == Looper.myLooper())
+        val record = audioRecord
+        val recordRunning = record != null && runCatching {
+            record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+        }.getOrDefault(false)
+        when (
+            captureReaderTransition(
+                requestedGeneration = generation,
+                currentGeneration = listeningCommandGeneration.get(),
+                listening = state == STATE_LISTENING && isListeningEnabled(),
+                recordRunning = recordRunning,
+            )
+        ) {
+            CaptureReaderTransition.IGNORE -> return
+            CaptureReaderTransition.RESTART -> startAudioInputOnAudioThread(generation)
+            CaptureReaderTransition.ADOPT -> {
+                audioHandler.removeCallbacks(audioReader)
+                audioRecordGeneration = generation
+                audioHandler.post(audioReader)
+            }
+        }
     }
 
     private fun setListeningEnabled(
@@ -333,7 +380,7 @@ class ReverbService : Service() {
                 generation = listeningCommandGeneration.get(),
             )
         }
-        if (enabled) innerStartListening(generation) else innerStopListening(generation)
+        if (enabled) innerStartListening(generation) else innerStopListening()
         return ListeningCommandResult(accepted = true, generation = generation)
     }
 
@@ -349,25 +396,22 @@ class ReverbService : Service() {
     private fun resolveConfiguredCaptureBufferSlot(): BufferSlot {
         val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         val persisted = persistedCaptureBufferSlot()
-        if (persisted == null) {
-            return defaultStartupBufferSlot(
+        return resolveAvailableCaptureBufferSlot(
+            preferred = persisted ?: defaultStartupBufferSlot(
                 oneShotEnabled = oneShotBufferEnabled,
                 oneShotFull = oneShotFull,
                 loopingEnabled = loopingBufferEnabled,
-            )
-        }
-        return resolveCaptureBufferSlot(
-            requested = persisted,
+            ),
             oneShotEnabled = oneShotBufferEnabled,
             oneShotFull = oneShotFull,
             loopingEnabled = loopingBufferEnabled,
-        ) ?: persisted
+        ) ?: (persisted ?: BufferSlot.ONE_SHOT)
     }
 
     private fun ensureActiveCaptureTargetOnAudioThread(): Boolean {
         check(audioHandler.looper == Looper.myLooper())
-        val resolved = resolveCaptureBufferSlot(
-            requested = activeBufferSlot,
+        val resolved = resolveAvailableCaptureBufferSlot(
+            preferred = activeBufferSlot,
             oneShotEnabled = oneShotBufferEnabled,
             oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
             loopingEnabled = loopingBufferEnabled,
@@ -387,6 +431,10 @@ class ReverbService : Service() {
         if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
             prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).apply()
             reportError(getString(R.string.recorder_state_persist_failed))
+        }
+        if (isLogicalListeningState(state, isListeningEnabled())) {
+            val generation = listeningCommandGeneration.incrementAndGet()
+            if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = generation
         }
         if (notifyTiles) RecordingQuickTiles.requestRefresh(this)
     }
@@ -627,6 +675,13 @@ class ReverbService : Service() {
             pauseListeningForNoWritableBufferOnAudioThread(generation)
             return
         }
+        val currentGeneration = listeningCommandGeneration.get()
+        if (generation != currentGeneration) {
+            if (state == STATE_LISTENING && isListeningEnabled()) {
+                audioHandler.post { startAudioInputOnAudioThread(currentGeneration) }
+            }
+            return
+        }
         val record = createAudioRecord()
         audioRecord = record
         audioRecordGeneration = generation
@@ -658,15 +713,16 @@ class ReverbService : Service() {
         audioHandler.post(audioReader)
     }
 
-    private fun innerStopListening(generation: Long = listeningCommandGeneration.get()) {
-        if (generation != listeningCommandGeneration.get()) return
+    private fun innerStopListening() {
         when (state) {
             STATE_READY -> return
             STATE_LISTENING, STATE_PAUSED -> Unit
             else -> return
         }
         audioHandler.post {
-            if (generation != listeningCommandGeneration.get() || isListeningEnabled()) return@post
+            // A target switch may legitimately advance the state generation after Stop was
+            // requested. Only a newer durable Start intent should cancel teardown.
+            if (isListeningEnabled()) return@post
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
@@ -1017,15 +1073,21 @@ class ReverbService : Service() {
                         if (!committed) {
                             throw InterruptedIOException("Export cancelled")
                         }
-                        notifyReceiver(receiver, recording)
+                        val cataloguedRecording = runCatching {
+                            runBlocking { RecordingRepository.register(this@ReverbService, recording) }
+                        }.onFailure { error ->
+                            Log.e(TAG, "Unable to register committed export ${recording.id}", error)
+                        }.getOrDefault(recording)
+                        clearExportState(exportToken)
+                        notifyReceiver(receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        deleteOutputTarget(outTarget)
+                        if (!committed) deleteOutputTarget(outTarget)
                         finishExportCancelled(exportToken, receiver)
                     } catch (e: Exception) {
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                            deleteOutputTarget(outTarget)
+                            if (!committed) deleteOutputTarget(outTarget)
                             finishExportCancelled(exportToken, receiver)
                             return@Callable Unit
                         }
@@ -1037,7 +1099,7 @@ class ReverbService : Service() {
                         )
                         reportError(message)
                         finishExportFailure(exportToken, receiver, message, e)
-                        deleteOutputTarget(outTarget)
+                        if (!committed) deleteOutputTarget(outTarget)
                     } finally {
                         closeLeaseOnce()
                         if (exportToken.cancelled.get() && !committed) {
@@ -1156,9 +1218,8 @@ class ReverbService : Service() {
                 loadConfiguredPreferences()
             }
             configurePersistentBuffer()
-            if (state == STATE_LISTENING &&
-                (!ensureActiveCaptureTargetOnAudioThread() || !hasWritableCaptureTarget())
-            ) {
+            val hasActiveTarget = ensureActiveCaptureTargetOnAudioThread()
+            if (state == STATE_LISTENING && (!hasActiveTarget || !hasWritableCaptureTarget())) {
                 pauseListeningForNoWritableBufferOnAudioThread()
             }
         }
@@ -1480,7 +1541,11 @@ class ReverbService : Service() {
             readCaptureIntoScratch(generation)
         } catch (error: Exception) {
             Log.e(TAG, "Audio capture failed", error)
-            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error, generation)
+            failListeningOnAudioThread(
+                getString(R.string.audio_input_init_failed),
+                error,
+                audioRecordGeneration,
+            )
         }
     }
 
@@ -2179,6 +2244,23 @@ class ReverbService : Service() {
 }
 
 
+internal enum class CaptureReaderTransition {
+    IGNORE,
+    ADOPT,
+    RESTART,
+}
+
+internal fun captureReaderTransition(
+    requestedGeneration: Long,
+    currentGeneration: Long,
+    listening: Boolean,
+    recordRunning: Boolean,
+): CaptureReaderTransition = when {
+    requestedGeneration != currentGeneration || !listening -> CaptureReaderTransition.IGNORE
+    recordRunning -> CaptureReaderTransition.ADOPT
+    else -> CaptureReaderTransition.RESTART
+}
+
 internal fun isLogicalListeningState(
     recorderState: Int,
     listeningIntentEnabled: Boolean,
@@ -2195,6 +2277,24 @@ internal fun canActivateCaptureBuffer(
     oneShotFull = oneShotFull,
     loopingEnabled = loopingEnabled,
 ) == requested
+
+internal fun resolveAvailableCaptureBufferSlot(
+    preferred: ReverbService.BufferSlot,
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+): ReverbService.BufferSlot? = when (preferred) {
+    ReverbService.BufferSlot.ONE_SHOT -> when {
+        oneShotEnabled && !oneShotFull -> ReverbService.BufferSlot.ONE_SHOT
+        loopingEnabled -> ReverbService.BufferSlot.LOOPING
+        else -> null
+    }
+    ReverbService.BufferSlot.LOOPING -> when {
+        loopingEnabled -> ReverbService.BufferSlot.LOOPING
+        oneShotEnabled && !oneShotFull -> ReverbService.BufferSlot.ONE_SHOT
+        else -> null
+    }
+}
 
 internal fun resolveCaptureBufferSlot(
     requested: ReverbService.BufferSlot,

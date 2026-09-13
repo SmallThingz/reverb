@@ -140,9 +140,11 @@ abstract class RecordingTileService : TileService() {
         } else {
             when (uiState) {
                 RecordingTileUiState.RECORDING -> getString(R.string.quick_tile_recording)
-                RecordingTileUiState.ACTIVE,
-                RecordingTileUiState.AVAILABLE,
-                -> getString(R.string.quick_tile_stopped)
+                RecordingTileUiState.ACTIVE -> when (bufferSlot) {
+                    ReverbService.BufferSlot.ONE_SHOT -> getString(R.string.quick_tile_one_shot_active)
+                    ReverbService.BufferSlot.LOOPING -> getString(R.string.quick_tile_looping_active)
+                }
+                RecordingTileUiState.AVAILABLE -> getString(R.string.quick_tile_stopped)
                 RecordingTileUiState.FULL -> getString(R.string.quick_tile_full)
                 RecordingTileUiState.DISABLED -> getString(R.string.quick_tile_off)
             }
