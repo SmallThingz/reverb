@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import java.util.Date
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,6 +97,7 @@ fun FilesScreen(
     active: Boolean = true,
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
+    onExpandedRecordingActiveChange: (Boolean) -> Unit = {},
     onVisibleRecordingsChanged: (List<RecordingEntity>) -> Unit = {},
     onParentRefreshRequested: () -> Unit = {},
     showNormalTopBar: Boolean = true,
@@ -379,24 +380,52 @@ fun FilesScreen(
 
     val selectionActive by remember { derivedStateOf { selectedIds.isNotEmpty() } }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
-    DisposableEffect(Unit) { onDispose { onSelectionActiveChange(false) } }
-    BackHandler(enabled = active && selectionActive) { clearSelection() }
-    BackHandler(enabled = active && !selectionActive && expandedRecordingId != null) {
-        expandedRecordingId = null
-        trimRequestRecordingId = null
+    LaunchedEffect(expandedRecordingId) {
+        onExpandedRecordingActiveChange(expandedRecordingId != null)
     }
-    BackHandler(enabled = active && !selectionActive && expandedRecordingId == null) { onDismissLibrary() }
+    DisposableEffect(Unit) {
+        onDispose {
+            onSelectionActiveChange(false)
+            onExpandedRecordingActiveChange(false)
+        }
+    }
+    val selectionBackMotion = rememberPredictiveBackMotion(
+        enabled = active && selectionActive,
+        onBack = ::clearSelection,
+    )
+    val selectionBackProgress = if (selectionBackMotion.gestureActive) {
+        selectionBackMotion.progress.value.coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val selectionBackDirection = predictiveBackHorizontalDirection(selectionBackMotion.swipeEdge)
+
 
     Scaffold(
         modifier = modifier,
         containerColor = Color.Transparent,
         topBar = {
             if (selectionActive) {
-                Surface(
-                    color = chrome.field,
-                    tonalElevation = 0.dp,
-                ) {
-                    Row(
+                Box {
+                    if (selectionBackProgress > 0f) {
+                        AppTopBar(
+                            onBrandClick = onBrandClick,
+                            onSettingsClick = onSettingsClick,
+                            applyStatusBarPadding = false,
+                        )
+                    }
+                    Surface(
+                        modifier = Modifier.graphicsLayer {
+                            translationX = selectionBackDirection * size.width * selectionBackProgress
+                            alpha = 1f - 0.18f * selectionBackProgress
+                            val scale = 1f - 0.015f * selectionBackProgress
+                            scaleX = scale
+                            scaleY = scale
+                        },
+                        color = chrome.field,
+                        tonalElevation = 0.dp,
+                    ) {
+                        Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(AppTopBarContentHeight)
@@ -436,6 +465,7 @@ fun FilesScreen(
                                     tint = MaterialTheme.colorScheme.error,
                                 )
                             }
+                        }
                         }
                     }
                 }

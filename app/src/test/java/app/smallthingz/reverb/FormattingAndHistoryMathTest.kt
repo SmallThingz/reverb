@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.pm.ServiceInfo
+import androidx.activity.BackEventCompat
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
@@ -1314,5 +1315,22 @@ class FormattingAndHistoryMathTest {
         assertEquals(45f, bufferTransitionFlipDegrees(oneShot, looping, 0.75f), 0.0001f)
         assertEquals(0f, bufferTransitionFlipDegrees(oneShot, looping, 1f), 0.0001f)
         assertEquals(45f, bufferTransitionFlipDegrees(looping, oneShot, 0.25f), 0.0001f)
+    }
+
+    @Test
+    fun predictiveBackOpenProgress_reversesAndClampsDestinationReveal() {
+        assertEquals(1f, predictiveBackOpenProgress(-1f), 0f)
+        assertEquals(1f, predictiveBackOpenProgress(0f), 0f)
+        assertEquals(0.75f, predictiveBackOpenProgress(0.25f), 0.0001f)
+        assertEquals(0f, predictiveBackOpenProgress(1f), 0f)
+        assertEquals(0f, predictiveBackOpenProgress(2f), 0f)
+    }
+
+
+    @Test
+    fun predictiveBackHorizontalDirection_followsGestureEdge() {
+        assertEquals(1f, predictiveBackHorizontalDirection(BackEventCompat.EDGE_LEFT), 0f)
+        assertEquals(-1f, predictiveBackHorizontalDirection(BackEventCompat.EDGE_RIGHT), 0f)
+        assertEquals(1f, predictiveBackHorizontalDirection(BackEventCompat.EDGE_NONE), 0f)
     }
 }

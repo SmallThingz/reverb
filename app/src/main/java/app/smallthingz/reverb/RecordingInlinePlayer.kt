@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.media.AudioAttributes
 import android.media.MediaPlayer
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -39,6 +38,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -56,6 +59,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
 private const val INLINE_SEEK_JUMP_MS = 10_000
@@ -116,14 +120,25 @@ internal fun RecordingInlinePlayer(
         label = "recordingCardWaveformMorph",
     )
 
-    BackHandler(enabled = true) {
-        if (trimMode && !trimSaving) {
-            trimMode = false
-            trimError = false
-        } else if (!trimSaving) {
-            onCollapse()
-        }
+    val backMotion = rememberPredictiveBackMotion(
+        enabled = true,
+        onBack = {
+            if (!trimSaving && trimMode) {
+                trimMode = false
+                trimError = false
+            } else if (!trimSaving) {
+                onCollapse()
+            }
+        },
+    )
+    val backProgress = if (!trimSaving && backMotion.gestureActive) {
+        backMotion.progress.value.coerceIn(0f, 1f)
+    } else {
+        0f
     }
+    val backDirection = predictiveBackHorizontalDirection(backMotion.swipeEdge)
+    val trimBackProgress = if (trimMode) backProgress else 0f
+    val collapseBackProgress = if (!trimMode) backProgress else 0f
 
     fun releasePlayer() {
         if (released) return
@@ -358,22 +373,41 @@ internal fun RecordingInlinePlayer(
 
     val progressFraction = if (duration <= 0) 0f else
         (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    val selectionStartFraction = if (trimMode && duration > 0) {
+    val rawTrimStartFraction = if (trimMode && duration > 0) {
         (trimStartMillis.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
     } else 0f
-    val selectionEndFraction = if (trimMode && duration > 0) {
-        (trimEndMillis.toFloat() / duration.toFloat()).coerceIn(selectionStartFraction, 1f)
+    val rawTrimEndFraction = if (trimMode && duration > 0) {
+        (trimEndMillis.toFloat() / duration.toFloat()).coerceIn(rawTrimStartFraction, 1f)
     } else progressFraction
+    val trimVisualAlpha = (1f - trimBackProgress).coerceIn(0f, 1f)
+    val selectionStartFraction = if (trimMode) {
+        rawTrimStartFraction * trimVisualAlpha
+    } else {
+        0f
+    }
+    val selectionEndFraction = if (trimMode) {
+        rawTrimEndFraction + (progressFraction - rawTrimEndFraction) * trimBackProgress
+    } else {
+        progressFraction
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .predictiveBackCollapse(collapseBackProgress)
+            .graphicsLayer {
+                translationX = backDirection * size.width * 0.08f * trimBackProgress
+            }
             .padding(start = 14.dp, end = 14.dp),
     ) {
         if (trimMode) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .graphicsLayer {
+                        alpha = trimVisualAlpha
+                        translationX = backDirection * size.width * 0.08f * trimBackProgress
+                    }
                     .padding(bottom = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -482,14 +516,14 @@ internal fun RecordingInlinePlayer(
                     val endX = size.width * selectionEndFraction
                     for (x in listOf(startX, endX)) {
                         drawLine(
-                            color = chrome.ink.copy(alpha = 0.82f),
+                            color = chrome.ink.copy(alpha = 0.82f * trimVisualAlpha),
                             start = Offset(x, size.height * 0.08f),
                             end = Offset(x, size.height * 0.92f),
                             strokeWidth = 1.5.dp.toPx(),
                             cap = StrokeCap.Round,
                         )
                         drawLine(
-                            color = chrome.ink,
+                            color = chrome.ink.copy(alpha = trimVisualAlpha),
                             start = Offset(x, size.height * 0.38f),
                             end = Offset(x, size.height * 0.62f),
                             strokeWidth = 7.dp.toPx(),
@@ -499,15 +533,21 @@ internal fun RecordingInlinePlayer(
                 }
                 val playheadX = size.width * progressFraction
                 drawLine(
-                    color = chrome.ink.copy(alpha = if (trimMode) 0.42f else 0.74f),
+                    color = chrome.ink.copy(
+                        alpha = if (trimMode) {
+                            0.42f + (0.74f - 0.42f) * trimBackProgress
+                        } else {
+                            0.74f
+                        },
+                    ),
                     start = Offset(playheadX, size.height * 0.12f),
                     end = Offset(playheadX, size.height * 0.88f),
                     strokeWidth = 1.35.dp.toPx(),
                     cap = StrokeCap.Round,
                 )
-                if (!trimMode) {
+                if (!trimMode || trimBackProgress > 0f) {
                     drawCircle(
-                        color = chrome.ink,
+                        color = chrome.ink.copy(alpha = if (trimMode) trimBackProgress else 1f),
                         radius = 3.dp.toPx(),
                         center = Offset(playheadX, size.height * 0.12f),
                     )
@@ -701,6 +741,24 @@ internal fun RecordingInlinePlayer(
             }
         }
     }
+}
+
+private fun Modifier.predictiveBackCollapse(progress: Float): Modifier {
+    val p = progress.coerceIn(0f, 1f)
+    return this
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            val visibleHeight = (placeable.height * (1f - p)).roundToInt().coerceAtLeast(0)
+            layout(placeable.width, visibleHeight) {
+                placeable.placeRelative(0, 0)
+            }
+        }
+        .clipToBounds()
+        .graphicsLayer {
+            alpha = 1f - p
+            scaleY = 1f - 0.04f * p
+            transformOrigin = TransformOrigin(0.5f, 0f)
+        }
 }
 
 @Composable

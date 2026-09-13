@@ -374,8 +374,106 @@ private fun OnboardingScreen(
     val validInitialOneShot = initialOneShotEnabled || !initialLoopingEnabled
     var oneShotEnabled by rememberSaveable { mutableStateOf(validInitialOneShot) }
     var loopingEnabled by rememberSaveable { mutableStateOf(initialLoopingEnabled) }
+    val backMotion = rememberPredictiveBackMotion(
+        enabled = page > 0,
+        onBack = { page-- },
+    )
+    val backProgress = if (backMotion.gestureActive) backMotion.progress.value.coerceIn(0f, 1f) else 0f
+    val backDirection = predictiveBackHorizontalDirection(backMotion.swipeEdge)
 
-    Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
+    Box(Modifier.fillMaxSize()) {
+        if (backMotion.gestureActive && page > 0) {
+            OnboardingPage(
+                page = page - 1,
+                microphoneAllowed = microphoneAllowed,
+                storageAllowed = storageAllowed,
+                storagePermissionRequired = storagePermissionRequired,
+                recoveryAllowed = recoveryAllowed,
+                recoveryPermissionRequired = recoveryPermissionRequired,
+                notificationAllowed = notificationAllowed,
+                notificationPermissionRequired = notificationPermissionRequired,
+                batteryOptimizationAllowed = batteryOptimizationAllowed,
+                oneShotEnabled = oneShotEnabled,
+                loopingEnabled = loopingEnabled,
+                onRequestMicrophone = {},
+                onRequestStorage = {},
+                onRequestRecovery = {},
+                onRequestNotifications = {},
+                onReviewBatteryOptimization = {},
+                onOneShotEnabledChange = {},
+                onLoopingEnabledChange = {},
+                onBackPage = {},
+                onContinue = {},
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = -backDirection * size.width * 0.08f * (1f - backProgress)
+                        val scale = 0.97f + 0.03f * backProgress
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = (backProgress * 1.45f).coerceIn(0f, 1f)
+                    },
+            )
+        }
+
+        OnboardingPage(
+            page = page,
+            microphoneAllowed = microphoneAllowed,
+            storageAllowed = storageAllowed,
+            storagePermissionRequired = storagePermissionRequired,
+            recoveryAllowed = recoveryAllowed,
+            recoveryPermissionRequired = recoveryPermissionRequired,
+            notificationAllowed = notificationAllowed,
+            notificationPermissionRequired = notificationPermissionRequired,
+            batteryOptimizationAllowed = batteryOptimizationAllowed,
+            oneShotEnabled = oneShotEnabled,
+            loopingEnabled = loopingEnabled,
+            onRequestMicrophone = onRequestMicrophone,
+            onRequestStorage = onRequestStorage,
+            onRequestRecovery = onRequestRecovery,
+            onRequestNotifications = onRequestNotifications,
+            onReviewBatteryOptimization = onReviewBatteryOptimization,
+            onOneShotEnabledChange = { oneShotEnabled = it },
+            onLoopingEnabledChange = { loopingEnabled = it },
+            onBackPage = { page-- },
+            onContinue = {
+                if (page < 2) page++ else onFinish(oneShotEnabled, loopingEnabled)
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationX = backDirection * size.width * backProgress
+                    alpha = 1f - 0.05f * backProgress
+                },
+        )
+    }
+}
+
+@Composable
+private fun OnboardingPage(
+    page: Int,
+    microphoneAllowed: Boolean,
+    storageAllowed: Boolean,
+    storagePermissionRequired: Boolean,
+    recoveryAllowed: Boolean,
+    recoveryPermissionRequired: Boolean,
+    notificationAllowed: Boolean,
+    notificationPermissionRequired: Boolean,
+    batteryOptimizationAllowed: Boolean,
+    oneShotEnabled: Boolean,
+    loopingEnabled: Boolean,
+    onRequestMicrophone: () -> Unit,
+    onRequestStorage: () -> Unit,
+    onRequestRecovery: () -> Unit,
+    onRequestNotifications: () -> Unit,
+    onReviewBatteryOptimization: () -> Unit,
+    onOneShotEnabledChange: (Boolean) -> Unit,
+    onLoopingEnabledChange: (Boolean) -> Unit,
+    onBackPage: () -> Unit,
+    onContinue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(modifier = modifier, color = Color.Transparent) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -477,7 +575,7 @@ private fun OnboardingScreen(
                             body = stringResource(R.string.onboarding_one_shot_body),
                             checked = oneShotEnabled,
                             enabled = !oneShotEnabled || loopingEnabled,
-                            onCheckedChange = { oneShotEnabled = it },
+                            onCheckedChange = onOneShotEnabledChange,
                         )
                         Spacer(Modifier.height(12.dp))
                         OnboardingBufferCard(
@@ -486,7 +584,7 @@ private fun OnboardingScreen(
                             body = stringResource(R.string.onboarding_looping_body),
                             checked = loopingEnabled,
                             enabled = !loopingEnabled || oneShotEnabled,
-                            onCheckedChange = { loopingEnabled = it },
+                            onCheckedChange = onLoopingEnabledChange,
                         )
                         Spacer(Modifier.height(18.dp))
                         Text(
@@ -517,14 +615,12 @@ private fun OnboardingScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (page > 0) {
-                    TextButton(onClick = { page-- }) {
+                    TextButton(onClick = onBackPage) {
                         Text(stringResource(R.string.onboarding_back))
                     }
                 }
                 Button(
-                    onClick = {
-                        if (page < 2) page++ else onFinish(oneShotEnabled, loopingEnabled)
-                    },
+                    onClick = onContinue,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(
@@ -697,21 +793,44 @@ private fun MainScreen(
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var librarySelectionActive by remember { mutableStateOf(false) }
+    var libraryExpandedRecordingActive by remember { mutableStateOf(false) }
     var panelDragTarget by remember { mutableStateOf<MainPanelDragTarget?>(null) }
     var settingsDragProgress by remember { mutableFloatStateOf(0f) }
     var libraryDragProgress by remember { mutableFloatStateOf(0f) }
     val settingsDragging = panelDragTarget == MainPanelDragTarget.SETTINGS
     val libraryDragging = panelDragTarget == MainPanelDragTarget.LIBRARY
-    val settingsPanelProgress by animateFloatAsState(
+    val settingsBackMotion = rememberPredictiveBackMotion(
+        enabled = showSettings && !showAboutDialog,
+        onBack = {
+            showSettings = false
+            settingsBufferTarget = null
+        },
+    )
+    val libraryBackMotion = rememberPredictiveBackMotion(
+        enabled = showLibrary && !showSettings && !librarySelectionActive &&
+            !libraryExpandedRecordingActive && !showAboutDialog,
+        onBack = { showLibrary = false },
+    )
+    val settingsSettledProgress by animateFloatAsState(
         targetValue = if (settingsDragging) settingsDragProgress else if (showSettings) 1f else 0f,
         animationSpec = if (settingsDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
         label = "settings-panel-progress",
     )
-    val libraryPanelProgress by animateFloatAsState(
+    val librarySettledProgress by animateFloatAsState(
         targetValue = if (libraryDragging) libraryDragProgress else if (showLibrary) 1f else 0f,
         animationSpec = if (libraryDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
         label = "library-panel-progress",
     )
+    val settingsPanelProgress = if (settingsBackMotion.gestureActive) {
+        predictiveBackOpenProgress(settingsBackMotion.progress.value)
+    } else {
+        settingsSettledProgress
+    }
+    val libraryPanelProgress = if (libraryBackMotion.gestureActive) {
+        predictiveBackOpenProgress(libraryBackMotion.progress.value)
+    } else {
+        librarySettledProgress
+    }
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
     val context = LocalContext.current.applicationContext
@@ -942,9 +1061,10 @@ private fun MainScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = libraryTopPadding),
-                    active = showLibrary,
+                    active = showLibrary && !showAboutDialog,
                     initialRecordings = librarySnapshot,
                     onSelectionActiveChange = { librarySelectionActive = it },
+                    onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
                     showNormalTopBar = false,
                     onVisibleRecordingsChanged = { visible ->
                         if (librarySnapshot != visible) {

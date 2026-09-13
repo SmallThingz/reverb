@@ -42,3 +42,5 @@
 - Range timeline snapping is gesture-latched: once magnetism acquires, hold the snapped value for at least 1.25 s; a stationary held pointer may then resolve to its raw in-zone position, and must not re-snap until it exits and re-enters the magnetic zone.
 - Android Back while range export is active dismisses range-export mode and releases/cancels its snapshot preparation; only Back from normal home may leave the app.
 - Retired raw-buffer chunks persist an identity-bound tombstone before leaving the live timeline; index loss must never resurrect explicitly cleared or retention-evicted audio, including chunks held by abandoned read leases.
+- Predictive Back mirrors each surface’s actual reverse navigation: Settings and Library track their vertical panels, range export reverses its blob/timeline morph, nested states reveal their parent, and root Home stays unhandled so Android owns app-to-launcher preview.
+- Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss handler must stay disabled while an expanded inline player owns Back.

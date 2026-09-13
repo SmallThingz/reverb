@@ -4,7 +4,6 @@ import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
-import androidx.activity.BackEventCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -73,8 +72,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -83,7 +80,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
@@ -818,7 +814,10 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(active) {
-        if (!active) releaseInputFocus()
+        if (!active) {
+            if (hasUnsavedChanges) restorePreviousSettings()
+            releaseInputFocus()
+        }
     }
     LaunchedEffect(Unit) { bindUiFromPreferences() }
     LaunchedEffect(focusRetentionBuffer, batteryOptimizationRestricted) {
@@ -827,48 +826,8 @@ fun SettingsScreen(
         }
     }
 
-    var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
-    var predictiveBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_NONE) }
-    var predictiveBackCloses by remember { mutableStateOf(false) }
-    PredictiveBackHandler(enabled = active) { progress ->
-        predictiveBackCloses = !hasUnsavedChanges
-        try {
-            progress.collect { event ->
-                predictiveBackProgress = event.progress.coerceIn(0f, 1f)
-                predictiveBackEdge = event.swipeEdge
-            }
-            if (predictiveBackCloses) {
-                releaseInputFocus()
-                onBack()
-            } else {
-                restorePreviousSettings()
-            }
-        } finally {
-            predictiveBackProgress = 0f
-            predictiveBackEdge = BackEventCompat.EDGE_NONE
-            predictiveBackCloses = false
-        }
-    }
-
     Scaffold(
-        modifier = modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                val progress = if (predictiveBackCloses) {
-                    predictiveBackProgress.coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-                val direction = if (predictiveBackEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
-                translationX = direction * size.width * 0.12f * progress
-                val scale = 1f - 0.035f * progress
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(
-                    pivotFractionX = if (direction < 0f) 1f else 0f,
-                    pivotFractionY = 0.5f,
-                )
-            },
+        modifier = modifier.fillMaxSize(),
         containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(

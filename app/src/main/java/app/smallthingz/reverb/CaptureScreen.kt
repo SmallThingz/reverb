@@ -13,7 +13,6 @@ import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
 import android.os.IBinder
 import android.os.Build
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -712,9 +711,10 @@ fun CaptureScreen(
             rangeSnapshotBuffer = null
             invalidateCustomRangePreparation()
         }
-        BackHandler(enabled = rangeSnapshotBuffer != null) {
-            dismissRangeExport()
-        }
+        val rangeBackMotion = rememberPredictiveBackMotion(
+            enabled = rangeSnapshotBuffer != null && visualizerVisible,
+            onBack = dismissRangeExport,
+        )
         val submitRangeExport: (Float, Float) -> Unit = submitRange@ { startSeconds, endSeconds ->
             val snapshot = rangeSnapshot ?: return@submitRange
             val range = buildCustomExportRange(
@@ -760,6 +760,7 @@ fun CaptureScreen(
             rangeSnapshot = rangeSnapshot,
             rangeSnapshotBuffer = rangeSnapshotBuffer,
             rangeMaxExportDurationSeconds = rangeMaxDurationSeconds,
+            rangeBackProgress = if (rangeBackMotion.gestureActive) rangeBackMotion.progress.value else 0f,
             onCancelRangeExport = dismissRangeExport,
             onSubmitRangeExport = submitRangeExport,
             onListenToggle = onListenToggle,
@@ -921,6 +922,7 @@ private fun MainCaptureContent(
     rangeSnapshot: ReverbService.TimelineSnapshot?,
     rangeSnapshotBuffer: ReverbService.BufferSlot?,
     rangeMaxExportDurationSeconds: Float,
+    rangeBackProgress: Float,
     onCancelRangeExport: () -> Unit,
     onSubmitRangeExport: (Float, Float) -> Unit,
     onListenToggle: (ReverbService.BufferSlot) -> Unit,
@@ -963,6 +965,7 @@ private fun MainCaptureContent(
             oneShotFull = oneShotFull,
             loopingEnabled = loopingEnabled,
             maxExportDurationSeconds = rangeMaxExportDurationSeconds,
+            backProgress = rangeBackProgress,
             visualizerVisible = visualizerVisible,
             onCancel = onCancelRangeExport,
             onExport = onSubmitRangeExport,

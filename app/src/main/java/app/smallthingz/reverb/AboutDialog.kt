@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
@@ -92,6 +93,15 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
             decorFitsSystemWindows = false,
         ),
     ) {
+        val backMotion = rememberPredictiveBackMotion(
+            enabled = !dismissing,
+            onBack = onDismiss,
+        )
+        val backProgress = if (backMotion.gestureActive) {
+            backMotion.progress.value.coerceIn(0f, 1f)
+        } else {
+            0f
+        }
         val dialogView = LocalView.current
         SideEffect {
             (dialogView.parent as? DialogWindowProvider)?.window?.setGravity(Gravity.TOP)
@@ -103,7 +113,12 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
             exit = slideOutVertically(animationSpec = tween(190), targetOffsetY = { -it }) + fadeOut(tween(140)),
         ) {
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        translationY = -size.height * backProgress
+                        alpha = 1f - 0.22f * backProgress
+                    },
                 shape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 tonalElevation = 6.dp,

@@ -759,6 +759,7 @@ internal fun RangeExportHomeContent(
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
     maxExportDurationSeconds: Float,
+    backProgress: Float = 0f,
     visualizerVisible: Boolean,
     onCancel: () -> Unit,
     onExport: (startSeconds: Float, endSeconds: Float) -> Unit,
@@ -775,7 +776,16 @@ internal fun RangeExportHomeContent(
         label = "blobToRangeTimeline",
     )
 
+    val visualTransitionProgress = transitionProgress * predictiveBackOpenProgress(backProgress)
+    val rangeChromeFade = ((visualTransitionProgress - 0.46f) / 0.42f).coerceIn(0f, 1f)
+
     LaunchedEffect(selectedBuffer) { transitionStarted = true }
+    LaunchedEffect(backProgress > 0f) {
+        if (backProgress > 0f) {
+            state.invalidateTextEditing()
+            state.pausePreview()
+        }
+    }
     DisposableEffect(state) {
         onDispose { state.close() }
     }
@@ -838,12 +848,12 @@ internal fun RangeExportHomeContent(
             val targetBlobScaleX = ((maxWidth - 24.dp).coerceAtLeast(1.dp) / blobVisualDiameter)
                 .coerceIn(1.18f, 1.72f)
             val targetBlobScaleY = (146.dp / blobVisualDiameter).coerceIn(0.50f, 0.78f)
-            val blobFade = (1f - ((transitionProgress - 0.34f) / 0.54f).coerceIn(0f, 1f))
-            val timelineFade = ((transitionProgress - 0.12f) / 0.62f).coerceIn(0f, 1f)
-            val chromeFade = ((transitionProgress - 0.46f) / 0.42f).coerceIn(0f, 1f)
-            val timelineScaleX = 0.30f + 0.70f * transitionProgress
-            val timelineScaleY = 1.62f - 0.62f * transitionProgress
-            if (transitionProgress < 0.995f) {
+            val blobFade = (1f - ((visualTransitionProgress - 0.34f) / 0.54f).coerceIn(0f, 1f))
+            val timelineFade = ((visualTransitionProgress - 0.12f) / 0.62f).coerceIn(0f, 1f)
+            val chromeFade = rangeChromeFade
+            val timelineScaleX = 0.30f + 0.70f * visualTransitionProgress
+            val timelineScaleY = 1.62f - 0.62f * visualTransitionProgress
+            if (visualTransitionProgress < 0.995f) {
                 BufferBlobPage(
                     bufferSlot = selectedBuffer,
                     activeBuffer = activeBuffer,
@@ -859,14 +869,14 @@ internal fun RangeExportHomeContent(
                     onOpenBufferSettings = {},
                     visualizerVisible = visualizerVisible,
                     interactionEnabled = false,
-                    contentAlpha = (1f - transitionProgress * 2.7f).coerceIn(0f, 1f),
+                    contentAlpha = (1f - visualTransitionProgress * 2.7f).coerceIn(0f, 1f),
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
                             alpha = blobFade
-                            scaleX = 1f + (targetBlobScaleX - 1f) * transitionProgress
-                            scaleY = 1f + (targetBlobScaleY - 1f) * transitionProgress
-                            translationY = -with(density) { 58.dp.toPx() } * transitionProgress
+                            scaleX = 1f + (targetBlobScaleX - 1f) * visualTransitionProgress
+                            scaleY = 1f + (targetBlobScaleY - 1f) * visualTransitionProgress
+                            translationY = -with(density) { 58.dp.toPx() } * visualTransitionProgress
                         },
                 )
             }
@@ -899,7 +909,7 @@ internal fun RangeExportHomeContent(
                 }
                 RangeExportTimeline(
                     state = state,
-                    morphProgress = transitionProgress,
+                    morphProgress = visualTransitionProgress,
                     chromeAlpha = chromeFade,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -913,7 +923,7 @@ internal fun RangeExportHomeContent(
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
                 SpringFineAdjust(
                     state = state,
-                    enabled = transitionProgress >= 0.98f,
+                    enabled = visualTransitionProgress >= 0.98f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(if (compact) 120.dp else 132.dp)
@@ -934,6 +944,7 @@ internal fun RangeExportHomeContent(
         }
 
         RangeExportControls(
+            modifier = Modifier.alpha(rangeChromeFade),
             state = state,
             selectedBuffer = selectedBuffer,
             activeBuffer = activeBuffer,
@@ -1642,6 +1653,7 @@ private fun SpringFineAdjust(
 
 @Composable
 private fun RangeExportControls(
+    modifier: Modifier = Modifier,
     state: RangeExportEditorState,
     selectedBuffer: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
@@ -1668,7 +1680,10 @@ private fun RangeExportControls(
             }
         }
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Surface(
             shape = RoundedCornerShape(22.dp),
             color = chrome.field,
