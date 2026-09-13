@@ -104,6 +104,12 @@ class ReverbService : Service() {
     private val exportStateLock = Any()
 
     @Volatile
+    private var foregroundServiceTypes = 0
+
+    @Volatile
+    private var foregroundServiceTimedOut = false
+
+    @Volatile
     private var cachedRetentionSampleBytes = 0L
 
     @Volatile
@@ -194,7 +200,7 @@ class ReverbService : Service() {
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopForegroundTracked()
 
         if (::exportWorkExecutor.isInitialized) {
             exportWorkExecutor.shutdown()
@@ -220,8 +226,15 @@ class ReverbService : Service() {
 
     override fun onBind(intent: Intent): IBinder {
         val retryGeneration = synchronized(listeningIntentLock) {
-            if (shouldRetryBlockedListeningOnForegroundBind(isListeningEnabled(), foregroundStartBlocked)) {
+            if (
+                shouldRetrySuspendedListeningOnForegroundBind(
+                    listeningIntentEnabled = isListeningEnabled(),
+                    foregroundStartBlocked = foregroundStartBlocked,
+                    foregroundServiceTimedOut = foregroundServiceTimedOut,
+                )
+            ) {
                 foregroundStartBlocked = false
+                foregroundServiceTimedOut = false
                 listeningCommandGeneration.get()
             } else {
                 null
@@ -378,7 +391,10 @@ class ReverbService : Service() {
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val slotChanged = enabled && requestedSlot != activeBufferSlot
             if (previousEnabled == enabled && !slotChanged) {
-                if (enabled) foregroundStartBlocked = false
+                if (enabled) {
+                    foregroundStartBlocked = false
+                    foregroundServiceTimedOut = false
+                }
                 listeningCommandGeneration.get()
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
@@ -394,6 +410,7 @@ class ReverbService : Service() {
                     if (enabled) {
                         activeBufferSlot = requestedSlot
                         foregroundStartBlocked = false
+                        foregroundServiceTimedOut = false
                     }
                     listeningCommandGeneration.incrementAndGet()
                 }
@@ -699,8 +716,7 @@ class ReverbService : Service() {
         updateWakeLockState()
         setQuickTileRecordingActive(active = false)
         reportError(userFacingError(getString(R.string.audio_input_init_failed), error))
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        requestServiceStopWhenExportIdle()
     }
 
     private fun startAudioInputOnAudioThread(generation: Long = listeningCommandGeneration.get()) {
@@ -786,8 +802,7 @@ class ReverbService : Service() {
                 releaseAudioRecord()
                 mainHandler.post {
                     if (isListeningEnabled() || state == STATE_LISTENING) return@post
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    requestServiceStopWhenExportIdle()
                 }
             }
         }
@@ -855,6 +870,7 @@ class ReverbService : Service() {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
             return
         }
+        if (!ensureExportForegroundLifetime(exportToken, receiver)) return
 
         if (!audioHandler.post {
             try {
@@ -896,6 +912,7 @@ class ReverbService : Service() {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
             return
         }
+        if (!ensureExportForegroundLifetime(exportToken, receiver)) return
 
         if (!audioHandler.post {
             try {
@@ -962,6 +979,10 @@ class ReverbService : Service() {
             notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
             return
         }
+        if (!ensureExportForegroundLifetime(exportToken, receiver)) {
+            snapshot.close()
+            return
+        }
 
         val lease = try {
             val totalDuration = snapshot.durationSeconds
@@ -1002,24 +1023,112 @@ class ReverbService : Service() {
         return store.acquireRange(start, end)
     }
 
-    fun cancelCurrentExport(): Boolean {
+    private fun ensureExportForegroundLifetime(
+        token: ExportCancellationToken,
+        receiver: AudioFileReceiver,
+    ): Boolean {
+        if (!isExportPending(token)) return false
+        foregroundServiceTimedOut = false
+        return try {
+            if (foregroundServiceTypes == 0) {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE),
+                )
+                promoteForeground(
+                    foregroundServiceTypesForWork(listening = false, exporting = true),
+                    exporting = true,
+                )
+            }
+            true
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Unable to protect export with a foreground service", error)
+            clearExportState(token)
+            val message = userFacingError(getString(R.string.save_failed), error)
+            reportError(message)
+            finishExportFailure(token, receiver, message, error)
+            false
+        }
+    }
+
+    private fun hasActiveExport(): Boolean = synchronized(exportStateLock) {
+        activeExportToken != null
+    }
+
+    private fun requestServiceStopWhenExportIdle() {
+        if (hasActiveExport()) {
+            ensureExportOnlyForegroundIfNeeded()
+            return
+        }
+        stopForegroundTracked()
+        stopSelf()
+    }
+
+    private fun ensureExportOnlyForegroundIfNeeded() {
+        if (!hasActiveExport()) return
+        if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) return
+        try {
+            promoteForeground(
+                foregroundServiceTypesForWork(listening = false, exporting = true),
+                exporting = true,
+            )
+        } catch (error: RuntimeException) {
+            // Keep the existing foreground state if Android refuses a type transition.
+            // The export remains protected rather than being destroyed with the service.
+            Log.e(TAG, "Unable to switch foreground service to export mode", error)
+            reportError(userFacingError(getString(R.string.save_failed), error))
+        }
+    }
+
+    private fun refreshForegroundAfterExport() {
+        mainHandler.post {
+            if (hasActiveExport()) return@post
+            if (foregroundServiceTimedOut) {
+                stopForegroundTracked()
+                return@post
+            }
+            if (state == STATE_LISTENING && isListeningEnabled() && !foregroundStartBlocked) {
+                try {
+                    promoteForeground(
+                        foregroundServiceTypesForWork(listening = true, exporting = false),
+                        exporting = false,
+                    )
+                } catch (error: RuntimeException) {
+                    Log.e(TAG, "Unable to restore microphone foreground state after export", error)
+                }
+                return@post
+            }
+            stopForegroundTracked()
+            // The export keepalive itself started this service. If capture cannot be
+            // restored to an active microphone foreground service, always release that
+            // started lifetime; a live UI binding may still keep the service instance.
+            stopSelf()
+        }
+    }
+
+    fun cancelCurrentExport(): Boolean = requestExportCancellation(preserveVerifiedOutput = false)
+
+    private fun requestExportCancellation(preserveVerifiedOutput: Boolean): Boolean {
         var receiverToNotify: AudioFileReceiver? = null
         var tokenToNotify: ExportCancellationToken? = null
+        var clearedImmediately = false
         val cancelled = synchronized(exportStateLock) {
             val token = activeExportToken ?: return@synchronized false
             if (token.committed.get()) return@synchronized false
 
+            if (preserveVerifiedOutput) token.preserveVerifiedOutput.set(true)
             token.cancelled.set(true)
             val future = activeExportFuture
             if (!token.started.get() && (future == null || future.cancel(true))) {
                 receiverToNotify = activeExportReceiver
                 tokenToNotify = token
-                clearExportStateLocked(token)
+                clearedImmediately = clearExportStateLocked(token)
             } else {
                 future?.cancel(true)
             }
             true
         }
+        if (clearedImmediately) refreshForegroundAfterExport()
         if (cancelled && receiverToNotify != null) {
             finishExportCancelled(tokenToNotify ?: return cancelled, receiverToNotify)
         }
@@ -1150,14 +1259,24 @@ class ReverbService : Service() {
                         finishExportSuccess(exportToken, receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        if (shouldDeleteExportTarget(cancelled = true, verifiedComplete, committed)) {
+                        if (shouldDeleteExportTarget(
+                                cancelled = true,
+                                verifiedComplete = verifiedComplete,
+                                committed = committed,
+                                preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
+                            )) {
                             deleteOutputTarget(outTarget)
                         }
                         finishExportCancelled(exportToken, receiver)
                     } catch (e: Exception) {
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                            if (shouldDeleteExportTarget(cancelled = true, verifiedComplete, committed)) {
+                            if (shouldDeleteExportTarget(
+                                cancelled = true,
+                                verifiedComplete = verifiedComplete,
+                                committed = committed,
+                                preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
+                            )) {
                                 deleteOutputTarget(outTarget)
                             }
                             finishExportCancelled(exportToken, receiver)
@@ -1171,12 +1290,22 @@ class ReverbService : Service() {
                         )
                         reportError(message)
                         finishExportFailure(exportToken, receiver, message, e)
-                        if (shouldDeleteExportTarget(cancelled = false, verifiedComplete, committed)) {
+                        if (shouldDeleteExportTarget(
+                            cancelled = false,
+                            verifiedComplete = verifiedComplete,
+                            committed = committed,
+                            preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
+                        )) {
                             deleteOutputTarget(outTarget)
                         }
                     } finally {
                         closeLeaseOnce()
-                        if (shouldDeleteExportTarget(exportToken.cancelled.get(), verifiedComplete, committed)) {
+                        if (shouldDeleteExportTarget(
+                            cancelled = exportToken.cancelled.get(),
+                            verifiedComplete = verifiedComplete,
+                            committed = committed,
+                            preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
+                        )) {
                             deleteOutputTarget(outTarget)
                         }
                         clearExportState(exportToken)
@@ -1240,16 +1369,18 @@ class ReverbService : Service() {
         }
 
     private fun clearExportState(token: ExportCancellationToken) {
-        synchronized(exportStateLock) {
+        val cleared = synchronized(exportStateLock) {
             clearExportStateLocked(token)
         }
+        if (cleared) refreshForegroundAfterExport()
     }
 
-    private fun clearExportStateLocked(token: ExportCancellationToken) {
-        if (activeExportToken !== token) return
+    private fun clearExportStateLocked(token: ExportCancellationToken): Boolean {
+        if (activeExportToken !== token) return false
         activeExportToken = null
         activeExportFuture = null
         activeExportReceiver = null
+        return true
     }
 
     fun applyUpdatedPreferences() {
@@ -1494,8 +1625,7 @@ class ReverbService : Service() {
         setQuickTileRecordingActive(active = false)
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            requestServiceStopWhenExportIdle()
         }
     }
 
@@ -1662,8 +1792,7 @@ class ReverbService : Service() {
         )
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            requestServiceStopWhenExportIdle()
         }
     }
 
@@ -1819,6 +1948,10 @@ class ReverbService : Service() {
         if (intent?.action == ACTION_APPLY_SETTINGS) {
             applyUpdatedPreferences()
         }
+        if (intent?.action == ACTION_EXPORT_KEEPALIVE) {
+            if (!hasActiveExport()) requestServiceStopWhenExportIdle()
+            return START_NOT_STICKY
+        }
         if (isDebuggableBuild() && intent?.action == ACTION_DEBUG_ENABLE_LISTENING && !isListeningEnabled()) {
             setListeningEnabled(true)
         }
@@ -1829,8 +1962,7 @@ class ReverbService : Service() {
         val listeningEnabled = isListeningEnabled()
         val generation = listeningCommandGeneration.get()
         if (listeningEnabled && foregroundStartBlocked) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
         if (state != STATE_LISTENING && listeningEnabled) {
@@ -1839,15 +1971,11 @@ class ReverbService : Service() {
         }
         if (listeningEnabled && state == STATE_LISTENING) {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    startForeground(
-                        FOREGROUND_NOTIFICATION_ID,
-                        buildNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-                    )
-                } else {
-                    startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification())
-                }
+                val exporting = hasActiveExport()
+                promoteForeground(
+                    foregroundServiceTypesForWork(listening = true, exporting = exporting),
+                    exporting = exporting,
+                )
             } catch (error: RuntimeException) {
                 Log.e(TAG, "Unable to enter microphone foreground state", error)
                 pauseListeningAfterForegroundStartFailure(generation, error)
@@ -1855,8 +1983,7 @@ class ReverbService : Service() {
             }
             audioHandler.post { startAudioInputOnAudioThread(generation) }
         } else {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
         handleDebugCommand(intent)
@@ -1867,17 +1994,59 @@ class ReverbService : Service() {
         audioHandler.post { checkpointAudioStores("task-removed checkpoint") }
     }
 
-    private fun buildNotification(): Notification {
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        foregroundServiceTimedOut = true
+        if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
+            Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
+            requestExportCancellation(preserveVerifiedOutput = true)
+        }
+        // A type transition can race the timeout callback. If microphone capture became
+        // active meanwhile, pause only the runtime capture and preserve the durable user
+        // intent; a foreground UI bind can restart it under the microphone-only FGS type.
+        synchronized(listeningIntentLock) {
+            if (state == STATE_LISTENING && isListeningEnabled()) {
+                listeningCommandGeneration.incrementAndGet()
+                state = STATE_PAUSED
+            }
+        }
+        audioHandler.post {
+            audioHandler.removeCallbacks(audioReader)
+            runCatching { sealActiveChunks() }
+            releaseAudioRecord()
+            updateWakeLockState()
+        }
+        setQuickTileRecordingActive(active = false)
+        stopForegroundTracked()
+        stopSelf()
+    }
+
+    private fun buildNotification(exporting: Boolean = false): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, BACKGROUND_NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(if (exporting) R.string.saving else R.string.quick_tile_recording))
             .setSmallIcon(R.drawable.ic_notification_recording)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
+    }
+
+    private fun promoteForeground(types: Int, exporting: Boolean) {
+        require(types != 0) { "Foreground service requires at least one active type" }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting), types)
+        } else {
+            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting))
+        }
+        foregroundServiceTypes = types
+    }
+
+    private fun stopForegroundTracked() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundServiceTypes = 0
     }
 
     fun consumePendingError(): String? = pendingError.getAndSet(null)
@@ -2291,6 +2460,7 @@ class ReverbService : Service() {
         // lease cleanup; after that point the callable owns it.
         val started: AtomicBoolean = AtomicBoolean(false),
         val committed: AtomicBoolean = AtomicBoolean(false),
+        val preserveVerifiedOutput: AtomicBoolean = AtomicBoolean(false),
         val terminalDelivered: AtomicBoolean = AtomicBoolean(false),
     )
 
@@ -2308,6 +2478,7 @@ class ReverbService : Service() {
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
         val nextExportTokenId = AtomicLong(1L)
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
+        const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
         const val ACTION_DEBUG_ENABLE_LISTENING = "${DEBUG_ACTION_PREFIX}ENABLE_LISTENING"
         const val ACTION_DEBUG_DISABLE_LISTENING = "${DEBUG_ACTION_PREFIX}DISABLE_LISTENING"
         const val ACTION_DEBUG_CLEAR_BUFFER = "${DEBUG_ACTION_PREFIX}CLEAR_BUFFER"
@@ -2331,15 +2502,28 @@ class ReverbService : Service() {
 
 }
 
+internal fun foregroundServiceTypesForWork(
+    listening: Boolean,
+    exporting: Boolean,
+): Int = when {
+    // Never combine the limited dataSync type with long-lived microphone capture.
+    // The microphone FGS already owns the service lifetime while recording; if capture
+    // stops during an export we switch to dataSync at that boundary.
+    listening -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    exporting -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    else -> 0
+}
+
 internal fun shouldAttemptAutomaticListeningStart(
     listeningIntentEnabled: Boolean,
     foregroundStartBlocked: Boolean,
 ): Boolean = listeningIntentEnabled && !foregroundStartBlocked
 
-internal fun shouldRetryBlockedListeningOnForegroundBind(
+internal fun shouldRetrySuspendedListeningOnForegroundBind(
     listeningIntentEnabled: Boolean,
     foregroundStartBlocked: Boolean,
-): Boolean = listeningIntentEnabled && foregroundStartBlocked
+    foregroundServiceTimedOut: Boolean,
+): Boolean = listeningIntentEnabled && (foregroundStartBlocked || foregroundServiceTimedOut)
 
 internal enum class CaptureReaderTransition {
     IGNORE,
@@ -2362,7 +2546,8 @@ internal fun shouldDeleteExportTarget(
     cancelled: Boolean,
     verifiedComplete: Boolean,
     committed: Boolean,
-): Boolean = !committed && (cancelled || !verifiedComplete)
+    preserveVerifiedOutput: Boolean = false,
+): Boolean = !committed && (!verifiedComplete || (cancelled && !preserveVerifiedOutput))
 
 internal fun isLogicalListeningState(
     recorderState: Int,

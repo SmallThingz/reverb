@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.content.pm.ServiceInfo
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
@@ -382,14 +383,36 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun foregroundServiceTypes_coverRecorderAndExportLifetimeIndependently() {
+        assertEquals(0, foregroundServiceTypesForWork(listening = false, exporting = false))
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            foregroundServiceTypesForWork(listening = true, exporting = false),
+        )
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            foregroundServiceTypesForWork(listening = false, exporting = true),
+        )
+        assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            foregroundServiceTypesForWork(listening = true, exporting = true),
+        )
+    }
+
+    @Test
     fun foregroundRestriction_blocksAutomaticRetry_withoutErasingDurableIntent() {
         assertTrue(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = false))
         assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = true, foregroundStartBlocked = true))
         assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = false))
         assertFalse(shouldAttemptAutomaticListeningStart(listeningIntentEnabled = false, foregroundStartBlocked = true))
-        assertTrue(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = true, foregroundStartBlocked = true))
-        assertFalse(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = true, foregroundStartBlocked = false))
-        assertFalse(shouldRetryBlockedListeningOnForegroundBind(listeningIntentEnabled = false, foregroundStartBlocked = true))
+    }
+
+    @Test
+    fun foregroundBind_retriesSuspendedDurableIntent() {
+        assertTrue(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = true, foregroundServiceTimedOut = false))
+        assertTrue(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = false, foregroundServiceTimedOut = true))
+        assertFalse(shouldRetrySuspendedListeningOnForegroundBind(true, foregroundStartBlocked = false, foregroundServiceTimedOut = false))
+        assertFalse(shouldRetrySuspendedListeningOnForegroundBind(false, foregroundStartBlocked = true, foregroundServiceTimedOut = true))
     }
 
     @Test

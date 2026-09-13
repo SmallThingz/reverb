@@ -113,6 +113,22 @@ class DurabilityInvariantTest {
         assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = false))
         assertTrue(shouldDeleteExportTarget(cancelled = true, verifiedComplete = false, committed = false))
         assertTrue(shouldDeleteExportTarget(cancelled = true, verifiedComplete = true, committed = false))
+        assertFalse(
+            shouldDeleteExportTarget(
+                cancelled = true,
+                verifiedComplete = true,
+                committed = false,
+                preserveVerifiedOutput = true,
+            ),
+        )
+        assertTrue(
+            shouldDeleteExportTarget(
+                cancelled = true,
+                verifiedComplete = false,
+                committed = false,
+                preserveVerifiedOutput = true,
+            ),
+        )
         assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = true))
         assertFalse(shouldDeleteExportTarget(cancelled = true, verifiedComplete = true, committed = true))
     }

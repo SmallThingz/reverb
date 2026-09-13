@@ -19,5 +19,6 @@
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation.
+- An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.
 - Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable recording intent; retry on a foreground bind or explicit start.
 - Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted.
