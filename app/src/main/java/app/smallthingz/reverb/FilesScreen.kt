@@ -73,6 +73,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+
+internal fun isLibraryDismissEdge(x: Float, width: Float): Boolean {
+    if (!x.isFinite() || !width.isFinite() || width <= 0f) return false
+    val edgeWidth = width * 0.13f
+    return x <= edgeWidth || x >= width - edgeWidth
+}
+
 private sealed class ListItem {
     data class Header(val dateLabel: String) : ListItem()
     data class Recording(val recording: RecordingEntity) : ListItem()
@@ -446,10 +453,9 @@ fun FilesScreen(
                             requireUnconsumed = false,
                             pass = PointerEventPass.Initial,
                         )
-                        val edgeWidth = size.width * 0.13f
-                        val startedInEdge = down.position.x <= edgeWidth ||
-                            down.position.x >= size.width - edgeWidth
-                        if (!startedInEdge) return@awaitEachGesture
+                        if (!isLibraryDismissEdge(down.position.x, size.width.toFloat())) {
+                            return@awaitEachGesture
+                        }
 
                         var downwardDrag = 0f
                         var accepted = false

@@ -9,6 +9,17 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun libraryDismissEdge_isExactlyThirteenPercentOnEachSide() {
+        assertTrue(isLibraryDismissEdge(0f, 100f))
+        assertTrue(isLibraryDismissEdge(13f, 100f))
+        assertFalse(isLibraryDismissEdge(13.01f, 100f))
+        assertFalse(isLibraryDismissEdge(86.99f, 100f))
+        assertTrue(isLibraryDismissEdge(87f, 100f))
+        assertTrue(isLibraryDismissEdge(100f, 100f))
+        assertFalse(isLibraryDismissEdge(0f, 0f))
+    }
+
+    @Test
     fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
         val steps = recordingDatabaseMigrationSteps(1, 2)
         assertEquals(
