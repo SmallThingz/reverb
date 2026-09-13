@@ -324,4 +324,18 @@ class DurabilityInvariantTest {
         assertTrue(canRecoverPendingMedia(45L, 1L))
     }
 
+    @Test
+    fun liveSafPublish_isHiddenUntilVerifiedCopyCompletes() {
+        val active = setOf("content://provider/final")
+        assertFalse(shouldExposeDocumentOutput("content://provider/final", active))
+        assertTrue(shouldExposeDocumentOutput("content://provider/other", active))
+    }
+
+    @Test
+    fun pendingDeletion_isNeverEligibleForMoveOrRecoveryTarget() {
+        val pending = setOf("delete-me")
+        assertFalse(isRecordingEligibleForMove("delete-me", pending))
+        assertTrue(isRecordingEligibleForMove("keep-me", pending))
+    }
+
 }
