@@ -171,6 +171,40 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun renameRollback_requiresExactOriginalPhysicalIdentity() {
+        assertTrue(renameRollbackRestoredOriginal("old-id", "old-id"))
+        assertFalse(renameRollbackRestoredOriginal("old-id", "new-id"))
+        assertFalse(renameRollbackRestoredOriginal("old-id", null))
+    }
+
+    @Test
+    fun moveSourceCleanup_neverDeletesChangedOrUnavailableSource() {
+        assertEquals(
+            MoveSourceCleanupAction.DELETE_SOURCE,
+            moveSourceCleanupAction(RecordingAssetState.PRESENT, sameContentAsVerifiedTarget = true),
+        )
+        assertEquals(
+            MoveSourceCleanupAction.KEEP_SOURCE,
+            moveSourceCleanupAction(RecordingAssetState.PRESENT, sameContentAsVerifiedTarget = false),
+        )
+        assertEquals(
+            MoveSourceCleanupAction.KEEP_SOURCE,
+            moveSourceCleanupAction(RecordingAssetState.UNAVAILABLE, sameContentAsVerifiedTarget = true),
+        )
+        assertEquals(
+            MoveSourceCleanupAction.COMPLETE,
+            moveSourceCleanupAction(RecordingAssetState.MISSING, sameContentAsVerifiedTarget = false),
+        )
+    }
+
+    @Test
+    fun moveResult_reportsCopyAndSourceCleanupFailures() {
+        assertFalse(RecordingRepository.MoveResult(moved = 1).hasFailures)
+        assertTrue(RecordingRepository.MoveResult(failed = 1).hasFailures)
+        assertTrue(RecordingRepository.MoveResult(moved = 1, cleanupFailed = 1).hasFailures)
+    }
+
+    @Test
     fun pendingDeletionIntent_roundTripsAndTracksPhysicalDeletionPhase() {
         val planned = PendingDeletionIntent(
             id = "content://provider/tree/a|b/%20",

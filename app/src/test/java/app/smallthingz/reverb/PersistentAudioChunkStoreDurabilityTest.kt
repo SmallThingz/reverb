@@ -48,6 +48,44 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun loopingEviction_syncsPartialReplacementBeforeRetiringOldAudio() = withStoreRoot { root ->
+        val capacity = 8_192L
+        val initial = pcmBytes(capacity.toInt())
+        val replacement = pcmBytes(256)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, capacity)
+            assertEquals(initial.size, store.append(initial, 0, initial.size))
+            assertEquals(replacement.size, store.append(replacement, 0, replacement.size))
+
+            val durableField = PersistentAudioChunkStore::class.java.getDeclaredField("activeDurablePayloadBytes")
+            durableField.isAccessible = true
+            assertEquals(replacement.size.toLong(), durableField.getLong(store))
+            assertTrue(store.countFilledBytes() <= capacity)
+            assertTrue((initial + replacement).endsWithBytes(readAll(store)))
+        }
+    }
+
+    @Test
+    fun periodicPayloadSync_isIdempotentAndMakesNewActiveBytesDurable() = withStoreRoot { root ->
+        val first = pcmBytes(16_000)
+        val second = pcmBytes(8_000)
+        val crashed = PersistentAudioChunkStore(root)
+        configure(crashed, 512 * 1024L)
+        assertEquals(first.size, crashed.append(first, 0, first.size))
+        assertEquals(first.size.toLong(), crashed.syncActivePayloadToDisk())
+        assertEquals(0L, crashed.syncActivePayloadToDisk())
+
+        assertEquals(second.size, crashed.append(second, 0, second.size))
+        assertEquals((first.size + second.size).toLong(), crashed.syncActivePayloadToDisk())
+        simulateAbruptProcessDeathWithoutSync(crashed)
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 512 * 1024L)
+            assertArrayEquals(first + second, readAll(reopened))
+        }
+    }
+
+    @Test
     fun processDeath_recoversActiveChunkFromDurablePayloadEvenWithStaleHeader() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val crashed = PersistentAudioChunkStore(root)
@@ -427,6 +465,14 @@ class PersistentAudioChunkStoreDurabilityTest {
             if (this[start + index] != suffix[index]) return false
         }
         return true
+    }
+
+    private fun simulateAbruptProcessDeathWithoutSync(store: PersistentAudioChunkStore) {
+        val field = PersistentAudioChunkStore::class.java.getDeclaredField("activeAccess")
+        field.isAccessible = true
+        val access = requireNotNull(field.get(store) as? RandomAccessFile)
+        access.close()
+        field.set(store, null)
     }
 
     private fun simulateProcessDeath(store: PersistentAudioChunkStore) {

@@ -7,9 +7,11 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.ArrayDeque
 import java.util.zip.CRC32
 import kotlin.math.ceil
@@ -143,6 +145,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private var activeRecord: ChunkRecord? = null
     private var activeAccess: RandomAccessFile? = null
     private var activePayloadCrc = CRC32()
+    private var activeDurablePayloadBytes = 0L
     private var lastWriteAtMillis = 0L
 
     data class Snapshot(
@@ -276,14 +279,15 @@ internal class PersistentAudioChunkStore internal constructor(
             remaining -= alignedWriteCount
             lastWriteAtMillis = System.currentTimeMillis()
 
-            // Keep the logical timeline inside its configured retention window as data
-            // arrives. This is still O(1) in the common case and only performs a delete
-            // when an old chunk actually expires.
-            if (overwriteOldest) cleanupRetentionLocked()
-
+            // Finalize a full replacement before evicting anything it displaced. For a
+            // partial active chunk, force its payload durable before retiring an older
+            // chunk so sudden power loss cannot lose both the old and replacement audio.
             if (record.payloadBytes >= limit) {
                 finalizeActiveLocked()
-                if (overwriteOldest) cleanupRetentionLocked()
+            }
+            if (overwriteOldest) {
+                if (retentionCleanupWillRetireChunkLocked()) syncActivePayloadLocked()
+                cleanupRetentionLocked()
             }
         }
         return count - remaining
@@ -406,6 +410,39 @@ internal class PersistentAudioChunkStore internal constructor(
         )
     }
 
+    fun syncActivePayloadToDisk(): Long {
+        val snapshot = synchronized(this) {
+            if (closed) return 0L
+            ensureLoadedLocked()
+            val record = activeRecord ?: return 0L
+            if (record.payloadBytes <= activeDurablePayloadBytes) return 0L
+            ActivePayloadSyncSnapshot(record.id, record.file, record.payloadBytes)
+        }
+
+        try {
+            // WRITE without CREATE cannot resurrect a chunk that was finalized and
+            // retired after the snapshot, while force(true) flushes its file data/metadata.
+            FileChannel.open(snapshot.file.toPath(), StandardOpenOption.WRITE).use { channel ->
+                channel.force(true)
+            }
+        } catch (_: NoSuchFileException) {
+            // Finalization force-syncs before retirement, so disappearance here means
+            // another synchronized store operation already made this snapshot obsolete.
+            return 0L
+        }
+
+        synchronized(this) {
+            val record = activeRecord
+            if (record != null && record.id == snapshot.id) {
+                activeDurablePayloadBytes = maxOf(
+                    activeDurablePayloadBytes,
+                    minOf(snapshot.payloadBytes, record.payloadBytes),
+                )
+            }
+        }
+        return snapshot.payloadBytes
+    }
+
     @Synchronized
     fun checkpoint() {
         ensureLoadedLocked()
@@ -434,6 +471,7 @@ internal class PersistentAudioChunkStore internal constructor(
         closeActiveAccessLocked()
         activeRecord = null
         activePayloadCrc = CRC32()
+        activeDurablePayloadBytes = 0L
 
         while (chunks.isNotEmpty()) {
             retireRecordLocked(removeFirstChunkLocked())
@@ -786,12 +824,18 @@ internal class PersistentAudioChunkStore internal constructor(
         check(!closed) { "PersistentAudioChunkStore is closed" }
         if (loaded) return
 
-        if (!rootDirectory.exists() && !rootDirectory.mkdirs() && !rootDirectory.exists()) {
+        val rootExisted = rootDirectory.exists()
+        if (!rootExisted && !rootDirectory.mkdirs() && !rootDirectory.exists()) {
             throw IllegalStateException("Unable to create chunk storage: ${rootDirectory.absolutePath}")
         }
-        if (!chunksDirectory.exists() && !chunksDirectory.mkdirs() && !chunksDirectory.exists()) {
+        if (!rootExisted) {
+            rootDirectory.parentFile?.takeIf { it.isDirectory }?.let(::forceDirectoryDurable)
+        }
+        val chunksExisted = chunksDirectory.exists()
+        if (!chunksExisted && !chunksDirectory.mkdirs() && !chunksDirectory.exists()) {
             throw IllegalStateException("Unable to create chunks directory: ${chunksDirectory.absolutePath}")
         }
+        if (!chunksExisted) forceDirectoryDurable(rootDirectory)
 
         // Never delete an older buffer format automatically. Even if this version cannot
         // decode it, those bytes may be the only surviving copy after a downgrade/upgrade.
@@ -855,9 +899,7 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun preserveUnrecognizedChunkLocked(file: File, reason: String) {
-        if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
-            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
-        }
+        ensureQuarantineDirectoryDurableLocked()
         var suffix = 0
         while (true) {
             val suffixText = if (suffix == 0) "" else ".$suffix"
@@ -871,14 +913,14 @@ internal class PersistentAudioChunkStore internal constructor(
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(file.toPath(), target.toPath())
             }
+            forceDirectoryDurable(quarantineDirectory)
+            forceDirectoryDurable(chunksDirectory)
             return
         }
     }
 
     private fun preserveFileCopyLocked(file: File, reason: String) {
-        if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
-            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
-        }
+        ensureQuarantineDirectoryDurableLocked()
         var suffix = 0
         while (true) {
             val suffixText = if (suffix == 0) "" else ".$suffix"
@@ -893,6 +935,7 @@ internal class PersistentAudioChunkStore internal constructor(
                     output.fd.sync()
                 }
             }
+            forceDirectoryDurable(quarantineDirectory)
             return
         }
     }
@@ -1082,6 +1125,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             openedAccess = RandomAccessFile(file, "rw")
             writeInitialChunkHeader(record, access = requireNotNull(openedAccess))
+            forceDirectoryDurable(chunksDirectory)
             requireNotNull(openedAccess)
         } catch (error: Exception) {
             runCatching { openedAccess?.close() }
@@ -1093,6 +1137,7 @@ internal class PersistentAudioChunkStore internal constructor(
         addChunkLastLocked(record)
         activeRecord = record
         activePayloadCrc = CRC32()
+        activeDurablePayloadBytes = 0L
         activeAccess = access
         return record
     }
@@ -1104,6 +1149,7 @@ internal class PersistentAudioChunkStore internal constructor(
             removeChunkLocked(record)
             activeRecord = null
             activePayloadCrc = CRC32()
+            activeDurablePayloadBytes = 0L
             record.pendingDelete = true
             tryDeleteRetiredRecordLocked(record)
             return
@@ -1119,17 +1165,27 @@ internal class PersistentAudioChunkStore internal constructor(
             closeActiveAccessLocked()
             activeRecord = null
             activePayloadCrc = CRC32()
+            activeDurablePayloadBytes = 0L
             throw error
         }
         closeActiveAccessLocked()
         activeRecord = null
         activePayloadCrc = CRC32()
+        activeDurablePayloadBytes = 0L
+    }
+
+    private fun syncActivePayloadLocked() {
+        val record = activeRecord ?: return
+        if (record.payloadBytes <= activeDurablePayloadBytes) return
+        requireNotNull(activeAccess).fd.sync()
+        activeDurablePayloadBytes = record.payloadBytes
     }
 
     private fun writeActiveHeaderLocked() {
         val record = activeRecord ?: return
         record.payloadChecksum = activePayloadCrc.value.toInt()
         writeMutableChunkSlot(record, access = activeAccess, forceToDisk = true)
+        activeDurablePayloadBytes = record.payloadBytes
     }
 
     private fun closeActiveAccessLocked() {
@@ -1328,6 +1384,12 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun retentionExceededLocked(): Boolean = when (retentionMode) {
         RetentionMode.SIZE -> totalPayloadBytesLocked() > retentionValue
         RetentionMode.TIME -> totalDurationSecondsLocked() > retentionValue.toDouble()
+    }
+
+    private fun retentionCleanupWillRetireChunkLocked(): Boolean {
+        if (!overwriteOldest || !retentionExceededLocked()) return false
+        val oldest = chunks.firstOrNull() ?: return false
+        return oldest !== activeRecord && activeRecord?.payloadBytes?.let { it > activeDurablePayloadBytes } == true
     }
 
     private fun writableBytesLocked(frameBytes: Int): Long {
@@ -1749,6 +1811,26 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         return crc.value.toInt()
     }
+
+    private fun ensureQuarantineDirectoryDurableLocked() {
+        val existed = quarantineDirectory.exists()
+        if (!existed && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
+            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
+        }
+        if (!existed) forceDirectoryDurable(rootDirectory)
+    }
+
+    private fun forceDirectoryDurable(directory: File) {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+            channel.force(true)
+        }
+    }
+
+    private data class ActivePayloadSyncSnapshot(
+        val id: UInt,
+        val file: File,
+        val payloadBytes: Long,
+    )
 
     private companion object {
         const val CHUNK_MAGIC = 0x52564348 // RVCH

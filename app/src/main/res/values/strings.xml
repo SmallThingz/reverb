@@ -179,6 +179,14 @@
         <item quantity="one">Moved %1$d recording.</item>
         <item quantity="other">Moved %1$d recordings.</item>
     </plurals>
+    <plurals name="move_recordings_failed_count">
+        <item quantity="one">Couldn\'t move %1$d recording.</item>
+        <item quantity="other">Couldn\'t move %1$d recordings.</item>
+    </plurals>
+    <plurals name="move_recordings_cleanup_failed">
+        <item quantity="one">Source cleanup for %1$d recording could not complete; an extra copy may remain.</item>
+        <item quantity="other">Source cleanup for %1$d recordings could not complete; extra copies may remain.</item>
+    </plurals>
     <plurals name="move_recordings_removed_missing">
         <item quantity="one">Removed %1$d missing entry.</item>
         <item quantity="other">Removed %1$d missing entries.</item>

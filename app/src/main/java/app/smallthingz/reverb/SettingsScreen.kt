@@ -782,22 +782,33 @@ fun SettingsScreen(
                 refreshMoveRecordingsAvailability()
                 return@launch
             }
-            val message = when {
-                result.moved == 0 && result.removedMissing == 0 -> resources.getString(R.string.move_recordings_none)
-                result.removedMissing > 0 -> {
-                    val movedMessage = resources.getQuantityString(
-                        R.plurals.move_recordings_done, result.moved, result.moved,
-                    )
-                    val removedMessage = resources.getQuantityString(
-                        R.plurals.move_recordings_removed_missing,
-                        result.removedMissing, result.removedMissing,
-                    )
-                    "$movedMessage $removedMessage"
+            val messageParts = buildList {
+                if (result.moved > 0) {
+                    add(resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved))
                 }
-                else -> resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved)
+                if (result.failed > 0) {
+                    add(resources.getQuantityString(R.plurals.move_recordings_failed_count, result.failed, result.failed))
+                }
+                if (result.cleanupFailed > 0) {
+                    add(
+                        resources.getQuantityString(
+                            R.plurals.move_recordings_cleanup_failed,
+                            result.cleanupFailed, result.cleanupFailed,
+                        ),
+                    )
+                }
+                if (result.removedMissing > 0) {
+                    add(
+                        resources.getQuantityString(
+                            R.plurals.move_recordings_removed_missing,
+                            result.removedMissing, result.removedMissing,
+                        ),
+                    )
+                }
             }
+            val message = messageParts.joinToString(" ").ifBlank { resources.getString(R.string.move_recordings_none) }
             refreshMoveRecordingsAvailability()
-            AppFeedbackCenter.post(message, FeedbackTone.SUCCESS)
+            AppFeedbackCenter.post(message, if (result.hasFailures) FeedbackTone.ERROR else FeedbackTone.SUCCESS)
         }
     }
 

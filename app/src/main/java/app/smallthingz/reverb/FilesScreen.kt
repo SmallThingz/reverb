@@ -603,6 +603,13 @@ fun FilesScreen(
                     clearSelection()
                     refresh(showSpinner = false)
                 },
+                onStateUncertain = {
+                    showRenameDialog = false
+                    renameRecording = null
+                    clearSelection()
+                    showPassiveNotice(resources.getString(R.string.rename_recording_failed), FeedbackTone.ERROR)
+                    refresh(showSpinner = false)
+                },
             )
         }
     }
@@ -750,6 +757,7 @@ private fun RenameRecordingDialog(
     recording: RecordingEntity,
     onDismiss: () -> Unit,
     onRenamed: (RecordingEntity) -> Unit,
+    onStateUncertain: () -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -784,7 +792,7 @@ private fun RenameRecordingDialog(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                error = resources.getString(R.string.rename_recording_failed)
+                onStateUncertain()
             } finally {
                 isRenaming = false
             }

@@ -383,6 +383,56 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun recorderIntentPersistence_onlyWritesWhenDurableIntentChanges() {
+        assertFalse(
+            captureSlotNeedsPersistence(
+                ReverbService.BufferSlot.LOOPING.name,
+                ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertTrue(captureSlotNeedsPersistence(null, ReverbService.BufferSlot.LOOPING))
+        assertTrue(
+            captureSlotNeedsPersistence(
+                ReverbService.BufferSlot.ONE_SHOT.name,
+                ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+
+        assertFalse(
+            captureIntentNeedsPersistence(
+                previousEnabled = true,
+                requestedEnabled = true,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                requestedSlot = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertTrue(
+            captureIntentNeedsPersistence(
+                previousEnabled = true,
+                requestedEnabled = true,
+                previousStoredSlot = ReverbService.BufferSlot.ONE_SHOT.name,
+                requestedSlot = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertTrue(
+            captureIntentNeedsPersistence(
+                previousEnabled = false,
+                requestedEnabled = true,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                requestedSlot = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+        assertTrue(
+            captureIntentNeedsPersistence(
+                previousEnabled = true,
+                requestedEnabled = false,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                requestedSlot = ReverbService.BufferSlot.LOOPING,
+            ),
+        )
+    }
+
+    @Test
     fun foregroundServiceTypes_coverRecorderAndExportLifetimeIndependently() {
         assertEquals(0, foregroundServiceTypesForWork(listening = false, exporting = false))
         assertEquals(

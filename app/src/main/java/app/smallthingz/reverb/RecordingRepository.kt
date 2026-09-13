@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
@@ -288,11 +289,15 @@ object RecordingRepository {
                         deleteIds = if (renamed.id == recording.id) emptyList() else listOf(recording.id),
                     )
                 } catch (error: Exception) {
-                    // Keep the catalog and physical asset on the same name when the
-                    // database commit fails. Recovery can still rediscover the renamed
-                    // asset if a provider refuses the rollback.
-                    runCatching {
+                    // Prefer restoring the original physical identity. If that is no longer
+                    // possible (for example the old path was reused concurrently), never keep
+                    // a stale catalog row that could now address unrelated bytes. A refresh can
+                    // rediscover both the renamed recording and any replacement independently.
+                    val rolledBack = runCatching {
                         renameRecordingAsset(context, renamed, recording.displayName)
+                    }.getOrNull()
+                    if (!renameRollbackRestoredOriginal(recording.id, rolledBack?.id)) {
+                        runCatching { RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id) }
                     }
                     throw error
                 }
@@ -353,6 +358,8 @@ object RecordingRepository {
                 dao.applyChanges(stateUpdates, emptyList())
 
                 var moved = 0
+                var failed = 0
+                var cleanupFailed = 0
                 val durableTargets = current
                     .filter { it.directoryId == targetDirectoryId && isRecordingEligibleForMove(it.id, pendingIds) }
                     .toMutableList()
@@ -363,25 +370,26 @@ object RecordingRepository {
                     }
                     val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source)
                     if (target == null) {
-                        skipped++
+                        failed++
                         return@forEach
                     }
-                    val committed = commitVerifiedMoveLocked(
+                    val cleanupComplete = commitVerifiedMoveLocked(
                         context = context,
                         dao = dao,
                         source = source,
                         target = target,
-                        targetCreatedByThisMove = recoveredTarget == null,
                     )
-                    if (committed) {
-                        if (recoveredTarget == null) durableTargets += target
-                        moved++
-                    } else {
-                        skipped++
-                    }
+                    if (recoveredTarget == null) durableTargets += target
+                    moved++
+                    if (!cleanupComplete) cleanupFailed++
                 }
 
-                MoveResult(moved = moved, skipped = skipped).also {
+                MoveResult(
+                    moved = moved,
+                    skipped = skipped,
+                    failed = failed,
+                    cleanupFailed = cleanupFailed,
+                ).also {
                     if (moved > 0) schedulePersistedPermissionCleanup(context)
                 }
             }
@@ -393,27 +401,18 @@ object RecordingRepository {
         dao: RecordingDao,
         source: RecordingEntity,
         target: RecordingEntity,
-        targetCreatedByThisMove: Boolean,
     ): Boolean {
-        try {
-            // The verified target becomes recoverable before the source is touched.
-            dao.upsert(target)
-        } catch (error: Exception) {
-            if (targetCreatedByThisMove) deleteRecordingAsset(context, target)
-            throw error
-        }
+        // Once a verified target exists, make it recoverable before touching the source.
+        // Never delete that target merely because later source cleanup is uncertain: the
+        // source path/URI may have disappeared or been reused for different bytes.
+        dao.upsert(target)
 
-        if (!deleteRecordingAsset(context, source)) {
-            // Preserve the original recording if cleanup fails. Roll the new target back when
-            // possible; if rollback also fails, both valid copies remain catalogued/recoverable.
-            if (targetCreatedByThisMove && deleteRecordingAsset(context, target)) {
-                runCatching { dao.deleteById(target.id) }
-            }
-            return false
-        }
+        val cleanupComplete = cleanupMovedSourceAfterVerifiedCopy(context, source, target)
+        if (!cleanupComplete) return false
 
-        // Only retire source metadata after physical source deletion succeeds. If this DB
-        // write fails, refresh will hide the now-missing source row while retaining target.
+        // Physical source cleanup completed (or the source was already positively absent).
+        // Metadata retirement is last; if it fails, refresh hides the missing source while
+        // retaining the verified target.
         dao.deleteById(source.id)
         return true
     }
@@ -473,14 +472,19 @@ object RecordingRepository {
             }
             val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source) ?: continue
 
-            val committed = commitVerifiedMoveLocked(
+            val cleanupComplete = commitVerifiedMoveLocked(
                 context = context,
                 dao = dao,
                 source = source,
                 target = target,
-                targetCreatedByThisMove = recoveredTarget == null,
             )
-            if (committed && recoveredTarget == null) durableTargets += target
+            if (recoveredTarget == null) durableTargets += target
+            if (!cleanupComplete) {
+                Log.w(
+                    "RecordingRepository",
+                    "Verified legacy target kept, but source cleanup was unsafe: ${source.id}",
+                )
+            }
         }
     }
 
@@ -551,11 +555,48 @@ object RecordingRepository {
         return 0
     }
 
+    private fun cleanupMovedSourceAfterVerifiedCopy(
+        context: Context,
+        source: RecordingEntity,
+        target: RecordingEntity,
+    ): Boolean {
+        val state = recordingAssetState(context, source)
+        val sameContent = state == RecordingAssetState.PRESENT && recordingsHaveSameContent(context, source, target)
+        return when (moveSourceCleanupAction(state, sameContent)) {
+            MoveSourceCleanupAction.COMPLETE -> true
+            MoveSourceCleanupAction.KEEP_SOURCE -> false
+            MoveSourceCleanupAction.DELETE_SOURCE -> deleteRecordingAsset(context, source)
+        }
+    }
+
     data class MoveResult(
         val moved: Int = 0,
         val skipped: Int = 0,
+        val failed: Int = 0,
+        val cleanupFailed: Int = 0,
         val removedMissing: Int = 0,
-    )
+    ) {
+        val hasFailures: Boolean
+            get() = failed > 0 || cleanupFailed > 0
+    }
+}
+
+internal fun renameRollbackRestoredOriginal(originalId: String, rolledBackId: String?): Boolean =
+    rolledBackId == originalId
+
+internal enum class MoveSourceCleanupAction { DELETE_SOURCE, COMPLETE, KEEP_SOURCE }
+
+internal fun moveSourceCleanupAction(
+    assetState: RecordingAssetState,
+    sameContentAsVerifiedTarget: Boolean,
+): MoveSourceCleanupAction = when (assetState) {
+    RecordingAssetState.MISSING -> MoveSourceCleanupAction.COMPLETE
+    RecordingAssetState.UNAVAILABLE -> MoveSourceCleanupAction.KEEP_SOURCE
+    RecordingAssetState.PRESENT -> if (sameContentAsVerifiedTarget) {
+        MoveSourceCleanupAction.DELETE_SOURCE
+    } else {
+        MoveSourceCleanupAction.KEEP_SOURCE
+    }
 }
 
 internal fun recordingDirectoryIdsToRetain(

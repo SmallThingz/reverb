@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
@@ -39,9 +40,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -140,6 +141,7 @@ class ReverbService : Service() {
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
     private lateinit var exportWorkExecutor: ExecutorService
+    private lateinit var durabilitySyncExecutor: ScheduledExecutorService
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
@@ -167,6 +169,20 @@ class ReverbService : Service() {
                 isDaemon = true
             }
         }
+        durabilitySyncExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                runnable.run()
+            }, "reverb-durability-sync").apply {
+                isDaemon = true
+            }
+        }
+        durabilitySyncExecutor.scheduleWithFixedDelay(
+            ::syncDirtyAudioPayloads,
+            ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS,
+            ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
         audioHandler.post {
             try {
                 loadConfiguredPreferences()
@@ -197,6 +213,9 @@ class ReverbService : Service() {
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
         setQuickTileRecordingActive(active = false)
+        if (::durabilitySyncExecutor.isInitialized) {
+            durabilitySyncExecutor.shutdownNow()
+        }
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
         releaseWakeLock()
@@ -330,11 +349,14 @@ class ReverbService : Service() {
             val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
             if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot.name) {
                 listeningCommandGeneration.get()
+            } else if (!captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
+                activeBufferSlot = bufferSlot
+                targetChanged = true
+                listeningCommandGeneration.incrementAndGet()
             } else if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
-                prefs.edit().apply {
-                    if (previousStoredSlot == null) remove(PrefKey.CAPTURE_BUFFER_SLOT)
-                    else putString(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot)
-                }.apply()
+                if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
+                    Log.e(TAG, "Unable to durably restore capture destination after failed selection")
+                }
                 null
             } else {
                 activeBufferSlot = bufferSlot
@@ -389,22 +411,32 @@ class ReverbService : Service() {
             val previousEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
-            val slotChanged = enabled && requestedSlot != activeBufferSlot
-            if (previousEnabled == enabled && !slotChanged) {
+            val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
+            val needsPersistence = captureIntentNeedsPersistence(
+                previousEnabled = previousEnabled,
+                requestedEnabled = enabled,
+                previousStoredSlot = previousStoredSlot,
+                requestedSlot = requestedSlot,
+            )
+            if (!needsPersistence) {
                 if (enabled) {
+                    activeBufferSlot = requestedSlot
                     foregroundStartBlocked = false
                     foregroundServiceTimedOut = false
                 }
-                listeningCommandGeneration.get()
+                if (runtimeSlotChanged) listeningCommandGeneration.incrementAndGet()
+                else listeningCommandGeneration.get()
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
                 if (enabled) editor.putString(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.name)
                 if (!editor.commit()) {
-                    prefs.edit().apply {
-                        putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled)
-                        if (previousStoredSlot == null) remove(PrefKey.CAPTURE_BUFFER_SLOT)
-                        else putString(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot)
-                    }.apply()
+                    if (!restoreCaptureIntentPreferences(
+                            prefs = prefs,
+                            previousEnabled = previousEnabled,
+                            previousStoredSlot = previousStoredSlot,
+                        )) {
+                        Log.e(TAG, "Unable to durably restore recorder intent after failed command")
+                    }
                     null
                 } else {
                     if (enabled) {
@@ -425,6 +457,18 @@ class ReverbService : Service() {
         }
         if (enabled) innerStartListening(generation) else innerStopListening()
         return ListeningCommandResult(accepted = true, generation = generation)
+    }
+
+    private fun restoreCaptureIntentPreferences(
+        prefs: SharedPreferences,
+        previousEnabled: Boolean? = null,
+        previousStoredSlot: String?,
+    ): Boolean {
+        val editor = prefs.edit()
+        if (previousEnabled != null) editor.putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled)
+        if (previousStoredSlot == null) editor.remove(PrefKey.CAPTURE_BUFFER_SLOT)
+        else editor.putString(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot)
+        return editor.commit()
     }
 
     private fun isListeningEnabled(): Boolean {
@@ -459,27 +503,33 @@ class ReverbService : Service() {
             oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
             loopingEnabled = loopingBufferEnabled,
         ) ?: return false
-        if (resolved != activeBufferSlot) switchActiveBufferOnAudioThread(resolved)
-        return true
+        return resolved == activeBufferSlot || switchActiveBufferOnAudioThread(resolved)
     }
 
     private fun switchActiveBufferOnAudioThread(
         bufferSlot: BufferSlot,
         notifyTiles: Boolean = true,
-    ) {
+    ): Boolean {
         check(audioHandler.looper == Looper.myLooper())
-        if (activeBufferSlot == bufferSlot) return
-        activeBufferSlot = bufferSlot
+        if (activeBufferSlot == bufferSlot) return true
         val prefs = getRecorderPreferences(this)
-        if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
-            prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).apply()
-            reportError(getString(R.string.recorder_state_persist_failed))
+        val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
+        if (captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
+            if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
+                if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
+                    Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
+                }
+                reportError(getString(R.string.recorder_state_persist_failed))
+                return false
+            }
         }
+        activeBufferSlot = bufferSlot
         if (isLogicalListeningState(state, isListeningEnabled())) {
             val generation = listeningCommandGeneration.incrementAndGet()
             if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = generation
         }
         if (notifyTiles) RecordingQuickTiles.requestRefresh(this)
+        return true
     }
 
     private fun setQuickTileRecordingActive(
@@ -1606,9 +1656,6 @@ class ReverbService : Service() {
             if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) return
             val prefs = getRecorderPreferences(this)
             val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
-            if (!committed) {
-                prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).apply()
-            }
             listeningCommandGeneration.incrementAndGet()
             state = STATE_PAUSED
             committed
@@ -1634,6 +1681,16 @@ class ReverbService : Service() {
 
     private fun sealActiveChunks() {
         forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
+    }
+
+    private fun syncDirtyAudioPayloads() {
+        try {
+            forEachAudioStore { store ->
+                store.syncActivePayloadToDisk()
+            }
+        } catch (error: Exception) {
+            reportPersistentStoreFailure("periodic payload sync", error)
+        }
     }
 
     private fun checkpointAudioStores(operation: String) {
@@ -2489,6 +2546,7 @@ class ReverbService : Service() {
         const val FOREGROUND_NOTIFICATION_ID = 458
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
         const val CAPTURE_SCRATCH_BYTES = 256 * 1024
+        const val ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS = 1_000L
         const val CAPTURE_READ_TARGET_MILLIS = 160L
         const val EMPTY_READ_RETRY_MILLIS = 20L
         const val VISUALIZATION_ANALYSIS_INTERVAL_NANOS = 90_000_000L
@@ -2531,6 +2589,19 @@ internal fun foregroundServiceTypesForWork(
     exporting -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
     else -> 0
 }
+
+internal fun captureSlotNeedsPersistence(
+    previousStoredSlot: String?,
+    requestedSlot: ReverbService.BufferSlot,
+): Boolean = previousStoredSlot != requestedSlot.name
+
+internal fun captureIntentNeedsPersistence(
+    previousEnabled: Boolean,
+    requestedEnabled: Boolean,
+    previousStoredSlot: String?,
+    requestedSlot: ReverbService.BufferSlot,
+): Boolean = previousEnabled != requestedEnabled ||
+    (requestedEnabled && captureSlotNeedsPersistence(previousStoredSlot, requestedSlot))
 
 internal fun shouldAttemptAutomaticListeningStart(
     listeningIntentEnabled: Boolean,
