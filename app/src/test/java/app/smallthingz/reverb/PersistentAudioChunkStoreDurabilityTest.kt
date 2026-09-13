@@ -246,6 +246,78 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retiredLeaseChunk_neverResurrectsWhenBothIndexesAreLost() = withStoreRoot { root ->
+        val expected = pcmBytes(32_000)
+        val crashed = PersistentAudioChunkStore(root)
+        configure(crashed, 128 * 1024L)
+        assertEquals(expected.size, crashed.append(expected, 0, expected.size))
+        crashed.sealActiveChunk()
+        val lease = requireNotNull(crashed.acquireRange(0.0, crashed.durationSeconds()))
+
+        crashed.clear()
+        assertFalse(crashed.hasData())
+        assertArrayEquals(expected, readLease(lease))
+        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        assertTrue(chunk.isFile)
+        crashed.close()
+
+        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+        assertFalse(chunk.exists())
+        assertTrue(File(root, "retired").listFiles().orEmpty().isEmpty())
+        // Intentionally do not close the abandoned lease: this models process death, where
+        // in-memory references disappear without executing RangeLease.close().
+    }
+
+    @Test
+    fun malformedRetirementMarker_neverResurrectsChunkAfterIndexLoss() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+        val retired = File(root, "retired").apply { mkdirs() }
+        File(retired, "0").writeText("v1|0|corrupt")
+        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+        assertFalse(File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0").exists())
+        assertTrue(File(root, "preserved").listFiles().orEmpty().any { ".retired-ambiguous" in it.name })
+    }
+
+    @Test
+    fun staleRetirementMarker_isClearedBeforeChunkIdReuse() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        val nextId = PersistentAudioChunkStore::class.java.getDeclaredField("nextChunkId")
+        nextId.isAccessible = true
+        nextId.setInt(store, 7)
+        val retired = File(root, "retired").apply { mkdirs() }
+        val stale = File(retired, "7").apply { writeText("v1|7|1|8000|1|PCM_16") }
+
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+        assertFalse(stale.exists())
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun retiredChunk_waitsForEveryConcurrentReadLeaseBeforeDeletion() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val store = PersistentAudioChunkStore(root)

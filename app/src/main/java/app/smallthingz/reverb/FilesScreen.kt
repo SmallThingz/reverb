@@ -97,7 +97,6 @@ fun FilesScreen(
     active: Boolean = true,
     initialRecordings: List<RecordingEntity> = emptyList(),
     onSelectionActiveChange: (Boolean) -> Unit = {},
-    onRecordingCountChanged: (Int) -> Unit = {},
     onVisibleRecordingsChanged: (List<RecordingEntity>) -> Unit = {},
     onParentRefreshRequested: () -> Unit = {},
     showNormalTopBar: Boolean = true,
@@ -317,9 +316,6 @@ fun FilesScreen(
     }
     LaunchedEffect(visibleRecordings) {
         onVisibleRecordingsChanged(visibleRecordings)
-    }
-    LaunchedEffect(hasLoaded, recordings.size) {
-        if (hasLoaded) onRecordingCountChanged(recordings.size)
     }
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {

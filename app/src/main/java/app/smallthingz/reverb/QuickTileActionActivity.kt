@@ -71,14 +71,48 @@ class QuickTileActionActivity : ComponentActivity() {
         val requestedBuffer = requestedBufferSlot() ?: return finishAction()
         if (!resumed || actionStarted || finished) return
         actionStarted = true
-
-        val result = recorder.enableListening(requestedBuffer)
-        if (!result.accepted) {
-            RecordingQuickTiles.requestRefresh(this)
-            finishAction()
-            return
-        }
-        waitForRuntimeCapture()
+        recorder.getState(
+            object : ReverbService.StateCallback {
+                override fun state(
+                    commandGeneration: Long,
+                    listeningEnabled: Boolean,
+                    activeBufferSlot: ReverbService.BufferSlot?,
+                    oneShotSeconds: Float,
+                    oneShotBytes: Long,
+                    loopingSeconds: Float,
+                    loopingBytes: Long,
+                    oneShotIsEnabled: Boolean,
+                    oneShotIsFull: Boolean,
+                    loopingIsEnabled: Boolean,
+                ) {
+                    if (finished) return
+                    val usable = canActivateCaptureBuffer(
+                        requested = requestedBuffer,
+                        oneShotEnabled = oneShotIsEnabled,
+                        oneShotFull = oneShotIsFull,
+                        loopingEnabled = loopingIsEnabled,
+                    )
+                    if (!usable) {
+                        RecordingQuickTiles.requestRefresh(this@QuickTileActionActivity)
+                        finishAction()
+                        return
+                    }
+                    val selection = recorder.selectCaptureBuffer(requestedBuffer)
+                    if (!selection.accepted) {
+                        RecordingQuickTiles.requestRefresh(this@QuickTileActionActivity)
+                        finishAction()
+                        return
+                    }
+                    val result = recorder.enableListening(requestedBuffer)
+                    if (!result.accepted) {
+                        RecordingQuickTiles.requestRefresh(this@QuickTileActionActivity)
+                        finishAction()
+                        return
+                    }
+                    waitForRuntimeCapture()
+                }
+            },
+        )
     }
 
     private fun waitForRuntimeCapture() {

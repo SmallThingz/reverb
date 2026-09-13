@@ -257,12 +257,18 @@ class DurabilityInvariantTest {
             PendingDeletionReplayAction.CLEAN_CATALOG,
             pendingDeletionReplayAction(planned, RecordingAssetState.MISSING),
         )
-        RecordingAssetState.entries.forEach { state ->
-            assertEquals(
-                PendingDeletionReplayAction.CLEAN_CATALOG,
-                pendingDeletionReplayAction(deleted, state),
-            )
-        }
+        assertEquals(
+            PendingDeletionReplayAction.ABANDON_INTENT,
+            pendingDeletionReplayAction(deleted, RecordingAssetState.PRESENT),
+        )
+        assertEquals(
+            PendingDeletionReplayAction.WAIT,
+            pendingDeletionReplayAction(deleted, RecordingAssetState.UNAVAILABLE),
+        )
+        assertEquals(
+            PendingDeletionReplayAction.CLEAN_CATALOG,
+            pendingDeletionReplayAction(deleted, RecordingAssetState.MISSING),
+        )
     }
 
     @Test

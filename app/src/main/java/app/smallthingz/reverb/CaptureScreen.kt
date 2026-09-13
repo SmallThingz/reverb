@@ -201,6 +201,7 @@ fun CaptureScreen(
     }
     var startupBufferChosen by remember { mutableStateOf(false) }
     var latestListeningCommandGeneration by remember { mutableLongStateOf(Long.MIN_VALUE) }
+    var serviceConnectionGeneration by remember { mutableLongStateOf(0L) }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
 
@@ -225,51 +226,58 @@ fun CaptureScreen(
         isPreparingRange = false
     }
 
-    val stateCallback = remember {
-        object : ReverbService.StateCallback {
-            override fun state(
-                commandGeneration: Long,
-                listeningEnabled: Boolean,
-                activeBufferSlot: ReverbService.BufferSlot?,
-                oneShotSeconds: Float,
-                oneShotBytes: Long,
-                loopingSeconds: Float,
-                loopingBytes: Long,
-                oneShotIsEnabled: Boolean,
-                oneShotIsFull: Boolean,
-                loopingIsEnabled: Boolean,
-            ) {
-                if (!shouldApplyRecorderStateSnapshot(commandGeneration, latestListeningCommandGeneration)) return
-                latestListeningCommandGeneration = commandGeneration
-                val previousActiveBuffer = activeBuffer
-                isListening = listeningEnabled
-                activeBuffer = activeBufferSlot
-                oneShotDurationSeconds = oneShotSeconds
-                oneShotPayloadBytes = oneShotBytes
-                loopingDurationSeconds = loopingSeconds
-                loopingPayloadBytes = loopingBytes
-                oneShotEnabled = oneShotIsEnabled
-                oneShotFull = oneShotIsFull
-                loopingEnabled = loopingIsEnabled
-
-                if (!startupBufferChosen) {
-                    selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
-                        oneShotEnabled = oneShotIsEnabled,
-                        oneShotFull = oneShotIsFull,
-                        loopingEnabled = loopingIsEnabled,
-                    )
-                    startupBufferChosen = true
-                } else if (
-                    listeningEnabled &&
-                    previousActiveBuffer == ReverbService.BufferSlot.ONE_SHOT &&
-                    activeBufferSlot == ReverbService.BufferSlot.LOOPING
+    fun requestRecorderState(recorder: ReverbService) {
+        val requestConnectionGeneration = serviceConnectionGeneration
+        recorder.getState(
+            object : ReverbService.StateCallback {
+                override fun state(
+                    commandGeneration: Long,
+                    listeningEnabled: Boolean,
+                    activeBufferSlot: ReverbService.BufferSlot?,
+                    oneShotSeconds: Float,
+                    oneShotBytes: Long,
+                    loopingSeconds: Float,
+                    loopingBytes: Long,
+                    oneShotIsEnabled: Boolean,
+                    oneShotIsFull: Boolean,
+                    loopingIsEnabled: Boolean,
                 ) {
-                    // One-shot filled while recording. Follow the recorder's automatic handoff once,
-                    // while still allowing the user to swipe back afterwards.
-                    selectedBuffer = ReverbService.BufferSlot.LOOPING
+                    if (!shouldApplyRecorderStateSnapshot(
+                            snapshotConnectionGeneration = requestConnectionGeneration,
+                            currentConnectionGeneration = serviceConnectionGeneration,
+                            snapshotGeneration = commandGeneration,
+                            latestCommandGeneration = latestListeningCommandGeneration,
+                        )
+                    ) return
+                    latestListeningCommandGeneration = commandGeneration
+                    val previousActiveBuffer = activeBuffer
+                    isListening = listeningEnabled
+                    activeBuffer = activeBufferSlot
+                    oneShotDurationSeconds = oneShotSeconds
+                    oneShotPayloadBytes = oneShotBytes
+                    loopingDurationSeconds = loopingSeconds
+                    loopingPayloadBytes = loopingBytes
+                    oneShotEnabled = oneShotIsEnabled
+                    oneShotFull = oneShotIsFull
+                    loopingEnabled = loopingIsEnabled
+
+                    if (!startupBufferChosen) {
+                        selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
+                            oneShotEnabled = oneShotIsEnabled,
+                            oneShotFull = oneShotIsFull,
+                            loopingEnabled = loopingIsEnabled,
+                        )
+                        startupBufferChosen = true
+                    } else if (
+                        listeningEnabled &&
+                        previousActiveBuffer == ReverbService.BufferSlot.ONE_SHOT &&
+                        activeBufferSlot == ReverbService.BufferSlot.LOOPING
+                    ) {
+                        selectedBuffer = ReverbService.BufferSlot.LOOPING
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 
     val connection = remember {
@@ -286,6 +294,7 @@ fun CaptureScreen(
                         showExportClampDialog = false
                         pendingClearBuffer = null
                         invalidateCustomRangePreparation()
+                        serviceConnectionGeneration++
                         service = null
                         return
                     }
@@ -301,8 +310,10 @@ fun CaptureScreen(
                     pendingClearBuffer = null
                     invalidateCustomRangePreparation()
                 }
+                serviceConnectionGeneration++
+                latestListeningCommandGeneration = Long.MIN_VALUE
                 service = connectedService
-                service?.getState(stateCallback)
+                requestRecorderState(connectedService)
             }
 
             override fun onServiceDisconnected(name: ComponentName) {
@@ -320,6 +331,7 @@ fun CaptureScreen(
                     saveStatus = null
                     errorMessage = resources.getString(R.string.save_failed)
                 }
+                serviceConnectionGeneration++
                 service = null
             }
         }
@@ -392,6 +404,7 @@ fun CaptureScreen(
                         context.unbindService(connection)
                         bound = false
                     }
+                    serviceConnectionGeneration++
                     service = null
                 }
 
@@ -413,6 +426,7 @@ fun CaptureScreen(
                 context.unbindService(connection)
                 bound = false
             }
+            serviceConnectionGeneration++
             service = null
         }
     }
@@ -475,7 +489,7 @@ fun CaptureScreen(
             while (true) {
                 val s = service
                 if (s != null) {
-                    s.getState(stateCallback)
+                    requestRecorderState(s)
                     s.consumePendingError()?.let { errorMessage = it }
                 }
                 delay(500)
@@ -793,9 +807,12 @@ fun CaptureScreen(
 }
 
 internal fun shouldApplyRecorderStateSnapshot(
+    snapshotConnectionGeneration: Long,
+    currentConnectionGeneration: Long,
     snapshotGeneration: Long,
     latestCommandGeneration: Long,
-): Boolean = snapshotGeneration >= latestCommandGeneration
+): Boolean = snapshotConnectionGeneration == currentConnectionGeneration &&
+    snapshotGeneration >= latestCommandGeneration
 
 internal fun shouldApplyCustomRangeSnapshot(
     requestGeneration: Long,

@@ -94,10 +94,12 @@ object RecordingRepository {
             mutex.withLock {
                 replayPendingDeletionsLocked(context)
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val pendingIds = pendingDeletionIds(context)
                 val nowMillis = System.currentTimeMillis()
                 val updates = mutableListOf<RecordingEntity>()
                 var movable = false
                 dao.listAll().forEach { recording ->
+                    if (!isRecordingEligibleForMove(recording.id, pendingIds)) return@forEach
                     if (recording.directoryId == targetDirectoryId) return@forEach
                     val updated = when (recordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> {
@@ -657,9 +659,9 @@ internal fun pendingDeletionReplayAction(
     intent: PendingDeletionIntent,
     assetState: RecordingAssetState,
 ): PendingDeletionReplayAction = when {
-    intent.assetDeleted -> PendingDeletionReplayAction.CLEAN_CATALOG
     assetState == RecordingAssetState.UNAVAILABLE -> PendingDeletionReplayAction.WAIT
     assetState == RecordingAssetState.PRESENT -> PendingDeletionReplayAction.ABANDON_INTENT
+    intent.assetDeleted -> PendingDeletionReplayAction.CLEAN_CATALOG
     else -> PendingDeletionReplayAction.CLEAN_CATALOG
 }
 

@@ -473,10 +473,12 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun recorderStateSnapshot_rejectsStaleCommandGenerations() {
-        assertTrue(shouldApplyRecorderStateSnapshot(snapshotGeneration = 7L, latestCommandGeneration = 7L))
-        assertTrue(shouldApplyRecorderStateSnapshot(snapshotGeneration = 8L, latestCommandGeneration = 7L))
-        assertFalse(shouldApplyRecorderStateSnapshot(snapshotGeneration = 6L, latestCommandGeneration = 7L))
+    fun recorderStateSnapshot_rejectsStaleCommandsAndPreviousServiceConnections() {
+        assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 7L, 7L))
+        assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 8L, 7L))
+        assertFalse(shouldApplyRecorderStateSnapshot(3L, 3L, 6L, 7L))
+        assertFalse(shouldApplyRecorderStateSnapshot(2L, 3L, 100L, 7L))
+        assertTrue(shouldApplyRecorderStateSnapshot(4L, 4L, 0L, Long.MIN_VALUE))
     }
 
     @Test

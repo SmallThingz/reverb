@@ -122,6 +122,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val indexA = File(rootDirectory, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
     private val indexB = File(rootDirectory, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
     private val quarantineDirectory = File(rootDirectory, "preserved")
+    private val retiredDirectory = File(rootDirectory, "retired")
 
     private val chunks = ArrayDeque<ChunkRecord>()
     private val liveChunkIds = HashSet<UInt>()
@@ -468,13 +469,8 @@ internal class PersistentAudioChunkStore internal constructor(
     @Synchronized
     fun clear() {
         ensureLoadedLocked()
-        closeActiveAccessLocked()
-        activeRecord = null
-        activePayloadCrc = CRC32()
-        activeDurablePayloadBytes = 0L
-
         while (chunks.isNotEmpty()) {
-            retireRecordLocked(removeFirstChunkLocked())
+            removeFirstChunkAndRetireLocked()
         }
         lastWriteAtMillis = 0L
         writeIndexLocked()
@@ -772,6 +768,21 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
+    private data class RetiredChunkIdentity(
+        val id: UInt,
+        val createdAtMillis: Long,
+        val sampleRate: Int,
+        val channelCount: Int,
+        val sampleFormat: PcmSampleFormat,
+    ) {
+        fun matches(record: ChunkRecord): Boolean =
+            id == record.id &&
+                createdAtMillis == record.createdAtMillis &&
+                sampleRate == record.sampleRate &&
+                channelCount == record.channelCount &&
+                sampleFormat == record.sampleFormat
+    }
+
     private data class LoadedIndex(
         val generation: Long,
         val nextChunkId: UInt,
@@ -851,7 +862,9 @@ internal class PersistentAudioChunkStore internal constructor(
         val firstIndex = readIndex(indexA)
         val secondIndex = readIndex(indexB)
         val restoredIndex = listOfNotNull(firstIndex, secondIndex).maxByOrNull { it.generation }
-        val scanned = scanChunkFilesLocked()
+        val retirementTombstones = readRetirementTombstonesLocked()
+        val scanned = scanChunkFilesLocked(retirementTombstones)
+        cleanupAbsentRetirementTombstonesLocked(retirementTombstones)
 
         if (restoredIndex != null) {
             restoreFromIndexLocked(restoredIndex, scanned)
@@ -869,7 +882,87 @@ internal class PersistentAudioChunkStore internal constructor(
         writeIndexLocked()
     }
 
-    private fun scanChunkFilesLocked(): MutableMap<UInt, ChunkRecord> {
+    private fun retirementTombstoneFile(id: UInt): File = File(retiredDirectory, id.toString())
+
+    private fun persistRetirementTombstoneLocked(record: ChunkRecord) {
+        if (!retiredDirectory.exists() && !retiredDirectory.mkdirs() && !retiredDirectory.exists()) {
+            throw IOException("Unable to create retired chunk directory: ${retiredDirectory.absolutePath}")
+        }
+        val target = retirementTombstoneFile(record.id)
+        val temp = File(retiredDirectory, "${record.id}.tmp")
+        val payload = buildString {
+            append("v1|")
+            append(record.id).append('|')
+            append(record.createdAtMillis).append('|')
+            append(record.sampleRate).append('|')
+            append(record.channelCount).append('|')
+            append(record.sampleFormat.name)
+        }.toByteArray(Charsets.UTF_8)
+        FileOutputStream(temp).use { output ->
+            output.write(payload)
+            output.fd.sync()
+        }
+        try {
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    private fun readRetirementTombstonesLocked(): MutableMap<UInt, RetiredChunkIdentity?> {
+        val result = LinkedHashMap<UInt, RetiredChunkIdentity?>()
+        if (!retiredDirectory.exists()) return result
+        val files = retiredDirectory.listFiles()
+            ?: throw IOException("Unable to list retired chunk directory: ${retiredDirectory.absolutePath}")
+        for (file in files) {
+            if (!file.isFile) continue
+            if (file.name.endsWith(".tmp")) {
+                runCatching { Files.deleteIfExists(file.toPath()) }
+                continue
+            }
+            val filenameId = file.name.toUIntOrNull() ?: continue
+            val identity = runCatching { parseRetirementTombstone(file.readText(Charsets.UTF_8)) }.getOrNull()
+            result[filenameId] = identity?.takeIf { it.id == filenameId }
+        }
+        return result
+    }
+
+    private fun parseRetirementTombstone(raw: String): RetiredChunkIdentity? {
+        val parts = raw.trim().split('|')
+        if (parts.size != 6 || parts[0] != "v1") return null
+        val id = parts[1].toUIntOrNull() ?: return null
+        val createdAtMillis = parts[2].toLongOrNull() ?: return null
+        val sampleRate = parts[3].toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val channelCount = parts[4].toIntOrNull()?.takeIf { it in 1..MAX_CHANNEL_COUNT } ?: return null
+        val sampleFormat = PcmSampleFormat.entries.firstOrNull { it.name == parts[5] } ?: return null
+        return RetiredChunkIdentity(id, createdAtMillis, sampleRate, channelCount, sampleFormat)
+    }
+
+    private fun cleanupAbsentRetirementTombstonesLocked(
+        retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
+    ) {
+        val iterator = retirementTombstones.keys.iterator()
+        while (iterator.hasNext()) {
+            val id = iterator.next()
+            if (!File(chunksDirectory, id.toString()).exists()) {
+                deleteRetirementTombstoneLocked(id)
+                iterator.remove()
+            }
+        }
+    }
+
+    private fun deleteRetirementTombstoneLocked(id: UInt) {
+        runCatching { Files.deleteIfExists(retirementTombstoneFile(id).toPath()) }
+    }
+
+    private fun scanChunkFilesLocked(
+        retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
+    ): MutableMap<UInt, ChunkRecord> {
         val result = LinkedHashMap<UInt, ChunkRecord>()
         val files = chunksDirectory.listFiles()
             ?: throw IOException("Unable to list chunks directory: ${chunksDirectory.absolutePath}")
@@ -889,6 +982,25 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             if (record == null) {
                 preserveUnrecognizedChunkLocked(file, "corrupt")
+                continue
+            }
+            if (retirementTombstones.containsKey(id)) {
+                val retiredIdentity = retirementTombstones[id]
+                if (retiredIdentity?.matches(record) == true) {
+                    if (runCatching { Files.deleteIfExists(file.toPath()) }.getOrDefault(false)) {
+                        deleteRetirementTombstoneLocked(id)
+                        retirementTombstones.remove(id)
+                    }
+                    continue
+                }
+                // A numeric tombstone is durable evidence that this id was retired. If its
+                // payload is malformed or no longer matches the chunk, recovery is ambiguous:
+                // preserve the bytes outside the live timeline rather than resurrecting data
+                // the user explicitly cleared. Legitimate id reuse clears stale markers before
+                // creating the replacement chunk.
+                preserveUnrecognizedChunkLocked(file, "retired-ambiguous")
+                deleteRetirementTombstoneLocked(id)
+                retirementTombstones.remove(id)
                 continue
             }
             if (result.put(id, record) != null) {
@@ -1103,6 +1215,16 @@ internal class PersistentAudioChunkStore internal constructor(
         if (file.exists()) {
             throw IOException("Unexpected chunk id collision on disk: ${file.absolutePath}")
         }
+        val staleRetirement = retirementTombstoneFile(id)
+        if (staleRetirement.exists()) {
+            val cleared = runCatching {
+                Files.deleteIfExists(staleRetirement.toPath())
+                true
+            }.getOrDefault(false)
+            if (!cleared) {
+                throw IOException("Unable to clear stale retirement marker for chunk id $id")
+            }
+        }
 
         val record = ChunkRecord(
             id = id,
@@ -1251,8 +1373,7 @@ internal class PersistentAudioChunkStore internal constructor(
         }
 
         for (index in current.lastIndex downTo cutoffIndex) {
-            val record = current[index]
-            if (removeChunkLocked(record)) retireRecordLocked(record)
+            removeChunkAndRetireLocked(current[index])
         }
 
         lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
@@ -1345,13 +1466,7 @@ internal class PersistentAudioChunkStore internal constructor(
         var changed = false
         if (retentionValue <= 0L) {
             while (chunks.isNotEmpty()) {
-                val record = removeFirstChunkLocked()
-                if (record === activeRecord) {
-                    closeActiveAccessLocked()
-                    activeRecord = null
-                    activePayloadCrc = CRC32()
-                }
-                retireRecordLocked(record)
+                removeFirstChunkAndRetireLocked()
                 changed = true
             }
             return changed
@@ -1362,8 +1477,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 while (retainedPayloadBytes > retentionValue && chunks.isNotEmpty()) {
                     val oldest = chunks.first()
                     if (oldest === activeRecord) break
-                    removeFirstChunkLocked()
-                    retireRecordLocked(oldest)
+                    removeFirstChunkAndRetireLocked()
                     changed = true
                 }
             }
@@ -1372,8 +1486,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 while (retainedDurationSeconds > retentionValue.toDouble() && chunks.isNotEmpty()) {
                     val oldest = chunks.first()
                     if (oldest === activeRecord) break
-                    removeFirstChunkLocked()
-                    retireRecordLocked(oldest)
+                    removeFirstChunkAndRetireLocked()
                     changed = true
                 }
             }
@@ -1404,7 +1517,39 @@ internal class PersistentAudioChunkStore internal constructor(
         )
     }
 
-    private fun retireRecordLocked(record: ChunkRecord) {
+    private fun removeFirstChunkAndRetireLocked(): ChunkRecord {
+        val record = chunks.first()
+        persistRetirementTombstoneLocked(record)
+        if (record === activeRecord) {
+            closeActiveAccessLocked()
+            activeRecord = null
+            activePayloadCrc = CRC32()
+            activeDurablePayloadBytes = 0L
+        }
+        val removed = removeFirstChunkLocked()
+        check(removed === record) { "Unexpected chunk retirement ordering" }
+        retirePreparedRecordLocked(record)
+        return record
+    }
+
+    private fun removeChunkAndRetireLocked(record: ChunkRecord): Boolean {
+        if (record !in chunks) return false
+        persistRetirementTombstoneLocked(record)
+        if (record === activeRecord) {
+            closeActiveAccessLocked()
+            activeRecord = null
+            activePayloadCrc = CRC32()
+            activeDurablePayloadBytes = 0L
+        }
+        if (!removeChunkLocked(record)) {
+            deleteRetirementTombstoneLocked(record.id)
+            return false
+        }
+        retirePreparedRecordLocked(record)
+        return true
+    }
+
+    private fun retirePreparedRecordLocked(record: ChunkRecord) {
         record.pendingDelete = true
         if (record.refCount <= 0) {
             tryDeleteRetiredRecordLocked(record)
@@ -1431,6 +1576,7 @@ internal class PersistentAudioChunkStore internal constructor(
         }.getOrDefault(false)
         if (deleted) {
             retiredById.remove(record.id)
+            deleteRetirementTombstoneLocked(record.id)
         } else {
             retiredById[record.id] = record
         }
