@@ -28,6 +28,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.UUID
 
 private val TAG = "RecordingFiles"
@@ -35,6 +36,19 @@ private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
+private const val STAGING_SESSION_SEPARATOR = "__"
+private val OUTPUT_STAGING_SESSION_ID = UUID.randomUUID().toString()
+
+internal enum class StagingOutputKind(val wireName: String) {
+    EXPORT("export"),
+    COPY("copy"),
+}
+
+internal data class StagingOutputMetadata(
+    val kind: StagingOutputKind,
+    val sessionId: String,
+    val finalDisplayName: String,
+)
 internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
 private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/"
 
@@ -505,27 +519,35 @@ fun createOutputTarget(
     )
     val displayName = "$baseName.${format.extension}"
     val mimeType = format.outputMimeType
-    return createOutputTarget(context, displayName, mimeType, startedAtMillis)
+    return createOutputTarget(
+        context,
+        displayName,
+        mimeType,
+        startedAtMillis,
+        stagingKind = StagingOutputKind.EXPORT,
+    )
 }
 
-fun createOutputTarget(
+internal fun createOutputTarget(
     context: Context,
     requestedDisplayName: String,
     mimeType: String,
     startedAtMillis: Long,
+    stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
     val treeUri = getConfiguredExportTreeUri(context)
     return if (treeUri == null) {
         if (usesMediaStoreDefaultStorage()) {
-            createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis)
+            createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
         } else {
             createLocalOutputTarget(
                 context, requestedDisplayName, mimeType, startedAtMillis,
                 storageDir = getSharedMusicRecordingsDirectory(),
+                stagingKind = stagingKind,
             )
         }
     } else {
-        createDocumentOutputTarget(context, treeUri, requestedDisplayName, mimeType, startedAtMillis)
+        createDocumentOutputTarget(context, treeUri, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
     }
 }
 
@@ -596,13 +618,31 @@ internal fun verifyOutputTargetSize(
 @Throws(IOException::class)
 fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
     return when (target.storageType) {
-        RecordingStorageType.MEDIASTORE -> {
-            publishMediaStoreUri(context, requireNotNull(target.uri))
-            target
-        }
+        RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target)
         RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target)
         RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target)
     }
+}
+
+@Throws(IOException::class)
+private fun finalizeMediaStoreOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+    val uri = requireNotNull(target.uri)
+    if (!target.staging) {
+        publishMediaStoreUri(context, uri)
+        return target
+    }
+    val finalName = findAvailableDisplayName(target.displayName) { candidate ->
+        mediaStoreNameExists(context, candidate)
+    }
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
+        put(MediaStore.MediaColumns.IS_PENDING, 0)
+    }
+    if (context.contentResolver.update(uri, values, null, null) <= 0) {
+        throw IOException("Unable to publish MediaStore recording: $uri")
+    }
+    val actualName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: finalName
+    return target.copy(displayName = actualName, staging = false)
 }
 
 @Throws(IOException::class)
@@ -1168,15 +1208,109 @@ internal fun listLegacyAppStorageRecordings(
     knownRecordings,
 )
 
+private fun recoverStagedFileOutputs(
+    context: Context,
+    directory: File,
+    files: Array<File>,
+): Boolean {
+    var changed = false
+    files.forEach { file ->
+        val name = file.name
+        if (!file.isFile || !isStagingOutputName(name)) return@forEach
+        val metadata = parseStagingOutputMetadata(name) ?: return@forEach
+        if (!shouldRecoverStagingOutput(metadata)) return@forEach
+        if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true) || file.length() <= 0L) return@forEach
+        val duration = runCatching { FileInputStream(file).use(::readRecoverableStagingWavDurationMillis) }
+            .onFailure { Log.w(TAG, "Unable to inspect staging recording $file", it) }
+            .getOrDefault(0L)
+        if (duration <= 0L) return@forEach
+        val target = RecordingOutputTarget(
+            id = file.absolutePath,
+            displayName = metadata.finalDisplayName,
+            mimeType = guessMimeType(metadata.finalDisplayName),
+            storageType = RecordingStorageType.FILE,
+            directoryId = directory.absolutePath,
+            startedAtMillis = resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.lastModified()),
+            file = file,
+            staging = true,
+        )
+        val recovered = runCatching { finalizeOutputTarget(context, target) }
+            .onFailure { Log.w(TAG, "Unable to publish recovered staging recording $file", it) }
+            .isSuccess
+        changed = changed || recovered
+    }
+    return changed
+}
+
+private fun recoverStagedDocumentOutputs(
+    context: Context,
+    treeUri: Uri,
+    files: Array<DocumentFile>,
+): Boolean {
+    var changed = false
+    files.forEach { file ->
+        val name = file.name ?: return@forEach
+        if (!file.isFile || !isStagingOutputName(name)) return@forEach
+        val metadata = parseStagingOutputMetadata(name) ?: return@forEach
+        if (!shouldRecoverStagingOutput(metadata)) return@forEach
+        if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
+        if (hasMatchingPublishedDocument(context, file, metadata.finalDisplayName, files)) return@forEach
+        val duration = runCatching {
+            context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
+        }.onFailure { Log.w(TAG, "Unable to inspect staging document ${file.uri}", it) }
+            .getOrDefault(0L)
+        if (duration <= 0L) return@forEach
+        val modified = file.lastModified().coerceAtLeast(0L)
+        val target = RecordingOutputTarget(
+            id = file.uri.toString(),
+            displayName = metadata.finalDisplayName,
+            mimeType = file.type ?: guessMimeType(metadata.finalDisplayName),
+            storageType = RecordingStorageType.DOCUMENT,
+            directoryId = treeUri.toString(),
+            startedAtMillis = resolveRecordingStartTimeMillis(metadata.finalDisplayName, modified),
+            uri = file.uri,
+            staging = true,
+        )
+        val recovered = runCatching { finalizeOutputTarget(context, target) }
+            .onFailure { Log.w(TAG, "Unable to publish recovered staging document ${file.uri}", it) }
+            .isSuccess
+        changed = changed || recovered
+    }
+    return changed
+}
+
+private fun hasMatchingPublishedDocument(
+    context: Context,
+    staging: DocumentFile,
+    finalDisplayName: String,
+    files: Array<DocumentFile>,
+): Boolean {
+    val stagingSize = staging.length().coerceAtLeast(0L)
+    val candidate = files.firstOrNull { file ->
+        file.isFile && file.uri != staging.uri && !isStagingOutputName(file.name.orEmpty()) &&
+            file.name == finalDisplayName &&
+            (stagingSize <= 0L || file.length().coerceAtLeast(0L) <= 0L || file.length() == stagingSize)
+    } ?: return false
+    return runCatching {
+        val first = context.contentResolver.openInputStream(staging.uri)?.use(::sha256) ?: return@runCatching false
+        val second = context.contentResolver.openInputStream(candidate.uri)?.use(::sha256) ?: return@runCatching false
+        first.byteCount == second.byteCount && first.sha256.contentEquals(second.sha256)
+    }.onFailure { Log.w(TAG, "Unable to compare retained staging document ${staging.uri}", it) }
+        .getOrDefault(false)
+}
+
 private fun listFileDirectoryRecordings(
     context: Context,
     directory: File,
     knownRecordings: Map<String, RecordingEntity>,
 ): List<RecordingEntity> {
-    val files = directory.listFiles() ?: if (!directory.exists()) {
+    var files = directory.listFiles() ?: if (!directory.exists()) {
         emptyArray()
     } else {
         throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
+    }
+    if (recoverStagedFileOutputs(context, directory, files)) {
+        files = directory.listFiles() ?: throw IOException("Unable to relist recordings directory: ${directory.absolutePath}")
     }
     return files.asSequence()
         .filter { it.isFile && it.length() > 0L && !it.isHidden }
@@ -1215,8 +1349,11 @@ private fun listDocumentTreeRecordings(
 ): List<RecordingEntity> = runCatching {
     val tree = DocumentFile.fromTreeUri(context, treeUri)
         ?: throw IOException("Unable to access output directory $treeUri")
-    tree.listFiles()
-        .asSequence()
+    var files = tree.listFiles()
+    if (recoverStagedDocumentOutputs(context, treeUri, files)) {
+        files = tree.listFiles()
+    }
+    files.asSequence()
         .filter { it.isFile }
         .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
         .mapNotNull { file ->
@@ -1280,26 +1417,79 @@ private fun listMediaStoreRecordings(
             val pendingIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
             buildList {
                 while (cursor.moveToNext()) {
-                    val name = cursor.getString(nameIndex) ?: continue
-                    if (!isSupportedRecordingName(name)) continue
+                    val storedName = cursor.getString(nameIndex) ?: continue
                     val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
                     val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
                     val pending = cursor.getInt(pendingIndex) != 0
                     val reportedDuration = cursor.getLong(durationIndex).coerceAtLeast(0L)
-                    // Pending rows are crash artifacts until the audio itself proves complete.
-                    // Never publish a merely non-empty partial file.
-                    val media = if (pending || reportedDuration <= 0L) {
-                        inspectRecordingMedia(context, uri, name)
-                    } else {
-                        null
-                    }
+                    val modifiedMillis = cursor.getLong(modifiedIndex).coerceAtLeast(0L) * 1000L
+                    val mimeType = cursor.getString(mimeIndex) ?: guessMimeType(storedName)
+
+                    var name = storedName
+                    var media: RecordingMediaMetadata? = null
+                    var durationMillis = reportedDuration
+
                     if (pending) {
-                        if (!canRecoverPendingMedia(size, media?.durationMillis ?: 0L)) continue
-                        val published = runCatching { publishMediaStoreUri(context, uri) }
-                            .onFailure { Log.w(TAG, "Unable to republish recovered recording $uri", it) }
-                            .isSuccess
-                        if (!published) continue
+                        val metadata = parseStagingOutputMetadata(storedName)
+                        if (metadata != null) {
+                            if (!shouldRecoverStagingOutput(metadata)) {
+                                continue
+                            }
+                            val strictDuration = runCatching {
+                                context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
+                            }.onFailure { Log.w(TAG, "Unable to inspect pending staged recording $uri", it) }
+                                .getOrDefault(0L)
+                            if (strictDuration <= 0L) continue
+                            val stagedTarget = RecordingOutputTarget(
+                                id = uri.toString(),
+                                displayName = metadata.finalDisplayName,
+                                mimeType = mimeType,
+                                storageType = RecordingStorageType.MEDIASTORE,
+                                directoryId = MEDIA_STORE_DIRECTORY_ID,
+                                startedAtMillis = resolveRecordingStartTimeMillis(metadata.finalDisplayName, modifiedMillis),
+                                uri = uri,
+                                staging = true,
+                            )
+                            val finalized = runCatching { finalizeOutputTarget(context, stagedTarget) }
+                                .onFailure { Log.w(TAG, "Unable to publish recovered pending recording $uri", it) }
+                                .getOrNull() ?: continue
+                            name = finalized.displayName
+                            durationMillis = strictDuration
+                            media = inspectRecordingMedia(context, uri, name)
+                        } else {
+                            // Compatibility with pending rows from older builds, which used
+                            // their final display name before operation-kind staging existed.
+                            if (!isSupportedRecordingName(storedName)) continue
+                            media = inspectRecordingMedia(context, uri, storedName)
+                            if (!canRecoverPendingMedia(size, media.durationMillis)) continue
+                            val pendingRecording = RecordingEntity(
+                                id = uri.toString(),
+                                displayName = storedName,
+                                mimeType = mimeType,
+                                startedAtMillis = resolveRecordingStartTimeMillis(storedName, modifiedMillis),
+                                durationMillis = media.durationMillis,
+                                sizeBytes = size,
+                                codecSummary = media.codecSummary,
+                                storageType = RecordingStorageType.MEDIASTORE.name,
+                                directoryId = MEDIA_STORE_DIRECTORY_ID,
+                            )
+                            val matchesKnownSource = knownRecordings.values.any { known ->
+                                known.id != pendingRecording.id &&
+                                    known.displayName == pendingRecording.displayName &&
+                                    recordingsHaveSameContent(context, known, pendingRecording)
+                            }
+                            if (matchesKnownSource) continue
+                            val published = runCatching { publishMediaStoreUri(context, uri) }
+                                .onFailure { Log.w(TAG, "Unable to republish legacy pending recording $uri", it) }
+                                .isSuccess
+                            if (!published) continue
+                            durationMillis = media.durationMillis
+                        }
+                    } else {
+                        if (!isSupportedRecordingName(name)) continue
+                        if (durationMillis <= 0L) media = inspectRecordingMedia(context, uri, name)
                     }
+
                     val id = uri.toString()
                     val existing = knownRecordings[id]
                     if (
@@ -1313,12 +1503,9 @@ private fun listMediaStoreRecordings(
                         RecordingEntity(
                             id = id,
                             displayName = name,
-                            mimeType = cursor.getString(mimeIndex) ?: guessMimeType(name),
-                            startedAtMillis = resolveRecordingStartTimeMillis(
-                                name,
-                                cursor.getLong(modifiedIndex).coerceAtLeast(0L) * 1000L,
-                            ),
-                            durationMillis = reportedDuration.takeIf { it > 0L }
+                            mimeType = mimeType,
+                            startedAtMillis = resolveRecordingStartTimeMillis(name, modifiedMillis),
+                            durationMillis = durationMillis.takeIf { it > 0L }
                                 ?: media?.durationMillis?.coerceAtLeast(0L)
                                 ?: 0L,
                             sizeBytes = size,
@@ -1422,10 +1609,52 @@ internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGIN
 internal fun isSupportedRecordingName(name: String): Boolean =
     !isStagingOutputName(name) && name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
 
-internal fun stagingOutputName(finalDisplayName: String, token: String): String {
+internal fun stagingOutputName(
+    finalDisplayName: String,
+    token: String,
+    sessionId: String = OUTPUT_STAGING_SESSION_ID,
+    kind: StagingOutputKind = StagingOutputKind.COPY,
+): String {
     val extension = finalDisplayName.substringAfterLast('.', "tmp").lowercase().ifBlank { "tmp" }
-    return "$STAGING_OUTPUT_PREFIX$token.$extension"
+    val encodedName = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(finalDisplayName.toByteArray(Charsets.UTF_8))
+    return buildString {
+        append(STAGING_OUTPUT_PREFIX)
+        append(kind.wireName)
+        append(STAGING_SESSION_SEPARATOR)
+        append(sessionId)
+        append(STAGING_SESSION_SEPARATOR)
+        append(token)
+        append(STAGING_SESSION_SEPARATOR)
+        append(encodedName)
+        append('.')
+        append(extension)
+    }
 }
+
+internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = runCatching {
+    if (!isStagingOutputName(name)) return@runCatching null
+    val stem = name.substringBeforeLast('.', name).removePrefix(STAGING_OUTPUT_PREFIX)
+    val parts = stem.split(STAGING_SESSION_SEPARATOR, limit = 4)
+    if (parts.size != 4) return@runCatching null
+    val kind = StagingOutputKind.entries.firstOrNull { it.wireName == parts[0] } ?: return@runCatching null
+    val sessionId = parts[1].takeIf { it.isNotBlank() } ?: return@runCatching null
+    if (parts[2].isBlank()) return@runCatching null
+    val finalDisplayName = Base64.getUrlDecoder().decode(parts[3]).toString(Charsets.UTF_8)
+        .takeIf { it.isNotBlank() && isSupportedRecordingName(it) } ?: return@runCatching null
+    StagingOutputMetadata(kind, sessionId, finalDisplayName)
+}.getOrNull()
+
+internal fun isStagingOutputFromSession(name: String, sessionId: String): Boolean =
+    parseStagingOutputMetadata(name)?.sessionId == sessionId
+
+internal fun isCurrentProcessStagingOutput(name: String): Boolean =
+    isStagingOutputFromSession(name, OUTPUT_STAGING_SESSION_ID)
+
+internal fun shouldRecoverStagingOutput(
+    metadata: StagingOutputMetadata?,
+    currentSessionId: String = OUTPUT_STAGING_SESSION_ID,
+): Boolean = metadata?.kind == StagingOutputKind.EXPORT && metadata.sessionId != currentSessionId
 
 internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
     sizeBytes > 0L && durationMillis > 0L
@@ -1436,6 +1665,7 @@ private fun createLocalOutputTarget(
     mimeType: String,
     startedAtMillis: Long,
     storageDir: File = getSavedRecordingsDirectory(context),
+    stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
     if (!storageDir.exists() && !storageDir.mkdirs() && !storageDir.exists()) {
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
@@ -1448,7 +1678,7 @@ private fun createLocalOutputTarget(
     val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate -> File(storageDir, candidate).exists() }
     var file: File
     while (true) {
-        file = File(storageDir, stagingOutputName(uniqueName, UUID.randomUUID().toString()))
+        file = File(storageDir, stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind))
         if (file.createNewFile()) break
     }
     return RecordingOutputTarget(
@@ -1544,14 +1774,16 @@ private fun createMediaStoreOutputTarget(
     requestedDisplayName: String,
     mimeType: String,
     startedAtMillis: Long,
+    stagingKind: StagingOutputKind,
 ): RecordingOutputTarget {
     check(usesMediaStoreDefaultStorage()) { "MediaStore output requires Android 10+" }
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
     val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
         mediaStoreNameExists(context, candidate)
     }
+    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind)
     val values = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName)
+        put(MediaStore.MediaColumns.DISPLAY_NAME, stagingName)
         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
         put(MediaStore.MediaColumns.RELATIVE_PATH, MEDIA_STORE_RELATIVE_PATH)
         put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -1560,12 +1792,13 @@ private fun createMediaStoreOutputTarget(
         ?: throw IOException("Unable to create MediaStore recording")
     return RecordingOutputTarget(
         id = uri.toString(),
-        displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
+        displayName = uniqueName,
         mimeType = mimeType,
         storageType = RecordingStorageType.MEDIASTORE,
         directoryId = MEDIA_STORE_DIRECTORY_ID,
         startedAtMillis = startedAtMillis,
         uri = uri,
+        staging = true,
     )
 }
 
@@ -1575,6 +1808,7 @@ private fun createDocumentOutputTarget(
     requestedDisplayName: String,
     mimeType: String,
     startedAtMillis: Long,
+    stagingKind: StagingOutputKind,
 ): RecordingOutputTarget {
     val tree = DocumentFile.fromTreeUri(context, treeUri)
         ?: throw IOException("Unable to access output directory")
@@ -1582,7 +1816,7 @@ private fun createDocumentOutputTarget(
     val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
         tree.findFile(candidate) != null
     }
-    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString())
+    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind)
     val documentUri = DocumentsContract.createDocument(
         context.contentResolver,
         DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
@@ -1632,7 +1866,12 @@ private fun sanitizeBaseName(name: String): String {
             }
         }
     }.trim()
-    return sanitized.ifEmpty { ReverbConfig.FALLBACK_DISPLAY_NAME }
+    val nonEmpty = sanitized.ifEmpty { ReverbConfig.FALLBACK_DISPLAY_NAME }
+    return if (nonEmpty.startsWith(STAGING_OUTPUT_PREFIX, ignoreCase = true)) {
+        "${ReverbConfig.FALLBACK_DISPLAY_NAME} $nonEmpty"
+    } else {
+        nonEmpty
+    }
 }
 
 private fun guessMimeType(displayName: String): String {
@@ -1697,6 +1936,68 @@ private fun readWavDurationMillis(input: InputStream): Long {
         }
         0L
     }.onFailure { Log.w(TAG, "readWavDurationMillis(input) failed", it) }.getOrDefault(0L)
+}
+
+internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long = runCatching {
+    val riffHeader = ByteArray(12)
+    if (!input.readFully(riffHeader)) return@runCatching 0L
+    if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
+        return@runCatching 0L
+    }
+    val expectedTotalBytes = littleEndianUnsignedInt(riffHeader, 4) + 8L
+    if (expectedTotalBytes < 44L) return@runCatching 0L
+
+    var consumedBytes = 12L
+    var byteRate = 0L
+    var dataSize = -1L
+    val chunkHeader = ByteArray(8)
+    val discardBuffer = ByteArray(FILE_COPY_BUFFER_BYTES)
+    while (consumedBytes < expectedTotalBytes) {
+        if (expectedTotalBytes - consumedBytes < chunkHeader.size) return@runCatching 0L
+        if (!input.readFully(chunkHeader)) return@runCatching 0L
+        consumedBytes += chunkHeader.size
+        val chunkSize = littleEndianUnsignedInt(chunkHeader, 4)
+        val paddedChunkSize = chunkSize + (chunkSize and 1L)
+        if (paddedChunkSize > expectedTotalBytes - consumedBytes) return@runCatching 0L
+
+        if (chunkHeader.regionMatchesAscii(0, "fmt ")) {
+            if (chunkSize < 16L) return@runCatching 0L
+            val format = ByteArray(16)
+            if (!input.readFully(format)) return@runCatching 0L
+            consumedBytes += format.size
+            byteRate = littleEndianUnsignedInt(format, 8)
+            val remainder = chunkSize - format.size.toLong()
+            if (!input.discardFully(remainder, discardBuffer)) return@runCatching 0L
+            consumedBytes += remainder
+        } else {
+            if (chunkHeader.regionMatchesAscii(0, "data")) dataSize = chunkSize
+            if (!input.discardFully(chunkSize, discardBuffer)) return@runCatching 0L
+            consumedBytes += chunkSize
+        }
+        if ((chunkSize and 1L) != 0L) {
+            if (input.read() < 0) return@runCatching 0L
+            consumedBytes++
+        }
+    }
+    if (consumedBytes != expectedTotalBytes || input.read() >= 0) return@runCatching 0L
+    if (byteRate <= 0L || dataSize <= 0L) return@runCatching 0L
+    (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: 0L
+}.getOrDefault(0L)
+
+private fun InputStream.discardFully(byteCount: Long, buffer: ByteArray): Boolean {
+    var remaining = byteCount
+    while (remaining > 0L) {
+        val requested = minOf(buffer.size.toLong(), remaining).toInt()
+        val read = read(buffer, 0, requested)
+        if (read < 0) return false
+        if (read == 0) {
+            if (read() < 0) return false
+            remaining--
+        } else {
+            remaining -= read.toLong()
+        }
+    }
+    return true
 }
 
 private fun countOutputTargetBytes(

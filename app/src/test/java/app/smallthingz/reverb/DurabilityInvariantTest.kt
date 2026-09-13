@@ -103,6 +103,53 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun stagingOutputMetadata_preservesPurposeSessionAndFinalName() {
+        val exportStaging = stagingOutputName(
+            finalDisplayName = "clip name.wav",
+            token = "token",
+            sessionId = "session-a",
+            kind = StagingOutputKind.EXPORT,
+        )
+        val exportMetadata = parseStagingOutputMetadata(exportStaging)
+        assertEquals(
+            StagingOutputMetadata(StagingOutputKind.EXPORT, "session-a", "clip name.wav"),
+            exportMetadata,
+        )
+        assertTrue(isStagingOutputFromSession(exportStaging, "session-a"))
+        assertFalse(isStagingOutputFromSession(exportStaging, "session-b"))
+        assertTrue(isStagingOutputName(exportStaging))
+        assertFalse(isSupportedRecordingName(exportStaging))
+        assertFalse(shouldRecoverStagingOutput(exportMetadata, currentSessionId = "session-a"))
+        assertTrue(shouldRecoverStagingOutput(exportMetadata, currentSessionId = "session-b"))
+
+        val copyStaging = stagingOutputName(
+            finalDisplayName = "clip.wav",
+            token = "token-2",
+            sessionId = "session-old",
+            kind = StagingOutputKind.COPY,
+        )
+        val copyMetadata = parseStagingOutputMetadata(copyStaging)
+        assertEquals(StagingOutputKind.COPY, copyMetadata?.kind)
+        assertFalse(shouldRecoverStagingOutput(copyMetadata, currentSessionId = "session-new"))
+        assertFalse(shouldRecoverStagingOutput(null, currentSessionId = "session-new"))
+        assertEquals(null, parseStagingOutputMetadata("reverb-partial-malformed.wav"))
+    }
+
+    @Test
+    fun stagingWavRecovery_requiresExactCompleteContainerBytes() {
+        val payload = ByteArray(8_820) { index -> ((index * 17 + 3) and 0xff).toByte() }
+        val header = buildWavHeaderBytes(44_100, 1, PcmSampleFormat.PCM_16, payload.size.toLong())
+        val complete = header + payload
+
+        assertEquals(100L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete)))
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete.copyOf(complete.size - 1))))
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete + byteArrayOf(0))))
+
+        val placeholder = buildWavHeaderBytes(44_100, 1, PcmSampleFormat.PCM_16, 0L) + payload
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(placeholder)))
+    }
+
+    @Test
     fun stagedFilePublish_neverOverwritesAnExistingRecording() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "publish-").toFile()
