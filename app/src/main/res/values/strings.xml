@@ -75,7 +75,7 @@
     <string name="theme_dark">Dark</string>
     <string name="retention_mode_title">Retention</string>
     <string name="retention_time_label">Time</string>
-    <string name="retention_time_invalid">Enter minutes, MM:SS, or HH:MM:SS.</string>
+    <string name="retention_time_invalid">Use H:MM:SS.</string>
     <string name="retention_size_label">Size (MiB)</string>
     <string name="retention_size_mode_label">Size</string>
     <string name="retention_loop_label">Loop</string>

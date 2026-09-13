@@ -101,11 +101,6 @@ private fun RecordingSummaryCard(
         else chrome.field,
         label = "recordingCardColor",
     )
-    val borderColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.52f)
-        else chrome.border,
-        label = "recordingCardBorder",
-    )
     val iconBackground by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else chrome.raised,
         label = "recordingCardIconBackground",
@@ -118,7 +113,7 @@ private fun RecordingSummaryCard(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         color = bgColor,
-        border = BorderStroke(1.dp, borderColor),
+        border = BorderStroke(1.dp, chrome.border),
         tonalElevation = 0.dp,
     ) {
         val iconInteractionModifier = if (onClick != null) {

@@ -936,9 +936,11 @@ class FormattingAndHistoryMathTest {
             loopingRetentionSizeBytes = 987_654_321L,
         )
 
-        assertEquals("1.017", formatRetentionTimeInput(snapshot.oneShotRetentionTime.toLong()))
+        assertEquals("0:01:01", formatRetentionTimeInput(snapshot.oneShotRetentionTime.toLong()))
         assertEquals(61, parseRetentionTimeSeconds(formatRetentionTimeInput(61)))
         assertEquals(3_599, parseRetentionTimeSeconds(formatRetentionTimeInput(3_599)))
+        assertEquals("0:59:59", formatRetentionTimeInput(3_599))
+        assertEquals("1:00:00", formatRetentionTimeInput(3_600))
         assertEquals(90, parseRetentionTimeSeconds("1.5"))
         assertEquals(90, parseRetentionTimeSeconds("1,5"))
         assertEquals(65, parseRetentionTimeSeconds("1:05"))

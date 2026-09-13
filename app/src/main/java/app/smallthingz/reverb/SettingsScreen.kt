@@ -96,8 +96,6 @@ import kotlin.math.roundToLong
 private val BYTES_IN_MEGABYTE = 1024L * 1024L
 private val retentionSizeFormatter =
     DecimalFormat(ReverbConfig.FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
-private val retentionTimeFormatter =
-    DecimalFormat("0.###", DecimalFormatSymbols(Locale.US))
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     var retentionMode: RetentionMode = RetentionMode.TIME,
@@ -1493,11 +1491,7 @@ private fun RetentionValue(
         if (requestFocus) focusRequester.requestFocus()
     }
     val value = if (isTime) timeText else sizeText
-    val unit = if (isTime) {
-        stringResource(R.string.retention_minutes_unit)
-    } else {
-        stringResource(R.string.retention_mib_unit)
-    }
+    val unit = if (isTime) null else stringResource(R.string.retention_mib_unit)
     val estimate = if (isTime) {
         stringResource(
             R.string.retention_size_estimate,
@@ -1538,7 +1532,9 @@ private fun RetentionValue(
                 value = value,
                 onValueChange = if (isTime) onTimeChange else onSizeChange,
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = if (isTime) KeyboardType.Ascii else KeyboardType.Decimal,
+                ),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                     color = chrome.ink,
                     fontSize = 34.sp,
@@ -1552,13 +1548,15 @@ private fun RetentionValue(
                     .focusRequester(focusRequester)
                     .semantics { contentDescription = label },
             )
-            Text(
-                text = unit,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                color = chrome.muted,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
+            if (unit != null) {
+                Text(
+                    text = unit,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    color = chrome.muted,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
         }
         Text(
             text = estimate,
@@ -1725,8 +1723,11 @@ internal fun parseRetentionTimeSeconds(value: String): Int? {
 }
 
 internal fun formatRetentionTimeInput(seconds: Long): String {
-    val safeSeconds = seconds.coerceAtLeast(0L)
-    return retentionTimeFormatter.format(safeSeconds / 60.0)
+    val total = seconds.coerceAtLeast(0L)
+    val hours = total / 3600L
+    val minutes = total % 3600L / 60L
+    val secs = total % 60L
+    return String.format(Locale.US, "%d:%02d:%02d", hours, minutes, secs)
 }
 
 private fun formatRetentionMinutesEstimate(seconds: Long): String {
