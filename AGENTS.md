@@ -23,3 +23,4 @@
 - An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.
 - Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable recording intent; retry on a foreground bind or explicit start.
 - Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted.
+- Physical deletion intents are versioned and content-fingerprinted; after process loss, never replay physical deletion against a present asset. Replay may only wait, abandon the intent, or finish catalog cleanup after confirmed deletion/absence.

@@ -2,6 +2,8 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.net.Uri
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -151,10 +153,24 @@ object RecordingRepository {
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
-                if (!addPendingDeletionLocked(context, recording.id)) return@withLock false
-                if (!deleteRecordingAsset(context, recording)) return@withLock false
-                RecordingDatabase.getInstance(context).recordingDao().deleteById(recording.id)
-                removePendingDeletionLocked(context, recording.id)
+                replayPendingDeletionsLocked(context)
+                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val tracked = dao.listAll().firstOrNull { it.id == recording.id }
+                    ?: return@withLock true
+
+                val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
+                if (!putPendingDeletionLocked(context, intent)) return@withLock false
+                if (!pendingDeletionMatchesCurrentAsset(context, tracked, intent)) {
+                    removePendingDeletionLocked(context, tracked.id)
+                    return@withLock false
+                }
+                if (!deleteRecordingAsset(context, tracked)) return@withLock false
+
+                // Persist the destructive phase boundary before touching catalog metadata.
+                // If this commit fails, replay still never repeats physical deletion.
+                putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
+                dao.deleteById(tracked.id)
+                removePendingDeletionLocked(context, tracked.id)
                 schedulePersistedPermissionCleanup(context)
                 true
             }
@@ -162,35 +178,98 @@ object RecordingRepository {
     }
 
     private suspend fun replayPendingDeletionsLocked(context: Context) {
-        val pendingIds = pendingDeletionIds(context)
-        if (pendingIds.isEmpty()) return
+        val rawEntries = pendingDeletionEntries(context)
+        if (rawEntries.isEmpty()) return
         val dao = RecordingDatabase.getInstance(context).recordingDao()
         val byId = dao.listAll().associateBy { it.id }
-        for (id in pendingIds) {
-            val recording = byId[id] ?: continue
-            if (!deleteRecordingAsset(context, recording)) continue
-            dao.deleteById(id)
-            removePendingDeletionLocked(context, id)
+        for (raw in rawEntries) {
+            val intent = decodePendingDeletionIntent(raw)
+            if (intent == null) {
+                // Old ID-only and malformed entries do not contain enough identity to
+                // authorize a destructive retry. Drop the intent, never the asset.
+                removePendingDeletionRawLocked(context, raw)
+                continue
+            }
+            val recording = byId[intent.id]
+            if (recording == null) {
+                removePendingDeletionLocked(context, intent.id)
+                continue
+            }
+            when (pendingDeletionReplayAction(intent, recordingAssetState(context, recording))) {
+                PendingDeletionReplayAction.WAIT -> continue
+                PendingDeletionReplayAction.ABANDON_INTENT -> {
+                    removePendingDeletionLocked(context, intent.id)
+                    continue
+                }
+                PendingDeletionReplayAction.CLEAN_CATALOG -> {
+                    // Physical deletion is never replayed. This only removes metadata after
+                    // confirmed deletion or a positive observation that the asset is absent.
+                    dao.deleteById(intent.id)
+                    removePendingDeletionLocked(context, intent.id)
+                }
+            }
         }
     }
 
-    private fun pendingDeletionIds(context: Context): Set<String> =
+    private fun pendingDeletionEntries(context: Context): Set<String> =
         getRecorderPreferences(context).getStringSet(PrefKey.PENDING_RECORDING_DELETIONS, emptySet())
             ?.toSet()
             .orEmpty()
 
-    private fun addPendingDeletionLocked(context: Context, id: String): Boolean {
-        val updated = pendingDeletionIds(context) + id
+    private fun pendingDeletionIds(context: Context): Set<String> =
+        pendingDeletionEntries(context).mapNotNullTo(mutableSetOf()) { raw ->
+            decodePendingDeletionIntent(raw)?.id ?: raw.takeUnless { it.startsWith(PENDING_DELETION_VERSION_PREFIX) }
+        }
+
+    private fun createPendingDeletionIntent(
+        context: Context,
+        recording: RecordingEntity,
+    ): PendingDeletionIntent? = runCatching {
+        val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return@runCatching null
+        if (digest.byteCount <= 0L) return@runCatching null
+        PendingDeletionIntent(
+            id = recording.id,
+            byteCount = digest.byteCount,
+            sha256Hex = digest.sha256.toHexString(),
+            assetDeleted = false,
+        )
+    }.getOrNull()
+
+    private fun pendingDeletionMatchesCurrentAsset(
+        context: Context,
+        recording: RecordingEntity,
+        intent: PendingDeletionIntent,
+    ): Boolean = runCatching {
+        val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return@runCatching false
+        pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
+    }.getOrDefault(false)
+
+    private fun putPendingDeletionLocked(context: Context, intent: PendingDeletionIntent): Boolean {
+        val current = pendingDeletionEntries(context)
+        val updated = current.filterNotTo(mutableSetOf()) { raw ->
+            decodePendingDeletionIntent(raw)?.id == intent.id || raw == intent.id
+        }
+        updated += encodePendingDeletionIntent(intent)
         return getRecorderPreferences(context).edit()
             .putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
             .commit()
     }
 
     private fun removePendingDeletionLocked(context: Context, id: String): Boolean {
-        val updated = pendingDeletionIds(context) - id
+        val current = pendingDeletionEntries(context)
+        val updated = current.filterNotTo(mutableSetOf()) { raw ->
+            decodePendingDeletionIntent(raw)?.id == id || raw == id
+        }
+        return writePendingDeletionEntries(context, updated)
+    }
+
+    private fun removePendingDeletionRawLocked(context: Context, raw: String): Boolean =
+        writePendingDeletionEntries(context, pendingDeletionEntries(context) - raw)
+
+    private fun writePendingDeletionEntries(context: Context, entries: Set<String>): Boolean {
         val editor = getRecorderPreferences(context).edit()
-        if (updated.isEmpty()) editor.remove(PrefKey.PENDING_RECORDING_DELETIONS)
-        else editor.putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
+        if (entries.isEmpty()) editor.remove(PrefKey.PENDING_RECORDING_DELETIONS)
+        else editor.putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, entries)
         return editor.commit()
     }
 
@@ -453,6 +532,65 @@ internal fun recordingDirectoryIdsToRetain(
     .map { it.directoryId }
     .filter { it.isNotBlank() }
     .toSet()
+
+private const val PENDING_DELETION_VERSION_PREFIX = "v1|"
+
+internal data class PendingDeletionIntent(
+    val id: String,
+    val byteCount: Long,
+    val sha256Hex: String,
+    val assetDeleted: Boolean,
+)
+
+internal fun encodePendingDeletionIntent(intent: PendingDeletionIntent): String {
+    val id = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(intent.id.toByteArray(StandardCharsets.UTF_8))
+    return buildString {
+        append(PENDING_DELETION_VERSION_PREFIX)
+        append(id).append('|')
+        append(intent.byteCount).append('|')
+        append(intent.sha256Hex.lowercase()).append('|')
+        append(if (intent.assetDeleted) '1' else '0')
+    }
+}
+
+internal fun decodePendingDeletionIntent(raw: String): PendingDeletionIntent? {
+    if (!raw.startsWith(PENDING_DELETION_VERSION_PREFIX)) return null
+    val parts = raw.split('|')
+    if (parts.size != 5 || parts[0] != "v1") return null
+    val id = runCatching {
+        String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8)
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+    val byteCount = parts[2].toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val sha256 = parts[3].lowercase()
+    if (sha256.length != 64 || sha256.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
+    val deleted = when (parts[4]) {
+        "0" -> false
+        "1" -> true
+        else -> return null
+    }
+    return PendingDeletionIntent(id, byteCount, sha256, deleted)
+}
+
+internal fun pendingDeletionMatchesDigest(
+    intent: PendingDeletionIntent,
+    byteCount: Long,
+    sha256Hex: String,
+): Boolean = intent.byteCount == byteCount && intent.sha256Hex.equals(sha256Hex, ignoreCase = true)
+
+internal enum class PendingDeletionReplayAction { WAIT, ABANDON_INTENT, CLEAN_CATALOG }
+
+internal fun pendingDeletionReplayAction(
+    intent: PendingDeletionIntent,
+    assetState: RecordingAssetState,
+): PendingDeletionReplayAction = when {
+    intent.assetDeleted -> PendingDeletionReplayAction.CLEAN_CATALOG
+    assetState == RecordingAssetState.UNAVAILABLE -> PendingDeletionReplayAction.WAIT
+    assetState == RecordingAssetState.PRESENT -> PendingDeletionReplayAction.ABANDON_INTENT
+    else -> PendingDeletionReplayAction.CLEAN_CATALOG
+}
+
+internal fun ByteArray.toHexString(): String = joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,

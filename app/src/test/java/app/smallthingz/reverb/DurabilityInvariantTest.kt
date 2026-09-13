@@ -124,6 +124,67 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun pendingDeletionIntent_roundTripsAndTracksPhysicalDeletionPhase() {
+        val planned = PendingDeletionIntent(
+            id = "content://provider/tree/a|b/%20",
+            byteCount = 12_345L,
+            sha256Hex = "abababababababababababababababababababababababababababababababab",
+            assetDeleted = false,
+        )
+        val encoded = encodePendingDeletionIntent(planned)
+        assertEquals(planned, decodePendingDeletionIntent(encoded))
+
+        val deleted = planned.copy(assetDeleted = true)
+        assertEquals(deleted, decodePendingDeletionIntent(encodePendingDeletionIntent(deleted)))
+    }
+
+    @Test
+    fun pendingDeletionIntent_rejectsLegacyMalformedAndMismatchedContent() {
+        assertEquals(null, decodePendingDeletionIntent("content://legacy/id-only"))
+        assertEquals(null, decodePendingDeletionIntent("v1|broken|12|abcd|0"))
+
+        val intent = PendingDeletionIntent(
+            id = "id",
+            byteCount = 4L,
+            sha256Hex = "0101010101010101010101010101010101010101010101010101010101010101",
+            assetDeleted = false,
+        )
+        assertTrue(pendingDeletionMatchesDigest(intent, 4L, "0101010101010101010101010101010101010101010101010101010101010101"))
+        assertFalse(pendingDeletionMatchesDigest(intent, 5L, "0101010101010101010101010101010101010101010101010101010101010101"))
+        assertFalse(pendingDeletionMatchesDigest(intent, 4L, "0202020202020202020202020202020202020202020202020202020202020202"))
+    }
+
+    @Test
+    fun pendingDeletionReplay_neverRepeatsPhysicalDeletionAfterProcessLoss() {
+        val planned = PendingDeletionIntent(
+            id = "id",
+            byteCount = 4L,
+            sha256Hex = "01".repeat(32),
+            assetDeleted = false,
+        )
+        val deleted = planned.copy(assetDeleted = true)
+
+        assertEquals(
+            PendingDeletionReplayAction.ABANDON_INTENT,
+            pendingDeletionReplayAction(planned, RecordingAssetState.PRESENT),
+        )
+        assertEquals(
+            PendingDeletionReplayAction.WAIT,
+            pendingDeletionReplayAction(planned, RecordingAssetState.UNAVAILABLE),
+        )
+        assertEquals(
+            PendingDeletionReplayAction.CLEAN_CATALOG,
+            pendingDeletionReplayAction(planned, RecordingAssetState.MISSING),
+        )
+        RecordingAssetState.entries.forEach { state ->
+            assertEquals(
+                PendingDeletionReplayAction.CLEAN_CATALOG,
+                pendingDeletionReplayAction(deleted, state),
+            )
+        }
+    }
+
+    @Test
     fun sha256Range_hashesOnlyRequestedPayloadAndRejectsTruncation() {
         val prefix = ByteArray(44) { 0x55.toByte() }
         val payload = ByteArray(12_345) { index -> ((index * 19 + 7) and 0xff).toByte() }
