@@ -155,7 +155,7 @@ private data class ExportUiConfig(
     val channelCount: Int,
 )
 
-private data class BufferMetrics(
+internal data class BufferMetrics(
     val seconds: Float,
     val bytes: Long,
 )
@@ -219,6 +219,7 @@ fun CaptureScreen(
     fun invalidateCustomRangePreparation() {
         customRangeRequestGeneration++
         pendingCustomRangeBuffer = null
+        rangeSnapshotBuffer = null
         isPreparingRange = false
     }
 
@@ -635,8 +636,9 @@ fun CaptureScreen(
                             val requestGeneration = customRangeRequestGeneration + 1L
                             customRangeRequestGeneration = requestGeneration
                             pendingCustomRangeBuffer = bufferSlot
+                            rangeSnapshotBuffer = bufferSlot
                             isPreparingRange = true
-                            s.acquireTimelineSnapshot(bufferSlot, waveformBucketCount = 128) { snapshot ->
+                            s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
                                 val currentRequest = shouldApplyCustomRangeSnapshot(
                                     requestGeneration = requestGeneration,
                                     latestRequestGeneration = customRangeRequestGeneration,
@@ -662,6 +664,7 @@ fun CaptureScreen(
                                     rangeSnapshotBuffer = bufferSlot
                                 } else {
                                     snapshot?.close()
+                                    rangeSnapshotBuffer = null
                                     AppFeedbackCenter.post(
                                         resources.getString(R.string.nothing_to_export),
                                         FeedbackTone.INFO,
@@ -690,6 +693,7 @@ fun CaptureScreen(
             rangeSnapshot?.close()
             rangeSnapshot = null
             rangeSnapshotBuffer = null
+            invalidateCustomRangePreparation()
         }
         val submitRangeExport: (Float, Float) -> Unit = submitRange@ { startSeconds, endSeconds ->
             val snapshot = rangeSnapshot ?: return@submitRange
@@ -701,6 +705,7 @@ fun CaptureScreen(
             )
             rangeSnapshot = null
             rangeSnapshotBuffer = null
+            invalidateCustomRangePreparation()
             if (range.warningDurationSeconds != null) {
                 clampWarningSeconds = range.warningDurationSeconds
                 pendingExportRange = range
@@ -905,17 +910,37 @@ private fun MainCaptureContent(
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
 ) {
-    val activeRangeSnapshot = rangeSnapshot
-    if (activeRangeSnapshot != null) {
+    val rangeBuffer = rangeSnapshotBuffer
+    if (rangeBuffer != null) {
+        val activeRangeSnapshot = rangeSnapshot
+        val rangeMetrics = when (rangeBuffer) {
+            ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
+            ReverbService.BufferSlot.LOOPING -> loopingMetrics
+        }
+        val rangeEnabled = when (rangeBuffer) {
+            ReverbService.BufferSlot.ONE_SHOT -> oneShotEnabled
+            ReverbService.BufferSlot.LOOPING -> loopingEnabled
+        }
+        val rangeBlobController = when (rangeBuffer) {
+            ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController
+            ReverbService.BufferSlot.LOOPING -> loopingBlobController
+        }
         RangeExportHomeContent(
             snapshot = activeRangeSnapshot,
-            selectedBuffer = rangeSnapshotBuffer ?: selectedBuffer,
+            initialDurationSeconds = rangeMetrics.seconds.coerceAtLeast(0.05f),
+            selectedBuffer = rangeBuffer,
             activeBuffer = activeBuffer,
+            blobMetrics = rangeMetrics,
+            blobEnabled = rangeEnabled,
+            blobController = rangeBlobController,
             isListening = isListening,
+            isSaving = isSaving,
+            service = service,
             oneShotEnabled = oneShotEnabled,
             oneShotFull = oneShotFull,
             loopingEnabled = loopingEnabled,
             maxExportDurationSeconds = rangeMaxExportDurationSeconds,
+            visualizerVisible = visualizerVisible,
             onCancel = onCancelRangeExport,
             onExport = onSubmitRangeExport,
             modifier = Modifier
@@ -1392,7 +1417,7 @@ private fun BufferSegment(
 }
 
 @Composable
-private fun BufferBlobPage(
+internal fun BufferBlobPage(
     bufferSlot: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
     metrics: BufferMetrics,
@@ -1406,6 +1431,9 @@ private fun BufferBlobPage(
     onListenToggle: () -> Unit,
     onOpenBufferSettings: () -> Unit,
     visualizerVisible: Boolean,
+    modifier: Modifier = Modifier,
+    interactionEnabled: Boolean = true,
+    contentAlpha: Float = 1f,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -1424,7 +1452,7 @@ private fun BufferBlobPage(
     val serviceReady = service != null
     val captureEnabled = serviceReady && !blockedByOther &&
         (uiState == CaptureBufferUiState.READY || recordingThisBuffer)
-    val clickEnabled = !isSaving && (disabled || (!blockedByOther && captureEnabled))
+    val clickEnabled = interactionEnabled && !isSaving && (disabled || (!blockedByOther && captureEnabled))
 
     val displayedCurrentSeconds = metrics.seconds.coerceAtLeast(0f).toInt()
     val currentBytes = metrics.bytes.coerceAtLeast(0L)
@@ -1465,7 +1493,7 @@ private fun BufferBlobPage(
     }
 
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
         val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
@@ -1482,6 +1510,7 @@ private fun BufferBlobPage(
             showWarning = overExportLimit,
             visualizerVisible = visualizerVisible,
             flipDegrees = flipDegrees,
+            contentAlpha = contentAlpha,
             modifier = Modifier.size(blobSize),
             onClick = if (disabled) onOpenBufferSettings else onListenToggle,
 
@@ -1570,6 +1599,7 @@ private fun AudioBlobControl(
     showWarning: Boolean = false,
     visualizerVisible: Boolean = true,
     flipDegrees: Float = 0f,
+    contentAlpha: Float = 1f,
 ) {
     val active = isListening
     val interactionSource = remember { MutableInteractionSource() }
@@ -1650,7 +1680,10 @@ private fun AudioBlobControl(
             modifier = Modifier.fillMaxSize(),
         )
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) },
+        ) {
             Icon(
                 imageVector = actionIcon,
                 contentDescription = actionDescription,

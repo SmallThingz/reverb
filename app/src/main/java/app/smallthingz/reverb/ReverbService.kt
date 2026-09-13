@@ -946,38 +946,22 @@ class ReverbService : Service() {
 
     fun acquireTimelineSnapshot(
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
-        waveformBucketCount: Int = 0,
         callback: (TimelineSnapshot?) -> Unit,
     ) {
         if (!audioHandler.post {
-            val lease = try {
+            val snapshot = try {
                 flushAudioRecord()
                 val duration = availableBufferedDurationSeconds(bufferSlot)
-                if (duration > 0.0) chunkStore(bufferSlot).acquireRange(0.0, duration) else null
+                if (duration > 0.0) {
+                    chunkStore(bufferSlot).acquireRange(0.0, duration)?.let(::TimelineSnapshot)
+                } else {
+                    null
+                }
             } catch (error: Exception) {
                 reportPersistentStoreFailure("acquire timeline snapshot", error)
                 null
             }
-            if (lease == null) {
-                mainHandler.post { callback(null) }
-                return@post
-            }
-            if (waveformBucketCount <= 0) {
-                mainHandler.post { callback(TimelineSnapshot(lease)) }
-                return@post
-            }
-            try {
-                exportWorkExecutor.execute {
-                    val waveform = runCatching {
-                        lease.sampleWaveformEnvelope(waveformBucketCount)
-                    }.getOrNull()
-                    mainHandler.post { callback(TimelineSnapshot(lease, waveform)) }
-                }
-            } catch (error: Exception) {
-                runCatching { lease.close() }
-                reportPersistentStoreFailure("prepare timeline waveform", error)
-                mainHandler.post { callback(null) }
-            }
+            mainHandler.post { callback(snapshot) }
         }) {
             mainHandler.post { callback(null) }
         }
@@ -2407,7 +2391,6 @@ class ReverbService : Service() {
 
     class TimelineSnapshot internal constructor(
         private val lease: PersistentAudioChunkStore.RangeLease,
-        internal val initialWaveformEnvelope: FloatArray? = null,
     ) : java.io.Closeable {
         val durationSeconds: Double
             get() = lease.durationSeconds
@@ -2415,8 +2398,17 @@ class ReverbService : Service() {
         internal fun acquireRange(startSeconds: Double, endSeconds: Double): PersistentAudioChunkStore.RangeLease? =
             lease.acquireSubRange(startSeconds, endSeconds)
 
-        internal fun sampleWaveformEnvelope(bucketCount: Int): FloatArray =
-            lease.sampleWaveformEnvelope(bucketCount)
+        internal fun sampleWaveformEnvelopeProgressive(
+            bucketCount: Int,
+            probesPerBucket: Int,
+            framesPerProbe: Int,
+            onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
+        ): FloatArray = lease.sampleWaveformEnvelopeProgressive(
+            bucketCount = bucketCount,
+            probesPerBucket = probesPerBucket,
+            framesPerProbe = framesPerProbe,
+            onBucket = onBucket,
+        )
 
         override fun close() {
             lease.close()

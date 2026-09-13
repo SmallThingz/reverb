@@ -174,6 +174,20 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun waveformSecondPassUsesMoreDetailWithStillFixedSampleBudget() {
+        val coarse = RangeWaveformPass.COARSE
+        val detail = RangeWaveformPass.DETAIL
+        assertTrue(detail.bucketCount >= coarse.bucketCount * 3)
+        val coarseFrames = coarse.bucketCount * coarse.probesPerBucket * coarse.framesPerProbe
+        val detailFrames = detail.bucketCount * detail.probesPerBucket * detail.framesPerProbe
+        assertTrue(coarseFrames > 0)
+        assertTrue(detailFrames > coarseFrames)
+        // These counts are constants of the UI pass, not functions of clip duration.
+        assertEquals(3_840, coarseFrames)
+        assertEquals(24_576, detailFrames)
+    }
+
+    @Test
     fun waveformNormalizationIsBoundedAndPreservesShape() {
         val normalized = normalizeWaveformEnvelope(floatArrayOf(0f, 0.25f, 1f, 0.25f, 0f))
         assertEquals(5, normalized.size)

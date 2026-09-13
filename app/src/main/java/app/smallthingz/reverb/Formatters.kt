@@ -41,19 +41,20 @@ fun formatShortTimer(seconds: Float): String {
 
 internal fun formatRangeTimeInput(seconds: Double): String {
     val safeSeconds = if (seconds.isFinite()) seconds.coerceAtLeast(0.0) else 0.0
-    val totalMillis = floor(safeSeconds * 1_000.0).toLong()
-    val totalSeconds = totalMillis / 1_000L
-    val millis = (totalMillis % 1_000L).toInt()
+    // Display at most tenths, and floor rather than round so the rendered end time can
+    // never jump beyond the actual retained audio boundary.
+    val totalTenths = floor(safeSeconds * 10.0).toLong()
+    val totalSeconds = totalTenths / 10L
+    val tenth = (totalTenths % 10L).toInt()
     val hours = totalSeconds / 3_600L
     val minutes = ((totalSeconds % 3_600L) / 60L).toInt()
     val secs = (totalSeconds % 60L).toInt()
-    val fraction = millis.toString().padStart(3, '0')
-
-    return if (hours > 0L) {
-        "$hours:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.$fraction"
+    val base = if (hours > 0L) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}"
     } else {
-        "${minutes}:${secs.toString().padStart(2, '0')}.$fraction"
+        "${minutes}:${secs.toString().padStart(2, '0')}"
     }
+    return if (tenth == 0) base else "$base.$tenth"
 }
 
 internal fun parseRangeTimeInput(value: String): Double? {

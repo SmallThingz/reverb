@@ -346,11 +346,38 @@ class PersistentAudioChunkStoreDurabilityTest {
             store.sealActiveChunk()
             val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
             try {
-                val envelope = lease.sampleWaveformEnvelope(64)
+                val published = ArrayList<Int>()
+                val envelope = lease.sampleWaveformEnvelopeProgressive(64) { index, _ ->
+                    published += index
+                    true
+                }
+                assertEquals((0 until 64).toList(), published)
                 assertEquals(64, envelope.size)
                 assertTrue(envelope.all { it in 0f..1f })
                 assertTrue(envelope.any { it > 0.05f })
                 assertTrue(envelope.distinct().size > 1)
+            } finally {
+                lease.close()
+            }
+            assertArrayEquals(expected, readAll(store))
+        }
+    }
+
+    @Test
+    fun waveformSampling_canStopAtPublishedFrontier() = withStoreRoot { root ->
+        val expected = pcmBytes(96_000)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+            val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            try {
+                val published = ArrayList<Int>()
+                lease.sampleWaveformEnvelopeProgressive(64) { index, _ ->
+                    published += index
+                    index < 11
+                }
+                assertEquals((0..11).toList(), published)
             } finally {
                 lease.close()
             }

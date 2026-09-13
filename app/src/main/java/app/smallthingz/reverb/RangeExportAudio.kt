@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToLong
-import kotlin.math.sqrt
+import kotlin.math.pow
 
 private const val PREVIEW_SAMPLE_RATE = 24_000
 private const val PREVIEW_WRITE_BYTES = 2_400
@@ -22,27 +22,58 @@ private const val SCRUB_AUDITION_SECONDS = 0.14
 private const val SCRUB_AUDITION_LEAD_SECONDS = 0.02
 private const val PREVIEW_PROGRESS_INTERVAL_MILLIS = 32L
 
-internal fun ReverbService.TimelineSnapshot.readWaveformEnvelope(bucketCount: Int): FloatArray =
-    normalizeWaveformEnvelope(sampleWaveformEnvelope(bucketCount))
+internal const val RANGE_WAVEFORM_COARSE_BUCKETS = 96
+internal const val RANGE_WAVEFORM_DETAIL_BUCKETS = 512
+private const val RANGE_WAVEFORM_COARSE_PROBES = 2
+private const val RANGE_WAVEFORM_COARSE_FRAMES_PER_PROBE = 20
+private const val RANGE_WAVEFORM_DETAIL_PROBES = 3
+private const val RANGE_WAVEFORM_DETAIL_FRAMES_PER_PROBE = 16
 
-internal fun normalizeWaveformEnvelope(raw: FloatArray): FloatArray {
-    if (raw.isEmpty()) return raw
-    val peak = raw.maxOrNull()?.coerceAtLeast(0f) ?: 0f
-    if (peak <= 0.0001f) return FloatArray(raw.size)
+internal fun shapeWaveformMagnitude(raw: Float): Float {
+    // Fixed companding keeps quiet structure visible without needing a whole-file peak scan.
+    // The transfer is duration-independent and stable while the waveform is built progressively.
+    val signal = ((raw.coerceIn(0f, 1f) - 0.00008f).coerceAtLeast(0f) * 3.6f)
+        .coerceIn(0f, 1f)
+    return signal.pow(0.28f)
+}
 
-    val normalized = FloatArray(raw.size) { index ->
-        sqrt((raw[index] / peak).coerceIn(0f, 1f))
+internal fun normalizeWaveformEnvelope(raw: FloatArray): FloatArray =
+    FloatArray(raw.size) { index -> shapeWaveformMagnitude(raw[index]) }
+
+internal enum class RangeWaveformPass(
+    val bucketCount: Int,
+    val probesPerBucket: Int,
+    val framesPerProbe: Int,
+) {
+    COARSE(
+        RANGE_WAVEFORM_COARSE_BUCKETS,
+        RANGE_WAVEFORM_COARSE_PROBES,
+        RANGE_WAVEFORM_COARSE_FRAMES_PER_PROBE,
+    ),
+    DETAIL(
+        RANGE_WAVEFORM_DETAIL_BUCKETS,
+        RANGE_WAVEFORM_DETAIL_PROBES,
+        RANGE_WAVEFORM_DETAIL_FRAMES_PER_PROBE,
+    ),
+}
+
+internal fun ReverbService.TimelineSnapshot.readWaveformEnvelopeProgressive(
+    pass: RangeWaveformPass,
+    onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
+): FloatArray {
+    val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
+    if (duration <= 0.0) return FloatArray(pass.bucketCount)
+    val shaped = FloatArray(pass.bucketCount)
+    sampleWaveformEnvelopeProgressive(
+        bucketCount = pass.bucketCount,
+        probesPerBucket = pass.probesPerBucket,
+        framesPerProbe = pass.framesPerProbe,
+    ) { index, raw ->
+        val magnitude = shapeWaveformMagnitude(raw)
+        shaped[index] = magnitude
+        onBucket(index, magnitude)
     }
-    if (normalized.size < 3) return normalized
-
-    val smoothed = FloatArray(normalized.size)
-    for (index in normalized.indices) {
-        val previous = normalized[(index - 1).coerceAtLeast(0)]
-        val current = normalized[index]
-        val next = normalized[(index + 1).coerceAtMost(normalized.lastIndex)]
-        smoothed[index] = (previous * 0.22f + current * 0.56f + next * 0.22f).coerceIn(0f, 1f)
-    }
-    return smoothed
+    return shaped
 }
 
 internal class TimelineAudioPreviewController : Closeable {

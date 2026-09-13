@@ -2,6 +2,9 @@ package app.smallthingz.reverb
 
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,6 +42,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -62,6 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -69,10 +75,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.cosh
 import kotlin.math.pow
@@ -215,10 +223,14 @@ internal fun rangeFineTuneDeltaSeconds(
     dtSeconds.coerceAtLeast(0f)
 
 internal class RangeExportEditorState(
-    val snapshot: ReverbService.TimelineSnapshot,
+    initialDurationSeconds: Float,
 ) {
-    val durationSeconds = snapshot.durationSeconds.toFloat().coerceAtLeast(0.05f)
     private val previewController = TimelineAudioPreviewController()
+
+    var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
+        private set
+    var durationSeconds by mutableFloatStateOf(initialDurationSeconds.coerceAtLeast(0.05f))
+        private set
 
     var startSeconds by mutableFloatStateOf(0f)
         private set
@@ -230,20 +242,115 @@ internal class RangeExportEditorState(
         private set
     var snappedTo by mutableStateOf<RangeEditTarget?>(null)
         private set
-    var waveform by mutableStateOf(FloatArray(0))
+    var coarseWaveform by mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS))
+        private set
+    var coarseWaveformBuiltCount by mutableIntStateOf(0)
+        private set
+    var detailWaveform by mutableStateOf(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS))
+        private set
+    var detailWaveformBuiltCount by mutableIntStateOf(0)
+        private set
+    var waveformPass by mutableStateOf(RangeWaveformPass.COARSE)
+        private set
     var waveformLoading by mutableStateOf(true)
+        private set
     var isPlaying by mutableStateOf(false)
         private set
     var isScrubbing by mutableStateOf(false)
         private set
     var previewError by mutableStateOf<String?>(null)
         private set
+    var textEditGeneration by mutableLongStateOf(0L)
+        private set
+    private var activeTextTarget: RangeEditTarget? = null
+    private var activeTextDraft: String? = null
 
     private var resumeAfterScrub = false
     private var lastAuditionAtMillis = 0L
 
     val selectionDurationSeconds: Float
         get() = (endSeconds - startSeconds).coerceAtLeast(0f)
+
+    val snapshotReady: Boolean
+        get() = snapshot != null
+
+    fun attachSnapshot(value: ReverbService.TimelineSnapshot) {
+        invalidateTextEditing()
+        val previousDuration = durationSeconds
+        val nextDuration = value.durationSeconds.toFloat().coerceAtLeast(0.05f)
+        val endWasAtLiveEdge = kotlin.math.abs(endSeconds - previousDuration) <= 0.15f
+        snapshot = value
+        durationSeconds = nextDuration
+        startSeconds = startSeconds.coerceIn(0f, (nextDuration - 0.05f).coerceAtLeast(0f))
+        endSeconds = if (endWasAtLiveEdge) {
+            nextDuration
+        } else {
+            endSeconds.coerceIn((startSeconds + 0.05f).coerceAtMost(nextDuration), nextDuration)
+        }
+        cursorSeconds = cursorSeconds.coerceIn(0f, nextDuration)
+    }
+
+    fun resetWaveformConstruction() {
+        coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
+        coarseWaveformBuiltCount = 0
+        detailWaveform = FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)
+        detailWaveformBuiltCount = 0
+        waveformPass = RangeWaveformPass.COARSE
+        waveformLoading = true
+    }
+
+    fun beginDetailedWaveformPass() {
+        waveformPass = RangeWaveformPass.DETAIL
+        detailWaveformBuiltCount = 0
+    }
+
+    fun publishWaveformBucket(pass: RangeWaveformPass, index: Int, magnitude: Float) {
+        when (pass) {
+            RangeWaveformPass.COARSE -> {
+                if (index !in coarseWaveform.indices) return
+                val next = coarseWaveform.copyOf()
+                next[index] = magnitude.coerceIn(0f, 1f)
+                coarseWaveform = next
+                coarseWaveformBuiltCount = maxOf(coarseWaveformBuiltCount, index + 1)
+            }
+            RangeWaveformPass.DETAIL -> {
+                if (index !in detailWaveform.indices) return
+                val next = detailWaveform.copyOf()
+                next[index] = magnitude.coerceIn(0f, 1f)
+                detailWaveform = next
+                detailWaveformBuiltCount = maxOf(detailWaveformBuiltCount, index + 1)
+            }
+        }
+    }
+
+    fun finishWaveformConstruction() {
+        waveformLoading = false
+    }
+
+    fun beginTextEditing(target: RangeEditTarget, draft: String) {
+        activeTextTarget = target
+        activeTextDraft = draft
+    }
+
+    fun updateTextDraft(target: RangeEditTarget, draft: String) {
+        if (activeTextTarget == target) activeTextDraft = draft
+    }
+
+    fun commitActiveTextEditing(): Boolean {
+        val target = activeTextTarget ?: return true
+        val parsed = parseRangeTimeInput(activeTextDraft.orEmpty())?.toFloat() ?: return false
+        if (!commitTarget(target, parsed)) return false
+        activeTextTarget = null
+        activeTextDraft = null
+        textEditGeneration++
+        return true
+    }
+
+    fun invalidateTextEditing() {
+        activeTextTarget = null
+        activeTextDraft = null
+        textEditGeneration++
+    }
 
     fun selectTarget(target: RangeEditTarget) {
         lastTarget = target
@@ -277,7 +384,21 @@ internal class RangeExportEditorState(
             RangeEditTarget.END -> if (requestedSeconds <= startSeconds) return false
             RangeEditTarget.CURSOR -> Unit
         }
-        setTarget(target, requestedSeconds, snapThresholdSeconds = 0f)
+        // A blur may be caused by selecting another bar. Committing the old field must not
+        // steal selection back from the newly touched target.
+        val selectedTarget = lastTarget
+        val update = adjustRangeEditTarget(
+            values = RangeEditValues(startSeconds, cursorSeconds, endSeconds),
+            target = target,
+            requestedSeconds = requestedSeconds,
+            durationSeconds = durationSeconds,
+            snapThresholdSeconds = 0f,
+        )
+        startSeconds = update.values.startSeconds
+        cursorSeconds = update.values.cursorSeconds
+        endSeconds = update.values.endSeconds
+        snappedTo = null
+        lastTarget = selectedTarget
         return true
     }
 
@@ -288,6 +409,7 @@ internal class RangeExportEditorState(
     }
 
     fun beginCursorScrub() {
+        invalidateTextEditing()
         selectTarget(RangeEditTarget.CURSOR)
         resumeAfterScrub = isPlaying
         if (isPlaying) {
@@ -313,6 +435,7 @@ internal class RangeExportEditorState(
     }
 
     fun beginFineAdjust() {
+        invalidateTextEditing()
         if (lastTarget == RangeEditTarget.CURSOR) {
             resumeAfterScrub = isPlaying
             if (isPlaying) {
@@ -344,6 +467,7 @@ internal class RangeExportEditorState(
     }
 
     fun togglePreview() {
+        invalidateTextEditing()
         if (isPlaying) pausePreview() else startPreview()
     }
 
@@ -358,13 +482,14 @@ internal class RangeExportEditorState(
     }
 
     private fun startPreview() {
+        val readySnapshot = snapshot ?: return
         if (durationSeconds <= 0f) return
         if (cursorSeconds >= durationSeconds - 0.01f) cursorSeconds = 0f
         previewError = null
         isPlaying = true
         isScrubbing = false
         previewController.play(
-            snapshot = snapshot,
+            snapshot = readySnapshot,
             fromSeconds = cursorSeconds.toDouble(),
             onProgress = { seconds ->
                 cursorSeconds = seconds.toFloat().coerceIn(0f, durationSeconds)
@@ -381,10 +506,11 @@ internal class RangeExportEditorState(
     }
 
     private fun auditionCursor(force: Boolean = false) {
+        val readySnapshot = snapshot ?: return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAuditionAtMillis < 55L) return
         lastAuditionAtMillis = now
-        previewController.audition(snapshot, cursorSeconds.toDouble())
+        previewController.audition(readySnapshot, cursorSeconds.toDouble())
     }
 
     private fun targetValue(target: RangeEditTarget): Float = when (target) {
@@ -396,42 +522,77 @@ internal class RangeExportEditorState(
 
 @Composable
 internal fun RangeExportHomeContent(
-    snapshot: ReverbService.TimelineSnapshot,
+    snapshot: ReverbService.TimelineSnapshot?,
+    initialDurationSeconds: Float,
     selectedBuffer: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
+    blobMetrics: BufferMetrics,
+    blobEnabled: Boolean,
+    blobController: AudioBlobController,
     isListening: Boolean,
+    isSaving: Boolean,
+    service: ReverbService?,
     oneShotEnabled: Boolean,
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
     maxExportDurationSeconds: Float,
+    visualizerVisible: Boolean,
     onCancel: () -> Unit,
     onExport: (startSeconds: Float, endSeconds: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val state = remember(snapshot) {
-        RangeExportEditorState(snapshot).also { editor ->
-            snapshot.initialWaveformEnvelope?.let { raw ->
-                editor.waveform = normalizeWaveformEnvelope(raw)
-                editor.waveformLoading = false
-            }
-        }
-    }
+    val state = remember(selectedBuffer) { RangeExportEditorState(initialDurationSeconds) }
+    var transitionStarted by remember(selectedBuffer) { mutableStateOf(false) }
+    val transitionProgress by animateFloatAsState(
+        targetValue = if (transitionStarted) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = 760,
+            easing = FastOutSlowInEasing,
+        ),
+        label = "blobToRangeTimeline",
+    )
 
+    LaunchedEffect(selectedBuffer) { transitionStarted = true }
     DisposableEffect(state) {
         onDispose { state.close() }
     }
     LaunchedEffect(snapshot) {
-        if (!state.waveformLoading) return@LaunchedEffect
-        try {
-            state.waveform = withContext(Dispatchers.IO) {
-                snapshot.readWaveformEnvelope(128)
+        val readySnapshot = snapshot ?: return@LaunchedEffect
+        state.attachSnapshot(readySnapshot)
+        state.resetWaveformConstruction()
+
+        suspend fun constructPass(pass: RangeWaveformPass) {
+            val updates = Channel<Pair<Int, Float>>(Channel.UNLIMITED)
+            val worker = launch(Dispatchers.IO) {
+                try {
+                    readySnapshot.readWaveformEnvelopeProgressive(pass) { index, magnitude ->
+                        updates.trySend(index to magnitude).isSuccess
+                    }
+                } finally {
+                    updates.close()
+                }
             }
+            try {
+                for ((index, magnitude) in updates) {
+                    state.publishWaveformBucket(pass, index, magnitude)
+                }
+                worker.join()
+            } finally {
+                worker.cancel()
+                updates.close()
+            }
+        }
+
+        try {
+            constructPass(RangeWaveformPass.COARSE)
+            // Let the coarse materialization visibly settle before the finer left-to-right polish begins.
+            delay(280L)
+            state.beginDetailedWaveformPass()
+            constructPass(RangeWaveformPass.DETAIL)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            state.waveform = FloatArray(0)
         } finally {
-            state.waveformLoading = false
+            state.finishWaveformConstruction()
         }
     }
 
@@ -446,41 +607,94 @@ internal fun RangeExportHomeContent(
             contentAlignment = Alignment.Center,
         ) {
             val compact = maxHeight < 390.dp
+            val density = LocalDensity.current
+            val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
+            // AudioBlobView's live body is roughly two thirds of its square view. Transform the
+            // existing view wrapper so that body, not the view bounds, lands on the timeline.
+            val blobVisualDiameter = blobSize * 0.66f
+            val targetBlobScaleX = ((maxWidth - 24.dp).coerceAtLeast(1.dp) / blobVisualDiameter)
+                .coerceIn(1.18f, 1.72f)
+            val targetBlobScaleY = (146.dp / blobVisualDiameter).coerceIn(0.50f, 0.78f)
+            val blobFade = (1f - ((transitionProgress - 0.34f) / 0.54f).coerceIn(0f, 1f))
+            val timelineFade = ((transitionProgress - 0.12f) / 0.62f).coerceIn(0f, 1f)
+            val chromeFade = ((transitionProgress - 0.46f) / 0.42f).coerceIn(0f, 1f)
+            val timelineScaleX = 0.30f + 0.70f * transitionProgress
+            val timelineScaleY = 1.62f - 0.62f * transitionProgress
+            if (transitionProgress < 0.995f) {
+                BufferBlobPage(
+                    bufferSlot = selectedBuffer,
+                    activeBuffer = activeBuffer,
+                    metrics = blobMetrics,
+                    bufferEnabled = blobEnabled,
+                    oneShotFull = oneShotFull,
+                    isListening = isListening,
+                    isSaving = isSaving,
+                    service = service,
+                    blobController = blobController,
+                    flipDegrees = 0f,
+                    onListenToggle = {},
+                    onOpenBufferSettings = {},
+                    visualizerVisible = visualizerVisible,
+                    interactionEnabled = false,
+                    contentAlpha = (1f - transitionProgress * 2.7f).coerceIn(0f, 1f),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            alpha = blobFade
+                            scaleX = 1f + (targetBlobScaleX - 1f) * transitionProgress
+                            scaleY = 1f + (targetBlobScaleY - 1f) * transitionProgress
+                            translationY = -with(density) { 58.dp.toPx() } * transitionProgress
+                        },
+                )
+            }
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
                 if (!compact) {
-                    Text(
-                        text = formatRangeTimeInput(state.selectionDurationSeconds.toDouble()),
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = stringResource(R.string.range_export_selected),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.alpha(chromeFade),
+                    ) {
+                        Text(
+                            text = formatRangeTimeInput(state.selectionDurationSeconds.toDouble()),
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 22.sp,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = stringResource(R.string.range_export_selected),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                 }
                 RangeExportTimeline(
                     state = state,
+                    morphProgress = transitionProgress,
+                    chromeAlpha = chromeFade,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (compact) 232.dp else 250.dp),
+                        .height(if (compact) 232.dp else 250.dp)
+                        .graphicsLayer {
+                            alpha = timelineFade
+                            scaleX = timelineScaleX
+                            scaleY = timelineScaleY
+                        },
                 )
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
                 SpringFineAdjust(
                     state = state,
-                    enabled = true,
+                    enabled = transitionProgress >= 0.98f,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (compact) 120.dp else 132.dp),
+                        .height(if (compact) 120.dp else 132.dp)
+                        .alpha(chromeFade),
                 )
                 if (state.selectionDurationSeconds > maxExportDurationSeconds) {
                     Text(
@@ -514,10 +728,13 @@ internal fun RangeExportHomeContent(
 @Composable
 private fun RangeExportTimeline(
     state: RangeExportEditorState,
+    morphProgress: Float,
+    chromeAlpha: Float,
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     val timelineTop = 42.dp
     val timelineHeight = 146.dp
     val horizontalInset = 12.dp
@@ -545,9 +762,12 @@ private fun RangeExportTimeline(
                 .padding(horizontal = horizontalInset)
                 .fillMaxWidth()
                 .height(timelineHeight)
-                .pointerInput(state.durationSeconds, timelineWidthPx) {
+                .pointerInput(state.durationSeconds, timelineWidthPx, chromeAlpha) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        if (chromeAlpha < 0.90f) return@awaitEachGesture
+                        state.invalidateTextEditing()
+                        focusManager.clearFocus(force = true)
                         state.beginCursorScrub()
                         try {
                             state.updateCursorScrub(
@@ -574,10 +794,15 @@ private fun RangeExportTimeline(
                 },
         ) {
             WaveformCanvas(
-                waveform = state.waveform,
+                coarseWaveform = state.coarseWaveform,
+                coarseBuiltCount = state.coarseWaveformBuiltCount,
+                detailWaveform = state.detailWaveform,
+                detailBuiltCount = state.detailWaveformBuiltCount,
+                waveformPass = state.waveformPass,
                 startFraction = state.startSeconds / state.durationSeconds,
                 endFraction = state.endSeconds / state.durationSeconds,
                 loading = state.waveformLoading,
+                morphProgress = morphProgress,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -593,6 +818,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
+            visualAlpha = chromeAlpha,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
         RangeTimelineBar(
@@ -604,6 +830,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
+            visualAlpha = chromeAlpha,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
         RangeTimelineBar(
@@ -615,6 +842,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
+            visualAlpha = chromeAlpha,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
 
@@ -622,6 +850,8 @@ private fun RangeExportTimeline(
             target = RangeEditTarget.START,
             valueSeconds = state.startSeconds,
             active = state.lastTarget == RangeEditTarget.START,
+            editorState = state,
+            visualAlpha = chromeAlpha,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.startSeconds), fullWidthPx, bubbleWidthPx),
@@ -629,12 +859,13 @@ private fun RangeExportTimeline(
                 )
             },
             onFocus = { state.beginBoundaryEdit(RangeEditTarget.START) },
-            onCommit = { state.commitTarget(RangeEditTarget.START, it) },
         )
         TimelineTimeInput(
             target = RangeEditTarget.END,
             valueSeconds = state.endSeconds,
             active = state.lastTarget == RangeEditTarget.END,
+            editorState = state,
+            visualAlpha = chromeAlpha,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.endSeconds), fullWidthPx, bubbleWidthPx),
@@ -642,12 +873,13 @@ private fun RangeExportTimeline(
                 )
             },
             onFocus = { state.beginBoundaryEdit(RangeEditTarget.END) },
-            onCommit = { state.commitTarget(RangeEditTarget.END, it) },
         )
         TimelineTimeInput(
             target = RangeEditTarget.CURSOR,
             valueSeconds = state.cursorSeconds,
             active = state.lastTarget == RangeEditTarget.CURSOR,
+            editorState = state,
+            visualAlpha = chromeAlpha,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.cursorSeconds), fullWidthPx, bubbleWidthPx),
@@ -658,20 +890,19 @@ private fun RangeExportTimeline(
                 state.selectTarget(RangeEditTarget.CURSOR)
                 state.pausePreview()
             },
-            onCommit = { state.commitTarget(RangeEditTarget.CURSOR, it) },
         )
 
         Text(
             text = formatRangeTimeInput(0.0),
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalInset),
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalInset).alpha(chromeAlpha),
         )
         Text(
             text = formatRangeTimeInput(state.durationSeconds.toDouble()),
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalInset),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalInset).alpha(chromeAlpha),
         )
     }
 }
@@ -683,97 +914,284 @@ private fun bubbleOffset(xPx: Float, fullWidthPx: Float, bubbleWidthPx: Float): 
 
 @Composable
 private fun WaveformCanvas(
-    waveform: FloatArray,
+    coarseWaveform: FloatArray,
+    coarseBuiltCount: Int,
+    detailWaveform: FloatArray,
+    detailBuiltCount: Int,
+    waveformPass: RangeWaveformPass,
     startFraction: Float,
     endFraction: Float,
     loading: Boolean,
+    morphProgress: Float,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
+    var wobblePhase by remember { mutableFloatStateOf(0f) }
+    val coarseAvailableFraction = if (coarseWaveform.isEmpty()) 0f else
+        (coarseBuiltCount.toFloat() / coarseWaveform.size.toFloat()).coerceIn(0f, 1f)
+    val detailAvailableFraction = if (detailWaveform.isEmpty()) 0f else
+        (detailBuiltCount.toFloat() / detailWaveform.size.toFloat()).coerceIn(0f, 1f)
+    // Let the blob become a single provisional ribbon before committing the sampled shape.
+    // The worker may finish early, but visual construction still reads as one left-to-right sweep.
+    val coarseTarget = if (morphProgress >= 0.64f) coarseAvailableFraction else 0f
+    val detailTarget = if (morphProgress >= 0.90f && waveformPass == RangeWaveformPass.DETAIL) {
+        detailAvailableFraction
+    } else 0f
+    val visibleCoarse by animateFloatAsState(
+        targetValue = coarseTarget,
+        animationSpec = tween(durationMillis = 430, easing = FastOutSlowInEasing),
+        label = "rangeWaveformCoarseReveal",
+    )
+    val visibleDetailRaw by animateFloatAsState(
+        targetValue = detailTarget,
+        animationSpec = tween(durationMillis = 330, easing = FastOutSlowInEasing),
+        label = "rangeWaveformDetailReveal",
+    )
+    val visibleDetail = minOf(visibleDetailRaw, visibleCoarse)
+
+    LaunchedEffect(loading) {
+        if (loading) {
+            while (true) {
+                withFrameNanos { frameNanos ->
+                    wobblePhase = (frameNanos / 1_000_000_000.0).toFloat()
+                }
+            }
+        } else {
+            repeat(14) {
+                withFrameNanos { frameNanos ->
+                    wobblePhase = (frameNanos / 1_000_000_000.0).toFloat()
+                }
+            }
+        }
+    }
+
     Canvas(modifier) {
-        val path = waveformPath(waveform, size.width, size.height)
+        val path = waveformConstructionPath(
+            coarseWaveform = coarseWaveform,
+            coarseBuiltCount = coarseBuiltCount,
+            detailWaveform = detailWaveform,
+            detailBuiltCount = detailBuiltCount,
+            visibleCoarseFraction = visibleCoarse,
+            visibleDetailFraction = visibleDetail,
+            morphProgress = morphProgress,
+            phase = wobblePhase,
+            width = size.width,
+            height = size.height,
+        ) ?: return@Canvas
         val centerY = size.height * 0.5f
+        val builtRight = size.width * visibleCoarse.coerceIn(0f, 1f)
+        val detailRight = size.width * visibleDetail.coerceIn(0f, 1f)
+        val selectedLeft = size.width * startFraction.coerceIn(0f, 1f)
+        val selectedRight = size.width * endFraction.coerceIn(startFraction, 1f)
+
         drawLine(
-            color = colors.onSurfaceVariant.copy(alpha = 0.12f),
+            color = colors.onSurfaceVariant.copy(alpha = 0.10f),
             start = Offset(0f, centerY),
             end = Offset(size.width, centerY),
             strokeWidth = 1.dp.toPx(),
         )
-        if (path == null) {
-            val alpha = if (loading) 0.12f else 0.08f
-            drawLine(
-                color = colors.primary.copy(alpha = alpha),
-                start = Offset(0f, centerY),
-                end = Offset(size.width, centerY),
-                strokeWidth = 8.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
-            return@Canvas
-        }
 
+        // The unresolved suffix remains live material. It contracts from the original blob
+        // silhouette into a ribbon while fixed audio is progressively committed from the left.
         drawPath(
             path = path,
             brush = Brush.horizontalGradient(
                 listOf(
-                    colors.primary.copy(alpha = 0.12f),
-                    colors.primary.copy(alpha = 0.18f),
-                    colors.primary.copy(alpha = 0.12f),
+                    colors.primary.copy(alpha = 0.08f),
+                    colors.primary.copy(alpha = 0.14f),
+                    colors.primary.copy(alpha = 0.08f),
                 ),
             ),
         )
         drawPath(
             path = path,
-            color = colors.primary.copy(alpha = 0.10f),
-            style = Stroke(width = 1.5.dp.toPx()),
+            color = colors.primary.copy(alpha = 0.08f),
+            style = Stroke(width = 1.dp.toPx()),
         )
 
-        val left = size.width * startFraction.coerceIn(0f, 1f)
-        val right = size.width * endFraction.coerceIn(startFraction, 1f)
-        clipRect(left = left, right = right) {
-            drawPath(
-                path = path,
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        colors.primary.copy(alpha = 0.94f),
-                        colors.primary,
-                        colors.primary.copy(alpha = 0.94f),
+        if (builtRight > 0f) {
+            clipRect(left = 0f, right = builtRight) {
+                drawPath(
+                    path = path,
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            colors.primary.copy(alpha = 0.24f),
+                            colors.primary.copy(alpha = 0.32f),
+                            colors.primary.copy(alpha = 0.24f),
+                        ),
                     ),
-                ),
+                )
+                drawPath(
+                    path = path,
+                    color = colors.primary.copy(alpha = 0.16f),
+                    style = Stroke(width = 1.25.dp.toPx()),
+                )
+                clipRect(left = selectedLeft, right = selectedRight) {
+                    drawPath(
+                        path = path,
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                colors.primary.copy(alpha = 0.94f),
+                                colors.primary,
+                                colors.primary.copy(alpha = 0.94f),
+                            ),
+                        ),
+                    )
+                    drawPath(
+                        path = path,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.18f),
+                                Color.Transparent,
+                                colors.primary.copy(alpha = 0.10f),
+                            ),
+                        ),
+                    )
+                    drawPath(
+                        path = path,
+                        color = colors.primary.copy(alpha = 0.24f),
+                        style = Stroke(width = 1.7.dp.toPx()),
+                    )
+                }
+            }
+        }
+
+        // A soft construction front makes the left-to-right materialization read as a sweep,
+        // rather than a hard clip edge. The second pass uses a smaller polishing front.
+        if (visibleCoarse in 0.002f..0.998f) {
+            drawLine(
+                color = colors.primary.copy(alpha = 0.12f),
+                start = Offset(builtRight, size.height * 0.10f),
+                end = Offset(builtRight, size.height * 0.90f),
+                strokeWidth = 13.dp.toPx(),
+                cap = StrokeCap.Round,
             )
-            drawPath(
-                path = path,
-                brush = Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.18f),
-                        Color.Transparent,
-                        colors.primary.copy(alpha = 0.12f),
-                    ),
-                ),
+            drawLine(
+                color = Color.White.copy(alpha = 0.36f),
+                start = Offset(builtRight, size.height * 0.13f),
+                end = Offset(builtRight, size.height * 0.87f),
+                strokeWidth = 1.15.dp.toPx(),
+                cap = StrokeCap.Round,
             )
-            drawPath(
-                path = path,
-                color = colors.primary.copy(alpha = 0.28f),
-                style = Stroke(width = 2.dp.toPx()),
+        }
+        if (
+            waveformPass == RangeWaveformPass.DETAIL &&
+            visibleDetail in 0.002f..0.998f &&
+            visibleCoarse > 0.95f
+        ) {
+            drawLine(
+                color = colors.tertiary.copy(alpha = 0.13f),
+                start = Offset(detailRight, size.height * 0.13f),
+                end = Offset(detailRight, size.height * 0.87f),
+                strokeWidth = 9.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = Color.White.copy(alpha = 0.28f),
+                start = Offset(detailRight, size.height * 0.16f),
+                end = Offset(detailRight, size.height * 0.84f),
+                strokeWidth = 0.9.dp.toPx(),
+                cap = StrokeCap.Round,
             )
         }
     }
 }
 
-private fun waveformPath(waveform: FloatArray, width: Float, height: Float): Path? {
-    if (waveform.size < 2 || width <= 0f || height <= 0f) return null
+private fun waveformConstructionPath(
+    coarseWaveform: FloatArray,
+    coarseBuiltCount: Int,
+    detailWaveform: FloatArray,
+    detailBuiltCount: Int,
+    visibleCoarseFraction: Float,
+    visibleDetailFraction: Float,
+    morphProgress: Float,
+    phase: Float,
+    width: Float,
+    height: Float,
+): Path? {
+    if (detailWaveform.size < 2 || coarseWaveform.size < 2 || width <= 0f || height <= 0f) return null
     val center = height * 0.5f
     val maxAmplitude = height * 0.44f
     val minimumAmplitude = height * 0.035f
+    val visibleCoarse = visibleCoarseFraction.coerceIn(0f, 1f)
+    val visibleDetail = visibleDetailFraction.coerceIn(0f, visibleCoarse)
+    val coarseAvailable = (coarseBuiltCount.toFloat() / coarseWaveform.size.toFloat()).coerceIn(0f, 1f)
+    val detailAvailable = (detailBuiltCount.toFloat() / detailWaveform.size.toFloat()).coerceIn(0f, 1f)
+    val ribbonProgress = ((morphProgress - 0.20f) / 0.80f).coerceIn(0f, 1f)
+    val morph = ribbonProgress * ribbonProgress * (3f - 2f * ribbonProgress)
     val path = Path()
-    waveform.forEachIndexed { index, sample ->
-        val x = width * index.toFloat() / waveform.lastIndex.toFloat()
-        val amplitude = minimumAmplitude + maxAmplitude * sample.coerceIn(0f, 1f)
+
+    fun sampledValue(values: FloatArray, builtCount: Int, u: Float): Float? {
+        if (builtCount <= 0 || values.isEmpty()) return null
+        val position = u.coerceIn(0f, 1f) * values.lastIndex.toFloat()
+        val first = position.toInt().coerceIn(0, values.lastIndex)
+        if (first >= builtCount) return null
+        val second = minOf(first + 1, builtCount - 1, values.lastIndex)
+        val fraction = (position - first.toFloat()).coerceIn(0f, 1f)
+        return values[first] + (values[second] - values[first]) * fraction
+    }
+
+    fun revealWeight(front: Float, u: Float, feather: Float): Float {
+        if (front >= 0.999f) return 1f
+        val distance = front - u
+        if (distance >= 0f) return 1f
+        if (distance <= -feather) return 0f
+        val t = ((distance + feather) / feather).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    fun blobEnvelopeAt(u: Float): Float {
+        val x = (u - 0.5f) * 2f
+        return 0.12f + 0.76f * kotlin.math.sqrt((1f - x * x).coerceAtLeast(0f))
+    }
+
+    fun provisionalValue(u: Float): Float {
+        val blobEnvelope = blobEnvelopeAt(u)
+        val ribbonWobble = (
+            0.27f +
+                0.070f * kotlin.math.sin(u * 31f + phase * 2.25f) +
+                0.040f * kotlin.math.sin(u * 67f - phase * 1.62f) +
+                0.022f * kotlin.math.sin(u * 113f + phase * 1.08f)
+            ).coerceIn(0.08f, 0.68f)
+        return blobEnvelope + (ribbonWobble - blobEnvelope) * morph
+    }
+
+    fun resolvedDuringMorph(u: Float, resolved: Float): Float {
+        val blobEnvelope = blobEnvelopeAt(u)
+        return blobEnvelope + (resolved.coerceIn(0f, 1f) - blobEnvelope) * morph
+    }
+
+    fun amplitudeAt(index: Int): Float {
+        val u = index.toFloat() / detailWaveform.lastIndex.toFloat()
+        var sample = provisionalValue(u)
+
+        if (u <= coarseAvailable + 0.04f) {
+            val coarse = sampledValue(coarseWaveform, coarseBuiltCount, u)
+            if (coarse != null) {
+                val fixedShape = resolvedDuringMorph(u, coarse)
+                val weight = revealWeight(visibleCoarse, u, 0.036f)
+                sample += (fixedShape - sample) * weight
+            }
+        }
+        if (u <= detailAvailable + 0.03f) {
+            val detail = sampledValue(detailWaveform, detailBuiltCount, u)
+            if (detail != null) {
+                val fixedShape = resolvedDuringMorph(u, detail)
+                val weight = revealWeight(visibleDetail, u, 0.024f)
+                sample += (fixedShape - sample) * weight
+            }
+        }
+        return minimumAmplitude + maxAmplitude * sample.coerceIn(0f, 1f)
+    }
+
+    for (index in detailWaveform.indices) {
+        val x = width * index.toFloat() / detailWaveform.lastIndex.toFloat()
+        val amplitude = amplitudeAt(index)
         if (index == 0) path.moveTo(x, center - amplitude) else path.lineTo(x, center - amplitude)
     }
-    for (index in waveform.lastIndex downTo 0) {
-        val x = width * index.toFloat() / waveform.lastIndex.toFloat()
-        val amplitude = minimumAmplitude + maxAmplitude * waveform[index].coerceIn(0f, 1f)
-        path.lineTo(x, center + amplitude)
+    for (index in detailWaveform.lastIndex downTo 0) {
+        val x = width * index.toFloat() / detailWaveform.lastIndex.toFloat()
+        path.lineTo(x, center + amplitudeAt(index))
     }
     path.close()
     return path
@@ -789,9 +1207,11 @@ private fun RangeTimelineBar(
     hitWidthPx: Float,
     timelineWidthPx: Float,
     snapThresholdSeconds: Float,
+    visualAlpha: Float,
     onSnap: () -> Unit,
 ) {
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     val active = state.lastTarget == target || state.snappedTo == target
     val colors = MaterialTheme.colorScheme
     val lineColor = if (active) colors.tertiary else colors.onSurface
@@ -799,7 +1219,11 @@ private fun RangeTimelineBar(
     var dragOrigin by remember(target) { mutableFloatStateOf(0f) }
     var accumulatedDrag by remember(target) { mutableFloatStateOf(0f) }
 
+    val interactionEnabled = visualAlpha >= 0.90f
+
     fun focusTarget() {
+        state.invalidateTextEditing()
+        focusManager.clearFocus(force = true)
         if (target == RangeEditTarget.CURSOR) {
             state.selectTarget(RangeEditTarget.CURSOR)
             state.pausePreview()
@@ -808,44 +1232,63 @@ private fun RangeTimelineBar(
         }
     }
 
-    val dragModifier = Modifier
-        .clickable(
-            interactionSource = tapInteraction,
-            indication = null,
-            onClick = ::focusTarget,
-        )
-        .pointerInput(target, state.durationSeconds, timelineWidthPx) {
-            detectDragGestures(
-                onDragStart = {
-                    dragOrigin = when (target) {
-                        RangeEditTarget.START -> state.startSeconds
-                        RangeEditTarget.CURSOR -> state.cursorSeconds
-                        RangeEditTarget.END -> state.endSeconds
+    val dragModifier = if (interactionEnabled) {
+        Modifier
+            .pointerInput(target, interactionEnabled) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    state.invalidateTextEditing()
+                    focusManager.clearFocus(force = true)
+                    var pressed = true
+                    while (pressed) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        pressed = change.pressed
                     }
-                    accumulatedDrag = 0f
-                    if (target == RangeEditTarget.CURSOR) state.beginCursorScrub()
-                    else state.beginBoundaryEdit(target)
-                },
-                onDragEnd = {
-                    if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
-                },
-                onDragCancel = {
-                    if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
-                },
-            ) { change, dragAmount ->
-                change.consume()
-                accumulatedDrag += dragAmount.x
-                val requested = dragOrigin + accumulatedDrag / timelineWidthPx * state.durationSeconds
-                val snapped = if (target == RangeEditTarget.CURSOR) {
-                    val before = state.snappedTo
-                    state.updateCursorScrub(requested, snapThresholdSeconds)
-                    state.snappedTo != null && state.snappedTo != before
-                } else {
-                    state.setTarget(target, requested, snapThresholdSeconds)
                 }
-                if (snapped) onSnap()
             }
-        }
+            .clickable(
+                interactionSource = tapInteraction,
+                indication = null,
+                onClick = ::focusTarget,
+            )
+            .pointerInput(target, state.durationSeconds, timelineWidthPx) {
+                detectDragGestures(
+                    onDragStart = {
+                        state.invalidateTextEditing()
+                        focusManager.clearFocus(force = true)
+                        dragOrigin = when (target) {
+                            RangeEditTarget.START -> state.startSeconds
+                            RangeEditTarget.CURSOR -> state.cursorSeconds
+                            RangeEditTarget.END -> state.endSeconds
+                        }
+                        accumulatedDrag = 0f
+                        if (target == RangeEditTarget.CURSOR) state.beginCursorScrub()
+                        else state.beginBoundaryEdit(target)
+                    },
+                    onDragEnd = {
+                        if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
+                    },
+                    onDragCancel = {
+                        if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
+                    },
+                ) { change, dragAmount ->
+                    change.consume()
+                    accumulatedDrag += dragAmount.x
+                    val requested = dragOrigin + accumulatedDrag / timelineWidthPx * state.durationSeconds
+                    val snapped = if (target == RangeEditTarget.CURSOR) {
+                        val before = state.snappedTo
+                        state.updateCursorScrub(requested, snapThresholdSeconds)
+                        state.snappedTo != null && state.snappedTo != before
+                    } else {
+                        state.setTarget(target, requested, snapThresholdSeconds)
+                    }
+                    if (snapped) onSnap()
+                }
+            }
+    } else {
+        Modifier
+    }
 
     Box(
         modifier = Modifier
@@ -858,7 +1301,8 @@ private fun RangeTimelineBar(
             .size(
                 width = with(density) { hitWidthPx.toDp() },
                 height = with(density) { heightPx.toDp() },
-            ),
+            )
+            .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -881,10 +1325,7 @@ private fun RangeTimelineBar(
             }
         } else {
             Box(
-                modifier = Modifier
-                    .width(with(density) { hitWidthPx.toDp() })
-                    .height(64.dp)
-                    .then(dragModifier),
+                modifier = Modifier.fillMaxSize().then(dragModifier),
                 contentAlignment = Alignment.Center,
             ) {
                 Surface(
@@ -903,8 +1344,9 @@ private fun TimelineTimeInput(
     target: RangeEditTarget,
     valueSeconds: Float,
     active: Boolean,
+    editorState: RangeExportEditorState,
+    visualAlpha: Float,
     onFocus: () -> Unit,
-    onCommit: (Float) -> Boolean,
     modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -912,10 +1354,26 @@ private fun TimelineTimeInput(
     val focusManager = LocalFocusManager.current
     var text by remember { mutableStateOf(formatRangeTimeInput(valueSeconds.toDouble())) }
     var wasFocused by remember { mutableStateOf(false) }
+    val editGeneration = editorState.textEditGeneration
+    var focusGeneration by remember { mutableLongStateOf(editGeneration) }
     var invalid by remember { mutableStateOf(false) }
 
-    LaunchedEffect(valueSeconds, focused) {
-        if (!focused) text = formatRangeTimeInput(valueSeconds.toDouble())
+    LaunchedEffect(valueSeconds) {
+        val formatted = formatRangeTimeInput(valueSeconds.toDouble())
+        if (focused && editGeneration == focusGeneration) {
+            // Programmatic motion owns the target once its underlying position changes.
+            editorState.invalidateTextEditing()
+            text = formatted
+            focusManager.clearFocus(force = true)
+        } else if (!focused) {
+            text = formatted
+        }
+    }
+    LaunchedEffect(editGeneration) {
+        if (editGeneration != focusGeneration) {
+            text = formatRangeTimeInput(valueSeconds.toDouble())
+            if (focused) focusManager.clearFocus(force = true)
+        }
     }
     LaunchedEffect(invalid) {
         if (invalid) {
@@ -937,47 +1395,66 @@ private fun TimelineTimeInput(
     }
 
     Surface(
-        modifier = modifier.width(100.dp).height(34.dp),
+        modifier = modifier
+            .zIndex(if (active) 30f else if (focused) 20f else 0f)
+            .width(100.dp)
+            .height(34.dp)
+            .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
         shape = RoundedCornerShape(13.dp),
         color = background,
         shadowElevation = if (active || focused) 3.dp else 1.dp,
     ) {
-        BasicTextField(
-            value = text,
-            onValueChange = { text = it },
-            singleLine = true,
-            interactionSource = interactionSource,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-            textStyle = MaterialTheme.typography.labelLarge.copy(
-                color = foreground,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            ),
-            cursorBrush = SolidColor(colors.primary),
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 7.dp, vertical = 8.dp)
-                .onFocusChanged { focusState ->
-                    if (focusState.isFocused && !wasFocused) {
-                        wasFocused = true
-                        onFocus()
-                    } else if (!focusState.isFocused && wasFocused) {
-                        wasFocused = false
-                        val parsed = parseRangeTimeInput(text)?.toFloat()
-                        val accepted = parsed != null && onCommit(parsed)
-                        if (!accepted) {
-                            invalid = true
-                            text = formatRangeTimeInput(valueSeconds.toDouble())
-                        }
-                    }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            BasicTextField(
+                value = text,
+                onValueChange = { value ->
+                    text = value
+                    editorState.updateTextDraft(target, value)
                 },
-        )
+                enabled = visualAlpha >= 0.95f,
+                singleLine = true,
+                interactionSource = interactionSource,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (editorState.commitActiveTextEditing()) {
+                            focusManager.clearFocus(force = true)
+                        } else {
+                            invalid = true
+                        }
+                    },
+                ),
+                textStyle = MaterialTheme.typography.labelLarge.copy(
+                    color = foreground,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                ),
+                cursorBrush = SolidColor(colors.primary),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 7.dp)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused && !wasFocused) {
+                            wasFocused = true
+                            focusGeneration = editGeneration
+                            editorState.beginTextEditing(target, text)
+                            onFocus()
+                        } else if (!focusState.isFocused && wasFocused) {
+                            wasFocused = false
+                            if (focusGeneration != editorState.textEditGeneration) {
+                                text = formatRangeTimeInput(valueSeconds.toDouble())
+                            }
+                        }
+                    },
+            )
+        }
     }
 }
 
@@ -988,6 +1465,7 @@ private fun SpringFineAdjust(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
+    val focusManager = LocalFocusManager.current
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
@@ -1061,6 +1539,8 @@ private fun SpringFineAdjust(
         Modifier.pointerInput(state.lastTarget) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                state.invalidateTextEditing()
+                focusManager.clearFocus(force = true)
                 val edgePadding = 10.dp.toPx()
                 val puckRadius = 16.dp.toPx()
                 val visualHorizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
@@ -1229,6 +1709,21 @@ private fun RangeExportControls(
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
+    val focusManager = LocalFocusManager.current
+    val view = LocalView.current
+    val discardDraftOnPointerDown = Modifier.pointerInput(state) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            state.invalidateTextEditing()
+            focusManager.clearFocus(force = true)
+            var pressed = true
+            while (pressed) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                pressed = change.pressed
+            }
+        }
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(
             shape = RoundedCornerShape(22.dp),
@@ -1260,14 +1755,29 @@ private fun RangeExportControls(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onCancel, modifier = Modifier.size(50.dp)) {
+                IconButton(
+                    onClick = {
+                        state.invalidateTextEditing()
+                        focusManager.clearFocus(force = true)
+                        onCancel()
+                    },
+                    modifier = Modifier.size(50.dp).then(discardDraftOnPointerDown),
+                ) {
                     Icon(
                         imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = chrome.ink,
                     )
                 }
-                IconButton(onClick = state::togglePreview, modifier = Modifier.size(50.dp)) {
+                IconButton(
+                    onClick = {
+                        val accepted = state.commitActiveTextEditing()
+                        focusManager.clearFocus(force = true)
+                        if (accepted) state.togglePreview()
+                    },
+                    enabled = state.snapshotReady,
+                    modifier = Modifier.size(50.dp),
+                ) {
                     Icon(
                         imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
                         contentDescription = stringResource(
@@ -1300,7 +1810,15 @@ private fun RangeExportControls(
                     )
                 }
                 Surface(
-                    onClick = onExport,
+                    onClick = {
+                        // Export is a commit boundary. A valid draft becomes the range; an invalid
+                        // draft blocks export rather than leaking a stale value into the request.
+                        if (state.commitActiveTextEditing()) {
+                            focusManager.clearFocus(force = true)
+                            view.post(onExport)
+                        }
+                    },
+                    enabled = state.snapshotReady,
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.height(50.dp),

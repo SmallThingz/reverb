@@ -376,6 +376,7 @@ internal class PersistentAudioChunkStore internal constructor(
             if (frameCount <= 0L) continue
 
             record.refCount++
+            val selectedSegmentDuration = frameCount.toDouble() / record.sampleRate.toDouble()
             segments += Segment(
                 record = record,
                 startFrame = startFrame,
@@ -383,6 +384,8 @@ internal class PersistentAudioChunkStore internal constructor(
                 payloadOffsetBytes = record.payloadOffsetBytes,
                 payloadBytesAtAcquire = record.payloadBytes,
                 payloadChecksumAtAcquire = record.payloadChecksum,
+                timelineStartSeconds = leaseDuration,
+                timelineEndSeconds = leaseDuration + selectedSegmentDuration,
             )
             if (startedAtMillis == 0L) {
                 startedAtMillis = record.createdAtMillis +
@@ -390,7 +393,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             endedAtMillis = record.createdAtMillis +
                 (endFrame * 1000L / record.sampleRate.coerceAtLeast(1))
-            leaseDuration += frameCount.toDouble() / record.sampleRate.toDouble()
+            leaseDuration += selectedSegmentDuration
         }
 
         if (segments.isEmpty()) return null
@@ -496,9 +499,12 @@ internal class PersistentAudioChunkStore internal constructor(
 
                     segment.record.refCount++
                     val absoluteStartFrame = segment.startFrame + firstFrame
+                    val childDuration = childFrames.toDouble() / rate.toDouble()
                     selected += segment.copy(
                         startFrame = absoluteStartFrame,
                         frameCount = childFrames,
+                        timelineStartSeconds = selectedDuration,
+                        timelineEndSeconds = selectedDuration + childDuration,
                     )
                     if (selectedStartedAtMillis == 0L) {
                         selectedStartedAtMillis = segment.record.createdAtMillis +
@@ -506,7 +512,7 @@ internal class PersistentAudioChunkStore internal constructor(
                     }
                     selectedEndedAtMillis = segment.record.createdAtMillis +
                         ((absoluteStartFrame + childFrames) * 1000L / rate)
-                    selectedDuration += childFrames.toDouble() / rate.toDouble()
+                    selectedDuration += childDuration
                 }
                 if (selected.isEmpty()) return null
                 return RangeLease(
@@ -560,26 +566,25 @@ internal class PersistentAudioChunkStore internal constructor(
         }
 
         /**
-         * Samples a small set of source frames across the leased timeline for UI waveform drawing.
-         * This deliberately avoids export normalization/checksum scans: export and playback still use
-         * [readNormalized], while this read-only preview path is bounded and never mutates storage.
+         * Samples a fixed PCM budget across the leased timeline, left to right. The amount
+         * of audio read depends only on the bucket/probe configuration, not retained duration.
+         * Returning false from [onBucket] cancels the remaining construction.
          */
         @Synchronized
-        fun sampleWaveformEnvelope(
+        fun sampleWaveformEnvelopeProgressive(
             bucketCount: Int,
-            probesPerBucket: Int = 3,
-            framesPerProbe: Int = 32,
+            probesPerBucket: Int = 2,
+            framesPerProbe: Int = 24,
+            onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
         ): FloatArray {
             check(!closedLease) { "RangeLease is closed" }
             val buckets = bucketCount.coerceIn(16, 512)
-            val probes = probesPerBucket.coerceIn(1, 64)
-            val frames = framesPerProbe.coerceIn(1, 128)
+            val probes = probesPerBucket.coerceIn(1, 16)
+            val frames = framesPerProbe.coerceIn(1, 64)
             val envelope = FloatArray(buckets)
             if (durationSeconds <= 0.0 || segments.isEmpty()) return envelope
 
             val scratch = ByteArray(frames * MAX_CHANNEL_COUNT * PcmSampleFormat.PCM_FLOAT.bytesPerSample)
-            var segmentIndex = 0
-            var segmentTimelineStart = 0.0
             var currentFile: File? = null
             var currentAccess: RandomAccessFile? = null
             try {
@@ -590,21 +595,13 @@ internal class PersistentAudioChunkStore internal constructor(
                     repeat(probes) { probe ->
                         val timelineSeconds = bucketStart +
                             (bucketEnd - bucketStart) * (probe.toDouble() + 0.5) / probes.toDouble()
-                        while (segmentIndex < segments.lastIndex) {
-                            val segment = segments[segmentIndex]
-                            val rate = segment.record.sampleRate.coerceAtLeast(1)
-                            val segmentDuration = segment.frameCount.toDouble() / rate.toDouble()
-                            if (timelineSeconds < segmentTimelineStart + segmentDuration) break
-                            segmentTimelineStart += segmentDuration
-                            segmentIndex++
-                        }
-
+                        val segmentIndex = segmentIndexAt(timelineSeconds)
                         val segment = segments[segmentIndex]
                         val record = segment.record
                         if (record.sampleRate <= 0 || record.frameBytes <= 0 || segment.frameCount <= 0L) {
                             return@repeat
                         }
-                        val localSeconds = (timelineSeconds - segmentTimelineStart).coerceAtLeast(0.0)
+                        val localSeconds = (timelineSeconds - segment.timelineStartSeconds).coerceAtLeast(0.0)
                         val centerFrame = (localSeconds * record.sampleRate.toDouble()).toLong()
                             .coerceIn(0L, segment.frameCount - 1L)
                         val readFrames = minOf(frames.toLong(), segment.frameCount).toInt()
@@ -636,12 +633,24 @@ internal class PersistentAudioChunkStore internal constructor(
                             }
                         }
                     }
-                    envelope[bucket] = peak.coerceIn(0f, 1f)
+                    val value = peak.coerceIn(0f, 1f)
+                    envelope[bucket] = value
+                    if (!onBucket(bucket, value)) break
                 }
             } finally {
                 runCatching { currentAccess?.close() }
             }
             return envelope
+        }
+
+        private fun segmentIndexAt(seconds: Double): Int {
+            var low = 0
+            var high = segments.lastIndex
+            while (low < high) {
+                val middle = (low + high) ushr 1
+                if (seconds < segments[middle].timelineEndSeconds) high = middle else low = middle + 1
+            }
+            return low.coerceIn(0, segments.lastIndex)
         }
 
         private fun waveformSampleMagnitude(
@@ -688,6 +697,8 @@ internal class PersistentAudioChunkStore internal constructor(
         val payloadOffsetBytes: Long,
         val payloadBytesAtAcquire: Long,
         val payloadChecksumAtAcquire: Int,
+        val timelineStartSeconds: Double,
+        val timelineEndSeconds: Double,
     )
 
     internal data class ChunkRecord(

@@ -1065,9 +1065,18 @@ class FormattingAndHistoryMathTest {
         val formatted = formatRangeTimeInput(available)
         val parsed = requireNotNull(parseRangeTimeInput(formatted))
 
-        assertEquals("1:00.999", formatted)
+        assertEquals("1:00.9", formatted)
         assertTrue(parsed <= available)
-        assertTrue(available - parsed < 0.0011)
+        assertTrue(available - parsed < 0.1001)
+    }
+
+    @Test
+    fun rangeTimeInput_displaysAtMostOneFractionDigit() {
+        assertEquals("0:00", formatRangeTimeInput(0.0))
+        assertEquals("0:00.1", formatRangeTimeInput(0.199))
+        assertEquals("1:01", formatRangeTimeInput(61.0))
+        assertEquals("1:01.9", formatRangeTimeInput(61.999))
+        assertEquals("1:01:01.1", formatRangeTimeInput(3661.199))
     }
 
     @Test
