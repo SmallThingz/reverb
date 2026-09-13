@@ -1121,7 +1121,6 @@ private fun BufferSelector(
             label = stringResource(R.string.buffer_one_shot),
             icon = if (oneShotFull) AppIcons.check else AppIcons.oneShot,
             selected = selectedBuffer == ReverbService.BufferSlot.ONE_SHOT,
-            active = activeBuffer == ReverbService.BufferSlot.ONE_SHOT,
             recording = isBufferActivelyRecording(
                 ReverbService.BufferSlot.ONE_SHOT,
                 isListening,
@@ -1135,7 +1134,6 @@ private fun BufferSelector(
             label = stringResource(R.string.buffer_loop),
             icon = AppIcons.looping,
             selected = selectedBuffer == ReverbService.BufferSlot.LOOPING,
-            active = activeBuffer == ReverbService.BufferSlot.LOOPING,
             recording = isBufferActivelyRecording(
                 ReverbService.BufferSlot.LOOPING,
                 isListening,
@@ -1153,7 +1151,6 @@ private fun BufferSegment(
     label: String,
     icon: ImageVector,
     selected: Boolean,
-    active: Boolean,
     recording: Boolean,
     enabled: Boolean,
     filled: Boolean,
@@ -1162,22 +1159,17 @@ private fun BufferSegment(
     val colors = MaterialTheme.colorScheme
     val chrome = appChrome()
     val containerColor = when {
-        recording -> colors.primary
-        active && filled -> colors.tertiaryContainer.copy(alpha = 0.82f)
-        selected && filled -> colors.tertiaryContainer.copy(alpha = 0.60f)
-        filled -> colors.tertiaryContainer.copy(alpha = 0.32f)
-        !enabled -> Color.Transparent
-        active -> colors.primaryContainer.copy(alpha = 0.78f)
-        selected -> chrome.raised
+        selected && recording -> colors.primary
+        selected && filled -> colors.tertiaryContainer.copy(alpha = 0.72f)
+        selected -> colors.primaryContainer.copy(alpha = 0.74f)
         else -> Color.Transparent
     }
     val contentColor = when {
-        recording -> colors.onPrimary
-        filled -> colors.onTertiaryContainer
-        !enabled -> chrome.muted.copy(alpha = 0.38f)
-        active -> colors.onPrimaryContainer
-        selected -> chrome.ink
-        else -> chrome.muted
+        selected && recording -> colors.onPrimary
+        selected && filled -> colors.onTertiaryContainer
+        selected && !enabled -> colors.onPrimaryContainer.copy(alpha = 0.62f)
+        selected -> colors.onPrimaryContainer
+        else -> chrome.muted.copy(alpha = if (enabled) 0.52f else 0.30f)
     }
 
     Surface(
@@ -1188,11 +1180,6 @@ private fun BufferSegment(
         ),
         shape = RoundedCornerShape(16.dp),
         color = containerColor,
-        border = if (active && enabled && !recording) {
-            BorderStroke(1.dp, colors.primary.copy(alpha = 0.42f))
-        } else {
-            null
-        },
     ) {
         Row(
             modifier = Modifier

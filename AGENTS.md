@@ -5,7 +5,7 @@
 - The Library glyph is the Material Rounded bulleted-list icon (`FormatListBulleted`).
 - Library normal and selection top bars use the same 58dp content height; multi-select uses `SelectAll`.
 - Library vertical gestures reserve 13% on each side for close and the center 74% for pull-to-refresh.
-- The active capture destination stays highlighted while idle; disabled buffers remain viewable, show Off, and cannot become active.
+- The currently displayed buffer page owns the selector highlight; the other buffer stays visually dimmed even if it is the active capture destination. Disabled buffers remain viewable, show Off, and cannot become active.
 - Quick Settings buffer tiles are start/activate controls: usable tiles switch capture to that buffer; disabled or full buffers are unavailable.
 - Brand marks keep the main stroke on the current foreground color and derive echo/accent strokes from the Material primary color; Android 12+ launcher accents use system Material You colors and Android 13+ keeps a monochrome themed-icon mask.
 - Buffer selector taps are navigation-only and follow the same path as horizontal swipes; only the blob starts or stops recording.
