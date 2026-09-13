@@ -28,11 +28,13 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.UUID
 
 private val TAG = "RecordingFiles"
 private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
+private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
 internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
 private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/"
 
@@ -62,6 +64,7 @@ data class RecordingOutputTarget(
     val startedAtMillis: Long,
     val file: File? = null,
     val uri: Uri? = null,
+    val staging: Boolean = false,
 )
 
 /** Legacy app-private location used by older Reverb builds; always scanned for recovery. */
@@ -591,16 +594,159 @@ internal fun verifyOutputTargetSize(
 }
 
 @Throws(IOException::class)
-fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget) {
-    when (target.storageType) {
-        RecordingStorageType.MEDIASTORE -> publishMediaStoreUri(context, requireNotNull(target.uri))
-        RecordingStorageType.FILE -> {
-            val file = target.file
-            if (file != null && target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
+fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+    return when (target.storageType) {
+        RecordingStorageType.MEDIASTORE -> {
+            publishMediaStoreUri(context, requireNotNull(target.uri))
+            target
+        }
+        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target)
+        RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target)
+    }
+}
+
+@Throws(IOException::class)
+private fun finalizeFileOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+    if (!target.staging) {
+        target.file?.let { file ->
+            if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
                 MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(target.mimeType), null)
             }
         }
-        RecordingStorageType.DOCUMENT -> Unit
+        return target
+    }
+    val source = requireNotNull(target.file)
+    val destination = publishStagedFile(source, target.displayName)
+    if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
+        MediaScannerConnection.scanFile(context, arrayOf(destination.absolutePath), arrayOf(target.mimeType), null)
+    }
+    return target.copy(
+        id = destination.absolutePath,
+        displayName = destination.name,
+        file = destination,
+        staging = false,
+    )
+}
+
+@Throws(IOException::class)
+internal fun publishStagedFile(source: File, finalDisplayName: String): File {
+    val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
+    while (true) {
+        val finalName = findAvailableDisplayName(finalDisplayName) { candidate -> File(parent, candidate).exists() }
+        val destination = File(parent, finalName)
+        try {
+            // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
+            // when a racing destination exists its replacement semantics are provider-specific.
+            Files.move(source.toPath(), destination.toPath())
+            return destination
+        } catch (_: FileAlreadyExistsException) {
+            continue
+        }
+    }
+}
+
+@Throws(IOException::class)
+private fun finalizeDocumentOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+    if (!target.staging) return target
+    val sourceUri = requireNotNull(target.uri)
+    val treeUri = target.directoryId.toUri()
+    val tree = DocumentFile.fromTreeUri(context, treeUri)
+        ?: throw IOException("Unable to access output directory while publishing recording")
+    val finalName = findAvailableDisplayName(target.displayName) { candidate ->
+        tree.findFile(candidate)?.uri?.let { it != sourceUri } == true
+    }
+    if (!documentSupportsRename(context, sourceUri)) {
+        return publishStagedDocumentByVerifiedCopy(context, target, treeUri, sourceUri, finalName)
+    }
+    val renamedUri = try {
+        DocumentsContract.renameDocument(context.contentResolver, sourceUri, finalName)
+    } catch (error: Exception) {
+        throw IOException("Output provider failed to atomically publish recording", error)
+    } ?: throw IOException("Output provider failed to atomically publish recording")
+    val actualName = DocumentFile.fromSingleUri(context, renamedUri)?.name
+        ?.takeIf { it.isNotBlank() }
+        ?: finalName
+    return target.copy(
+        id = renamedUri.toString(),
+        displayName = actualName,
+        uri = renamedUri,
+        staging = false,
+    )
+}
+
+private fun documentSupportsRename(context: Context, uri: Uri): Boolean = runCatching {
+    context.contentResolver.query(
+        uri,
+        arrayOf(DocumentsContract.Document.COLUMN_FLAGS),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        cursor.moveToFirst() &&
+            (cursor.getInt(0) and DocumentsContract.Document.FLAG_SUPPORTS_RENAME) != 0
+    } == true
+}.onFailure { Log.w(TAG, "Unable to inspect document publish capabilities for $uri", it) }
+    .getOrDefault(false)
+
+@Throws(IOException::class)
+private fun publishStagedDocumentByVerifiedCopy(
+    context: Context,
+    target: RecordingOutputTarget,
+    treeUri: Uri,
+    sourceUri: Uri,
+    finalName: String,
+): RecordingOutputTarget {
+    val finalUri = DocumentsContract.createDocument(
+        context.contentResolver,
+        DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
+        target.mimeType,
+        finalName,
+    ) ?: throw IOException("Unable to create final output document")
+    val actualName = DocumentFile.fromSingleUri(context, finalUri)?.name
+        ?.takeIf { it.isNotBlank() }
+        ?: finalName
+    val finalTarget = target.copy(
+        id = finalUri.toString(),
+        displayName = actualName,
+        uri = finalUri,
+        staging = false,
+    )
+    try {
+        val sourceDigest = context.contentResolver.openInputStream(sourceUri)?.use { input ->
+            openWritableParcelFileDescriptor(context, finalTarget).use { descriptor ->
+                FileOutputStream(descriptor.fileDescriptor).use { output ->
+                    val digest = copyWithSha256(input, output)
+                    output.fd.sync()
+                    digest
+                }
+            }
+        } ?: throw IOException("Unable to reopen verified staging document")
+        if (sourceDigest.byteCount <= 0L) throw IOException("Verified staging document was empty")
+        val finalDigest = context.contentResolver.openInputStream(finalUri)?.use(::sha256)
+            ?: throw IOException("Unable to verify final output document")
+        if (
+            sourceDigest.byteCount != finalDigest.byteCount ||
+            !sourceDigest.sha256.contentEquals(finalDigest.sha256)
+        ) {
+            throw IOException("Final output document verification failed")
+        }
+        val stagingDeleted = runCatching {
+            DocumentFile.fromSingleUri(context, sourceUri)?.delete() == true
+        }.onFailure { Log.w(TAG, "Unable to remove published staging document $sourceUri", it) }
+            .getOrDefault(false)
+        if (!stagingDeleted) {
+            Log.w(TAG, "Published staging document retained for safety: $sourceUri")
+        }
+        return finalTarget
+    } catch (error: Exception) {
+        val finalDeleted = runCatching {
+            DocumentFile.fromSingleUri(context, finalUri)?.delete() == true
+        }.onFailure { Log.w(TAG, "Unable to remove failed final document $finalUri", it) }
+            .getOrDefault(false)
+        if (!finalDeleted) {
+            Log.w(TAG, "Failed final document retained alongside verified staging copy: $finalUri")
+        }
+        throw if (error is IOException) error else IOException("Unable to publish verified staging document", error)
     }
 }
 
@@ -811,14 +957,15 @@ fun copyRecordingToConfiguredDirectory(
         ) {
             throw IOException("Recording source changed during copy")
         }
-        finalizeOutputTarget(context, resolvedTarget)
+        val finalizedTarget = finalizeOutputTarget(context, resolvedTarget)
+        target = finalizedTarget
 
         recording.copy(
-            id = resolvedTarget.id,
-            displayName = resolvedTarget.displayName,
+            id = finalizedTarget.id,
+            displayName = finalizedTarget.displayName,
             sizeBytes = verifiedTargetSize,
-            storageType = resolvedTarget.storageType.name,
-            directoryId = resolvedTarget.directoryId,
+            storageType = finalizedTarget.storageType.name,
+            directoryId = finalizedTarget.directoryId,
         )
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
@@ -1270,8 +1417,15 @@ internal fun inspectRecoverableDocumentDirectory(
     }
 }
 
+internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGING_OUTPUT_PREFIX)
+
 internal fun isSupportedRecordingName(name: String): Boolean =
-    name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
+    !isStagingOutputName(name) && name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
+
+internal fun stagingOutputName(finalDisplayName: String, token: String): String {
+    val extension = finalDisplayName.substringAfterLast('.', "tmp").lowercase().ifBlank { "tmp" }
+    return "$STAGING_OUTPUT_PREFIX$token.$extension"
+}
 
 internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
     sizeBytes > 0L && durationMillis > 0L
@@ -1291,17 +1445,11 @@ private fun createLocalOutputTarget(
     // A name such as "../recording.wav" must never escape app-local storage when
     // recordings are moved from SAF back into the app directory.
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
-    val dotIndex = safeDisplayName.lastIndexOf('.')
-    val name = if (dotIndex > 0) safeDisplayName.substring(0, dotIndex) else safeDisplayName
-    val extension = if (dotIndex > 0) safeDisplayName.substring(dotIndex) else ""
-    var suffix = 1
-    var uniqueName: String
+    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate -> File(storageDir, candidate).exists() }
     var file: File
     while (true) {
-        uniqueName = if (suffix == 1) safeDisplayName else "$name ($suffix)$extension"
-        file = File(storageDir, uniqueName)
+        file = File(storageDir, stagingOutputName(uniqueName, UUID.randomUUID().toString()))
         if (file.createNewFile()) break
-        suffix++
     }
     return RecordingOutputTarget(
         id = file.absolutePath,
@@ -1311,6 +1459,7 @@ private fun createLocalOutputTarget(
         directoryId = storageDir.absolutePath,
         startedAtMillis = startedAtMillis,
         file = file,
+        staging = true,
     )
 }
 
@@ -1429,27 +1578,27 @@ private fun createDocumentOutputTarget(
 ): RecordingOutputTarget {
     val tree = DocumentFile.fromTreeUri(context, treeUri)
         ?: throw IOException("Unable to access output directory")
-    val uniqueName = findAvailableDisplayName(requestedDisplayName) { candidate ->
+    val safeDisplayName = sanitizeBaseName(requestedDisplayName)
+    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
         tree.findFile(candidate) != null
     }
+    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString())
     val documentUri = DocumentsContract.createDocument(
         context.contentResolver,
         DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
         mimeType,
-        uniqueName,
+        stagingName,
     ) ?: throw IOException("Unable to create output document")
-    val actualDisplayName = DocumentFile.fromSingleUri(context, documentUri)?.name
-        ?.takeIf { it.isNotBlank() }
-        ?: uniqueName
 
     return RecordingOutputTarget(
         id = documentUri.toString(),
-        displayName = actualDisplayName,
+        displayName = uniqueName,
         mimeType = mimeType,
         storageType = RecordingStorageType.DOCUMENT,
         directoryId = treeUri.toString(),
         startedAtMillis = startedAtMillis,
         uri = documentUri,
+        staging = true,
     )
 }
 

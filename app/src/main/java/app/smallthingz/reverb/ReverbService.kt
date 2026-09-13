@@ -1229,11 +1229,12 @@ class ReverbService : Service() {
                         )
                         verifiedComplete = true
                         ensureExportNotCancelled(exportToken)
-                        finalizeOutputTarget(this@ReverbService, target)
+                        val finalizedTarget = finalizeOutputTarget(this@ReverbService, target)
+                        outTarget = finalizedTarget
                         ensureExportNotCancelled(exportToken)
                         val recording = buildRecordingEntity(
                             this@ReverbService,
-                            target,
+                            finalizedTarget,
                             durationMillis,
                             buildCodecSummary(
                                 this@ReverbService,

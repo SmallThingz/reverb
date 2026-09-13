@@ -3,6 +3,8 @@ package app.smallthingz.reverb
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.File
+import java.nio.file.Files
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertArrayEquals
@@ -88,6 +90,37 @@ class DurabilityInvariantTest {
         assertFalse(requiresLegacyPublicStoragePermission(29))
         assertTrue(usesMediaStoreDefaultStorage(37))
         assertFalse(requiresLegacyPublicStoragePermission(37))
+    }
+
+    @Test
+    fun stagingOutputNames_areNeverImportedAsFinishedRecordings() {
+        val staging = stagingOutputName("clip.wav", "test-token")
+        assertTrue(isStagingOutputName(staging))
+        assertTrue(staging.endsWith(".wav"))
+        assertFalse(isSupportedRecordingName(staging))
+        assertTrue(isSupportedRecordingName("clip.wav"))
+        assertFalse(isStagingOutputName("clip.wav"))
+    }
+
+    @Test
+    fun stagedFilePublish_neverOverwritesAnExistingRecording() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "publish-").toFile()
+        try {
+            val existingBytes = byteArrayOf(1, 2, 3, 4)
+            val stagedBytes = byteArrayOf(9, 8, 7, 6, 5)
+            val existing = File(directory, "clip.wav").apply { writeBytes(existingBytes) }
+            val staged = File(directory, stagingOutputName("clip.wav", "token")).apply { writeBytes(stagedBytes) }
+
+            val published = publishStagedFile(staged, "clip.wav")
+
+            assertEquals("clip (2).wav", published.name)
+            assertArrayEquals(existingBytes, existing.readBytes())
+            assertArrayEquals(stagedBytes, published.readBytes())
+            assertFalse(staged.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 
     @Test
