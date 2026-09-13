@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -140,8 +141,9 @@ private fun RecordingSummaryCard(
         ) {
             Box(
                 modifier = Modifier
-                    .then(iconInteractionModifier)
-                    .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+                    .width(72.dp)
+                    .heightIn(min = 68.dp)
+                    .then(iconInteractionModifier),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
