@@ -64,6 +64,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -189,6 +190,29 @@ internal fun adjustRangeEditTarget(
 }
 
 private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
+internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = 32f
+
+internal fun rangeFineTunePuckContains(
+    pointerX: Float,
+    pointerY: Float,
+    puckX: Float,
+    puckY: Float,
+    radius: Float,
+): Boolean {
+    val dx = pointerX - puckX
+    val dy = pointerY - puckY
+    val safeRadius = radius.coerceAtLeast(0f)
+    return dx * dx + dy * dy <= safeRadius * safeRadius
+}
+
+internal fun rangeFineTuneMovementExceedsSlop(
+    deltaX: Float,
+    deltaY: Float,
+    touchSlop: Float,
+): Boolean {
+    val slop = touchSlop.coerceAtLeast(0f)
+    return deltaX * deltaX + deltaY * deltaY > slop * slop
+}
 
 internal fun rangeFineTuneHorizontalTouchPull(
     pointerX: Float,
@@ -1420,7 +1444,9 @@ private fun SpringFineAdjust(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
+    val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
+    val touchSlop = LocalViewConfiguration.current.touchSlop
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
@@ -1428,6 +1454,12 @@ private fun SpringFineAdjust(
     var lastFrameNanos by remember { mutableLongStateOf(0L) }
 
     val constrainedY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+
+    fun togglePreviewFromPuck() {
+        val accepted = state.commitActiveTextEditing()
+        focusManager.clearFocus(force = true)
+        if (accepted && state.snapshotReady) state.togglePreview()
+    }
 
     LaunchedEffect(enabled) {
         if (!enabled) {
@@ -1491,48 +1523,78 @@ private fun SpringFineAdjust(
     }
 
     val gestureModifier = if (enabled) {
-        Modifier.pointerInput(state.lastTarget) {
+        Modifier.pointerInput(state.lastTarget, touchSlop) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                state.invalidateTextEditing()
-                focusManager.clearFocus(force = true)
                 val edgePadding = 10.dp.toPx()
-                val puckRadius = 16.dp.toPx()
+                val puckRadius = RANGE_FINE_TUNE_PUCK_RADIUS_DP.dp.toPx()
                 val visualHorizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
                     .coerceAtLeast(1f)
                 val visualVerticalTravel = (size.height * 0.5f - edgePadding - puckRadius)
                     .coerceAtLeast(1f)
                 val verticalInputTravel = visualVerticalTravel * 2.35f
-
-                dragging = true
-                dragStartRawVertical = rawVerticalPull
-                horizontalPull = rangeFineTuneHorizontalTouchPull(
+                val startPuckX = size.width * 0.5f + horizontalPull * visualHorizontalTravel
+                val startPuckY = size.height * 0.5f + constrainedY * visualVerticalTravel
+                val startedOnPuck = rangeFineTunePuckContains(
                     pointerX = down.position.x,
-                    width = size.width.toFloat(),
-                    horizontalTravel = visualHorizontalTravel,
+                    pointerY = down.position.y,
+                    puckX = startPuckX,
+                    puckY = startPuckY,
+                    radius = puckRadius,
                 )
-                state.beginFineAdjust()
-                down.consume()
+                var fineAdjustStarted = false
+
+                fun startFineAdjust(pointerX: Float) {
+                    if (fineAdjustStarted) return
+                    state.invalidateTextEditing()
+                    focusManager.clearFocus(force = true)
+                    dragStartRawVertical = rawVerticalPull
+                    horizontalPull = rangeFineTuneHorizontalTouchPull(
+                        pointerX = pointerX,
+                        width = size.width.toFloat(),
+                        horizontalTravel = visualHorizontalTravel,
+                    )
+                    dragging = true
+                    fineAdjustStarted = true
+                    state.beginFineAdjust()
+                }
+
+                if (!startedOnPuck) {
+                    startFineAdjust(down.position.x)
+                    down.consume()
+                }
 
                 try {
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) break
-                        horizontalPull = rangeFineTuneHorizontalTouchPull(
-                            pointerX = change.position.x,
-                            width = size.width.toFloat(),
-                            horizontalTravel = visualHorizontalTravel,
-                        )
-                        rawVerticalPull = rangeFineTuneVerticalDragPull(
-                            startRawVertical = dragStartRawVertical,
-                            dragDeltaY = change.position.y - down.position.y,
-                            verticalTravel = verticalInputTravel,
-                        )
-                        change.consume()
+
+                        if (!fineAdjustStarted && rangeFineTuneMovementExceedsSlop(
+                                deltaX = change.position.x - down.position.x,
+                                deltaY = change.position.y - down.position.y,
+                                touchSlop = touchSlop,
+                            )
+                        ) {
+                            startFineAdjust(change.position.x)
+                        }
+
+                        if (fineAdjustStarted) {
+                            horizontalPull = rangeFineTuneHorizontalTouchPull(
+                                pointerX = change.position.x,
+                                width = size.width.toFloat(),
+                                horizontalTravel = visualHorizontalTravel,
+                            )
+                            rawVerticalPull = rangeFineTuneVerticalDragPull(
+                                startRawVertical = dragStartRawVertical,
+                                dragDeltaY = change.position.y - down.position.y,
+                                verticalTravel = verticalInputTravel,
+                            )
+                            change.consume()
+                        }
                     }
                 } finally {
-                    if (dragging) {
+                    if (fineAdjustStarted) {
                         dragging = false
                         state.endFineAdjust()
                     }
@@ -1543,41 +1605,48 @@ private fun SpringFineAdjust(
         Modifier
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier.then(gestureModifier),
         contentAlignment = Alignment.Center,
     ) {
+        val edgePadding = 10.dp
+        val puckRadius = RANGE_FINE_TUNE_PUCK_RADIUS_DP.dp
+        val horizontalTravelPx = with(density) {
+            (maxWidth * 0.5f - edgePadding - puckRadius).coerceAtLeast(1.dp).toPx()
+        }
+        val verticalTravelPx = with(density) {
+            (maxHeight * 0.5f - edgePadding - puckRadius).coerceAtLeast(1.dp).toPx()
+        }
+        val puckOffsetX = horizontalPull * horizontalTravelPx
+        val puckOffsetY = constrainedY * verticalTravelPx
+
         Canvas(Modifier.fillMaxSize()) {
             val center = Offset(size.width * 0.5f, size.height * 0.5f)
-            val edgePadding = 10.dp.toPx()
-            val puckRadius = 16.dp.toPx()
-            val horizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
-                .coerceAtLeast(1f)
-            val verticalTravel = (size.height * 0.5f - edgePadding - puckRadius)
-                .coerceAtLeast(1f)
+            val edgePaddingPx = edgePadding.toPx()
+            val puckRadiusPx = puckRadius.toPx()
             val puck = Offset(
-                x = center.x + horizontalPull * horizontalTravel,
-                y = center.y + constrainedY * verticalTravel,
+                x = center.x + puckOffsetX,
+                y = center.y + puckOffsetY,
             )
-            val leftTipX = edgePadding
-            val rightTipX = size.width - edgePadding
-            val leftSpan = (puck.x - puckRadius - leftTipX).coerceAtLeast(1f)
-            val rightSpan = (rightTipX - puck.x - puckRadius).coerceAtLeast(1f)
-            val topY = puck.y - puckRadius
-            val bottomY = puck.y + puckRadius
+            val leftTipX = edgePaddingPx
+            val rightTipX = size.width - edgePaddingPx
+            val leftSpan = (puck.x - puckRadiusPx - leftTipX).coerceAtLeast(1f)
+            val rightSpan = (rightTipX - puck.x - puckRadiusPx).coerceAtLeast(1f)
+            val topY = puck.y - puckRadiusPx
+            val bottomY = puck.y + puckRadiusPx
 
             val field = Path().apply {
                 moveTo(leftTipX, center.y)
                 cubicTo(
                     leftTipX + leftSpan * 0.30f,
                     center.y,
-                    (puck.x - puckRadius - leftSpan * 0.28f).coerceAtLeast(leftTipX),
+                    (puck.x - puckRadiusPx - leftSpan * 0.28f).coerceAtLeast(leftTipX),
                     topY,
                     puck.x,
                     topY,
                 )
                 cubicTo(
-                    (puck.x + puckRadius + rightSpan * 0.28f).coerceAtMost(rightTipX),
+                    (puck.x + puckRadiusPx + rightSpan * 0.28f).coerceAtMost(rightTipX),
                     topY,
                     rightTipX - rightSpan * 0.30f,
                     center.y,
@@ -1587,13 +1656,13 @@ private fun SpringFineAdjust(
                 cubicTo(
                     rightTipX - rightSpan * 0.30f,
                     center.y,
-                    (puck.x + puckRadius + rightSpan * 0.28f).coerceAtMost(rightTipX),
+                    (puck.x + puckRadiusPx + rightSpan * 0.28f).coerceAtMost(rightTipX),
                     bottomY,
                     puck.x,
                     bottomY,
                 )
                 cubicTo(
-                    (puck.x - puckRadius - leftSpan * 0.28f).coerceAtLeast(leftTipX),
+                    (puck.x - puckRadiusPx - leftSpan * 0.28f).coerceAtLeast(leftTipX),
                     bottomY,
                     leftTipX + leftSpan * 0.30f,
                     center.y,
@@ -1636,17 +1705,37 @@ private fun SpringFineAdjust(
             if (dragging) {
                 drawCircle(
                     color = fieldColor.copy(alpha = 0.055f + 0.055f * horizontalPower),
-                    radius = puckRadius * 1.42f,
+                    radius = puckRadiusPx * 1.28f,
                     center = puck,
                 )
             }
-            // The puck itself always stays the Material foreground color. Only
-            // the surrounding field communicates fast/fine mode through color.
-            drawCircle(
-                color = colors.onSurface,
-                radius = puckRadius,
-                center = puck,
-            )
+        }
+
+        Surface(
+            onClick = ::togglePreviewFromPuck,
+            enabled = enabled && state.snapshotReady,
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        puckOffsetX.roundToInt(),
+                        puckOffsetY.roundToInt(),
+                    )
+                }
+                .size(puckRadius * 2f),
+            shape = CircleShape,
+            color = colors.onSurface,
+            tonalElevation = if (dragging) 0.dp else 2.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
+                    contentDescription = stringResource(
+                        if (state.isPlaying) R.string.player_pause else R.string.player_play,
+                    ),
+                    tint = colors.surface,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
         }
     }
 }
@@ -1726,23 +1815,6 @@ private fun RangeExportControls(
                         imageVector = AppIcons.close,
                         contentDescription = stringResource(R.string.close),
                         tint = chrome.ink,
-                    )
-                }
-                IconButton(
-                    onClick = {
-                        val accepted = state.commitActiveTextEditing()
-                        focusManager.clearFocus(force = true)
-                        if (accepted) state.togglePreview()
-                    },
-                    enabled = state.snapshotReady,
-                    modifier = Modifier.size(50.dp),
-                ) {
-                    Icon(
-                        imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
-                        contentDescription = stringResource(
-                            if (state.isPlaying) R.string.player_pause else R.string.player_play,
-                        ),
-                        tint = MaterialTheme.colorScheme.primary,
                     )
                 }
                 Column(

@@ -35,6 +35,7 @@
 
 - Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob renderer/animation to implement the timeline.
 - Range-export fine adjustment is a 2D spring field: horizontal pull controls direction/base jog rate and is intentionally more sensitive than Y, upward pull accelerates, downward pull increases precision, jog rate is a percentage of total timeline duration, Y uses a tall low-sensitivity cosh field that stiffens toward horizontal edges, the foreground-colored puck tracks touch X 1:1 inside its visual bounds while seek sensitivity is applied separately, and release returns monotonically to center.
+- The range-export fine-adjust puck is also the play/pause control: a tap toggles preview without jogging, while movement beyond touch slop turns the same puck gesture into fine adjustment.
 - Range waveform previews use a fixed source-sample budget independent of history length, build off the UI thread, and publish left-to-right while the unrevealed suffix remains animated.
 - Blob-to-range transitions may transform the containing UI, but must not modify `AudioBlobView` rendering semantics.
 - Range waveform construction is two-pass: a cheap coarse left-to-right materialization, then a finer fixed-budget left-to-right refinement; neither pass scales source reads with history duration.
