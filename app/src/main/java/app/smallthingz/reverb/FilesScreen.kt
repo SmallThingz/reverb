@@ -141,6 +141,9 @@ fun FilesScreen(
     var trimRequestRecordingId by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<LibraryNotice?>(null) }
     var deletionJob by remember { mutableStateOf<Job?>(null) }
+    var shareJob by remember { mutableStateOf<Job?>(null) }
+    val shareGeneration = remember { intArrayOf(0) }
+    val activeState = androidx.compose.runtime.rememberUpdatedState(active)
     var deletionsCommittedInBackground by remember { mutableStateOf(false) }
     var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
 
@@ -279,6 +282,9 @@ fun FilesScreen(
 
     LaunchedEffect(active) {
         if (!active) {
+            shareGeneration[0]++
+            shareJob?.cancel()
+            shareJob = null
             contextMenuRecordingId = null
             selectedIds.clear()
             syncSelectionActive()
@@ -445,11 +451,14 @@ fun FilesScreen(
             if (targets.size == 1) R.string.share_recording_title
             else R.string.share_recordings_title,
         )
-        scope.launch {
+        val generation = ++shareGeneration[0]
+        shareJob?.cancel()
+        shareJob = scope.launch {
             try {
                 val shareIntent = withContext(Dispatchers.IO) {
                     buildShareRecordingsIntent(context, targets)
                 }
+                if (generation != shareGeneration[0] || !activeState.value) return@launch
                 context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -458,6 +467,8 @@ fun FilesScreen(
             } catch (_: RuntimeException) {
                 showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
                 refresh(showSpinner = false)
+            } finally {
+                if (generation == shareGeneration[0]) shareJob = null
             }
         }
     }
@@ -469,6 +480,9 @@ fun FilesScreen(
     }
     DisposableEffect(Unit) {
         onDispose {
+            shareGeneration[0]++
+            shareJob?.cancel()
+            shareJob = null
             onSelectionActiveChange(false)
             onExpandedRecordingActiveChange(false)
         }
