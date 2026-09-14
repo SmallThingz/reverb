@@ -54,7 +54,7 @@ class RecordingOpenActivity : ComponentActivity() {
 internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? {
     val id = source.getStringExtra("recording_id")?.takeIf { it.isNotBlank() } ?: return null
     val storage = source.getStringExtra("recording_storage_type")
-        ?.let { stored -> RecordingStorageType.entries.firstOrNull { it.name == stored } }
+        ?.let { stored -> RecordingStorageType.fromLegacyName(stored) }
         ?: return null
     val mimeType = source.getStringExtra("recording_mime_type")
         ?.takeIf { it.isNotBlank() }

@@ -61,10 +61,18 @@ internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
 private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/"
 
 
-enum class RecordingStorageType {
-    FILE,
-    DOCUMENT,
-    MEDIASTORE,
+enum class RecordingStorageType(val storageCode: Byte) {
+    FILE(1),
+    DOCUMENT(2),
+    MEDIASTORE(3),
+    ;
+
+    companion object {
+        fun fromStorageCode(value: Int): RecordingStorageType? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
+
+        fun fromLegacyName(value: String?): RecordingStorageType? = entries.firstOrNull { it.name == value }
+    }
 }
 
 internal enum class RecordingAssetState {
@@ -74,7 +82,7 @@ internal enum class RecordingAssetState {
 }
 
 internal fun resolveRecordingStorageType(recording: RecordingEntity): RecordingStorageType? {
-    return RecordingStorageType.entries.firstOrNull { it.name == recording.storageType }
+    return RecordingStorageType.fromLegacyName(recording.storageType)
 }
 
 data class RecordingOutputTarget(

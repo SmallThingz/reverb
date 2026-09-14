@@ -16,8 +16,10 @@ import java.util.Base64
 import java.util.UUID
 
 private const val OUTPUT_CLEANUP_RECORD_VERSION_V1 = "v1"
-private const val OUTPUT_CLEANUP_RECORD_VERSION = "v2"
-private const val VERIFIED_EXPORT_STAGING_VERSION = "v1"
+private const val OUTPUT_CLEANUP_RECORD_VERSION_V2 = "v2"
+private const val OUTPUT_CLEANUP_RECORD_VERSION = "v3"
+private const val VERIFIED_EXPORT_STAGING_VERSION_V1 = "v1"
+private const val VERIFIED_EXPORT_STAGING_VERSION = "v2"
 private val outputCleanupJournalLock = Any()
 private val verifiedExportStagingLock = Any()
 
@@ -49,7 +51,7 @@ private enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
 
 internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord): String = buildString {
     append(OUTPUT_CLEANUP_RECORD_VERSION).append('|')
-    append(record.storageType.name).append('|')
+    append(record.storageType.storageCode.toInt()).append('|')
     append(encodeCleanupField(record.id)).append('|')
     append(record.byteCount).append('|')
     append(record.sha256Hex.lowercase()).append('|')
@@ -59,13 +61,20 @@ internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord
 
 internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanupRecord? {
     val parts = raw.split('|')
-    val expectedSize = when (parts.firstOrNull()) {
+    val version = parts.firstOrNull()
+    val expectedSize = when (version) {
         OUTPUT_CLEANUP_RECORD_VERSION_V1 -> 6
-        OUTPUT_CLEANUP_RECORD_VERSION -> 7
+        OUTPUT_CLEANUP_RECORD_VERSION_V2, OUTPUT_CLEANUP_RECORD_VERSION -> 7
         else -> return null
     }
     if (parts.size != expectedSize) return null
-    val storageType = RecordingStorageType.entries.firstOrNull { it.name == parts[1] } ?: return null
+    val storageType = when (version) {
+        OUTPUT_CLEANUP_RECORD_VERSION_V1, OUTPUT_CLEANUP_RECORD_VERSION_V2 ->
+            RecordingStorageType.fromLegacyName(parts[1])
+        OUTPUT_CLEANUP_RECORD_VERSION ->
+            parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        else -> null
+    } ?: return null
     val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
     val byteCount = parts[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
     val sha256Hex = parts[4].lowercase()
@@ -81,7 +90,7 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
 
 internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String = buildString {
     append(VERIFIED_EXPORT_STAGING_VERSION).append('|')
-    append(record.storageType.name).append('|')
+    append(record.storageType.storageCode.toInt()).append('|')
     append(encodeCleanupField(record.id)).append('|')
     append(record.byteCount).append('|')
     append(record.sha256Hex.lowercase()).append('|')
@@ -91,8 +100,12 @@ internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingReco
 
 internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagingRecord? {
     val parts = raw.split('|')
-    if (parts.size != 7 || parts[0] != VERIFIED_EXPORT_STAGING_VERSION) return null
-    val storageType = RecordingStorageType.entries.firstOrNull { it.name == parts[1] } ?: return null
+    if (parts.size != 7) return null
+    val storageType = when (parts[0]) {
+        VERIFIED_EXPORT_STAGING_VERSION_V1 -> RecordingStorageType.fromLegacyName(parts[1])
+        VERIFIED_EXPORT_STAGING_VERSION -> parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        else -> null
+    } ?: return null
     val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
     val byteCount = parts[3].toLongOrNull()?.takeIf { it > 0L } ?: return null
     val sha256Hex = parts[4].lowercase()

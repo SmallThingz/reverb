@@ -953,7 +953,7 @@ class DurabilityInvariantTest {
             fileKey = "stat:1:2:100:5:77",
         )
         val encoded = encodePendingOutputCleanupRecord(record)
-        assertTrue(encoded.startsWith("v2|"))
+        assertTrue(encoded.startsWith("v3|1|"))
         assertEquals(record, decodePendingOutputCleanupRecord(encoded))
         assertTrue(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:2:100:5:77"))
         assertFalse(pendingOutputCleanupMatches(record, 1235L, hash, "stat:1:2:100:5:77"))
@@ -985,7 +985,22 @@ class DurabilityInvariantTest {
             providerIdentity = null,
         )
         val encoded = encodeVerifiedExportStagingRecord(fileRecord)
+        assertTrue(encoded.startsWith("v2|1|"))
         assertEquals(fileRecord, decodeVerifiedExportStagingRecord(encoded))
+
+        val encodeField: (String) -> String = { value ->
+            java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(value.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        }
+        val legacyV1 = buildString {
+            append("v1|FILE|")
+            append(encodeField(fileRecord.id)).append('|')
+            append(fileRecord.byteCount).append('|')
+            append(fileRecord.sha256Hex).append('|')
+            append(encodeField(fileRecord.fileKey.orEmpty())).append('|')
+            append(encodeField(fileRecord.providerIdentity.orEmpty()))
+        }
+        assertEquals(fileRecord, decodeVerifiedExportStagingRecord(legacyV1))
         assertTrue(verifiedExportStagingRecordMatches(fileRecord, fileFingerprint))
         assertFalse(
             verifiedExportStagingRecordMatches(
@@ -1106,8 +1121,14 @@ class DurabilityInvariantTest {
         )
 
         val encoded = encodePendingOutputCleanupRecord(record)
-        assertTrue(encoded.startsWith("v2|"))
+        assertTrue(encoded.startsWith("v3|3|"))
         assertEquals(record, decodePendingOutputCleanupRecord(encoded))
+        val legacyV2Identity = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(identity.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val legacyV2Id = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(id.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val legacyV2 = "v2|MEDIASTORE|$legacyV2Id|4321|$hash||$legacyV2Identity"
+        assertEquals(record, decodePendingOutputCleanupRecord(legacyV2))
         assertTrue(pendingOutputCleanupMatches(record, 4321L, hash, null, identity))
         assertEquals(
             PendingOutputCleanupMatch.EXACT,

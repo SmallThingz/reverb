@@ -421,7 +421,9 @@ class PersistentAudioChunkStoreDurabilityTest {
 
         crashed.clear()
         assertFalse(crashed.hasData())
-        assertTrue(File(root, "retired/0").readText().startsWith("v2|"))
+        val retirementMarker = File(root, "retired/0").readText()
+        assertTrue(retirementMarker.startsWith("v2|0|"))
+        assertTrue(retirementMarker.endsWith("|${PcmSampleFormat.PCM_16.storageCode.toInt()}"))
         assertArrayEquals(expected, readLease(lease))
         val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
         assertTrue(chunk.isFile)

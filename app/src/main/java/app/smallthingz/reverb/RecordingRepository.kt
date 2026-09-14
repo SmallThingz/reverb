@@ -856,7 +856,7 @@ private fun decodePendingDeletionV2(raw: String): PendingDeletionIntent? {
     val parts = raw.split('|')
     if (parts.size != 8 || parts[0] != "v2") return null
     val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
-    val storage = RecordingStorageType.entries.firstOrNull { it.name == parts[5] }?.name ?: return null
+    val storage = RecordingStorageType.fromLegacyName(parts[5])?.name ?: return null
     if (storage != RecordingStorageType.FILE.name) return null
     val token = parts[6].takeIf { it.isNotBlank() }?.let { value ->
         runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
