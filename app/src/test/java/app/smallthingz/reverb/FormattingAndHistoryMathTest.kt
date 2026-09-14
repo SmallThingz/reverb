@@ -1471,6 +1471,9 @@ class FormattingAndHistoryMathTest {
         assertEquals(0f, panelRevealProgress(25f, 0f), 0.0001f)
         assertFalse(shouldCommitPanelReveal(0.119f))
         assertTrue(shouldCommitPanelReveal(0.12f))
+        assertFalse(shouldComposeMainPanel(visible = false, progress = 0f))
+        assertTrue(shouldComposeMainPanel(visible = true, progress = 0f))
+        assertTrue(shouldComposeMainPanel(visible = false, progress = 0.001f))
     }
 
     @Test

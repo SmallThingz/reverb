@@ -418,8 +418,10 @@ fun CaptureScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        bindIfNeeded()
+        val initialBind = Runnable { bindIfNeeded() }
+        view.postOnAnimation(initialBind)
         onDispose {
+            view.removeCallbacks(initialBind)
             lifecycleOwner.lifecycle.removeObserver(observer)
             rangeSnapshot?.close()
             rangeSnapshot = null

@@ -49,8 +49,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -72,9 +70,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
@@ -95,6 +90,9 @@ internal fun panelRevealProgress(dragDistancePx: Float, viewportHeightPx: Float)
 
 internal fun shouldCommitPanelReveal(progress: Float): Boolean =
     progress.coerceIn(0f, 1f) >= PANEL_COMMIT_PROGRESS
+
+internal fun shouldComposeMainPanel(visible: Boolean, progress: Float): Boolean =
+    visible || progress > 0f
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
@@ -834,7 +832,6 @@ private fun MainScreen(
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
     val context = LocalContext.current.applicationContext
-    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
 
@@ -862,19 +859,6 @@ private fun MainScreen(
         }
     }
 
-    val hasObservedInitialResume = remember { booleanArrayOf(false) }
-    LaunchedEffect(Unit) { refreshLibrarySnapshot() }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                if (hasObservedInitialResume[0]) refreshLibrarySnapshot()
-                else hasObservedInitialResume[0] = true
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
     fun closeLibrary() {
         showLibrary = false
     }
@@ -883,22 +867,24 @@ private fun MainScreen(
     val libraryContentTopPadding = libraryTopPadding + AppTopBarContentHeight
 
     Box(Modifier.fillMaxSize()) {
-        SettingsScreen(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(0f)
-                .graphicsLayer { alpha = if (settingsPanelProgress > 0f || showSettings) 1f else 0.01f }
-                .semantics { if (!showSettings) hideFromAccessibility() },
-            active = showSettings,
-            onBack = {
-                showSettings = false
-                settingsBufferTarget = null
-            },
-            onThemeChanged = onThemeChanged,
-            focusRetentionBuffer = settingsBufferTarget?.let { stored ->
-                runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
-            },
-        )
+        if (shouldComposeMainPanel(showSettings, settingsPanelProgress)) {
+            SettingsScreen(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(0f)
+                    .graphicsLayer { alpha = if (settingsPanelProgress > 0f || showSettings) 1f else 0.01f }
+                    .semantics { if (!showSettings) hideFromAccessibility() },
+                active = showSettings,
+                onBack = {
+                    showSettings = false
+                    settingsBufferTarget = null
+                },
+                onThemeChanged = onThemeChanged,
+                focusRetentionBuffer = settingsBufferTarget?.let { stored ->
+                    runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
+                },
+            )
+        }
 
         Scaffold(
             modifier = Modifier
@@ -1030,57 +1016,59 @@ private fun MainScreen(
                 .padding(bottom = if (showSettings) 20.dp else 104.dp),
         )
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(if (showLibrary || libraryPanelProgress > 0f) 3f else -2f)
-                .graphicsLayer { alpha = if (libraryPanelProgress > 0f || showLibrary) 1f else 0.01f }
-                .semantics { if (!showLibrary) hideFromAccessibility() },
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(top = libraryContentTopPadding)
-                    .graphicsLayer { alpha = libraryPanelProgress }
-                    .background(BottomSheetDefaults.ScrimColor),
-            )
+        if (shouldComposeMainPanel(showLibrary, libraryPanelProgress)) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationY = (1f - libraryPanelProgress) * size.height },
+                    .zIndex(if (showLibrary || libraryPanelProgress > 0f) 3f else -2f)
+                    .graphicsLayer { alpha = if (libraryPanelProgress > 0f || showLibrary) 1f else 0.01f }
+                    .semantics { if (!showLibrary) hideFromAccessibility() },
             ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(top = libraryContentTopPadding)
+                        .graphicsLayer { alpha = libraryPanelProgress }
+                        .background(BottomSheetDefaults.ScrimColor),
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(top = libraryContentTopPadding)
-                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .appNoise(noiseBrush),
-                )
-                FilesScreen(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = libraryTopPadding),
-                    active = showLibrary && !showAboutDialog,
-                    initialRecordings = librarySnapshot,
-                    onSelectionActiveChange = { librarySelectionActive = it },
-                    onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
-                    showNormalTopBar = false,
-                    onVisibleRecordingsChanged = { visible ->
-                        if (librarySnapshot != visible) {
-                            ++libraryRefreshGeneration[0]
-                            librarySnapshot = visible
-                        }
-                    },
-                    onParentRefreshRequested = { refreshLibrarySnapshot() },
-                    onBrandClick = { showAboutDialog = true },
-                    onSettingsClick = {
-                        closeLibrary()
-                        settingsBufferTarget = null
-                        showSettings = true
-                    },
-                    onDismissLibrary = ::closeLibrary,
-                )
+                        .graphicsLayer { translationY = (1f - libraryPanelProgress) * size.height },
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = libraryContentTopPadding)
+                            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .appNoise(noiseBrush),
+                    )
+                    FilesScreen(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = libraryTopPadding),
+                        active = showLibrary && !showAboutDialog,
+                        initialRecordings = librarySnapshot,
+                        onSelectionActiveChange = { librarySelectionActive = it },
+                        onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
+                        showNormalTopBar = false,
+                        onVisibleRecordingsChanged = { visible ->
+                            if (librarySnapshot != visible) {
+                                ++libraryRefreshGeneration[0]
+                                librarySnapshot = visible
+                            }
+                        },
+                        onParentRefreshRequested = { refreshLibrarySnapshot() },
+                        onBrandClick = { showAboutDialog = true },
+                        onSettingsClick = {
+                            closeLibrary()
+                            settingsBufferTarget = null
+                            showSettings = true
+                        },
+                        onDismissLibrary = ::closeLibrary,
+                    )
+                }
             }
         }
 
