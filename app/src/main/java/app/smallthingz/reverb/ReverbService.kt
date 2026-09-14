@@ -1320,26 +1320,10 @@ class ReverbService : Service() {
                         finishExportSuccess(exportToken, receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        if (shouldDeleteExportTarget(
-                                cancelled = true,
-                                verifiedComplete = verifiedComplete,
-                                committed = committed,
-                                preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
-                            )) {
-                            deleteOutputTarget(outTarget)
-                        }
                         finishExportCancelled(exportToken, receiver)
                     } catch (e: Exception) {
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                            if (shouldDeleteExportTarget(
-                                cancelled = true,
-                                verifiedComplete = verifiedComplete,
-                                committed = committed,
-                                preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
-                            )) {
-                                deleteOutputTarget(outTarget)
-                            }
                             finishExportCancelled(exportToken, receiver)
                             return@Callable Unit
                         }
@@ -1351,14 +1335,6 @@ class ReverbService : Service() {
                         )
                         reportError(message)
                         finishExportFailure(exportToken, receiver, message, e)
-                        if (shouldDeleteExportTarget(
-                            cancelled = false,
-                            verifiedComplete = verifiedComplete,
-                            committed = committed,
-                            preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
-                        )) {
-                            deleteOutputTarget(outTarget)
-                        }
                     } finally {
                         closeLeaseOnce()
                         if (shouldDeleteExportTarget(
@@ -1556,14 +1532,12 @@ class ReverbService : Service() {
     @Throws(IOException::class)
     private fun requireExportedOutput(target: RecordingOutputTarget, expectedSizeBytes: Long) {
         if (expectedSizeBytes <= 0L) {
-            deleteOutputTarget(target)
             throw IOException("Export produced empty output: ${target.displayName}")
         }
         val size = verifyOutputTargetSize(this, target, expectedSizeBytes)
         if (size == expectedSizeBytes) {
             return
         }
-        deleteOutputTarget(target)
         throw IOException(
             "Export output size mismatch for ${target.displayName}: expected=$expectedSizeBytes actual=$size",
         )
