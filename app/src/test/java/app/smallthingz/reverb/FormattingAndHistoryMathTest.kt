@@ -590,15 +590,6 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun exportLimitWarning_remainsVisibleWhenCaptureIsPaused() {
-        assertTrue(shouldShowCaptureSecondaryText(true, active = false, filled = false, showWarning = true))
-        assertTrue(shouldShowCaptureSecondaryText(true, active = true, filled = false, showWarning = false))
-        assertTrue(shouldShowCaptureSecondaryText(true, active = false, filled = true, showWarning = false))
-        assertFalse(shouldShowCaptureSecondaryText(true, active = false, filled = false, showWarning = false))
-        assertFalse(shouldShowCaptureSecondaryText(false, active = true, filled = true, showWarning = true))
-    }
-
-    @Test
     fun captureUiState_distinguishesRunningFilledDisabled_andOtherBufferBlock() {
         assertEquals(
             CaptureBufferUiState.RECORDING,

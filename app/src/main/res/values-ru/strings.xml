@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">Начало</string>
     <string name="custom_export_end_label">Конец</string>
     <string name="custom_export_range_invalid">Конец должен быть позже начала.</string>
-    <string name="export_limit_summary">Макс. экспорт: %1$s</string>
     <string name="export_limit_dialog_title">Лимит экспорта</string>
     <string name="export_limit_dialog_message">Текущая длина слишком велика. Экспортируются только последние %1$s.</string>
     <string name="saving">Сохранение…</string>

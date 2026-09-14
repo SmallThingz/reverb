@@ -23,7 +23,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -866,13 +865,6 @@ internal fun isCaptureBlockedByOtherBuffer(
     activeBuffer: ReverbService.BufferSlot?,
 ): Boolean = isListening && activeBuffer != null && activeBuffer != bufferSlot
 
-internal fun shouldShowCaptureSecondaryText(
-    hasText: Boolean,
-    active: Boolean,
-    filled: Boolean,
-    showWarning: Boolean,
-): Boolean = hasText && (active || filled || showWarning)
-
 internal fun oppositeBufferSlot(bufferSlot: ReverbService.BufferSlot): ReverbService.BufferSlot =
     when (bufferSlot) {
         ReverbService.BufferSlot.ONE_SHOT -> ReverbService.BufferSlot.LOOPING
@@ -1495,16 +1487,6 @@ internal fun BufferBlobPage(
 
     val displayedCurrentSeconds = metrics.seconds.coerceAtLeast(0f).toInt()
     val currentBytes = metrics.bytes.coerceAtLeast(0L)
-    val exportConfig = currentExportConfig(context, service)
-    val estimatedExportBytes = remember(exportConfig, displayedCurrentSeconds) {
-        estimateExportSizeBytes(
-            exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-            exportConfig.channelCount, displayedCurrentSeconds.toLong(),
-            exportConfig.sampleFormat,
-        )
-    }
-    val exportLimitBytes = remember(exportConfig.format) { exportFileSizeLimitBytes(exportConfig.format) }
-    val overExportLimit = remember(estimatedExportBytes, exportLimitBytes) { estimatedExportBytes > exportLimitBytes }
     val timerText = remember(retentionMode, displayedCurrentSeconds, currentBytes, disabled, resources) {
         when {
             disabled -> resources.getString(R.string.buffer_disabled)
@@ -1513,21 +1495,14 @@ internal fun BufferBlobPage(
         }
     }
     val summaryText: String? = remember(
-        retentionMode, overExportLimit, currentBytes, disabled,
-        displayedCurrentSeconds, exportLimitBytes, context,
+        retentionMode, currentBytes, disabled, displayedCurrentSeconds,
     ) {
         if (disabled) {
             null
+        } else if (retentionMode == RetentionMode.TIME) {
+            formatShortFileSize(currentBytes)
         } else {
-            val exportLimitSummary = resources.getString(
-                R.string.export_limit_summary,
-                formatShortFileSize(exportLimitBytes),
-            )
-            when {
-                overExportLimit -> exportLimitSummary
-                retentionMode == RetentionMode.TIME -> formatShortFileSize(currentBytes)
-                else -> formatShortTimer(displayedCurrentSeconds.toFloat())
-            }
+            formatShortTimer(displayedCurrentSeconds.toFloat())
         }
     }
 
@@ -1546,7 +1521,6 @@ internal fun BufferBlobPage(
             blobController = blobController,
             primaryText = timerText,
             secondaryText = summaryText,
-            showWarning = overExportLimit,
             visualizerVisible = visualizerVisible,
             flipDegrees = flipDegrees,
             contentAlpha = contentAlpha,
@@ -1635,7 +1609,6 @@ private fun AudioBlobControl(
     dimmed: Boolean = false,
     primaryText: String? = null,
     secondaryText: String? = null,
-    showWarning: Boolean = false,
     visualizerVisible: Boolean = true,
     flipDegrees: Float = 0f,
     contentAlpha: Float = 1f,
@@ -1743,25 +1716,17 @@ private fun AudioBlobControl(
                     maxLines = 1,
                 )
             }
-            if (shouldShowCaptureSecondaryText(secondaryText != null, active, filled, showWarning)) {
-                Spacer(Modifier.height(if (showWarning) 6.dp else 2.dp))
+            if (secondaryText != null && (active || filled)) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = secondaryText.orEmpty(),
+                    text = secondaryText,
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontSize = if (showWarning) 14.5.sp else 14.sp,
+                        fontSize = 14.sp,
                         lineHeight = 18.sp,
-                        fontWeight = if (showWarning) FontWeight.SemiBold else FontWeight.Normal,
                     ),
-                    color = if (showWarning) colors.onErrorContainer else contentColor.copy(alpha = 0.76f),
+                    color = contentColor.copy(alpha = 0.76f),
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
-                    modifier = if (showWarning) {
-                        Modifier
-                            .background(colors.errorContainer, RoundedCornerShape(9.dp))
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                    } else {
-                        Modifier
-                    },
                 )
             }
         }

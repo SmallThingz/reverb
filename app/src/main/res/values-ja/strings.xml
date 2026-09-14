@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">開始</string>
     <string name="custom_export_end_label">終了</string>
     <string name="custom_export_range_invalid">終了は開始より後である必要があります。</string>
-    <string name="export_limit_summary">最大エクスポート: %1$s</string>
     <string name="export_limit_dialog_title">エクスポート制限</string>
     <string name="export_limit_dialog_message">現在の長さが大きすぎます。最後の %1$s のみを書き出します。</string>
     <string name="saving">保存中…</string>

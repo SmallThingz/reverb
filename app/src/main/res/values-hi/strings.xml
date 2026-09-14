@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">शुरुआत</string>
     <string name="custom_export_end_label">अंत</string>
     <string name="custom_export_range_invalid">अंत शुरुआत के बाद होना चाहिए।</string>
-    <string name="export_limit_summary">अधिकतम निर्यात: %1$s</string>
     <string name="export_limit_dialog_title">निर्यात सीमा</string>
     <string name="export_limit_dialog_message">वर्तमान लंबाई बहुत बड़ी है। केवल अंतिम %1$s निर्यात किया जाएगा।</string>
     <string name="saving">सहेजा जा रहा है…</string>

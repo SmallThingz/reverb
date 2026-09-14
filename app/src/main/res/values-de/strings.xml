@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">Start</string>
     <string name="custom_export_end_label">Ende</string>
     <string name="custom_export_range_invalid">Ende muss nach dem Start liegen.</string>
-    <string name="export_limit_summary">Max. Export: %1$s</string>
     <string name="export_limit_dialog_title">Exportlimit</string>
     <string name="export_limit_dialog_message">Aktuelle Länge ist zu groß. Es werden nur die letzten %1$s exportiert.</string>
     <string name="saving">Speichern…</string>

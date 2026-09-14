@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">Başlangıç</string>
     <string name="custom_export_end_label">Bitiş</string>
     <string name="custom_export_range_invalid">Bitiş başlangıçtan sonra olmalıdır.</string>
-    <string name="export_limit_summary">Maks dışa aktarma: %1$s</string>
     <string name="export_limit_dialog_title">Dışa aktarma sınırı</string>
     <string name="export_limit_dialog_message">Geçerli uzunluk çok büyük. Yalnızca son %1$s dışa aktarılacak.</string>
     <string name="saving">Kaydediliyor…</string>

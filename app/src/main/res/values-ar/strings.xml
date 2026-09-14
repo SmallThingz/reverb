@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">البداية</string>
     <string name="custom_export_end_label">النهاية</string>
     <string name="custom_export_range_invalid">يجب أن تكون النهاية بعد البداية.</string>
-    <string name="export_limit_summary">الحد الأقصى للتصدير: %1$s</string>
     <string name="export_limit_dialog_title">حد التصدير</string>
     <string name="export_limit_dialog_message">المدة الحالية كبيرة جدًا. سيتم تصدير آخر %1$s فقط.</string>
     <string name="saving">جارٍ الحفظ…</string>

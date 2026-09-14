@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">Mulai</string>
     <string name="custom_export_end_label">Selesai</string>
     <string name="custom_export_range_invalid">Akhir harus setelah awal.</string>
-    <string name="export_limit_summary">Maks ekspor: %1$s</string>
     <string name="export_limit_dialog_title">Batas ekspor</string>
     <string name="export_limit_dialog_message">Durasi saat ini terlalu besar. Hanya %1$s terakhir yang akan diekspor.</string>
     <string name="saving">Menyimpan…</string>

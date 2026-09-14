@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">Inicio</string>
     <string name="custom_export_end_label">Fin</string>
     <string name="custom_export_range_invalid">El final debe ser posterior al inicio.</string>
-    <string name="export_limit_summary">Máx. exportación: %1$s</string>
     <string name="export_limit_dialog_title">Límite de exportación</string>
     <string name="export_limit_dialog_message">La longitud actual es demasiado grande. Solo se exportarán los últimos %1$s.</string>
     <string name="saving">Guardando…</string>

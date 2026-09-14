@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">시작</string>
     <string name="custom_export_end_label">끝</string>
     <string name="custom_export_range_invalid">끝은 시작보다 뒤여야 합니다.</string>
-    <string name="export_limit_summary">최대 내보내기: %1$s</string>
     <string name="export_limit_dialog_title">내보내기 제한</string>
     <string name="export_limit_dialog_message">현재 길이가 너무 깁니다. 마지막 %1$s만 내보냅니다.</string>
     <string name="saving">저장 중…</string>

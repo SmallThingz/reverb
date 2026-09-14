@@ -8,7 +8,6 @@
     <string name="custom_export_start_label">شروع</string>
     <string name="custom_export_end_label">پایان</string>
     <string name="custom_export_range_invalid">پایان باید بعد از شروع باشد.</string>
-    <string name="export_limit_summary">حداکثر خروجی: %1$s</string>
     <string name="export_limit_dialog_title">محدودیت خروجی</string>
     <string name="export_limit_dialog_message">طول فعلی بیش از حد بزرگ است. فقط %1$s آخر صادر می‌شود.</string>
     <string name="saving">در حال ذخیره…</string>
