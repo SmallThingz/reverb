@@ -138,13 +138,15 @@ internal fun retentionConfigurationFromPreferences(
 internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration {
     val prefs = getRecorderPreferences(context)
     val values = readRetentionPreferenceValues(prefs)
-    retentionConfigurationFromPreferences(
+    val recovery = readRetentionRecoveryConfiguration(context)
+    val verifiedPrimary = retentionConfigurationFromPreferences(
         values = values,
         recoveryFallback = null,
         allowLegacyWithoutDigest = false,
-    )?.let { return it }
+    )
+    if (recovery != null && verifiedPrimary != recovery) return recovery
+    if (verifiedPrimary != null) return verifiedPrimary
 
-    val recovery = readRetentionRecoveryConfiguration(context)
     return retentionConfigurationFromPreferences(
         values = values,
         recoveryFallback = recovery,
@@ -180,6 +182,7 @@ internal fun resolveRetentionConfiguration(
     recovery: RetentionConfiguration?,
     historyExists: Boolean,
 ): ResolvedRetentionConfiguration? = when {
+    primary != null && recovery != null && primary != recovery && historyExists -> null
     primary != null -> ResolvedRetentionConfiguration(primary, RetentionConfigurationSource.PREFERENCES)
     recovery != null -> ResolvedRetentionConfiguration(recovery, RetentionConfigurationSource.RECOVERY)
     historyExists -> null

@@ -551,6 +551,48 @@ fun SettingsScreen(
 
         val preferences = getRecorderPreferences(context)
         val previousCachedOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+        val previous = originalSnapshot
+        val previousRetentionConfiguration = RetentionConfiguration(
+            mode = previous.retentionMode,
+            oneShotSeconds = previous.oneShotRetentionTime.toLong(),
+            oneShotSizeBytes = previous.oneShotRetentionSizeBytes,
+            loopingSeconds = previous.loopingRetentionTime.toLong(),
+            loopingSizeBytes = previous.loopingRetentionSizeBytes,
+        )
+
+        fun restorePreviousSettings(): Boolean {
+            // Restore the independently durable retention provenance first. If preference
+            // rollback then fails, a disagreement with existing history is fail-closed.
+            val recoveryRestored = writeRetentionRecoveryConfiguration(context, previousRetentionConfiguration)
+            val preferencesRestored = getRecorderPreferences(context).edit()
+                .putInt(PrefKey.RETENTION_MODE, previous.retentionMode.ordinal)
+                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, previous.oneShotRetentionTime.toLong())
+                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, previous.oneShotRetentionSizeBytes)
+                .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
+                .putLong(PrefKey.AUDIO_MEMORY_SIZE, previous.loopingRetentionSizeBytes)
+                .putString(
+                    PrefKey.RETENTION_CONFIG_DIGEST,
+                    retentionConfigurationDigest(previousRetentionConfiguration),
+                )
+                .putString(PrefKey.OUTPUT_FORMAT, (previous.format ?: ExportFormat.WAV).prefValue)
+                .putString(PrefKey.OUTPUT_CODEC, (previous.codec ?: ExportCodec.PCM_16).prefValue)
+                .putString(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.prefValue)
+                .putInt(PrefKey.AUDIO_SOURCE, previous.source?.sourceValue ?: AudioSourceMode.defaultMode().sourceValue)
+                .putString(PrefKey.CHANNEL_MODE, (previous.channelMode ?: ChannelMode.MONO).prefValue)
+                .putString(PrefKey.INPUT_ROUTE, (previous.route ?: InputRouteMode.AUTO).prefValue)
+                .putInt(PrefKey.SAMPLE_RATE, previous.sampleRate)
+                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, previous.wakeLockEnabled)
+                .putString(PrefKey.THEME_MODE, previous.themeMode.prefValue)
+                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, previousCachedOneShotFull)
+                .apply {
+                    val previousExportDirectoryUri = previous.exportDirectoryUri
+                    if (previousExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
+                    else putString(PrefKey.EXPORT_DIRECTORY_URI, previousExportDirectoryUri)
+                }
+                .commit()
+            return recoveryRestored && preferencesRestored
+        }
+
         val invalidateCachedOneShotFull = shouldInvalidateCachedOneShotFull(
             previousMode = originalSnapshot.retentionMode,
             newMode = activeRetentionMode,
@@ -590,40 +632,12 @@ fun SettingsScreen(
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
         if (!settingsEditor.commit()) {
-            val previous = originalSnapshot
-            val previousRetentionConfiguration = RetentionConfiguration(
-                mode = previous.retentionMode,
-                oneShotSeconds = previous.oneShotRetentionTime.toLong(),
-                oneShotSizeBytes = previous.oneShotRetentionSizeBytes,
-                loopingSeconds = previous.loopingRetentionTime.toLong(),
-                loopingSizeBytes = previous.loopingRetentionSizeBytes,
-            )
-            getRecorderPreferences(context).edit()
-                .putInt(PrefKey.RETENTION_MODE, previous.retentionMode.ordinal)
-                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, previous.oneShotRetentionTime.toLong())
-                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, previous.oneShotRetentionSizeBytes)
-                .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
-                .putLong(PrefKey.AUDIO_MEMORY_SIZE, previous.loopingRetentionSizeBytes)
-                .putString(
-                    PrefKey.RETENTION_CONFIG_DIGEST,
-                    retentionConfigurationDigest(previousRetentionConfiguration),
-                )
-                .putString(PrefKey.OUTPUT_FORMAT, (previous.format ?: ExportFormat.WAV).prefValue)
-                .putString(PrefKey.OUTPUT_CODEC, (previous.codec ?: ExportCodec.PCM_16).prefValue)
-                .putString(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.prefValue)
-                .putInt(PrefKey.AUDIO_SOURCE, previous.source?.sourceValue ?: AudioSourceMode.defaultMode().sourceValue)
-                .putString(PrefKey.CHANNEL_MODE, (previous.channelMode ?: ChannelMode.MONO).prefValue)
-                .putString(PrefKey.INPUT_ROUTE, (previous.route ?: InputRouteMode.AUTO).prefValue)
-                .putInt(PrefKey.SAMPLE_RATE, previous.sampleRate)
-                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, previous.wakeLockEnabled)
-                .putString(PrefKey.THEME_MODE, previous.themeMode.prefValue)
-                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, previousCachedOneShotFull)
-                .apply {
-                    val previousExportDirectoryUri = previous.exportDirectoryUri
-                    if (previousExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
-                    else putString(PrefKey.EXPORT_DIRECTORY_URI, previousExportDirectoryUri)
-                }
-                .commit()
+            restorePreviousSettings()
+            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+            return false
+        }
+        if (!writeRetentionRecoveryConfiguration(context, retentionConfiguration)) {
+            restorePreviousSettings()
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }

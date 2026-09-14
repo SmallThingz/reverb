@@ -35,6 +35,9 @@
 - FILE catalog entries bind to a stable filesystem-object identity; stale path reuse must fail closed for delete/rename/read/play/share/copy, and explicit FILE deletion must atomically claim the selected object under a journaled tombstone before destruction.
 - Retention zero means a capture buffer is Off, never cleared; only explicit Clear may destroy all retained history.
 - Retention prefs carry a digest and a CRC-checked no-backup recovery snapshot; no retention that can evict audio may reach a chunk store until that exact config is durably recoverable. If history exists and retention provenance is unprovable, fail closed instead of applying defaults.
+- Retention preference commits and the recovery journal form one transaction: Settings/onboarding must not apply retention until both are durable; if they disagree while history exists, capture fails closed and the UI reads the recovery copy for explicit resolution.
+- In-place PCM boundary rewrites require atomic same-directory replacement; never fall back to non-atomic replacement of the only live audio chunk.
+- Provider-backed move source deletion is content-fingerprinted and journaled before deletion; crash replay may finish metadata cleanup but must never replay physical provider deletion.
 - Explicit looping-retention shrink keeps the maximum newest frame-aligned window; partial boundary trimming waits for active read leases rather than dropping an extra whole chunk.
 
 - Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob renderer/animation to implement the timeline.

@@ -1052,12 +1052,22 @@ internal class PersistentAudioChunkStore internal constructor(
                 continue
             }
             try {
-                Files.move(file.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(file.toPath(), target.toPath())
+                FileInputStream(file).use { input ->
+                    FileOutputStream(target).use { output ->
+                        input.copyTo(output)
+                        output.fd.sync()
+                    }
+                }
+                forceDirectoryDurable(quarantineDirectory)
+            } catch (error: Exception) {
+                runCatching { Files.deleteIfExists(target.toPath()) }
+                throw error
             }
-            forceDirectoryDurable(quarantineDirectory)
-            forceDirectoryDurable(chunksDirectory)
+            if (!deleteChunkFileDurablyLocked(file)) {
+                // Both copies are intentionally retained if source removal cannot be made
+                // durable; abort recovery rather than pretending quarantine was exclusive.
+                throw IOException("Unable to durably remove preserved chunk source: ${file.absolutePath}")
+            }
             return
         }
     }
@@ -1479,8 +1489,11 @@ internal class PersistentAudioChunkStore internal constructor(
                     StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING,
                 )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temp.toPath(), record.file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } catch (error: AtomicMoveNotSupportedException) {
+                // Never replace the only live audio chunk through a non-atomic fallback.
+                // If this filesystem cannot provide atomic same-directory replacement,
+                // fail closed and leave the original chunk untouched.
+                throw IOException("Atomic audio-chunk replacement is unavailable", error)
             }
         } catch (error: Exception) {
             runCatching { output?.close() }

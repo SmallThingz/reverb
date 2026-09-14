@@ -314,7 +314,8 @@ fun finishOnboarding(
             },
         )
     }
-    return getRecorderPreferences(context).edit()
+    val prefs = getRecorderPreferences(context)
+    val committed = prefs.edit()
         .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
         .putInt(PrefKey.RETENTION_MODE, updated.mode.ordinal)
         .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
@@ -323,6 +324,22 @@ fun finishOnboarding(
         .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
         .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
         .commit()
+    if (!committed) return false
+    if (writeRetentionRecoveryConfiguration(context, updated)) return true
+
+    // Do not let onboarding become complete unless its retention selection has the same
+    // independent durability barrier as Settings. Roll both sources back on failure.
+    writeRetentionRecoveryConfiguration(context, current)
+    prefs.edit()
+        .putBoolean(PrefKey.ONBOARDING_SHOWN, false)
+        .putInt(PrefKey.RETENTION_MODE, current.mode.ordinal)
+        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, current.oneShotSeconds)
+        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, current.oneShotSizeBytes)
+        .putLong(PrefKey.RETENTION_SECONDS, current.loopingSeconds)
+        .putLong(PrefKey.AUDIO_MEMORY_SIZE, current.loopingSizeBytes)
+        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(current))
+        .commit()
+    return false
 }
 
 fun getConfiguredOutputFormat(context: Context): ExportFormat {

@@ -215,8 +215,11 @@ object RecordingRepository {
                 if (!deleted) return@withLock false
 
                 // Persist the destructive phase boundary before touching catalog metadata.
-                // If this commit fails, replay still never targets a reused original path.
-                putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
+                // If this commit fails, keep the existing planned intent and catalog row; the
+                // pending-id filter hides it and replay can finish cleanup once absence is known.
+                if (!putPendingDeletionLocked(context, intent.copy(assetDeleted = true))) {
+                    return@withLock true
+                }
                 // This row describes the object the user selected, not any later object that
                 // may reuse the same path. Retiring metadata cannot delete replacement bytes;
                 // directory reconciliation will import a replacement as a fresh observation.
@@ -677,11 +680,19 @@ object RecordingRepository {
             MoveSourceCleanupAction.COMPLETE -> true
             MoveSourceCleanupAction.KEEP_SOURCE -> false
             MoveSourceCleanupAction.DELETE_SOURCE -> {
+                val intent = createPendingDeletionIntent(context, source) ?: return false
+                if (!putPendingDeletionLocked(context, intent)) return false
                 if (resolveRecordingStorageType(source) != RecordingStorageType.FILE) {
-                    deleteRecordingAsset(context, source)
+                    if (!pendingDeletionMatchesCurrentAsset(context, source, intent)) {
+                        removePendingDeletionLocked(context, source.id)
+                        return false
+                    }
+                    if (!deleteRecordingAsset(context, source)) return false
+                    // Physical deletion is never replayed for provider assets. The phase marker
+                    // lets restart cleanup retire metadata immediately when it can be persisted.
+                    putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
+                    true
                 } else {
-                    val intent = createPendingDeletionIntent(context, source) ?: return false
-                    if (!putPendingDeletionLocked(context, intent)) return false
                     when (deleteClaimedFile(intent)) {
                         FileDeletionClaimResult.DELETED -> {
                             // Best effort phase marker. The planned v2 intent is still safe if

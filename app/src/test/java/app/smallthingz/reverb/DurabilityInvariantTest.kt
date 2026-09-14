@@ -218,13 +218,18 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun retentionResolution_neverAppliesDefaultsOverExistingHistory() {
+    fun retentionResolution_neverAppliesConflictingDurableStateOverExistingHistory() {
         val primary = RetentionConfiguration(RetentionMode.SIZE, 11L, 22L, 33L, 44L)
         val recovery = RetentionConfiguration(RetentionMode.TIME, 55L, 66L, 77L, 88L)
 
         assertEquals(
             ResolvedRetentionConfiguration(primary, RetentionConfigurationSource.PREFERENCES),
-            resolveRetentionConfiguration(primary, recovery, historyExists = true),
+            resolveRetentionConfiguration(primary, primary, historyExists = true),
+        )
+        assertEquals(null, resolveRetentionConfiguration(primary, recovery, historyExists = true))
+        assertEquals(
+            ResolvedRetentionConfiguration(primary, RetentionConfigurationSource.PREFERENCES),
+            resolveRetentionConfiguration(primary, recovery, historyExists = false),
         )
         assertEquals(
             ResolvedRetentionConfiguration(recovery, RetentionConfigurationSource.RECOVERY),
