@@ -296,19 +296,24 @@ object RecordingRepository {
             }
             val recording = byId[intent.id]
             val claim = deletionClaimFile(intent)
-            if (claim?.isFile == true) {
-                when (replayClaimedFileDeletion(intent, claim)) {
-                    FileDeletionClaimResult.RETRY -> continue
-                    FileDeletionClaimResult.MISMATCH_PRESERVED,
-                    FileDeletionClaimResult.DELETED,
-                    -> {
-                        // Rename/delete/recovery changes must be durable before the journal
-                        // that explains them can disappear. A current source-path occupant,
-                        // if any, is a different object and reconciliation will import it.
-                        if (!confirmFileDirectoryStateDurable(File(intent.id))) continue
-                        if (recording != null) dao.deleteById(intent.id)
-                        removePendingDeletionLocked(context, intent.id)
-                        continue
+            if (claim != null) {
+                val claimObservation = observeStoragePath(claim)
+                when (claimedFileReplayAction(claimObservation)) {
+                    ClaimedFileReplayAction.WAIT -> continue
+                    ClaimedFileReplayAction.NO_CLAIM -> Unit
+                    ClaimedFileReplayAction.REPLAY -> when (replayClaimedFileDeletion(intent, claim)) {
+                        FileDeletionClaimResult.RETRY -> continue
+                        FileDeletionClaimResult.MISMATCH_PRESERVED,
+                        FileDeletionClaimResult.DELETED,
+                        -> {
+                            // Rename/delete/recovery changes must be durable before the journal
+                            // that explains them can disappear. A current source-path occupant,
+                            // if any, is a different object and reconciliation will import it.
+                            if (!confirmFileDirectoryStateDurable(File(intent.id))) continue
+                            if (recording != null) dao.deleteById(intent.id)
+                            removePendingDeletionLocked(context, intent.id)
+                            continue
+                        }
                     }
                 }
             }
@@ -904,6 +909,19 @@ internal fun pendingDeletionMatchesDigest(
 
 internal enum class FileDeletionClaimResult { DELETED, MISMATCH_PRESERVED, RETRY }
 
+internal enum class ClaimedFileReplayAction { REPLAY, NO_CLAIM, WAIT }
+
+internal fun claimedFileReplayAction(observation: StoragePathObservation): ClaimedFileReplayAction =
+    when (observation.state) {
+        StoragePathState.MISSING -> ClaimedFileReplayAction.NO_CLAIM
+        StoragePathState.UNAVAILABLE -> ClaimedFileReplayAction.WAIT
+        StoragePathState.PRESENT -> if (observation.isRegularFile) {
+            ClaimedFileReplayAction.REPLAY
+        } else {
+            ClaimedFileReplayAction.WAIT
+        }
+    }
+
 internal fun deletionClaimFile(intent: PendingDeletionIntent): File? {
     if (intent.storageType != RecordingStorageType.FILE.name) return null
     val token = intent.claimToken ?: return null
@@ -919,9 +937,19 @@ internal fun deleteClaimedFile(intent: PendingDeletionIntent): FileDeletionClaim
         Files.move(source.toPath(), claim.toPath())
         if (!confirmFileDirectoryStateDurable(source)) return FileDeletionClaimResult.RETRY
     } catch (_: NoSuchFileException) {
-        return if (claim.isFile) replayClaimedFileDeletion(intent, claim) else FileDeletionClaimResult.RETRY
+        return when (claimedFileReplayAction(observeStoragePath(claim))) {
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
+            ClaimedFileReplayAction.NO_CLAIM,
+            ClaimedFileReplayAction.WAIT,
+            -> FileDeletionClaimResult.RETRY
+        }
     } catch (_: FileAlreadyExistsException) {
-        return if (claim.isFile) replayClaimedFileDeletion(intent, claim) else FileDeletionClaimResult.RETRY
+        return when (claimedFileReplayAction(observeStoragePath(claim))) {
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
+            ClaimedFileReplayAction.NO_CLAIM,
+            ClaimedFileReplayAction.WAIT,
+            -> FileDeletionClaimResult.RETRY
+        }
     } catch (error: IOException) {
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY

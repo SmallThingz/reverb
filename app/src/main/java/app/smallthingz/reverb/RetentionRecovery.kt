@@ -173,7 +173,13 @@ internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
     )
     return roots.any { root ->
         val chunks = File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
-        if (!chunks.exists()) false else chunks.listFiles()?.any { it.isFile } ?: true
+        when (val state = storagePathState(chunks)) {
+            StoragePathState.MISSING -> false
+            StoragePathState.UNAVAILABLE -> storagePathMayContainData(state)
+            StoragePathState.PRESENT -> chunks.listFiles()
+                ?.any { child -> storagePathMayContainData(storagePathState(child)) }
+                ?: true
+        }
     }
 }
 

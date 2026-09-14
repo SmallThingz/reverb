@@ -171,6 +171,39 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun corruptDatabaseRecovery_sidecarAvailabilityIsNeverTreatedAsAbsence() {
+        val database = File("build/tmp/database-recovery-tests/observed/recordings.db")
+        val unavailableWal: (File) -> StoragePathObservation = { candidate ->
+            when {
+                candidate == database -> StoragePathObservation(
+                    StoragePathState.PRESENT,
+                    isRegularFile = true,
+                )
+                candidate.path.endsWith("-wal") -> StoragePathObservation(StoragePathState.UNAVAILABLE)
+                else -> StoragePathObservation(StoragePathState.MISSING)
+            }
+        }
+
+        assertEquals(null, recordingDatabaseFilesForPreservation(database, unavailableWal))
+        assertFalse(recordingDatabaseSidecarsConfirmedMissing(database, unavailableWal))
+        assertTrue(
+            recordingDatabaseSidecarsConfirmedMissing(database) {
+                StoragePathObservation(StoragePathState.MISSING)
+            },
+        )
+        assertEquals(
+            null,
+            recordingDatabaseFilesForPreservation(database) { candidate ->
+                if (candidate == database) {
+                    StoragePathObservation(StoragePathState.PRESENT, isRegularFile = false)
+                } else {
+                    StoragePathObservation(StoragePathState.MISSING)
+                }
+            },
+        )
+    }
+
+    @Test
     fun corruptDatabaseRecovery_atomicPublishFailureNeverCreatesFinalSnapshot() {
         val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "publish-failure-").toFile()
@@ -1310,6 +1343,30 @@ class DurabilityInvariantTest {
         assertEquals(
             PendingDeletionReplayAction.CLEAN_CATALOG,
             pendingDeletionReplayAction(deleted, RecordingAssetState.MISSING),
+        )
+    }
+
+    @Test
+    fun claimedFileReplay_waitsUnlessClaimPresenceIsProven() {
+        assertEquals(
+            ClaimedFileReplayAction.NO_CLAIM,
+            claimedFileReplayAction(StoragePathObservation(StoragePathState.MISSING)),
+        )
+        assertEquals(
+            ClaimedFileReplayAction.WAIT,
+            claimedFileReplayAction(StoragePathObservation(StoragePathState.UNAVAILABLE)),
+        )
+        assertEquals(
+            ClaimedFileReplayAction.WAIT,
+            claimedFileReplayAction(
+                StoragePathObservation(StoragePathState.PRESENT, isRegularFile = false),
+            ),
+        )
+        assertEquals(
+            ClaimedFileReplayAction.REPLAY,
+            claimedFileReplayAction(
+                StoragePathObservation(StoragePathState.PRESENT, isRegularFile = true),
+            ),
         )
     }
 

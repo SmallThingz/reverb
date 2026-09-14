@@ -32,6 +32,31 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun nonRegularChunkIndex_failsClosedWithoutRewritingAudio() = withStoreRoot { root ->
+        val expected = pcmBytes(24_000)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 512 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val before = chunk.readBytes()
+        val firstIndex = File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
+        val secondIndex = File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
+        firstIndex.deleteRecursively()
+        secondIndex.deleteRecursively()
+        assertTrue(firstIndex.mkdir())
+
+        val reopened = PersistentAudioChunkStore(root)
+        try {
+            assertThrows(IOException::class.java) { configure(reopened, 512 * 1024L) }
+        } finally {
+            runCatching { reopened.close() }
+        }
+        assertArrayEquals(before, chunk.readBytes())
+    }
+
+    @Test
     fun brokenIndexes_recoverFromChunkFilesWithoutLosingAudio() = withStoreRoot { root ->
         val expected = pcmBytes(90_000)
         PersistentAudioChunkStore(root).use { store ->
@@ -425,6 +450,46 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
         assertFalse(File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0").exists())
         assertTrue(File(root, "preserved").listFiles().orEmpty().any { ".retired-ambiguous" in it.name })
+    }
+
+    @Test
+    fun malformedRetirementMarker_neverOverwritesExistingRecoveryCopy() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+        val retired = File(root, "retired").apply { mkdirs() }
+        File(retired, "0").writeText("v1|0|corrupt")
+        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+        val preserved = File(root, "preserved").apply { mkdirs() }
+        val sentinelBytes = byteArrayOf(9, 8, 7, 6)
+        val sentinel = File(preserved, "0.retired-ambiguous").apply { writeBytes(sentinelBytes) }
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
+        assertTrue(File(preserved, "0.retired-ambiguous.1").isFile)
+    }
+
+    @Test
+    fun storagePathState_neverTreatsUnavailableAsMissing() = withStoreRoot { root ->
+        val present = File(root, "present").apply { writeText("data") }
+        val missing = File(root, "missing")
+        val nonDirectory = File(root, "not-a-directory").apply { writeText("data") }
+        val unavailable = File(nonDirectory, "child")
+
+        assertEquals(StoragePathState.PRESENT, storagePathState(present))
+        assertEquals(StoragePathState.MISSING, storagePathState(missing))
+        assertEquals(StoragePathState.UNAVAILABLE, storagePathState(unavailable))
+        assertTrue(storagePathMayContainData(StoragePathState.PRESENT))
+        assertFalse(storagePathMayContainData(StoragePathState.MISSING))
+        assertTrue(storagePathMayContainData(StoragePathState.UNAVAILABLE))
     }
 
     @Test

@@ -2190,14 +2190,14 @@ private fun forceRecordingDirectoryDurable(directory: File) {
 }
 
 internal fun confirmFileDirectoryStateDurable(file: File): Boolean = runCatching {
-    val parent = file.parentFile?.takeIf { it.isDirectory } ?: return@runCatching false
+    val parent = file.parentFile ?: return@runCatching false
     forceRecordingDirectoryDurable(parent)
     true
 }.onFailure { Log.w(TAG, "Unable to persist recording directory state for $file", it) }
     .getOrDefault(false)
 
 internal fun confirmMissingFileRecordingDurable(file: File): Boolean =
-    !file.exists() && confirmFileDirectoryStateDurable(file)
+    storagePathState(file) == StoragePathState.MISSING && confirmFileDirectoryStateDurable(file)
 
 private fun createLocalOutputTarget(
     context: Context,
@@ -2212,7 +2212,9 @@ private fun createLocalOutputTarget(
         throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
     }
     if (!storageDirectoryExisted) {
-        storageDir.parentFile?.takeIf { it.isDirectory }?.let(::forceRecordingDirectoryDurable)
+        val parent = storageDir.parentFile
+            ?: throw IOException("Recordings directory has no parent: ${storageDir.absolutePath}")
+        forceRecordingDirectoryDurable(parent)
     }
 
     // Document-provider display names are metadata, not trusted filesystem paths.

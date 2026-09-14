@@ -246,10 +246,12 @@ private class PreservingRecordingDatabaseErrorHandler(
             ?: throw SQLiteException("Recording database is corrupt and could not be preserved")
 
         SQLiteDatabase.deleteDatabase(databaseFile)
-        if (recordingDatabaseSidecars(databaseFile).any(File::exists)) {
+        if (!recordingDatabaseSidecarsConfirmedMissing(databaseFile)) {
             throw SQLiteException("Recording database was preserved at ${preserved.name} but could not be reset")
         }
-        databaseFile.parentFile?.takeIf(File::isDirectory)?.let(::forceRecordingDatabaseDirectoryDurable)
+        val databaseParent = databaseFile.parentFile
+            ?: throw SQLiteException("Recording database path has no parent directory")
+        forceRecordingDatabaseDirectoryDurable(databaseParent)
     }
 }
 
@@ -259,6 +261,32 @@ internal fun recordingDatabaseSidecars(databaseFile: File): List<File> = listOf(
     File(databaseFile.path + "-shm"),
     File(databaseFile.path + "-journal"),
 )
+
+internal fun recordingDatabaseFilesForPreservation(
+    databaseFile: File,
+    observe: (File) -> StoragePathObservation = ::observeStoragePath,
+): List<File>? {
+    val present = mutableListOf<File>()
+    for (candidate in recordingDatabaseSidecars(databaseFile)) {
+        val observation = observe(candidate)
+        when (observation.state) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.UNAVAILABLE -> return null
+            StoragePathState.PRESENT -> {
+                if (!observation.isRegularFile) return null
+                present += candidate
+            }
+        }
+    }
+    return present
+}
+
+internal fun recordingDatabaseSidecarsConfirmedMissing(
+    databaseFile: File,
+    observe: (File) -> StoragePathObservation = ::observeStoragePath,
+): Boolean = recordingDatabaseSidecars(databaseFile).all { candidate ->
+    observe(candidate).state == StoragePathState.MISSING
+}
 
 internal interface RecordingDatabaseRecoveryIo {
     fun sha256(file: File): ByteArray
@@ -297,7 +325,7 @@ internal fun preserveCorruptRecordingDatabase(
     recoveryId: String = "${System.currentTimeMillis()}-${java.util.UUID.randomUUID()}",
     io: RecordingDatabaseRecoveryIo = DefaultRecordingDatabaseRecoveryIo,
 ): File? {
-    val sources = recordingDatabaseSidecars(databaseFile).filter(File::isFile)
+    val sources = recordingDatabaseFilesForPreservation(databaseFile) ?: return null
     if (sources.isEmpty()) return null
     return runCatching {
         val rootExisted = recoveryRoot.exists()
@@ -305,7 +333,9 @@ internal fun preserveCorruptRecordingDatabase(
             throw IOException("Unable to create recording database recovery directory")
         }
         if (!rootExisted) {
-            recoveryRoot.parentFile?.takeIf(File::isDirectory)?.let(io::forceDirectory)
+            val recoveryParent = recoveryRoot.parentFile
+                ?: throw IOException("Recording database recovery root has no parent")
+            io.forceDirectory(recoveryParent)
         }
 
         var suffix = 0
@@ -331,7 +361,8 @@ internal fun preserveCorruptRecordingDatabase(
             }
         }
 
-        val finalSources = recordingDatabaseSidecars(databaseFile).filter(File::isFile)
+        val finalSources = recordingDatabaseFilesForPreservation(databaseFile)
+            ?: throw IOException("Recording database sidecar state became unavailable during recovery")
         if (finalSources.map(File::getName) != sources.map(File::getName)) {
             throw IOException("Recording database sidecar set changed during recovery")
         }

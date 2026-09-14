@@ -31,6 +31,7 @@
 - An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.
 - Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable recording intent; retry on a foreground bind or explicit start.
 - Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted.
+- Recovery must distinguish positively missing storage from unavailable metadata/I/O: raw-buffer chunks/tombstones and catalog DB sidecars fail closed on uncertainty, and preservation copies atomically reserve their destination then verify both copy bytes and source stability before destructive source changes.
 - Physical deletion intents are versioned and content-fingerprinted; after process loss, never replay physical deletion against a present asset. Replay may only wait, abandon the intent, or finish catalog cleanup after confirmed deletion/absence.
 - A verified move target becomes recoverable before source cleanup; delete the source only after re-verifying byte identity, and never discard the verified target because source cleanup is uncertain.
 - Durable capture intent/destination changes use synchronous persistence; active PCM is force-synced on a bounded background cadence, and replacement PCM must be durable before retention evicts older audio.

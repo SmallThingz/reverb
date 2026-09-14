@@ -331,9 +331,21 @@ internal fun retryPendingOutputCleanup(context: Context) {
             removePendingOutputCleanupRaw(context, raw)
             continue
         }
-        if (record.storageType == RecordingStorageType.FILE && outputCleanupClaimFile(record)?.isFile == true) {
-            if (deletePendingOutputAsset(context, record)) removePendingOutputCleanup(context, record.id)
-            continue
+        if (record.storageType == RecordingStorageType.FILE) {
+            val claim = outputCleanupClaimFile(record)
+            if (claim != null) {
+                val claimObservation = observeStoragePath(claim)
+                when (claimedFileReplayAction(claimObservation)) {
+                    ClaimedFileReplayAction.WAIT -> continue
+                    ClaimedFileReplayAction.NO_CLAIM -> Unit
+                    ClaimedFileReplayAction.REPLAY -> {
+                        if (deletePendingOutputAsset(context, record)) {
+                            removePendingOutputCleanup(context, record.id)
+                        }
+                        continue
+                    }
+                }
+            }
         }
         when (outputCleanupAssetState(context, record.storageType, record.id)) {
             OutputCleanupAssetState.MISSING -> {
@@ -537,8 +549,12 @@ private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean
     val intent = pendingOutputCleanupFileIntent(record) ?: return false
     val identity = requireNotNull(intent.fileIdentity)
     val claim = deletionClaimFile(intent)
-    val result = if (claim?.isFile == true) {
-        replayClaimedFileDeletion(intent, claim)
+    val result = if (claim != null) {
+        when (claimedFileReplayAction(observeStoragePath(claim))) {
+            ClaimedFileReplayAction.WAIT -> return false
+            ClaimedFileReplayAction.NO_CLAIM -> deleteClaimedFile(intent)
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
+        }
     } else {
         deleteClaimedFile(intent)
     }
@@ -549,8 +565,13 @@ private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean
         FileDeletionClaimResult.DELETED -> {
             val source = File(record.id)
             if (!confirmFileDirectoryStateDurable(source)) return false
-            if (!source.exists()) true
-            else !fileIdentityMatches(identity, resolveFileIdentity(source))
+            val sourceObservation = observeStoragePath(source)
+            when (sourceObservation.state) {
+                StoragePathState.MISSING -> true
+                StoragePathState.UNAVAILABLE -> false
+                StoragePathState.PRESENT -> !sourceObservation.isRegularFile ||
+                    !fileIdentityMatches(identity, resolveFileIdentity(source))
+            }
         }
     }
 }

@@ -891,7 +891,9 @@ internal class PersistentAudioChunkStore internal constructor(
             throw IllegalStateException("Unable to create chunk storage: ${rootDirectory.absolutePath}")
         }
         if (!rootExisted) {
-            rootDirectory.parentFile?.takeIf { it.isDirectory }?.let(::forceDirectoryDurable)
+            val parent = rootDirectory.parentFile
+                ?: throw IOException("Chunk storage root has no parent: ${rootDirectory.absolutePath}")
+            forceDirectoryDurable(parent)
         }
         val chunksExisted = chunksDirectory.exists()
         if (!chunksExisted && !chunksDirectory.mkdirs() && !chunksDirectory.exists()) {
@@ -957,17 +959,37 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun readRetirementTombstonesLocked(): MutableMap<UInt, RetiredChunkIdentity?> {
         val result = LinkedHashMap<UInt, RetiredChunkIdentity?>()
-        if (!retiredDirectory.exists()) return result
+        when (storagePathState(retiredDirectory)) {
+            StoragePathState.MISSING -> return result
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to inspect retired chunk directory: ${retiredDirectory.absolutePath}",
+            )
+            StoragePathState.PRESENT -> Unit
+        }
         val files = retiredDirectory.listFiles()
             ?: throw IOException("Unable to list retired chunk directory: ${retiredDirectory.absolutePath}")
         for (file in files) {
-            if (!file.isFile) continue
+            val observation = observeStoragePath(file)
+            when (observation.state) {
+                StoragePathState.MISSING -> continue
+                StoragePathState.UNAVAILABLE -> throw IOException(
+                    "Unable to inspect retirement marker: ${file.absolutePath}",
+                )
+                StoragePathState.PRESENT -> if (!observation.isRegularFile) continue
+            }
             if (file.name.endsWith(".tmp")) {
                 runCatching { Files.deleteIfExists(file.toPath()) }
                 continue
             }
             val filenameId = file.name.toUIntOrNull() ?: continue
-            val identity = runCatching { parseRetirementTombstone(file.readText(Charsets.UTF_8)) }.getOrNull()
+            val raw = try {
+                file.readText(Charsets.UTF_8)
+            } catch (error: IOException) {
+                throw IOException("Unable to read retirement marker: ${file.absolutePath}", error)
+            } catch (error: SecurityException) {
+                throw IOException("Unable to read retirement marker: ${file.absolutePath}", error)
+            }
+            val identity = parseRetirementTombstone(raw)
             result[filenameId] = identity?.takeIf { it.id == filenameId }
         }
         return result
@@ -990,11 +1012,18 @@ internal class PersistentAudioChunkStore internal constructor(
         val iterator = retirementTombstones.keys.iterator()
         while (iterator.hasNext()) {
             val id = iterator.next()
-            if (!File(chunksDirectory, id.toString()).exists()) {
-                // Make the observed absence durable before forgetting why that chunk must
-                // remain absent. If this force fails, recovery aborts with the marker intact.
-                forceDirectoryDurable(chunksDirectory)
-                if (deleteRetirementTombstoneLocked(id)) iterator.remove()
+            val chunk = File(chunksDirectory, id.toString())
+            when (storagePathState(chunk)) {
+                StoragePathState.PRESENT -> Unit
+                StoragePathState.UNAVAILABLE -> throw IOException(
+                    "Unable to prove retired chunk absence: ${chunk.absolutePath}",
+                )
+                StoragePathState.MISSING -> {
+                    // Make the positively observed absence durable before forgetting why that
+                    // chunk must remain absent. Unavailable storage is never deletion evidence.
+                    forceDirectoryDurable(chunksDirectory)
+                    if (deleteRetirementTombstoneLocked(id)) iterator.remove()
+                }
             }
         }
     }
@@ -1002,7 +1031,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun deleteRetirementTombstoneLocked(id: UInt): Boolean = runCatching {
         val marker = retirementTombstoneFile(id)
         val existed = Files.deleteIfExists(marker.toPath())
-        if (existed && retiredDirectory.exists()) forceDirectoryDurable(retiredDirectory)
+        if (existed) forceDirectoryDurable(retiredDirectory)
         true
     }.getOrDefault(false)
 
@@ -1019,7 +1048,14 @@ internal class PersistentAudioChunkStore internal constructor(
         val files = chunksDirectory.listFiles()
             ?: throw IOException("Unable to list chunks directory: ${chunksDirectory.absolutePath}")
         for (file in files) {
-            if (!file.isFile) continue
+            val observation = observeStoragePath(file)
+            when (observation.state) {
+                StoragePathState.MISSING -> continue
+                StoragePathState.UNAVAILABLE -> throw IOException(
+                    "Unable to inspect chunk path: ${file.absolutePath}",
+                )
+                StoragePathState.PRESENT -> if (!observation.isRegularFile) continue
+            }
             val id = file.name.toUIntOrNull()
             if (id == null || file.name != id.toString()) {
                 preserveUnrecognizedChunkLocked(file, "unrecognized")
@@ -1066,18 +1102,17 @@ internal class PersistentAudioChunkStore internal constructor(
         while (true) {
             val suffixText = if (suffix == 0) "" else ".$suffix"
             val target = File(quarantineDirectory, "${file.name}.$reason$suffixText")
-            if (target.exists()) {
+            val reserved = try {
+                target.createNewFile()
+            } catch (error: Exception) {
+                throw IOException("Unable to reserve preserved chunk path: ${target.absolutePath}", error)
+            }
+            if (!reserved) {
                 suffix++
                 continue
             }
             try {
-                FileInputStream(file).use { input ->
-                    FileOutputStream(target).use { output ->
-                        input.copyTo(output)
-                        output.fd.sync()
-                    }
-                }
-                forceDirectoryDurable(quarantineDirectory)
+                copyPreservedChunkAndVerifyLocked(file, target)
             } catch (error: Exception) {
                 runCatching { Files.deleteIfExists(target.toPath()) }
                 throw error
@@ -1097,19 +1132,42 @@ internal class PersistentAudioChunkStore internal constructor(
         while (true) {
             val suffixText = if (suffix == 0) "" else ".$suffix"
             val target = File(quarantineDirectory, "${file.name}.$reason$suffixText")
-            if (target.exists()) {
+            val reserved = try {
+                target.createNewFile()
+            } catch (error: Exception) {
+                throw IOException("Unable to reserve preserved chunk path: ${target.absolutePath}", error)
+            }
+            if (!reserved) {
                 suffix++
                 continue
             }
-            FileInputStream(file).use { input ->
-                FileOutputStream(target).use { output ->
-                    input.copyTo(output)
-                    output.fd.sync()
-                }
+            try {
+                copyPreservedChunkAndVerifyLocked(file, target)
+            } catch (error: Exception) {
+                runCatching { Files.deleteIfExists(target.toPath()) }
+                throw error
             }
-            forceDirectoryDurable(quarantineDirectory)
             return
         }
+    }
+
+    private fun copyPreservedChunkAndVerifyLocked(source: File, target: File) {
+        val copiedDigest = FileInputStream(source).use { input ->
+            FileOutputStream(target, false).use { output ->
+                val digest = copyWithSha256(input, output)
+                output.fd.sync()
+                digest
+            }
+        }
+        val targetDigest = FileInputStream(target).use(::sha256)
+        if (!copyDigestMatches(copiedDigest, targetDigest)) {
+            throw IOException("Preserved chunk copy verification failed: ${source.absolutePath}")
+        }
+        val sourceAfterCopy = FileInputStream(source).use(::sha256)
+        if (!copyDigestMatches(copiedDigest, sourceAfterCopy)) {
+            throw IOException("Chunk changed while being preserved: ${source.absolutePath}")
+        }
+        forceDirectoryDurable(quarantineDirectory)
     }
 
     private fun restoreFromIndexLocked(
@@ -1272,16 +1330,28 @@ internal class PersistentAudioChunkStore internal constructor(
         if (liveCollision) {
             throw IOException("Chunk id collision with live data: $id")
         }
-        if (file.exists()) {
-            throw IOException("Unexpected chunk id collision on disk: ${file.absolutePath}")
+        when (storagePathState(file)) {
+            StoragePathState.PRESENT -> throw IOException(
+                "Unexpected chunk id collision on disk: ${file.absolutePath}",
+            )
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to prove chunk id is unused: ${file.absolutePath}",
+            )
+            StoragePathState.MISSING -> Unit
         }
         val staleRetirement = retirementTombstoneFile(id)
-        if (staleRetirement.exists()) {
-            // A prior delete may have removed the chunk in memory but not reached stable
-            // storage. Force the directory's current absence before removing its tombstone.
-            forceDirectoryDurable(chunksDirectory)
-            if (!deleteRetirementTombstoneLocked(id)) {
-                throw IOException("Unable to clear stale retirement marker for chunk id $id")
+        when (storagePathState(staleRetirement)) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to inspect retirement marker for chunk id $id",
+            )
+            StoragePathState.PRESENT -> {
+                // A prior delete may have removed the chunk in memory but not reached stable
+                // storage. Force the positively observed absence before removing its tombstone.
+                forceDirectoryDurable(chunksDirectory)
+                if (!deleteRetirementTombstoneLocked(id)) {
+                    throw IOException("Unable to clear stale retirement marker for chunk id $id")
+                }
             }
         }
 
@@ -1976,15 +2046,30 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun readIndex(file: File): LoadedIndex? {
-        if (!file.isFile) return null
-        val fileLength = runCatching { Files.size(file.toPath()) }.getOrNull() ?: return null
+        val observation = observeStoragePath(file)
+        when (observation.state) {
+            StoragePathState.MISSING -> return null
+            StoragePathState.UNAVAILABLE -> throw IOException("Unable to inspect chunk index: ${file.absolutePath}")
+            StoragePathState.PRESENT -> if (!observation.isRegularFile) {
+                throw IOException("Chunk index path is not a regular file: ${file.absolutePath}")
+            }
+        }
+        val fileLength = try {
+            Files.size(file.toPath())
+        } catch (_: NoSuchFileException) {
+            return null
+        } catch (error: IOException) {
+            throw IOException("Unable to read chunk index size: ${file.absolutePath}", error)
+        } catch (error: SecurityException) {
+            throw IOException("Unable to read chunk index size: ${file.absolutePath}", error)
+        }
         if (
             fileLength < INDEX_HEADER_BYTES + INDEX_CRC_BYTES ||
             fileLength > MAX_INDEX_BYTES
         ) {
             return null
         }
-        val bytes = runCatching {
+        val bytes = try {
             val size = fileLength.toInt()
             ByteArray(size).also { buffer ->
                 FileInputStream(file).use { input ->
@@ -1996,7 +2081,13 @@ internal class PersistentAudioChunkStore internal constructor(
                     }
                 }
             }
-        }.getOrNull() ?: return null
+        } catch (_: NoSuchFileException) {
+            return null
+        } catch (error: IOException) {
+            throw IOException("Unable to read chunk index: ${file.absolutePath}", error)
+        } catch (error: SecurityException) {
+            throw IOException("Unable to read chunk index: ${file.absolutePath}", error)
+        }
         if (bytes.size < INDEX_HEADER_BYTES + INDEX_CRC_BYTES) return null
         if (readIntLE(bytes, 0) != INDEX_MAGIC || readIntLE(bytes, 4) != INDEX_VERSION) return null
         val count = readIntLE(bytes, 20)
