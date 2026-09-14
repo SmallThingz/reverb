@@ -314,33 +314,20 @@ object RecordingRepository {
             }
             if (intent.storageType == RecordingStorageType.FILE.name && intent.fileIdentity != null) {
                 val source = File(intent.id)
-                when (fileRecordingAssetState(source)) {
-                    RecordingAssetState.UNAVAILABLE -> continue
-                    RecordingAssetState.MISSING -> {
+                when (pendingDeletionReplayAction(intent, fileRecordingAssetState(source))) {
+                    PendingDeletionReplayAction.WAIT -> continue
+                    PendingDeletionReplayAction.ABANDON_INTENT -> {
+                        // A persisted intent alone never authorizes a second physical delete
+                        // after process loss. Only a claim file created before the crash may
+                        // finish deletion above. A still-present source is preserved.
+                        removePendingDeletionLocked(context, intent.id)
+                        continue
+                    }
+                    PendingDeletionReplayAction.CLEAN_CATALOG -> {
                         if (!confirmMissingFileRecordingDurable(source)) continue
                         if (recording != null) dao.deleteById(intent.id)
                         removePendingDeletionLocked(context, intent.id)
                         continue
-                    }
-                    RecordingAssetState.PRESENT -> {
-                        val currentIdentity = resolveFileIdentity(source)
-                        if (!fileIdentityMatches(intent.fileIdentity, currentIdentity)) {
-                            if (!confirmFileDirectoryStateDurable(source)) continue
-                            if (recording != null) dao.deleteById(intent.id)
-                            removePendingDeletionLocked(context, intent.id)
-                            continue
-                        }
-                        when (deleteClaimedFile(intent)) {
-                            FileDeletionClaimResult.RETRY -> continue
-                            FileDeletionClaimResult.MISMATCH_PRESERVED,
-                            FileDeletionClaimResult.DELETED,
-                            -> {
-                                if (!confirmFileDirectoryStateDurable(source)) continue
-                                if (recording != null) dao.deleteById(intent.id)
-                                removePendingDeletionLocked(context, intent.id)
-                                continue
-                            }
-                        }
                     }
                 }
             }

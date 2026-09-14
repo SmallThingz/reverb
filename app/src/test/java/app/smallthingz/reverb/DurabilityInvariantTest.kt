@@ -802,6 +802,7 @@ class DurabilityInvariantTest {
             fileKey = "stat:1:2:100:5:77",
         )
         val encoded = encodePendingOutputCleanupRecord(record)
+        assertTrue(encoded.startsWith("v2|"))
         assertEquals(record, decodePendingOutputCleanupRecord(encoded))
         assertTrue(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:2:100:5:77"))
         assertFalse(pendingOutputCleanupMatches(record, 1235L, hash, "stat:1:2:100:5:77"))
@@ -814,6 +815,72 @@ class DurabilityInvariantTest {
         assertEquals(record.fileKey, firstIntent.fileIdentity)
         assertEquals(firstIntent.claimToken, secondIntent.claimToken)
         assertTrue(requireNotNull(deletionClaimFile(firstIntent)).name.startsWith(".reverb-delete-"))
+    }
+
+    @Test
+    fun pendingProviderOutputCleanup_requiresStableProviderIdentity_andLegacyV1FailsClosed() {
+        val id = "content://media/external/audio/media/42"
+        val hash = "ef".repeat(32)
+        val identity = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            id,
+            sizeBytes = 4321L,
+            revisionToken = 77L,
+        )
+        val record = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.MEDIASTORE,
+            id = id,
+            byteCount = 4321L,
+            sha256Hex = hash,
+            fileKey = null,
+            providerIdentity = identity,
+        )
+
+        val encoded = encodePendingOutputCleanupRecord(record)
+        assertTrue(encoded.startsWith("v2|"))
+        assertEquals(record, decodePendingOutputCleanupRecord(encoded))
+        assertTrue(pendingOutputCleanupMatches(record, 4321L, hash, null, identity))
+        assertEquals(
+            PendingOutputCleanupMatch.EXACT,
+            classifyPendingOutputCleanup(record, 4321L, hash, null, identity),
+        )
+        assertEquals(
+            PendingOutputCleanupMatch.REPLACED,
+            classifyPendingOutputCleanup(record, 4321L, hash, null, "provider:MEDIASTORE:replacement"),
+        )
+        assertEquals(
+            PendingOutputCleanupMatch.UNPROVEN,
+            classifyPendingOutputCleanup(record, 4321L, hash, null, null),
+        )
+
+        val encodedId = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(id.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val legacy = requireNotNull(
+            decodePendingOutputCleanupRecord("v1|MEDIASTORE|$encodedId|4321|$hash|"),
+        )
+        assertEquals(null, legacy.providerIdentity)
+        assertFalse(pendingOutputCleanupMatches(legacy, 4321L, hash, null, identity))
+        assertEquals(
+            PendingOutputCleanupMatch.UNPROVEN,
+            classifyPendingOutputCleanup(legacy, 4321L, hash, null, identity),
+        )
+        assertEquals(
+            PendingOutputCleanupMatch.REPLACED,
+            classifyPendingOutputCleanup(legacy, 4321L, "aa".repeat(32), null, identity),
+        )
+    }
+
+    @Test
+    fun pendingFileOutputCleanup_withoutObjectIdentityFailsClosed() {
+        val record = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "recordings/legacy.wav",
+            byteCount = 10L,
+            sha256Hex = "aa".repeat(32),
+            fileKey = null,
+        )
+        assertFalse(pendingOutputCleanupMatches(record, 10L, record.sha256Hex, null))
+        assertEquals(null, pendingOutputCleanupFileIntent(record))
     }
 
     @Test
@@ -973,10 +1040,20 @@ class DurabilityInvariantTest {
             assetDeleted = false,
         )
         val deleted = planned.copy(assetDeleted = true)
+        val filePlanned = planned.copy(
+            id = "/storage/emulated/0/Music/Reverb/clip.wav",
+            storageType = RecordingStorageType.FILE.name,
+            claimToken = "00000000-0000-0000-0000-000000000126",
+            fileIdentity = "stat:1:42:100:7:55",
+        )
 
         assertEquals(
             PendingDeletionReplayAction.ABANDON_INTENT,
             pendingDeletionReplayAction(planned, RecordingAssetState.PRESENT),
+        )
+        assertEquals(
+            PendingDeletionReplayAction.ABANDON_INTENT,
+            pendingDeletionReplayAction(filePlanned, RecordingAssetState.PRESENT),
         )
         assertEquals(
             PendingDeletionReplayAction.WAIT,

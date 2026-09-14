@@ -2227,7 +2227,9 @@ class ReverbService : Service() {
     private fun flushAndPersistBeforeShutdown() {
         if (!::audioHandler.isInitialized) {
             runCatching { loopingAudioChunkStore.close() }
+                .onFailure { reportPersistentStoreFailure("close looping store during early shutdown", it) }
             runCatching { oneShotAudioChunkStore.close() }
+                .onFailure { reportPersistentStoreFailure("close one-shot store during early shutdown", it) }
             return
         }
         val storeCloseOwnedByAudioThread = runOnAudioThreadAndWait {
@@ -2254,7 +2256,9 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             releaseAudioRecord()
             runCatching { loopingAudioChunkStore.close() }
+                .onFailure { reportPersistentStoreFailure("close looping store after shutdown timeout", it) }
             runCatching { oneShotAudioChunkStore.close() }
+                .onFailure { reportPersistentStoreFailure("close one-shot store after shutdown timeout", it) }
         }
     }
 

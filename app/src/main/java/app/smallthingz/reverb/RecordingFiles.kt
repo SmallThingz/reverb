@@ -921,13 +921,7 @@ internal fun recordingDestructiveIdentityMatches(context: Context, recording: Re
 }
 
 internal fun recordingDeletionIdentityMatches(context: Context, recording: RecordingEntity): Boolean =
-    when (resolveRecordingStorageType(recording)) {
-        RecordingStorageType.FILE -> recordingDestructiveIdentityMatches(context, recording)
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> recording.fileIdentity.isBlank() || recordingContentIdentityMatches(context, recording)
-        null -> false
-    }
+    recordingDestructiveIdentityMatches(context, recording)
 
 internal fun resolveFileIdentity(file: File): String {
     val attributes = runCatching {
@@ -1498,13 +1492,10 @@ private fun recoverStagedDocumentOutputs(
         }.onFailure { Log.w(TAG, "Unable to inspect staging document ${file.uri}", it) }
             .getOrDefault(0L)
         if (duration <= 0L) return@forEach
-        if (hasMatchingPublishedDocument(context, file, metadata.finalDisplayName, files)) {
-            val removed = runCatching { file.delete() }
-                .onFailure { Log.w(TAG, "Unable to remove redundant staging document ${file.uri}", it) }
-                .getOrDefault(false)
-            changed = changed || removed
-            return@forEach
-        }
+        // Do not auto-delete an old-session staging object merely because a published
+        // document currently has the same bytes. That final object can be replaced between
+        // comparison and deletion. Publish the staging object under a unique visible name;
+        // only an identity-bound cleanup journal may delete an exact staged object.
         val modified = file.lastModified().coerceAtLeast(0L)
         val target = RecordingOutputTarget(
             id = file.uri.toString(),
@@ -1522,26 +1513,6 @@ private fun recoverStagedDocumentOutputs(
         changed = changed || recovered
     }
     return changed
-}
-
-private fun hasMatchingPublishedDocument(
-    context: Context,
-    staging: DocumentFile,
-    finalDisplayName: String,
-    files: Array<DocumentFile>,
-): Boolean {
-    val stagingSize = staging.length().coerceAtLeast(0L)
-    val candidate = files.firstOrNull { file ->
-        file.isFile && file.uri != staging.uri && !isStagingOutputName(file.name.orEmpty()) &&
-            file.name == finalDisplayName &&
-            (stagingSize <= 0L || file.length().coerceAtLeast(0L) <= 0L || file.length() == stagingSize)
-    } ?: return false
-    return runCatching {
-        val first = context.contentResolver.openInputStream(staging.uri)?.use(::sha256) ?: return@runCatching false
-        val second = context.contentResolver.openInputStream(candidate.uri)?.use(::sha256) ?: return@runCatching false
-        first.byteCount == second.byteCount && first.sha256.contentEquals(second.sha256)
-    }.onFailure { Log.w(TAG, "Unable to compare retained staging document ${staging.uri}", it) }
-        .getOrDefault(false)
 }
 
 private fun listFileDirectoryRecordings(
@@ -1722,7 +1693,7 @@ private fun listMediaStoreRecordings(
                                 context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
                             }.onFailure { Log.w(TAG, "Unable to inspect pending staged recording $uri", it) }
                                 .getOrDefault(0L)
-                            if (strictDuration <= 0L) continue
+                            if (!canRecoverPendingMedia(size, strictDuration)) continue
                             val stagedTarget = RecordingOutputTarget(
                                 id = uri.toString(),
                                 displayName = metadata.finalDisplayName,
@@ -1740,33 +1711,10 @@ private fun listMediaStoreRecordings(
                             durationMillis = strictDuration
                             media = inspectRecordingMedia(context, uri, name)
                         } else {
-                            // Compatibility with pending rows from older builds, which used
-                            // their final display name before operation-kind staging existed.
-                            if (!isSupportedRecordingName(storedName)) continue
-                            media = inspectRecordingMedia(context, uri, storedName)
-                            if (!canRecoverPendingMedia(size, media.durationMillis)) continue
-                            val pendingRecording = RecordingEntity(
-                                id = uri.toString(),
-                                displayName = storedName,
-                                mimeType = mimeType,
-                                startedAtMillis = resolveRecordingStartTimeMillis(storedName, modifiedMillis),
-                                durationMillis = media.durationMillis,
-                                sizeBytes = size,
-                                codecSummary = media.codecSummary,
-                                storageType = RecordingStorageType.MEDIASTORE.name,
-                                directoryId = MEDIA_STORE_DIRECTORY_ID,
-                            )
-                            val matchesKnownSource = knownRecordings.values.any { known ->
-                                known.id != pendingRecording.id &&
-                                    known.displayName == pendingRecording.displayName &&
-                                    recordingsHaveSameContent(context, known, pendingRecording)
-                            }
-                            if (matchesKnownSource) continue
-                            val published = runCatching { publishMediaStoreUri(context, uri) }
-                                .onFailure { Log.w(TAG, "Unable to republish legacy pending recording $uri", it) }
-                                .isSuccess
-                            if (!published) continue
-                            durationMillis = media.durationMillis
+                            // Older rows predate operation-kind/session staging, so they may
+                            // represent either an export or a copy/move. That ambiguity is not
+                            // enough authority to publish them as finished user recordings.
+                            continue
                         }
                     } else {
                         if (!isSupportedRecordingName(name)) continue
@@ -1956,14 +1904,6 @@ private fun forceRecordingDirectoryDurable(directory: File) {
         channel.force(true)
     }
 }
-
-internal fun deleteFileRecordingDurably(file: File): Boolean = runCatching {
-    val parent = file.parentFile ?: return@runCatching false
-    if (!Files.deleteIfExists(file.toPath())) return@runCatching false
-    forceRecordingDirectoryDurable(parent)
-    true
-}.onFailure { Log.w(TAG, "Unable to durably delete recording $file", it) }
-    .getOrDefault(false)
 
 internal fun confirmFileDirectoryStateDurable(file: File): Boolean = runCatching {
     val parent = file.parentFile?.takeIf { it.isDirectory } ?: return@runCatching false

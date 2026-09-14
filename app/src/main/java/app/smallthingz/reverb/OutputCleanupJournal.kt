@@ -7,7 +7,6 @@ import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileInputStream
-import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
@@ -15,7 +14,8 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.util.Base64
 import java.util.UUID
 
-private const val OUTPUT_CLEANUP_RECORD_VERSION = "v1"
+private const val OUTPUT_CLEANUP_RECORD_VERSION_V1 = "v1"
+private const val OUTPUT_CLEANUP_RECORD_VERSION = "v2"
 private val outputCleanupJournalLock = Any()
 
 internal data class PendingOutputCleanupRecord(
@@ -24,11 +24,13 @@ internal data class PendingOutputCleanupRecord(
     val byteCount: Long,
     val sha256Hex: String,
     val fileKey: String?,
+    val providerIdentity: String? = null,
 )
 
 private data class OutputCleanupFingerprint(
     val digest: CopyDigest,
     val fileKey: String?,
+    val providerIdentity: String?,
 )
 
 private enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
@@ -39,19 +41,64 @@ internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord
     append(encodeCleanupField(record.id)).append('|')
     append(record.byteCount).append('|')
     append(record.sha256Hex.lowercase()).append('|')
-    append(encodeCleanupField(record.fileKey.orEmpty()))
+    append(encodeCleanupField(record.fileKey.orEmpty())).append('|')
+    append(encodeCleanupField(record.providerIdentity.orEmpty()))
 }
 
 internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanupRecord? {
     val parts = raw.split('|')
-    if (parts.size != 6 || parts[0] != OUTPUT_CLEANUP_RECORD_VERSION) return null
+    val expectedSize = when (parts.firstOrNull()) {
+        OUTPUT_CLEANUP_RECORD_VERSION_V1 -> 6
+        OUTPUT_CLEANUP_RECORD_VERSION -> 7
+        else -> return null
+    }
+    if (parts.size != expectedSize) return null
     val storageType = RecordingStorageType.entries.firstOrNull { it.name == parts[1] } ?: return null
     val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
     val byteCount = parts[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
     val sha256Hex = parts[4].lowercase()
     if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
     val fileKey = decodeCleanupField(parts[5])?.takeIf { it.isNotBlank() }
-    return PendingOutputCleanupRecord(storageType, id, byteCount, sha256Hex, fileKey)
+    val providerIdentity = if (parts.size == 7) {
+        decodeCleanupField(parts[6])?.takeIf { it.isNotBlank() }
+    } else {
+        null
+    }
+    return PendingOutputCleanupRecord(storageType, id, byteCount, sha256Hex, fileKey, providerIdentity)
+}
+
+internal enum class PendingOutputCleanupMatch {
+    EXACT,
+    REPLACED,
+    UNPROVEN,
+}
+
+internal fun classifyPendingOutputCleanup(
+    record: PendingOutputCleanupRecord,
+    byteCount: Long,
+    sha256Hex: String,
+    fileKey: String?,
+    providerIdentity: String? = null,
+): PendingOutputCleanupMatch {
+    if (record.byteCount != byteCount || !record.sha256Hex.equals(sha256Hex, ignoreCase = true)) {
+        return PendingOutputCleanupMatch.REPLACED
+    }
+    return when (record.storageType) {
+        RecordingStorageType.FILE -> {
+            val expected = record.fileKey ?: return PendingOutputCleanupMatch.UNPROVEN
+            val current = fileKey ?: return PendingOutputCleanupMatch.UNPROVEN
+            if (fileIdentityMatches(expected, current)) PendingOutputCleanupMatch.EXACT
+            else PendingOutputCleanupMatch.REPLACED
+        }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
+            val expected = record.providerIdentity ?: return PendingOutputCleanupMatch.UNPROVEN
+            val current = providerIdentity ?: return PendingOutputCleanupMatch.UNPROVEN
+            if (providerRecordingIdentityMatches(expected, current)) PendingOutputCleanupMatch.EXACT
+            else PendingOutputCleanupMatch.REPLACED
+        }
+    }
 }
 
 internal fun pendingOutputCleanupMatches(
@@ -59,10 +106,10 @@ internal fun pendingOutputCleanupMatches(
     byteCount: Long,
     sha256Hex: String,
     fileKey: String?,
-): Boolean {
-    if (record.byteCount != byteCount || !record.sha256Hex.equals(sha256Hex, ignoreCase = true)) return false
-    return record.fileKey == null || (fileKey != null && fileIdentityMatches(record.fileKey, fileKey))
-}
+    providerIdentity: String? = null,
+): Boolean = classifyPendingOutputCleanup(
+    record, byteCount, sha256Hex, fileKey, providerIdentity,
+) == PendingOutputCleanupMatch.EXACT
 
 internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchronized(outputCleanupJournalLock) {
     pendingOutputCleanupEntriesLocked(context).mapNotNullTo(mutableSetOf()) { raw ->
@@ -98,6 +145,7 @@ internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOu
         byteCount = fingerprint.digest.byteCount,
         sha256Hex = fingerprint.digest.sha256.toHexString(),
         fileKey = fingerprint.fileKey,
+        providerIdentity = fingerprint.providerIdentity,
     )
     if (!putPendingOutputCleanup(context, record)) return false
     val cleaned = deletePendingOutputAsset(context, record)
@@ -131,23 +179,30 @@ internal fun retryPendingOutputCleanup(context: Context) {
             OutputCleanupAssetState.PRESENT -> Unit
         }
         val fingerprint = readOutputCleanupFingerprint(context, record.storageType, record.id) ?: continue
-        if (!pendingOutputCleanupMatches(
-                record,
-                fingerprint.digest.byteCount,
-                fingerprint.digest.sha256.toHexString(),
-                fingerprint.fileKey,
-            )
-        ) {
-            // The path/URI now identifies different bytes. The old cleanup intent must not
-            // delete a replacement recording that reused the same external identity. For a
-            // FILE claim, first make any restore/recovery rename durable.
-            if (record.storageType == RecordingStorageType.FILE &&
-                !confirmFileDirectoryStateDurable(File(record.id))
-            ) {
+        when (classifyPendingOutputCleanup(
+            record,
+            fingerprint.digest.byteCount,
+            fingerprint.digest.sha256.toHexString(),
+            fingerprint.fileKey,
+            fingerprint.providerIdentity,
+        )) {
+            PendingOutputCleanupMatch.UNPROVEN -> {
+                // Legacy provider cleanup records have content fingerprints but no stable
+                // object identity. Keep them suppressed, but never delete on that evidence.
                 continue
             }
-            removePendingOutputCleanup(context, record.id)
-            continue
+            PendingOutputCleanupMatch.REPLACED -> {
+                // A different object/content now owns the path or URI. Abandon the stale
+                // cleanup intent so replacement data is neither deleted nor kept hidden.
+                if (record.storageType == RecordingStorageType.FILE &&
+                    !confirmFileDirectoryStateDurable(File(record.id))
+                ) {
+                    continue
+                }
+                removePendingOutputCleanup(context, record.id)
+                continue
+            }
+            PendingOutputCleanupMatch.EXACT -> Unit
         }
         if (deletePendingOutputAsset(context, record)) {
             removePendingOutputCleanup(context, record.id)
@@ -204,19 +259,34 @@ private fun readOutputCleanupFingerprint(
     storageType: RecordingStorageType,
     id: String,
 ): OutputCleanupFingerprint? = runCatching {
-    val input: InputStream = when (storageType) {
-        RecordingStorageType.FILE -> FileInputStream(File(id))
+    when (storageType) {
+        RecordingStorageType.FILE -> readStableFileOutputCleanupFingerprint(File(id))
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> context.contentResolver.openInputStream(id.toUri()) ?: return@runCatching null
+        -> {
+            val uri = id.toUri()
+            val before = resolveProviderRecordingIdentity(context, storageType, uri)
+                .takeIf { it.isNotBlank() } ?: return@runCatching null
+            val digest = context.contentResolver.openInputStream(uri)?.use(::sha256)
+                ?: return@runCatching null
+            val after = resolveProviderRecordingIdentity(context, storageType, uri)
+            if (!providerRecordingIdentityMatches(before, after)) return@runCatching null
+            OutputCleanupFingerprint(digest, fileKey = null, providerIdentity = before)
+        }
     }
-    val digest = input.use(::sha256)
-    val fileKey = if (storageType == RecordingStorageType.FILE) {
-        resolveFileIdentity(File(id)).takeIf { it.isNotBlank() } ?: return@runCatching null
-    } else {
-        null
+}.getOrNull()
+
+private fun readStableFileOutputCleanupFingerprint(file: File): OutputCleanupFingerprint? = runCatching {
+    FileInputStream(file).use { input ->
+        val openedIdentity = resolveFileDescriptorIdentity(input.fd)
+            .takeIf { it.isNotBlank() } ?: return@runCatching null
+        val digest = sha256(input)
+        val closedIdentity = resolveFileDescriptorIdentity(input.fd)
+        if (openedIdentity != closedIdentity) return@runCatching null
+        val pathIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
+        if (!fileDescriptorIdentityMatches(pathIdentity, closedIdentity)) return@runCatching null
+        OutputCleanupFingerprint(digest, fileKey = pathIdentity, providerIdentity = null)
     }
-    OutputCleanupFingerprint(digest, fileKey)
 }.getOrNull()
 
 private fun outputCleanupAssetState(
@@ -266,13 +336,31 @@ private fun deletePendingOutputAsset(
 ): Boolean = when (record.storageType) {
     RecordingStorageType.FILE -> deletePendingFileOutput(record)
     RecordingStorageType.DOCUMENT -> runCatching {
-        val document = DocumentFile.fromSingleUri(context, record.id.toUri())
-        document?.let { !it.exists() || it.delete() } ?: false
+        if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
+        val document = DocumentFile.fromSingleUri(context, record.id.toUri()) ?: return@runCatching false
+        if (document.delete()) true
+        else outputCleanupAssetState(context, record.storageType, record.id) == OutputCleanupAssetState.MISSING
     }.getOrDefault(false)
     RecordingStorageType.MEDIASTORE -> runCatching {
+        if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
         if (context.contentResolver.delete(record.id.toUri(), null, null) > 0) true
         else outputCleanupAssetState(context, record.storageType, record.id) == OutputCleanupAssetState.MISSING
     }.getOrDefault(false)
+}
+
+private fun pendingProviderOutputCleanupStillMatches(
+    context: Context,
+    record: PendingOutputCleanupRecord,
+): Boolean {
+    if (record.storageType == RecordingStorageType.FILE || record.providerIdentity.isNullOrBlank()) return false
+    val fingerprint = readOutputCleanupFingerprint(context, record.storageType, record.id) ?: return false
+    return pendingOutputCleanupMatches(
+        record,
+        fingerprint.digest.byteCount,
+        fingerprint.digest.sha256.toHexString(),
+        fingerprint.fileKey,
+        fingerprint.providerIdentity,
+    )
 }
 
 private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean {

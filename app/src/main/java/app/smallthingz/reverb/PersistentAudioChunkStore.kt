@@ -118,6 +118,12 @@ internal fun oneShotRetainedChunkBytesForTime(
     return keepFrames * frameBytes.toLong()
 }
 
+private fun forceAudioStoreDirectoryDurable(directory: File) {
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+        channel.force(true)
+    }
+}
+
 /**
  * Disk-backed append-only PCM timeline.
  *
@@ -128,6 +134,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val rootDirectory: File,
     private val legacyDirectory: File?,
     private val overwriteOldest: Boolean,
+    private val directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
 ) : Closeable {
     constructor(
         context: Context,
@@ -143,7 +150,10 @@ internal class PersistentAudioChunkStore internal constructor(
     internal constructor(
         rootDirectory: File,
         overwriteOldest: Boolean = true,
-    ) : this(rootDirectory, legacyDirectory = null, overwriteOldest = overwriteOldest)
+        directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
+    ) : this(
+        rootDirectory, legacyDirectory = null, overwriteOldest = overwriteOldest, directorySync = directorySync,
+    )
 
     private val chunksDirectory = File(rootDirectory, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
     private val indexA = File(rootDirectory, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
@@ -525,13 +535,31 @@ internal class PersistentAudioChunkStore internal constructor(
     @Synchronized
     override fun close() {
         if (closed) return
+        var failure: Exception? = null
+        fun recordFailure(error: Exception) {
+            val previous = failure
+            if (previous == null) failure = error else previous.addSuppressed(error)
+        }
         if (loaded) {
-            runCatching { writeActiveHeaderLocked() }
-            runCatching { retryRetiredDeletesLocked() }
-            runCatching { writeIndexLocked() }
+            try {
+                writeActiveHeaderLocked()
+            } catch (error: Exception) {
+                recordFailure(error)
+            }
+            try {
+                retryRetiredDeletesLocked()
+            } catch (error: Exception) {
+                recordFailure(error)
+            }
+            try {
+                writeIndexLocked()
+            } catch (error: Exception) {
+                recordFailure(error)
+            }
             closeActiveAccessLocked()
         }
         closed = true
+        failure?.let { throw it }
     }
 
     internal inner class RangeLease internal constructor(
@@ -1503,6 +1531,10 @@ internal class PersistentAudioChunkStore internal constructor(
 
         val oldDuration = record.durationSeconds
         val removedBytes = record.payloadBytes - replacement.payloadBytes
+        // The atomic rename already changed the live object. Update runtime metadata before
+        // the directory fsync barrier so an fsync failure cannot leave this process reading
+        // the shorter replacement through stale pre-replacement geometry. Recovery can still
+        // observe either old or new directory state after sudden power loss.
         record.state = replacement.state
         record.createdAtMillis = replacement.createdAtMillis
         record.payloadBytes = replacement.payloadBytes
@@ -2068,9 +2100,7 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun forceDirectoryDurable(directory: File) {
-        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
-            channel.force(true)
-        }
+        directorySync(directory)
     }
 
     private data class ActivePayloadSyncSnapshot(

@@ -306,6 +306,62 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun close_surfacesCheckpointFailureWhileLeavingAudioRecoverable() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 64 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+
+        val indexATemp = File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME + ".tmp")
+        val indexBTemp = File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME + ".tmp")
+        indexATemp.deleteRecursively()
+        indexBTemp.deleteRecursively()
+        assertTrue(indexATemp.mkdir())
+        assertTrue(indexBTemp.mkdir())
+
+        assertThrows(IOException::class.java) { store.close() }
+        indexATemp.deleteRecursively()
+        indexBTemp.deleteRecursively()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 64 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
+    fun truncationFsyncFailure_keepsRuntimeGeometryBoundToPublishedReplacement() = withStoreRoot { root ->
+        val original = pcmBytes(8_192)
+        var failDirectorySync = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            directorySync = { directory ->
+                if (failDirectorySync && directory.name == ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME) {
+                    throw IOException("Injected post-replacement directory sync failure")
+                }
+            },
+        )
+        configure(store, 128 * 1024L)
+        assertEquals(original.size, store.append(original, 0, original.size))
+        store.sealActiveChunk()
+
+        failDirectorySync = true
+        assertThrows(IOException::class.java) { configure(store, 4_096L) }
+        failDirectorySync = false
+
+        val expected = original.copyOf(4_096)
+        assertEquals(expected.size.toLong(), store.countFilledBytes())
+        assertArrayEquals(expected, readAll(store))
+        store.close()
+
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            configure(reopened, 4_096L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun retiredLeaseChunk_neverResurrectsWhenBothIndexesAreLost() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val crashed = PersistentAudioChunkStore(root)
