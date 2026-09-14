@@ -201,6 +201,8 @@ class RecordingWaveformTest {
             storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
         )
         assertEquals("", recordingWaveformRevision(provider))
+        val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.4f })
+        assertFalse(isValidRecordingWaveformCache(provider, encoded, ""))
         assertTrue(recordingWaveformRevision(provider.copy(fileIdentity = "provider:MEDIASTORE:x:4000:9")).isNotBlank())
     }
 

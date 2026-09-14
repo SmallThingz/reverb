@@ -31,10 +31,13 @@ internal fun isValidRecordingWaveformCache(
     recording: RecordingEntity,
     waveformData: String,
     waveformRevision: String,
-): Boolean =
-    recording.missingSinceMillis == null &&
-        waveformRevision == recordingWaveformRevision(recording) &&
+): Boolean {
+    val expectedRevision = recordingWaveformRevision(recording)
+    return recording.missingSinceMillis == null &&
+        expectedRevision.isNotBlank() &&
+        waveformRevision == expectedRevision &&
         decodeRecordingWaveform(waveformData) != null
+}
 
 internal fun encodeRecordingWaveform(values: FloatArray): String {
     if (values.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return ""
@@ -89,12 +92,19 @@ internal fun <T> withRecordingWavChannel(
     RecordingStorageType.DOCUMENT,
     RecordingStorageType.MEDIASTORE,
     -> {
+        if (!recordingContentIdentityMatches(context, recording)) {
+            throw IOException("Recording changed in provider")
+        }
         val uri = recording.id.toUri()
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
             ?: throw IOException("Unable to open recording for reading")
-        descriptor.use {
+        val result = descriptor.use {
             FileInputStream(it.fileDescriptor).channel.use(block)
         }
+        if (!recordingContentIdentityMatches(context, recording)) {
+            throw IOException("Recording changed in provider while reading")
+        }
+        result
     }
     null -> throw IOException("Unknown recording storage type")
 }
