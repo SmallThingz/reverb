@@ -942,12 +942,12 @@ internal class PersistentAudioChunkStore internal constructor(
         val target = retirementTombstoneFile(record.id)
         val temp = File(retiredDirectory, "${record.id}.tmp")
         val payload = buildString {
-            append("v1|")
+            append("v2|")
             append(record.id).append('|')
             append(record.createdAtMillis).append('|')
             append(record.sampleRate).append('|')
             append(record.channelCount).append('|')
-            append(record.sampleFormat.name)
+            append(record.sampleFormat.storageCode.toInt())
         }.toByteArray(Charsets.UTF_8)
         FileOutputStream(temp).use { output ->
             output.write(payload)
@@ -997,12 +997,12 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun parseRetirementTombstone(raw: String): RetiredChunkIdentity? {
         val parts = raw.trim().split('|')
-        if (parts.size != 6 || parts[0] != "v1") return null
+        if (parts.size != 6) return null
         val id = parts[1].toUIntOrNull() ?: return null
         val createdAtMillis = parts[2].toLongOrNull() ?: return null
         val sampleRate = parts[3].toIntOrNull()?.takeIf { it > 0 } ?: return null
         val channelCount = parts[4].toIntOrNull()?.takeIf { it in 1..MAX_CHANNEL_COUNT } ?: return null
-        val sampleFormat = PcmSampleFormat.entries.firstOrNull { it.name == parts[5] } ?: return null
+        val sampleFormat = retirementSampleFormatFromWire(parts[0], parts[5]) ?: return null
         return RetiredChunkIdentity(id, createdAtMillis, sampleRate, channelCount, sampleFormat)
     }
 
@@ -2258,6 +2258,12 @@ internal class PersistentAudioChunkStore internal constructor(
             }
         }
     }
+}
+
+internal fun retirementSampleFormatFromWire(version: String, value: String): PcmSampleFormat? = when (version) {
+    "v1" -> PcmSampleFormat.entries.firstOrNull { it.name == value }
+    "v2" -> value.toIntOrNull()?.let(PcmSampleFormat::fromStorageCode)
+    else -> null
 }
 
 internal fun publishRetirementTombstoneAtomically(

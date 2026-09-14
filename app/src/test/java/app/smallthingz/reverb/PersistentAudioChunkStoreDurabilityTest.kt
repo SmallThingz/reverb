@@ -17,6 +17,14 @@ import org.junit.Test
 
 class PersistentAudioChunkStoreDurabilityTest {
     @Test
+    fun retirementTombstoneSampleFormatWire_readsLegacyNamesAndV2ByteCodes() {
+        assertEquals(PcmSampleFormat.PCM_16, retirementSampleFormatFromWire("v1", "PCM_16"))
+        assertEquals(PcmSampleFormat.PCM_16, retirementSampleFormatFromWire("v2", "2"))
+        assertEquals(null, retirementSampleFormatFromWire("v2", "PCM_16"))
+        assertEquals(null, retirementSampleFormatFromWire("v3", "2"))
+    }
+    @Test
+
     fun finalizedAudio_survivesCloseAndReopenByteForByte() = withStoreRoot { root ->
         val expected = pcmBytes(24_000)
         PersistentAudioChunkStore(root).use { store ->
@@ -413,6 +421,7 @@ class PersistentAudioChunkStoreDurabilityTest {
 
         crashed.clear()
         assertFalse(crashed.hasData())
+        assertTrue(File(root, "retired/0").readText().startsWith("v2|"))
         assertArrayEquals(expected, readLease(lease))
         val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
         assertTrue(chunk.isFile)
