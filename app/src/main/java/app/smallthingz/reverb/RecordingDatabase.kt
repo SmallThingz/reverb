@@ -5,8 +5,15 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import android.database.Cursor
+import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 
 data class RecordingEntity(
     val id: String,
@@ -57,6 +64,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
     DATABASE_NAME,
     null,
     DATABASE_VERSION,
+    PreservingRecordingDatabaseErrorHandler(context.applicationContext, DATABASE_NAME),
 ) {
     private val dao = DaoImpl()
 
@@ -205,7 +213,83 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 instance ?: RecordingDatabase(context).also { instance = it }
             }
         }
+
+        internal fun resetAfterCorruption() {
+            synchronized(this) {
+                runCatching { instance?.close() }
+                instance = null
+            }
+        }
     }
+}
+
+
+private class PreservingRecordingDatabaseErrorHandler(
+    private val context: Context,
+    private val databaseName: String,
+) : DatabaseErrorHandler {
+    override fun onCorruption(dbObj: SQLiteDatabase) {
+        val databaseFile = context.getDatabasePath(databaseName)
+        val recoveryRoot = File(context.noBackupFilesDir, "recording-database-recovery")
+        val preserved = preserveCorruptRecordingDatabase(databaseFile, recoveryRoot)
+            ?: throw SQLiteException("Recording database is corrupt and could not be preserved")
+
+        runCatching { dbObj.close() }
+        val removed = SQLiteDatabase.deleteDatabase(databaseFile)
+        if (!removed && recordingDatabaseSidecars(databaseFile).any(File::exists)) {
+            throw SQLiteException("Recording database was preserved at ${preserved.name} but could not be reset")
+        }
+        databaseFile.parentFile?.takeIf(File::isDirectory)?.let(::forceRecordingDatabaseDirectoryDurable)
+    }
+}
+
+internal fun recordingDatabaseSidecars(databaseFile: File): List<File> = listOf(
+    databaseFile,
+    File(databaseFile.path + "-wal"),
+    File(databaseFile.path + "-shm"),
+    File(databaseFile.path + "-journal"),
+)
+
+internal fun preserveCorruptRecordingDatabase(
+    databaseFile: File,
+    recoveryRoot: File,
+    recoveryId: String = "${System.currentTimeMillis()}-${java.util.UUID.randomUUID()}",
+): File? {
+    val sources = recordingDatabaseSidecars(databaseFile).filter(File::isFile)
+    if (sources.isEmpty()) return null
+    return runCatching {
+        val rootExisted = recoveryRoot.exists()
+        if (!rootExisted && !recoveryRoot.mkdirs() && !recoveryRoot.isDirectory) {
+            throw IOException("Unable to create recording database recovery directory")
+        }
+        if (!rootExisted) recoveryRoot.parentFile?.takeIf(File::isDirectory)?.let(::forceRecordingDatabaseDirectoryDurable)
+
+        var suffix = 0
+        var destination: File
+        do {
+            destination = File(recoveryRoot, if (suffix == 0) recoveryId else "$recoveryId-$suffix")
+            suffix++
+        } while (destination.exists())
+        if (!destination.mkdir()) throw IOException("Unable to create recording database recovery snapshot")
+        forceRecordingDatabaseDirectoryDurable(recoveryRoot)
+
+        sources.forEach { source ->
+            val target = File(destination, source.name)
+            FileInputStream(source).use { input ->
+                FileOutputStream(target).use { output ->
+                    input.copyTo(output)
+                    output.fd.sync()
+                }
+            }
+        }
+        forceRecordingDatabaseDirectoryDurable(destination)
+        forceRecordingDatabaseDirectoryDurable(recoveryRoot)
+        destination
+    }.getOrNull()
+}
+
+private fun forceRecordingDatabaseDirectoryDurable(directory: File) {
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
 }
 
 private fun SQLiteDatabase.upsertRecording(recording: RecordingEntity) {

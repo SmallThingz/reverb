@@ -191,6 +191,10 @@ class RecordingWaveformTest {
         assertEquals("", providerRecordingIdentity(
             RecordingStorageType.DOCUMENT, "content://docs/1", 4_000L, 0L,
         ))
+        assertTrue(providerRecordingIdentityMatches(first, first))
+        assertFalse(providerRecordingIdentityMatches("", first))
+        assertFalse(providerRecordingIdentityMatches(first, ""))
+        assertFalse(providerRecordingIdentityMatches(first, "provider:MEDIASTORE:other"))
     }
 
     @Test

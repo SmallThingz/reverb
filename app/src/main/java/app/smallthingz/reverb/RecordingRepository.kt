@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.net.Uri
 import android.util.Log
 import java.io.File
@@ -40,16 +41,28 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
-                replayPendingDeletionsLocked(context)
-                syncRecoverableDirectories(context)
-                updateMissingStatesLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
-                val pending = pendingDeletionIds(context)
-                visibleCatalogRecordings(
-                    RecordingDatabase.getInstance(context).recordingDao().listAll(),
-                    pending,
-                )
+                try {
+                    refreshLocked(context)
+                } catch (corrupt: SQLiteDatabaseCorruptException) {
+                    // The database error handler has already preserved the damaged DB and
+                    // removed the active copy. Reopen once and rebuild solely from surviving
+                    // storage; destructive operations never use this automatic retry path.
+                    RecordingDatabase.resetAfterCorruption()
+                    refreshLocked(context)
+                }
             }
         }
+    }
+
+    private suspend fun refreshLocked(context: Context): List<RecordingEntity> {
+        replayPendingDeletionsLocked(context)
+        syncRecoverableDirectories(context)
+        updateMissingStatesLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
+        val pending = pendingDeletionIds(context)
+        return visibleCatalogRecordings(
+            RecordingDatabase.getInstance(context).recordingDao().listAll(),
+            pending,
+        )
     }
 
     /**
@@ -171,6 +184,7 @@ object RecordingRepository {
         if (!isValidRecordingWaveformCache(recording, waveformData, waveformRevision)) return false
         return withContext(Dispatchers.IO) {
             mutex.withLock {
+                if (!recordingContentIdentityMatches(context, recording)) return@withLock false
                 RecordingDatabase.getInstance(context).recordingDao().updateWaveformCache(
                     recording = recording,
                     waveformData = waveformData,
@@ -391,10 +405,8 @@ object RecordingRepository {
             mutex.withLock {
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val tracked = dao.listAll().firstOrNull { it.id == recording.id } ?: return@withLock null
-                if (resolveRecordingStorageType(tracked) == RecordingStorageType.FILE &&
-                    !recordingFileIdentityMatches(tracked)
-                ) {
-                    throw IOException("Recording changed on disk before rename")
+                if (!recordingContentIdentityMatches(context, tracked)) {
+                    throw IOException("Recording changed before rename")
                 }
                 val renamed = renameRecordingAsset(context, tracked, requestedBaseName) ?: return@withLock null
                 if (renamed == tracked) return@withLock tracked
