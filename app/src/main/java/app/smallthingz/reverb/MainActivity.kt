@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyPhonePortraitOnly()
-        applyConfiguredPlatformTheme()
+        val configuredThemeMode = applyConfiguredPlatformTheme()
         super.onCreate(savedInstanceState)
         microphonePermissionRequested =
             savedInstanceState?.getBoolean(STATE_MICROPHONE_PERMISSION_REQUESTED) ?: false
@@ -151,12 +151,14 @@ class MainActivity : ComponentActivity() {
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
         permissionsGranted = hasRequiredPermissions()
-        notificationPermissionGranted = hasNotificationPermission()
-        mediaRecoveryAllowed = hasMediaRecoveryPermission()
-        batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         showOnboarding = isOnboardingPending(this)
+        if (showOnboarding) {
+            notificationPermissionGranted = hasNotificationPermission()
+            mediaRecoveryAllowed = hasMediaRecoveryPermission()
+            batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
+        }
         RecordingRepository.schedulePersistedPermissionCleanup(this)
-        themeMode = getConfiguredThemeMode(this)
+        themeMode = configuredThemeMode
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
@@ -254,10 +256,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         permissionsGranted = hasRequiredPermissions()
-        notificationPermissionGranted = hasNotificationPermission()
-        mediaRecoveryAllowed = hasMediaRecoveryPermission()
-        batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
-        if (!showOnboarding) beginPermissionFlow()
+        if (showOnboarding) {
+            notificationPermissionGranted = hasNotificationPermission()
+            mediaRecoveryAllowed = hasMediaRecoveryPermission()
+            batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
+        } else {
+            beginPermissionFlow()
+        }
     }
 
     private fun beginPermissionFlow() {
@@ -329,11 +334,13 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
-    private fun applyConfiguredPlatformTheme() {
+    private fun applyConfiguredPlatformTheme(): AppThemeMode {
         val systemDark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
             Configuration.UI_MODE_NIGHT_YES
-        val dark = getConfiguredThemeMode(this).isDark(systemDark)
+        val mode = getConfiguredThemeMode(this)
+        val dark = mode.isDark(systemDark)
         setTheme(if (dark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
+        return mode
     }
 
     private fun applyPhonePortraitOnly() {

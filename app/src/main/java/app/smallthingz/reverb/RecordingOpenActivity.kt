@@ -1,30 +1,39 @@
 package app.smallthingz.reverb
 
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-class RecordingOpenActivity : Activity() {
+class RecordingOpenActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val openIntent = runCatching { buildVerifiedOpenIntent(this, intent) }.getOrNull()
-        if (openIntent != null) {
-            try {
-                startActivity(openIntent)
-            } catch (_: ActivityNotFoundException) {
-                AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
-            } catch (_: RuntimeException) {
+        val sourceIntent = intent
+        lifecycleScope.launch {
+            val openIntent = withContext(Dispatchers.IO) {
+                runCatching { buildVerifiedOpenIntent(this@RecordingOpenActivity, sourceIntent) }.getOrNull()
+            }
+            if (openIntent != null) {
+                try {
+                    startActivity(openIntent)
+                } catch (_: ActivityNotFoundException) {
+                    AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
+                } catch (_: RuntimeException) {
+                    AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+                }
+            } else {
                 AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
             }
-        } else {
-            AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+            finish()
         }
-        finish()
     }
 
     companion object {

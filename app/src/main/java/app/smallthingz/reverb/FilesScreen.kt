@@ -69,9 +69,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 internal fun isLibraryDismissEdge(x: Float, width: Float): Boolean {
@@ -438,18 +440,25 @@ fun FilesScreen(
 
     fun shareRecordings(recordingsToShare: Collection<RecordingEntity>) {
         if (recordingsToShare.isEmpty()) return
+        val targets = recordingsToShare.toList()
         val chooserTitle = resources.getString(
-            if (recordingsToShare.size == 1) R.string.share_recording_title
+            if (targets.size == 1) R.string.share_recording_title
             else R.string.share_recordings_title,
         )
-        try {
-            val shareIntent = buildShareRecordingsIntent(context, recordingsToShare)
-            context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
-        } catch (_: ActivityNotFoundException) {
-            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
-        } catch (_: RuntimeException) {
-            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
-            refresh(showSpinner = false)
+        scope.launch {
+            try {
+                val shareIntent = withContext(Dispatchers.IO) {
+                    buildShareRecordingsIntent(context, targets)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: ActivityNotFoundException) {
+                showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+            } catch (_: RuntimeException) {
+                showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+                refresh(showSpinner = false)
+            }
         }
     }
 
@@ -708,12 +717,7 @@ fun FilesScreen(
                                         onPlaybackFailed = {
                                             setExpandedRecording(null)
                                             try {
-                                                context.startActivity(buildOpenRecordingIntent(context, recording))
-                                            } catch (_: ActivityNotFoundException) {
-                                                showPassiveNotice(
-                                                    resources.getString(R.string.no_app_available),
-                                                    FeedbackTone.ERROR,
-                                                )
+                                                context.startActivity(RecordingOpenActivity.intentFor(context, recording))
                                             } catch (_: RuntimeException) {
                                                 showPassiveNotice(
                                                     resources.getString(R.string.recording_unavailable),
