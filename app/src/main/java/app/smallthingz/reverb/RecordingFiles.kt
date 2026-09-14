@@ -898,6 +898,9 @@ internal fun resolveProviderRecordingIdentity(
     }.getOrDefault("")
 }
 
+internal fun providerRecordingIdentityMatches(stored: String, current: String): Boolean =
+    stored.isNotBlank() && current.isNotBlank() && stored == current
+
 internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
     return when (val storageType = resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> recordingFileIdentityMatches(recording)
@@ -906,10 +909,15 @@ internal fun recordingContentIdentityMatches(context: Context, recording: Record
         -> {
             if (recording.fileIdentity.isBlank()) return true
             val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
-            current.isNotBlank() && current == recording.fileIdentity
+            providerRecordingIdentityMatches(recording.fileIdentity, current)
         }
         null -> false
     }
+}
+
+internal fun recordingDestructiveIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
+    if (recording.fileIdentity.isBlank()) return false
+    return recordingContentIdentityMatches(context, recording)
 }
 
 internal fun resolveFileIdentity(file: File): String {
@@ -1032,6 +1040,7 @@ fun deleteRecordingAsset(
     context: Context,
     recording: RecordingEntity,
 ): Boolean {
+    if (!recordingDestructiveIdentityMatches(context, recording)) return false
     when (recordingAssetState(context, recording)) {
         RecordingAssetState.MISSING,
         RecordingAssetState.UNAVAILABLE,
@@ -1061,6 +1070,7 @@ fun renameRecordingAsset(
     recording: RecordingEntity,
     requestedBaseName: String,
 ): RecordingEntity? {
+    if (!recordingDestructiveIdentityMatches(context, recording)) return null
     val extension = recording.displayName.substringAfterLast('.', "")
     var sanitized = sanitizeBaseName(requestedBaseName)
     if (sanitized.isBlank()) return null
@@ -1283,7 +1293,11 @@ internal fun openRecordingInputStream(context: Context, recording: RecordingEnti
         RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> context.contentResolver.openInputStream(recording.id.toUri())
+        -> if (recordingContentIdentityMatches(context, recording)) {
+            context.contentResolver.openInputStream(recording.id.toUri())
+        } else {
+            null
+        }
         null -> null
     }
 
@@ -1302,6 +1316,14 @@ internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputS
     return stream
 }
 
+internal fun sha256StableRecording(
+    context: Context,
+    recording: RecordingEntity,
+): CopyDigest? {
+    val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return null
+    return digest.takeIf { recordingContentIdentityMatches(context, recording) }
+}
+
 internal fun recordingsHaveSameContent(
     context: Context,
     first: RecordingEntity,
@@ -1309,8 +1331,8 @@ internal fun recordingsHaveSameContent(
 ): Boolean {
     if (first.sizeBytes > 0L && second.sizeBytes > 0L && first.sizeBytes != second.sizeBytes) return false
     return runCatching {
-        val firstDigest = openRecordingInputStream(context, first)?.use(::sha256) ?: return@runCatching false
-        val secondDigest = openRecordingInputStream(context, second)?.use(::sha256) ?: return@runCatching false
+        val firstDigest = sha256StableRecording(context, first) ?: return@runCatching false
+        val secondDigest = sha256StableRecording(context, second) ?: return@runCatching false
         firstDigest.byteCount == secondDigest.byteCount &&
             firstDigest.sha256.contentEquals(secondDigest.sha256)
     }.onFailure { Log.w(TAG, "Unable to compare recordings ${first.id} and ${second.id}", it) }

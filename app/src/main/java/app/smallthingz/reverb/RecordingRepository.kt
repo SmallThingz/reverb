@@ -344,7 +344,8 @@ object RecordingRepository {
         context: Context,
         recording: RecordingEntity,
     ): PendingDeletionIntent? = runCatching {
-        val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return@runCatching null
+        if (!recordingDestructiveIdentityMatches(context, recording)) return@runCatching null
+        val digest = sha256StableRecording(context, recording) ?: return@runCatching null
         if (digest.byteCount <= 0L) return@runCatching null
         val isFile = resolveRecordingStorageType(recording) == RecordingStorageType.FILE
         PendingDeletionIntent(
@@ -363,7 +364,7 @@ object RecordingRepository {
         recording: RecordingEntity,
         intent: PendingDeletionIntent,
     ): Boolean = runCatching {
-        val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return@runCatching false
+        val digest = sha256StableRecording(context, recording) ?: return@runCatching false
         pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
     }.getOrDefault(false)
 
@@ -1067,7 +1068,9 @@ internal fun mergeObservedRecording(
         missingSinceMillis = null,
     )
     val revision = recordingWaveformRevision(merged)
-    val preserveWaveform = fallback?.waveformRevision == revision && fallback.waveformData.isNotBlank()
+    val preserveWaveform = revision.isNotBlank() &&
+        fallback?.waveformRevision == revision &&
+        decodeRecordingWaveform(fallback.waveformData) != null
     return merged.copy(
         waveformData = if (preserveWaveform) fallback.waveformData else "",
         waveformRevision = if (preserveWaveform) revision else "",

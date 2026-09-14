@@ -124,6 +124,8 @@ class RecordingWaveformTest {
             index.toFloat() / (RANGE_WAVEFORM_DETAIL_BUCKETS - 1).toFloat()
         }
         val encoded = encodeRecordingWaveform(detail)
+        assertEquals(683, encoded.length)
+        assertEquals(null, decodeRecordingWaveform("A".repeat(100_000)))
         val decoded = requireNotNull(decodeRecordingWaveform(encoded))
         assertEquals(RANGE_WAVEFORM_DETAIL_BUCKETS, decoded.size)
         decoded.indices.forEach { index ->

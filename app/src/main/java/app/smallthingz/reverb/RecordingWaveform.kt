@@ -11,6 +11,7 @@ import kotlin.math.abs
 
 
 private const val RECORDING_WAVEFORM_CACHE_VERSION = 1
+private const val RECORDING_WAVEFORM_ENCODED_LENGTH = (RANGE_WAVEFORM_DETAIL_BUCKETS * 4 + 2) / 3
 
 internal fun recordingWaveformRevision(recording: RecordingEntity): String {
     val identity = recording.fileIdentity.takeIf { it.isNotBlank() } ?: return ""
@@ -48,7 +49,7 @@ internal fun encodeRecordingWaveform(values: FloatArray): String {
 }
 
 internal fun decodeRecordingWaveform(data: String): FloatArray? {
-    if (data.isBlank()) return null
+    if (data.length != RECORDING_WAVEFORM_ENCODED_LENGTH) return null
     val bytes = runCatching { Base64.getDecoder().decode(data) }.getOrNull() ?: return null
     if (bytes.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return null
     return FloatArray(bytes.size) { index -> (bytes[index].toInt() and 0xff) / 255f }

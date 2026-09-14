@@ -231,10 +231,16 @@ private class PreservingRecordingDatabaseErrorHandler(
     override fun onCorruption(dbObj: SQLiteDatabase) {
         val databaseFile = context.getDatabasePath(databaseName)
         val recoveryRoot = File(context.noBackupFilesDir, "recording-database-recovery")
+        val closed = runCatching {
+            if (dbObj.isOpen) dbObj.close()
+            !dbObj.isOpen
+        }.getOrDefault(false)
+        if (!closed) {
+            throw SQLiteException("Recording database is corrupt and could not be frozen for preservation")
+        }
         val preserved = preserveCorruptRecordingDatabase(databaseFile, recoveryRoot)
             ?: throw SQLiteException("Recording database is corrupt and could not be preserved")
 
-        runCatching { dbObj.close() }
         val removed = SQLiteDatabase.deleteDatabase(databaseFile)
         if (!removed && recordingDatabaseSidecars(databaseFile).any(File::exists)) {
             throw SQLiteException("Recording database was preserved at ${preserved.name} but could not be reset")
@@ -274,12 +280,17 @@ internal fun preserveCorruptRecordingDatabase(
         forceRecordingDatabaseDirectoryDurable(recoveryRoot)
 
         sources.forEach { source ->
+            val sourceBytes = source.length().takeIf { it >= 0L }
+                ?: throw IOException("Unable to size recording database recovery source")
             val target = File(destination, source.name)
             FileInputStream(source).use { input ->
                 FileOutputStream(target).use { output ->
                     input.copyTo(output)
                     output.fd.sync()
                 }
+            }
+            if (target.length() != sourceBytes) {
+                throw IOException("Incomplete recording database recovery copy: ${source.name}")
             }
         }
         forceRecordingDatabaseDirectoryDurable(destination)

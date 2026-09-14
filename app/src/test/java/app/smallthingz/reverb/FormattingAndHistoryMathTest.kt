@@ -172,10 +172,11 @@ class FormattingAndHistoryMathTest {
             storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
         )
         val revision = recordingWaveformRevision(base)
-        val cached = base.copy(waveformData = "cached", waveformRevision = revision)
+        val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.5f })
+        val cached = base.copy(waveformData = encoded, waveformRevision = revision)
         val observed = base.copy(waveformData = "", waveformRevision = "")
         val preserved = mergeObservedRecording(cached, observed, nowMillis = 40L)
-        assertEquals("cached", preserved.waveformData)
+        assertEquals(encoded, preserved.waveformData)
         assertEquals(revision, preserved.waveformRevision)
 
         val changed = mergeObservedRecording(cached, observed.copy(fileIdentity = "stat:b"), nowMillis = 40L)

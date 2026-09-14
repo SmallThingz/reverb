@@ -43,6 +43,46 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun corruptDatabaseRecovery_preservesMainAndSidecarsWithoutMutatingSources() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "db-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val wal = File(database.path + "-wal").apply { writeBytes(byteArrayOf(5, 6, 7)) }
+            val shm = File(database.path + "-shm").apply { writeBytes(byteArrayOf(8, 9)) }
+            val recoveryRoot = File(root, "recovery")
+
+            val first = requireNotNull(preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
+            assertArrayEquals(database.readBytes(), File(first, database.name).readBytes())
+            assertArrayEquals(wal.readBytes(), File(first, wal.name).readBytes())
+            assertArrayEquals(shm.readBytes(), File(first, shm.name).readBytes())
+            assertTrue(database.isFile)
+            assertTrue(wal.isFile)
+            assertTrue(shm.isFile)
+
+            val second = requireNotNull(preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
+            assertTrue(second.name != first.name)
+            assertArrayEquals(database.readBytes(), File(second, database.name).readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_neverInventsSnapshotWithoutSourceFiles() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "empty-").toFile()
+        try {
+            val database = File(root, "recordings.db")
+            val recoveryRoot = File(root, "recovery")
+            assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
+            assertFalse(recoveryRoot.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun databaseMigration_refusesDowngradeAndUnknownVersions() {
         assertEquals(emptyList<RecordingDatabaseMigrationStep>(), recordingDatabaseMigrationSteps(2, 2))
         assertEquals(
