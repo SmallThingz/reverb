@@ -134,8 +134,9 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun fineTunePuckIsLargeAndSeparatesTapFromDrag() {
-        assertEquals(32f, RANGE_FINE_TUNE_PUCK_RADIUS_DP, 0f)
+    fun fineTunePuckKeepsLargeHitTargetAndSeparatesTapFromDrag() {
+        assertEquals(24f, RANGE_FINE_TUNE_PUCK_RADIUS_DP, 0f)
+        assertEquals(32f, RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP, 0f)
         assertTrue(rangeFineTunePuckContains(100f, 100f, 100f, 100f, 32f))
         assertTrue(rangeFineTunePuckContains(124f, 100f, 100f, 100f, 32f))
         assertFalse(rangeFineTunePuckContains(133f, 100f, 100f, 100f, 32f))

@@ -190,7 +190,8 @@ internal fun adjustRangeEditTarget(
 }
 
 private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
-internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = 32f
+internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = 24f
+internal const val RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP = 32f
 
 internal fun rangeFineTunePuckContains(
     pointerX: Float,
@@ -1540,7 +1541,7 @@ private fun SpringFineAdjust(
                     pointerY = down.position.y,
                     puckX = startPuckX,
                     puckY = startPuckY,
-                    radius = puckRadius,
+                    radius = RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp.toPx(),
                 )
                 var fineAdjustStarted = false
 
@@ -1711,9 +1712,7 @@ private fun SpringFineAdjust(
             }
         }
 
-        Surface(
-            onClick = ::togglePreviewFromPuck,
-            enabled = enabled && state.snapshotReady,
+        Box(
             modifier = Modifier
                 .offset {
                     IntOffset(
@@ -1721,20 +1720,30 @@ private fun SpringFineAdjust(
                         puckOffsetY.roundToInt(),
                     )
                 }
-                .size(puckRadius * 2f),
-            shape = CircleShape,
-            color = colors.onSurface,
-            tonalElevation = if (dragging) 0.dp else 2.dp,
+                .size(RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp * 2f)
+                .clickable(
+                    enabled = enabled && state.snapshotReady,
+                    role = androidx.compose.ui.semantics.Role.Button,
+                    onClick = ::togglePreviewFromPuck,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
-                    contentDescription = stringResource(
-                        if (state.isPlaying) R.string.player_pause else R.string.player_play,
-                    ),
-                    tint = colors.surface,
-                    modifier = Modifier.size(30.dp),
-                )
+            Surface(
+                modifier = Modifier.size(puckRadius * 2f),
+                shape = CircleShape,
+                color = colors.onSurface,
+                tonalElevation = if (dragging) 0.dp else 2.dp,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
+                        contentDescription = stringResource(
+                            if (state.isPlaying) R.string.player_pause else R.string.player_play,
+                        ),
+                        tint = colors.surface,
+                        modifier = Modifier.size(23.dp),
+                    )
+                }
             }
         }
     }

@@ -47,3 +47,4 @@
 - Predictive Back mirrors each surface’s actual reverse navigation: Settings and Library track their vertical panels, range export reverses its blob/timeline morph, nested states reveal their parent, and root Home stays unhandled so Android owns app-to-launcher preview.
 - Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss handler must stay disabled while an expanded inline player owns Back.
 - Cancelled or failed pre-commit outputs use a content-fingerprinted cleanup journal; Library recovery suppresses those exact assets until deletion succeeds, and identity reuse must never authorize deletion of replacement bytes.
+- The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its appearance must not shrink its touch target.
