@@ -49,6 +49,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +82,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlin.math.abs
 import kotlin.math.cosh
 import kotlin.math.pow
@@ -190,6 +193,7 @@ internal fun adjustRangeEditTarget(
 }
 
 private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
+private const val RANGE_FINE_TUNE_STATE_UPDATE_NANOS = 33_333_333L
 internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = 24f
 internal const val RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP = 32f
 
@@ -213,6 +217,27 @@ internal fun rangeFineTuneMovementExceedsSlop(
 ): Boolean {
     val slop = touchSlop.coerceAtLeast(0f)
     return deltaX * deltaX + deltaY * deltaY > slop * slop
+}
+
+private class FineAdjustCommitAccumulator {
+    var deltaSeconds = 0f
+    var elapsedNanos = 0L
+
+    fun reset() {
+        deltaSeconds = 0f
+        elapsedNanos = 0L
+    }
+
+    fun add(deltaSeconds: Float, elapsedNanos: Long) {
+        this.deltaSeconds += deltaSeconds
+        this.elapsedNanos += elapsedNanos
+    }
+
+    fun takeDelta(): Float {
+        val delta = deltaSeconds
+        reset()
+        return delta
+    }
 }
 
 internal fun rangeFineTuneHorizontalTouchPull(
@@ -615,6 +640,8 @@ internal class RangeExportEditorState(
     }
 
     private fun currentEditValues() = RangeEditValues(startSeconds, cursorSeconds, endSeconds)
+
+    fun targetSeconds(target: RangeEditTarget): Float = targetValue(target)
 
     private fun applyEditUpdate(update: RangeEditUpdate) {
         startSeconds = update.values.startSeconds
@@ -1071,7 +1098,7 @@ private fun RangeExportTimeline(
         RangeTimelineBar(
             target = RangeEditTarget.CURSOR,
             state = state,
-            xPx = xFor(state.cursorSeconds),
+            xPx = { xFor(state.cursorSeconds) },
             topPx = timelineTopPx,
             heightPx = timelineHeightPx,
             hitWidthPx = hitWidthPx,
@@ -1083,7 +1110,7 @@ private fun RangeExportTimeline(
         RangeTimelineBar(
             target = RangeEditTarget.START,
             state = state,
-            xPx = xFor(state.startSeconds),
+            xPx = { xFor(state.startSeconds) },
             topPx = timelineTopPx,
             heightPx = timelineHeightPx,
             hitWidthPx = hitWidthPx,
@@ -1095,7 +1122,7 @@ private fun RangeExportTimeline(
         RangeTimelineBar(
             target = RangeEditTarget.END,
             state = state,
-            xPx = xFor(state.endSeconds),
+            xPx = { xFor(state.endSeconds) },
             topPx = timelineTopPx,
             heightPx = timelineHeightPx,
             hitWidthPx = hitWidthPx,
@@ -1107,7 +1134,6 @@ private fun RangeExportTimeline(
 
         TimelineTimeInput(
             target = RangeEditTarget.START,
-            valueSeconds = state.startSeconds,
             active = state.lastTarget == RangeEditTarget.START,
             editorState = state,
             visualAlpha = chromeAlpha,
@@ -1121,7 +1147,6 @@ private fun RangeExportTimeline(
         )
         TimelineTimeInput(
             target = RangeEditTarget.END,
-            valueSeconds = state.endSeconds,
             active = state.lastTarget == RangeEditTarget.END,
             editorState = state,
             visualAlpha = chromeAlpha,
@@ -1135,7 +1160,6 @@ private fun RangeExportTimeline(
         )
         TimelineTimeInput(
             target = RangeEditTarget.CURSOR,
-            valueSeconds = state.cursorSeconds,
             active = state.lastTarget == RangeEditTarget.CURSOR,
             editorState = state,
             visualAlpha = chromeAlpha,
@@ -1175,7 +1199,7 @@ private fun bubbleOffset(xPx: Float, fullWidthPx: Float, bubbleWidthPx: Float): 
 private fun RangeTimelineBar(
     target: RangeEditTarget,
     state: RangeExportEditorState,
-    xPx: Float,
+    xPx: () -> Float,
     topPx: Float,
     heightPx: Float,
     hitWidthPx: Float,
@@ -1274,7 +1298,7 @@ private fun RangeTimelineBar(
         modifier = Modifier
             .offset {
                 IntOffset(
-                    (xPx - hitWidthPx * 0.5f).roundToInt(),
+                    (xPx() - hitWidthPx * 0.5f).roundToInt(),
                     topPx.roundToInt(),
                 )
             }
@@ -1322,7 +1346,6 @@ private fun RangeTimelineBar(
 @Composable
 private fun TimelineTimeInput(
     target: RangeEditTarget,
-    valueSeconds: Float,
     active: Boolean,
     editorState: RangeExportEditorState,
     visualAlpha: Float,
@@ -1332,26 +1355,34 @@ private fun TimelineTimeInput(
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
     val focusManager = LocalFocusManager.current
-    var text by remember { mutableStateOf(formatRangeTimeInput(valueSeconds.toDouble())) }
+    var text by remember(editorState, target) {
+        mutableStateOf(
+            formatRangeTimeInput(
+                Snapshot.withoutReadObservation { editorState.targetSeconds(target) }.toDouble(),
+            ),
+        )
+    }
     var wasFocused by remember { mutableStateOf(false) }
     val editGeneration = editorState.textEditGeneration
     var focusGeneration by remember { mutableLongStateOf(editGeneration) }
     var invalid by remember { mutableStateOf(false) }
 
-    LaunchedEffect(valueSeconds) {
-        val formatted = formatRangeTimeInput(valueSeconds.toDouble())
-        if (focused && editGeneration == focusGeneration) {
-            // Programmatic motion owns the target once its underlying position changes.
-            editorState.invalidateTextEditing()
-            text = formatted
-            focusManager.clearFocus(force = true)
-        } else if (!focused) {
-            text = formatted
+    LaunchedEffect(editorState, target, focused, focusGeneration) {
+        snapshotFlow { editorState.targetSeconds(target) }.collect { valueSeconds ->
+            val formatted = formatRangeTimeInput(valueSeconds.toDouble())
+            if (focused && editorState.textEditGeneration == focusGeneration) {
+                // Programmatic motion owns the target once its underlying position changes.
+                editorState.invalidateTextEditing()
+                if (text != formatted) text = formatted
+                focusManager.clearFocus(force = true)
+            } else if (!focused && text != formatted) {
+                text = formatted
+            }
         }
     }
     LaunchedEffect(editGeneration) {
         if (editGeneration != focusGeneration) {
-            text = formatRangeTimeInput(valueSeconds.toDouble())
+            text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble())
             if (focused) focusManager.clearFocus(force = true)
         }
     }
@@ -1429,7 +1460,7 @@ private fun TimelineTimeInput(
                         } else if (!focusState.isFocused && wasFocused) {
                             wasFocused = false
                             if (focusGeneration != editorState.textEditGeneration) {
-                                text = formatRangeTimeInput(valueSeconds.toDouble())
+                                text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble())
                             }
                         }
                     },
@@ -1451,10 +1482,7 @@ private fun SpringFineAdjust(
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
-    var dragStartRawVertical by remember { mutableFloatStateOf(0f) }
-    var lastFrameNanos by remember { mutableLongStateOf(0L) }
-
-    val constrainedY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+    val commitAccumulator = remember { FineAdjustCommitAccumulator() }
 
     fun togglePreviewFromPuck() {
         val accepted = state.commitActiveTextEditing()
@@ -1501,23 +1529,31 @@ private fun SpringFineAdjust(
 
     LaunchedEffect(dragging) {
         if (!dragging) return@LaunchedEffect
-        lastFrameNanos = 0L
+        var lastFrameNanos = 0L
+        commitAccumulator.reset()
         while (dragging) {
             withFrameNanos { frameNanos ->
                 val previous = lastFrameNanos
                 lastFrameNanos = frameNanos
                 if (previous == 0L) return@withFrameNanos
-                val dtSeconds =
-                    ((frameNanos - previous).coerceAtMost(50_000_000L)) / 1_000_000_000f
-                val liveY = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
-                val deltaSeconds = rangeFineTuneDeltaSeconds(
-                    horizontalPull = rangeFineTuneSeekPull(horizontalPull),
-                    verticalPull = liveY,
-                    durationSeconds = state.durationSeconds,
-                    dtSeconds = dtSeconds,
+                val elapsedNanos = (frameNanos - previous).coerceAtMost(50_000_000L)
+                val dtSeconds = elapsedNanos / 1_000_000_000f
+                val liveHorizontalPull = horizontalPull
+                val liveY = rangeFineTuneConstrainedY(rawVerticalPull, liveHorizontalPull)
+                commitAccumulator.add(
+                    deltaSeconds = rangeFineTuneDeltaSeconds(
+                        horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
+                        verticalPull = liveY,
+                        durationSeconds = state.durationSeconds,
+                        dtSeconds = dtSeconds,
+                    ),
+                    elapsedNanos = elapsedNanos,
                 )
-                if (deltaSeconds != 0f) {
-                    state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
+                if (commitAccumulator.elapsedNanos >= RANGE_FINE_TUNE_STATE_UPDATE_NANOS) {
+                    val deltaSeconds = commitAccumulator.takeDelta()
+                    if (deltaSeconds != 0f) {
+                        state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
+                    }
                 }
             }
         }
@@ -1535,7 +1571,8 @@ private fun SpringFineAdjust(
                     .coerceAtLeast(1f)
                 val verticalInputTravel = visualVerticalTravel * 2.35f
                 val startPuckX = size.width * 0.5f + horizontalPull * visualHorizontalTravel
-                val startPuckY = size.height * 0.5f + constrainedY * visualVerticalTravel
+                val startPuckY = size.height * 0.5f +
+                    rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull) * visualVerticalTravel
                 val startedOnPuck = rangeFineTunePuckContains(
                     pointerX = down.position.x,
                     pointerY = down.position.y,
@@ -1544,6 +1581,7 @@ private fun SpringFineAdjust(
                     radius = RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp.toPx(),
                 )
                 var fineAdjustStarted = false
+                var dragStartRawVertical = rawVerticalPull
 
                 fun startFineAdjust(pointerX: Float) {
                     if (fineAdjustStarted) return
@@ -1596,6 +1634,10 @@ private fun SpringFineAdjust(
                     }
                 } finally {
                     if (fineAdjustStarted) {
+                        val finalDeltaSeconds = commitAccumulator.takeDelta()
+                        if (finalDeltaSeconds != 0f) {
+                            state.fineAdjust(finalDeltaSeconds, snapThresholdSeconds = 0.04f)
+                        }
                         dragging = false
                         state.endFineAdjust()
                     }
@@ -1618,10 +1660,15 @@ private fun SpringFineAdjust(
         val verticalTravelPx = with(density) {
             (maxHeight * 0.5f - edgePadding - puckRadius).coerceAtLeast(1.dp).toPx()
         }
-        val puckOffsetX = horizontalPull * horizontalTravelPx
-        val puckOffsetY = constrainedY * verticalTravelPx
+        val fieldPath = remember { Path() }
 
         Canvas(Modifier.fillMaxSize()) {
+            // Keep high-frequency pointer state in draw/layout phases. Reading these values in
+            // composition made every pointer move recompose the whole spring control.
+            val liveHorizontalPull = horizontalPull
+            val liveConstrainedY = rangeFineTuneConstrainedY(rawVerticalPull, liveHorizontalPull)
+            val puckOffsetX = liveHorizontalPull * horizontalTravelPx
+            val puckOffsetY = liveConstrainedY * verticalTravelPx
             val center = Offset(size.width * 0.5f, size.height * 0.5f)
             val edgePaddingPx = edgePadding.toPx()
             val puckRadiusPx = puckRadius.toPx()
@@ -1636,7 +1683,8 @@ private fun SpringFineAdjust(
             val topY = puck.y - puckRadiusPx
             val bottomY = puck.y + puckRadiusPx
 
-            val field = Path().apply {
+            fieldPath.reset()
+            fieldPath.apply {
                 moveTo(leftTipX, center.y)
                 cubicTo(
                     leftTipX + leftSpan * 0.30f,
@@ -1673,16 +1721,16 @@ private fun SpringFineAdjust(
                 close()
             }
 
-            val horizontalPower = abs(horizontalPull).pow(0.72f)
-            val yMagnitude = (abs(constrainedY) / 0.72f).coerceIn(0f, 1f)
+            val horizontalPower = abs(liveHorizontalPull).pow(0.72f)
+            val yMagnitude = (abs(liveConstrainedY) / 0.72f).coerceIn(0f, 1f)
             val fieldColor = when {
-                constrainedY < 0f -> lerp(colors.primary, colors.tertiary, yMagnitude)
-                constrainedY > 0f -> lerp(colors.primary, colors.secondary, yMagnitude)
+                liveConstrainedY < 0f -> lerp(colors.primary, colors.tertiary, yMagnitude)
+                liveConstrainedY > 0f -> lerp(colors.primary, colors.secondary, yMagnitude)
                 else -> colors.primary
             }
             val fieldAlpha = 0.12f + 0.13f * horizontalPower + 0.06f * yMagnitude
             drawPath(
-                path = field,
+                path = fieldPath,
                 brush = Brush.horizontalGradient(
                     colors = listOf(
                         fieldColor.copy(alpha = 0.018f),
@@ -1694,7 +1742,7 @@ private fun SpringFineAdjust(
                 ),
             )
             drawPath(
-                path = field,
+                path = fieldPath,
                 color = fieldColor.copy(alpha = 0.035f + 0.045f * yMagnitude),
             )
 
@@ -1712,16 +1760,26 @@ private fun SpringFineAdjust(
             }
         }
 
+        val puckInteractionSource = remember { MutableInteractionSource() }
         Box(
             modifier = Modifier
                 .offset {
+                    // Lambda offset defers state reads to layout, so pointer tracking does not
+                    // recompose the spring/timeline hierarchy.
+                    val liveHorizontalPull = horizontalPull
+                    val liveConstrainedY = rangeFineTuneConstrainedY(
+                        rawVerticalPull,
+                        liveHorizontalPull,
+                    )
                     IntOffset(
-                        puckOffsetX.roundToInt(),
-                        puckOffsetY.roundToInt(),
+                        (liveHorizontalPull * horizontalTravelPx).roundToInt(),
+                        (liveConstrainedY * verticalTravelPx).roundToInt(),
                     )
                 }
                 .size(RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp * 2f)
                 .clickable(
+                    interactionSource = puckInteractionSource,
+                    indication = null,
                     enabled = enabled && state.snapshotReady,
                     role = androidx.compose.ui.semantics.Role.Button,
                     onClick = ::togglePreviewFromPuck,

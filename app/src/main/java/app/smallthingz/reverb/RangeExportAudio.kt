@@ -8,6 +8,8 @@ import android.os.Looper
 import android.os.SystemClock
 import java.io.Closeable
 import java.io.IOException
+import java.util.WeakHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -88,7 +90,14 @@ internal class TimelineAudioPreviewController : Closeable {
     ) { runnable ->
         Thread(runnable, "Reverb-range-preview").apply { isDaemon = true }
     }
+    // AudioTrack stop/flush/release can block in AudioFlinger. Scrub gestures used to run
+    // this teardown on the caller (Compose main) thread every audition, which made the puck
+    // visibly hitch. A separate worker can interrupt the preview stream without blocking UI.
+    private val releaseExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Reverb-range-preview-release").apply { isDaemon = true }
+    }
     private val trackLock = Any()
+    private val releasedTracks = WeakHashMap<AudioTrack, Boolean>()
 
     @Volatile
     private var activeTrack: AudioTrack? = null
@@ -155,6 +164,7 @@ internal class TimelineAudioPreviewController : Closeable {
         closed = true
         cancelCurrent()
         executor.shutdownNow()
+        releaseExecutor.shutdown()
     }
 
     private fun enqueueLatest(block: () -> Unit) {
@@ -168,7 +178,15 @@ internal class TimelineAudioPreviewController : Closeable {
         val track = synchronized(trackLock) {
             activeTrack.also { activeTrack = null }
         }
-        if (track != null) releaseTrack(track)
+        if (track != null) {
+            if (!releaseExecutor.isShutdown) {
+                releaseExecutor.execute { releaseTrackOnce(track) }
+            } else {
+                // close() calls cancelCurrent() before shutting this executor down, so this is
+                // only a defensive fallback for an unexpected late cancellation.
+                releaseTrackOnce(track)
+            }
+        }
     }
 
     private fun stream(
@@ -255,7 +273,7 @@ internal class TimelineAudioPreviewController : Closeable {
                 synchronized(trackLock) {
                     if (activeTrack === track) activeTrack = null
                 }
-                releaseTrack(track)
+                releaseTrackOnce(track)
             }
         }
     }
@@ -286,7 +304,10 @@ internal class TimelineAudioPreviewController : Closeable {
             .also { it.setVolume(volume.coerceIn(0f, 1f)) }
     }
 
-    private fun releaseTrack(track: AudioTrack) {
+    private fun releaseTrackOnce(track: AudioTrack) {
+        synchronized(releasedTracks) {
+            if (releasedTracks.put(track, true) != null) return
+        }
         runCatching { track.pause() }
         runCatching { track.flush() }
         runCatching { track.stop() }
