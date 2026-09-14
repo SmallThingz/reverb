@@ -519,7 +519,7 @@ internal fun RecordingInlinePlayer(
                 startFraction = selectionStartFraction,
                 endFraction = selectionEndFraction,
                 loading = waveformLoading,
-                morphProgress = waveformMorph,
+                morphProgress = { waveformMorph },
                 modifier = Modifier.fillMaxSize(),
             )
             Canvas(Modifier.fillMaxSize()) {

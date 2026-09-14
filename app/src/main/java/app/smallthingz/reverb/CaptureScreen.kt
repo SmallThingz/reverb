@@ -66,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.toArgb
@@ -78,6 +79,8 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -210,6 +213,8 @@ fun CaptureScreen(
     var serviceConnectionGeneration by remember { mutableLongStateOf(0L) }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
+    // Sampled only when range export opens; visualization updates must not recompose CaptureScreen.
+    val latestBlobActivity = remember { FloatArray(2) }
 
     var pendingClearBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
     var showExportClampDialog by remember { mutableStateOf(false) }
@@ -348,8 +353,14 @@ fun CaptureScreen(
     val visualizationCallback = remember {
         ReverbService.VisualizationCallback { frame ->
             when (activeBufferState.value) {
-                ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController.submit(frame)
-                ReverbService.BufferSlot.LOOPING -> loopingBlobController.submit(frame)
+                ReverbService.BufferSlot.ONE_SHOT -> {
+                    latestBlobActivity[0] = frame.activity.coerceIn(0f, 1f)
+                    oneShotBlobController.submit(frame)
+                }
+                ReverbService.BufferSlot.LOOPING -> {
+                    latestBlobActivity[1] = frame.activity.coerceIn(0f, 1f)
+                    loopingBlobController.submit(frame)
+                }
                 null -> Unit
             }
         }
@@ -364,9 +375,16 @@ fun CaptureScreen(
 
     LaunchedEffect(activeBuffer) {
         when (activeBuffer) {
-            ReverbService.BufferSlot.ONE_SHOT -> loopingBlobController.clear()
-            ReverbService.BufferSlot.LOOPING -> oneShotBlobController.clear()
+            ReverbService.BufferSlot.ONE_SHOT -> {
+                latestBlobActivity[1] = 0f
+                loopingBlobController.clear()
+            }
+            ReverbService.BufferSlot.LOOPING -> {
+                latestBlobActivity[0] = 0f
+                oneShotBlobController.clear()
+            }
             null -> {
+                latestBlobActivity.fill(0f)
                 oneShotBlobController.clear()
                 loopingBlobController.clear()
             }
@@ -765,6 +783,8 @@ fun CaptureScreen(
             service = service,
             oneShotBlobController = oneShotBlobController,
             loopingBlobController = loopingBlobController,
+            oneShotBlobActivity = latestBlobActivity[0],
+            loopingBlobActivity = latestBlobActivity[1],
             rangeSnapshot = rangeSnapshot,
             rangeSnapshotBuffer = rangeSnapshotBuffer,
             rangeMaxExportDurationSeconds = rangeMaxDurationSeconds,
@@ -949,6 +969,8 @@ private fun MainCaptureContent(
     service: ReverbService?,
     oneShotBlobController: AudioBlobController,
     loopingBlobController: AudioBlobController,
+    oneShotBlobActivity: Float,
+    loopingBlobActivity: Float,
     rangeSnapshot: ReverbService.TimelineSnapshot?,
     rangeSnapshotBuffer: ReverbService.BufferSlot?,
     rangeMaxExportDurationSeconds: Float,
@@ -965,6 +987,11 @@ private fun MainCaptureContent(
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
 ) {
+    // Measured from the actual composed home layout. These plain holders intentionally do not
+    // trigger recomposition; opening range export samples the last committed layout geometry.
+    val homeRootBoundsInRoot = remember { arrayOfNulls<Rect>(1) }
+    val homeBlobBoundsInRoot = remember { arrayOfNulls<Rect>(1) }
+
     val rangeBuffer = rangeSnapshotBuffer
     if (rangeBuffer != null) {
         val activeRangeSnapshot = rangeSnapshot
@@ -980,6 +1007,17 @@ private fun MainCaptureContent(
             ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobController
             ReverbService.BufferSlot.LOOPING -> loopingBlobController
         }
+        val rangeBlobActivity = when (rangeBuffer) {
+            ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobActivity
+            ReverbService.BufferSlot.LOOPING -> loopingBlobActivity
+        }
+        val sourceGeometry = rangeMorphSourceGeometry(
+            rootBoundsInRoot = homeRootBoundsInRoot[0],
+            blobBoundsInRoot = homeBlobBoundsInRoot[0],
+            active = isListening && activeBuffer == rangeBuffer,
+            enabled = rangeEnabled,
+            activity = rangeBlobActivity,
+        )
         RangeExportHomeContent(
             snapshot = activeRangeSnapshot,
             initialDurationSeconds = rangeMetrics.seconds.coerceAtLeast(0.05f),
@@ -988,6 +1026,7 @@ private fun MainCaptureContent(
             blobMetrics = rangeMetrics,
             blobEnabled = rangeEnabled,
             blobController = rangeBlobController,
+            sourceGeometry = sourceGeometry,
             isListening = isListening,
             isSaving = isSaving,
             service = service,
@@ -1097,7 +1136,10 @@ private fun MainCaptureContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 18.dp)
+            .onGloballyPositioned { coordinates ->
+                homeRootBoundsInRoot[0] = coordinates.boundsInRoot()
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -1176,6 +1218,7 @@ private fun MainCaptureContent(
                 onListenToggle = { onListenToggle(renderedBuffer) },
                 onOpenBufferSettings = { onOpenBufferSettings(renderedBuffer) },
                 visualizerVisible = visualizerVisible,
+                onBlobBoundsInRoot = { bounds -> homeBlobBoundsInRoot[0] = bounds },
             )
         }
 
@@ -1506,6 +1549,7 @@ internal fun BufferBlobPage(
     modifier: Modifier = Modifier,
     interactionEnabled: Boolean = true,
     contentAlpha: Float = 1f,
+    onBlobBoundsInRoot: ((Rect) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -1567,7 +1611,17 @@ internal fun BufferBlobPage(
             flipPivotX = flipPivotX,
             flipDepthScale = flipDepthScale,
             contentAlpha = contentAlpha,
-            modifier = Modifier.size(blobSize),
+            modifier = Modifier
+                .size(blobSize)
+                .then(
+                    if (onBlobBoundsInRoot != null) {
+                        Modifier.onGloballyPositioned { coordinates ->
+                            onBlobBoundsInRoot(coordinates.boundsInRoot())
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
             onClick = if (disabled) onOpenBufferSettings else onListenToggle,
 
         )

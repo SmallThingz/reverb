@@ -57,12 +57,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
@@ -83,6 +86,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 import kotlin.math.cosh
 import kotlin.math.pow
@@ -108,18 +112,70 @@ internal const val RANGE_SNAP_STATIONARY_MILLIS = 90L
 internal const val RANGE_SNAP_RELEASE_MULTIPLIER = 1.35f
 internal const val RANGE_SNAP_POINTER_JITTER_FRACTION = 0.08f
 internal const val RANGE_BLOB_MORPH_HANDOFF_PROGRESS = 0.07f
-private const val RANGE_BLOB_VISUAL_DIAMETER_FRACTION = 0.43f
-private const val RANGE_BLOB_ENVELOPE_HEIGHT_FRACTION = 0.95f
+
+// These are the exact base-radius terms used by AudioBlobView's shader/fallback renderer:
+// baseRadius = 0.095 + life * (0.235 + activity * 0.018).
+private const val AUDIO_BLOB_BASE_RADIUS_FRACTION = 0.095f
+private const val AUDIO_BLOB_LIFE_RADIUS_FRACTION = 0.235f
+private const val AUDIO_BLOB_ACTIVITY_RADIUS_FRACTION = 0.018f
+private const val AUDIO_BLOB_COLLAPSED_LIFE = 0.38f
+private const val AUDIO_BLOB_DISABLED_LIFE = 0.36f
+
+internal data class RangeMorphSourceGeometry(
+    val rootLeftInRootPx: Float,
+    val rootTopInRootPx: Float,
+    val centerXInRootPx: Float,
+    val centerYInRootPx: Float,
+    val bodyDiameterPx: Float,
+) {
+    val centerXInLocalPx: Float get() = centerXInRootPx - rootLeftInRootPx
+    val centerYInLocalPx: Float get() = centerYInRootPx - rootTopInRootPx
+}
+
+internal fun rangeBlobBaseRadiusFraction(
+    active: Boolean,
+    enabled: Boolean,
+    activity: Float,
+): Float {
+    val life = when {
+        !enabled -> AUDIO_BLOB_DISABLED_LIFE
+        active -> 1f
+        else -> AUDIO_BLOB_COLLAPSED_LIFE
+    }
+    val liveActivity = if (active) activity.coerceIn(0f, 1f) else 0f
+    return AUDIO_BLOB_BASE_RADIUS_FRACTION +
+        life * (AUDIO_BLOB_LIFE_RADIUS_FRACTION + liveActivity * AUDIO_BLOB_ACTIVITY_RADIUS_FRACTION)
+}
+
+internal fun rangeMorphSourceGeometry(
+    rootBoundsInRoot: Rect?,
+    blobBoundsInRoot: Rect?,
+    active: Boolean,
+    enabled: Boolean,
+    activity: Float,
+): RangeMorphSourceGeometry? {
+    val root = rootBoundsInRoot ?: return null
+    val blob = blobBoundsInRoot ?: return null
+    val viewSize = minOf(blob.width, blob.height)
+    if (viewSize <= 0f || root.width <= 0f || root.height <= 0f) return null
+    val bodyDiameter = viewSize * 2f * rangeBlobBaseRadiusFraction(active, enabled, activity)
+    return RangeMorphSourceGeometry(
+        rootLeftInRootPx = root.left,
+        rootTopInRootPx = root.top,
+        centerXInRootPx = blob.center.x,
+        centerYInRootPx = blob.center.y,
+        bodyDiameterPx = bodyDiameter,
+    )
+}
 
 internal fun rangeBlobMorphStartScaleX(blobDiameterPx: Float, timelineWidthPx: Float): Float =
     (blobDiameterPx / timelineWidthPx.coerceAtLeast(1f)).coerceAtLeast(0f)
 
 internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: Float): Float =
-    (blobDiameterPx / (timelineHeightPx.coerceAtLeast(1f) * RANGE_BLOB_ENVELOPE_HEIGHT_FRACTION))
-        .coerceAtLeast(0f)
+    (blobDiameterPx / timelineHeightPx.coerceAtLeast(1f)).coerceAtLeast(0f)
 
-internal fun rangeBlobMorphTranslationY(progress: Float, startOffsetPx: Float): Float =
-    startOffsetPx * (1f - progress.coerceIn(0f, 1f))
+internal fun rangeBlobMorphTranslation(progress: Float, sourceCenterPx: Float, targetCenterPx: Float): Float =
+    (sourceCenterPx - targetCenterPx) * (1f - progress.coerceIn(0f, 1f))
 
 internal fun rangeSnapReleaseThreshold(snapThresholdSeconds: Float): Float =
     snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_RELEASE_MULTIPLIER
@@ -462,6 +518,9 @@ internal class RangeExportEditorState(
                 if (snapshot.values.size != detailWaveform.size) return
                 detailWaveform = snapshot.values
                 detailWaveformBuiltCount = snapshot.builtCount.coerceIn(0, detailWaveform.size)
+            }
+        }
+    }
             }
         }
     }
@@ -867,6 +926,7 @@ internal fun RangeExportHomeContent(
     blobMetrics: BufferMetrics,
     blobEnabled: Boolean,
     blobController: AudioBlobController,
+    sourceGeometry: RangeMorphSourceGeometry?,
     isListening: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
@@ -883,7 +943,9 @@ internal fun RangeExportHomeContent(
     val state = remember(selectedBuffer) { RangeExportEditorState(initialDurationSeconds) }
     val colors = MaterialTheme.colorScheme
     var transitionStarted by remember(selectedBuffer) { mutableStateOf(false) }
-    val transitionProgress by animateFloatAsState(
+    var interactionReady by remember(selectedBuffer) { mutableStateOf(false) }
+    var waveformTargetBoundsInRoot by remember(selectedBuffer) { mutableStateOf<Rect?>(null) }
+    val transitionProgress = animateFloatAsState(
         targetValue = if (transitionStarted) 1f else 0f,
         animationSpec = tween(
             durationMillis = 760,
@@ -891,11 +953,28 @@ internal fun RangeExportHomeContent(
         ),
         label = "blobToRangeTimeline",
     )
+    val predictiveOpenProgress = predictiveBackOpenProgress(backProgress)
+    val visualProgress = remember(transitionProgress, predictiveOpenProgress) {
+        { transitionProgress.value * predictiveOpenProgress }
+    }
+    val morphProgress = remember(visualProgress) {
+        {
+            ((visualProgress() - RANGE_BLOB_MORPH_HANDOFF_PROGRESS) /
+                (1f - RANGE_BLOB_MORPH_HANDOFF_PROGRESS)).coerceIn(0f, 1f)
+        }
+    }
+    val chromeAlpha = remember(visualProgress) {
+        { ((visualProgress() - 0.46f) / 0.42f).coerceIn(0f, 1f) }
+    }
 
-    val visualTransitionProgress = transitionProgress * predictiveBackOpenProgress(backProgress)
-    val rangeChromeFade = ((visualTransitionProgress - 0.46f) / 0.42f).coerceIn(0f, 1f)
-
-    LaunchedEffect(selectedBuffer) { transitionStarted = true }
+    LaunchedEffect(selectedBuffer, sourceGeometry, waveformTargetBoundsInRoot) {
+        if (sourceGeometry == null || waveformTargetBoundsInRoot == null || transitionStarted) {
+            return@LaunchedEffect
+        }
+        transitionStarted = true
+        snapshotFlow { transitionProgress.value }.first { it >= 0.98f }
+        interactionReady = true
+    }
     LaunchedEffect(backProgress > 0f) {
         if (backProgress > 0f) {
             state.invalidateTextEditing()
@@ -909,6 +988,10 @@ internal fun RangeExportHomeContent(
         val readySnapshot = snapshot ?: return@LaunchedEffect
         state.attachSnapshot(readySnapshot)
         state.resetWaveformConstruction()
+        // Keep disk sampling and Compose publication out of the geometry-morph critical path.
+        // The light zero-pass body already gives immediate visual feedback; once the morph has
+        // essentially settled, resolve real audio into it left-to-right as before.
+        snapshotFlow { transitionProgress.value }.first { it >= 0.96f }
 
         suspend fun constructPass(pass: RangeWaveformPass) {
             val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
@@ -948,10 +1031,11 @@ internal fun RangeExportHomeContent(
         }
     }
 
-    Column(
-        modifier = modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
@@ -959,54 +1043,8 @@ internal fun RangeExportHomeContent(
             contentAlignment = Alignment.Center,
         ) {
             val compact = maxHeight < 390.dp
-            val density = LocalDensity.current
-            val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
-            // AudioBlobView's live body is roughly two thirds of its square view. The live view
-            // owns only the initial frame; the same-sized waveform-material path then takes over
-            // and continuously widens/flattens into the final timeline geometry.
-            val blobVisualDiameter = blobSize * RANGE_BLOB_VISUAL_DIAMETER_FRACTION
-            val chromeFade = rangeChromeFade
-            val morphGeometryProgress = ((
-                visualTransitionProgress - RANGE_BLOB_MORPH_HANDOFF_PROGRESS
-            ) / (1f - RANGE_BLOB_MORPH_HANDOFF_PROGRESS)).coerceIn(0f, 1f)
-            val timelineBodyWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
-            val timelineBodyHeight = 146.dp
-            val blobDiameterPx = with(density) { blobVisualDiameter.toPx() }
-            val timelineWidthPx = with(density) { timelineBodyWidth.toPx() }
-            val timelineHeightPx = with(density) { timelineBodyHeight.toPx() }
-            val startTimelineScaleX = rangeBlobMorphStartScaleX(blobDiameterPx, timelineWidthPx)
-            val startTimelineScaleY = rangeBlobMorphStartScaleY(blobDiameterPx, timelineHeightPx)
-            val timelineScaleX = startTimelineScaleX +
-                (1f - startTimelineScaleX) * morphGeometryProgress
-            val timelineScaleY = startTimelineScaleY +
-                (1f - startTimelineScaleY) * morphGeometryProgress
-            val morphStartColor = when {
-                isListening && activeBuffer == selectedBuffer -> colors.primary
-                selectedBuffer == ReverbService.BufferSlot.ONE_SHOT && oneShotFull -> colors.primaryContainer
-                else -> colors.surfaceContainerHighest
-            }
-            if (visualTransitionProgress <= RANGE_BLOB_MORPH_HANDOFF_PROGRESS) {
-                BufferBlobPage(
-                    bufferSlot = selectedBuffer,
-                    activeBuffer = activeBuffer,
-                    metrics = blobMetrics,
-                    bufferEnabled = blobEnabled,
-                    oneShotFull = oneShotFull,
-                    isListening = isListening,
-                    isSaving = isSaving,
-                    service = service,
-                    blobController = blobController,
-                    flipDegrees = 0f,
-                    onListenToggle = {},
-                    onOpenBufferSettings = {},
-                    visualizerVisible = visualizerVisible,
-                    interactionEnabled = false,
-                    contentAlpha = (1f -
-                        visualTransitionProgress / RANGE_BLOB_MORPH_HANDOFF_PROGRESS
-                    ).coerceIn(0f, 1f),
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            // Zero-pass range material is the same light primary material as the final timeline.
+            val morphStartColor = colors.primary
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1015,7 +1053,7 @@ internal fun RangeExportHomeContent(
                 if (!compact) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.alpha(chromeFade),
+                        modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
                     ) {
                         Text(
                             text = formatRangeTimeInput(state.selectionDurationSeconds.toDouble()),
@@ -1036,34 +1074,28 @@ internal fun RangeExportHomeContent(
                 }
                 RangeExportTimeline(
                     state = state,
-                    morphProgress = morphGeometryProgress,
+                    morphProgress = morphProgress,
                     morphStartColor = morphStartColor,
-                    chromeAlpha = chromeFade,
+                    chromeAlpha = chromeAlpha,
+                    interactionEnabled = interactionReady && backProgress <= 0f,
+                    sourceGeometry = sourceGeometry,
+                    transitionStarted = transitionStarted,
+                    targetBoundsInRoot = waveformTargetBoundsInRoot,
+                    onTargetBoundsInRoot = { bounds ->
+                        if (waveformTargetBoundsInRoot != bounds) waveformTargetBoundsInRoot = bounds
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (compact) 232.dp else 250.dp)
-                        .graphicsLayer {
-                            // Binary renderer hand-off, not a crossfade. At the first non-zero
-                            // morph frame this path already occupies the blob's body geometry.
-                            alpha = if (
-                                visualTransitionProgress <= RANGE_BLOB_MORPH_HANDOFF_PROGRESS
-                            ) 0f else 1f
-                            scaleX = timelineScaleX
-                            scaleY = timelineScaleY
-                            translationY = rangeBlobMorphTranslationY(
-                                morphGeometryProgress,
-                                with(density) { 58.dp.toPx() },
-                            )
-                        },
+                        .height(if (compact) 232.dp else 250.dp),
                 )
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
                 SpringFineAdjust(
                     state = state,
-                    enabled = visualTransitionProgress >= 0.98f,
+                    enabled = interactionReady && backProgress <= 0f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(if (compact) 120.dp else 132.dp)
-                        .alpha(chromeFade),
+                        .graphicsLayer { alpha = chromeAlpha() },
                 )
                 if (state.selectionDurationSeconds > maxExportDurationSeconds) {
                     Text(
@@ -1080,7 +1112,7 @@ internal fun RangeExportHomeContent(
         }
 
         RangeExportControls(
-            modifier = Modifier.alpha(rangeChromeFade),
+            modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
             state = state,
             selectedBuffer = selectedBuffer,
             activeBuffer = activeBuffer,
@@ -1091,16 +1123,36 @@ internal fun RangeExportHomeContent(
             onCancel = onCancel,
             onExport = { onExport(state.startSeconds, state.endSeconds) },
         )
-        Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(18.dp))
+        }
+
+        // Before the target waveform has reported its final bounds, keep an exact canonical
+        // source circle on screen. It uses the measured home center/diameter, so there is no
+        // blank/dark frame while the final layout is being measured.
+        val source = sourceGeometry
+        if (!transitionStarted && source != null) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawCircle(
+                    color = colors.primary,
+                    radius = source.bodyDiameterPx * 0.5f,
+                    center = Offset(source.centerXInLocalPx, source.centerYInLocalPx),
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun RangeExportTimeline(
     state: RangeExportEditorState,
-    morphProgress: Float,
+    morphProgress: () -> Float,
     morphStartColor: androidx.compose.ui.graphics.Color? = null,
-    chromeAlpha: Float,
+    chromeAlpha: () -> Float,
+    interactionEnabled: Boolean,
+    sourceGeometry: RangeMorphSourceGeometry?,
+    transitionStarted: Boolean,
+    targetBoundsInRoot: Rect?,
+    onTargetBoundsInRoot: (Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
@@ -1133,10 +1185,10 @@ private fun RangeExportTimeline(
                 .padding(horizontal = horizontalInset)
                 .fillMaxWidth()
                 .height(timelineHeight)
-                .pointerInput(state.durationSeconds, timelineWidthPx, chromeAlpha) {
+                .pointerInput(state.durationSeconds, timelineWidthPx, interactionEnabled) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (chromeAlpha < 0.90f) return@awaitEachGesture
+                        if (!interactionEnabled) return@awaitEachGesture
                         state.invalidateTextEditing()
                         focusManager.clearFocus(force = true)
                         state.beginCursorScrub()
@@ -1164,23 +1216,67 @@ private fun RangeExportTimeline(
                     }
                 },
         ) {
-            ProgressiveWaveformCanvas(
-                coarseWaveform = state.coarseWaveform,
-                coarseBuiltCount = state.coarseWaveformBuiltCount,
-                detailWaveform = state.detailWaveform,
-                detailBuiltCount = state.detailWaveformBuiltCount,
-                waveformPass = state.waveformPass,
-                startFraction = state.startSeconds / state.durationSeconds,
-                endFraction = state.endSeconds / state.durationSeconds,
-                loading = state.waveformLoading,
-                morphProgress = morphProgress,
-                morphStartColor = morphStartColor,
-                modifier = Modifier.fillMaxSize(),
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned { coordinates ->
+                        onTargetBoundsInRoot(coordinates.boundsInRoot())
+                    },
+            ) {
+                ProgressiveWaveformCanvas(
+                    coarseWaveform = state.coarseWaveform,
+                    coarseBuiltCount = state.coarseWaveformBuiltCount,
+                    detailWaveform = state.detailWaveform,
+                    detailBuiltCount = state.detailWaveformBuiltCount,
+                    waveformPass = state.waveformPass,
+                    startFraction = state.startSeconds / state.durationSeconds,
+                    endFraction = state.endSeconds / state.durationSeconds,
+                    loading = state.waveformLoading,
+                    morphProgress = morphProgress,
+                    morphStartColor = morphStartColor,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            val source = sourceGeometry
+                            val target = targetBoundsInRoot
+                            if (!transitionStarted || source == null || target == null) {
+                                alpha = 0f
+                            } else {
+                                val morph = morphProgress()
+                                val startScaleX = rangeBlobMorphStartScaleX(
+                                    source.bodyDiameterPx,
+                                    target.width,
+                                )
+                                val startScaleY = rangeBlobMorphStartScaleY(
+                                    source.bodyDiameterPx,
+                                    target.height,
+                                )
+                                alpha = 1f
+                                scaleX = startScaleX + (1f - startScaleX) * morph
+                                scaleY = startScaleY + (1f - startScaleY) * morph
+                                translationX = rangeBlobMorphTranslation(
+                                    morph,
+                                    source.centerXInRootPx,
+                                    target.center.x,
+                                )
+                                translationY = rangeBlobMorphTranslation(
+                                    morph,
+                                    source.centerYInRootPx,
+                                    target.center.y,
+                                )
+                            }
+                        },
+                )
+            }
         }
 
-        // Draw the cursor first. When it snaps onto an endpoint, the endpoint's center grip
-        // stays on top while the rest of the cursor line remains directly draggable.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = chromeAlpha() },
+        ) {
+            // Draw the cursor first. When it snaps onto an endpoint, the endpoint's center grip
+            // stays on top while the rest of the cursor line remains directly draggable.
         RangeTimelineBar(
             target = RangeEditTarget.CURSOR,
             state = state,
@@ -1190,7 +1286,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
         RangeTimelineBar(
@@ -1202,7 +1298,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
         RangeTimelineBar(
@@ -1214,7 +1310,7 @@ private fun RangeExportTimeline(
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
             snapThresholdSeconds = snapThreshold,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
 
@@ -1222,7 +1318,7 @@ private fun RangeExportTimeline(
             target = RangeEditTarget.START,
             active = state.lastTarget == RangeEditTarget.START,
             editorState = state,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.startSeconds), fullWidthPx, bubbleWidthPx),
@@ -1235,7 +1331,7 @@ private fun RangeExportTimeline(
             target = RangeEditTarget.END,
             active = state.lastTarget == RangeEditTarget.END,
             editorState = state,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.endSeconds), fullWidthPx, bubbleWidthPx),
@@ -1248,7 +1344,7 @@ private fun RangeExportTimeline(
             target = RangeEditTarget.CURSOR,
             active = state.lastTarget == RangeEditTarget.CURSOR,
             editorState = state,
-            visualAlpha = chromeAlpha,
+            visualAlpha = 1f,
             modifier = Modifier.offset {
                 IntOffset(
                     bubbleOffset(xFor(state.cursorSeconds), fullWidthPx, bubbleWidthPx),
@@ -1265,14 +1361,15 @@ private fun RangeExportTimeline(
             text = formatRangeTimeInput(0.0),
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalInset).alpha(chromeAlpha),
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = horizontalInset),
         )
-        Text(
-            text = formatRangeTimeInput(state.durationSeconds.toDouble()),
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalInset).alpha(chromeAlpha),
-        )
+            Text(
+                text = formatRangeTimeInput(state.durationSeconds.toDouble()),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalInset),
+            )
+        }
     }
 }
 

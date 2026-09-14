@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import androidx.compose.ui.geometry.Rect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -7,13 +8,32 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
-    fun blobMorphStartsAtBlobGeometryAndSettlesAtTimeline() {
+    fun blobMorphUsesMeasuredRendererGeometryExactly() {
+        assertEquals(0.330f, rangeBlobBaseRadiusFraction(active = true, enabled = true, activity = 0f), 0.000001f)
+        assertEquals(0.348f, rangeBlobBaseRadiusFraction(active = true, enabled = true, activity = 1f), 0.000001f)
+        assertEquals(0.1843f, rangeBlobBaseRadiusFraction(active = false, enabled = true, activity = 1f), 0.000001f)
+        assertEquals(0.1796f, rangeBlobBaseRadiusFraction(active = false, enabled = false, activity = 1f), 0.000001f)
+
+        val source = rangeMorphSourceGeometry(
+            rootBoundsInRoot = Rect(10f, 20f, 1010f, 2020f),
+            blobBoundsInRoot = Rect(210f, 320f, 810f, 920f),
+            active = true,
+            enabled = true,
+            activity = 0f,
+        )!!
+        assertEquals(396f, source.bodyDiameterPx, 0.0001f)
+        assertEquals(500f, source.centerXInLocalPx, 0.0001f)
+        assertEquals(600f, source.centerYInLocalPx, 0.0001f)
+
         assertEquals(0.4f, rangeBlobMorphStartScaleX(200f, 500f), 0.0001f)
-        assertTrue(rangeBlobMorphStartScaleY(200f, 146f) > 1f)
-        assertEquals(58f, rangeBlobMorphTranslationY(0f, 58f), 0.0001f)
-        assertEquals(29f, rangeBlobMorphTranslationY(0.5f, 58f), 0.0001f)
-        assertEquals(0f, rangeBlobMorphTranslationY(1f, 58f), 0.0001f)
+        assertEquals(200f / 146f, rangeBlobMorphStartScaleY(200f, 146f), 0.0001f)
+        assertEquals(-150f, rangeBlobMorphTranslation(0f, 100f, 250f), 0.0001f)
+        assertEquals(-75f, rangeBlobMorphTranslation(0.5f, 100f, 250f), 0.0001f)
+        assertEquals(0f, rangeBlobMorphTranslation(1f, 100f, 250f), 0.0001f)
         assertTrue(RANGE_BLOB_MORPH_HANDOFF_PROGRESS in 0.05f..0.10f)
+        assertEquals(128, rangeWaveformRenderPointCount(512, 0.5f))
+        assertEquals(256, rangeWaveformRenderPointCount(512, 0.9f))
+        assertEquals(512, rangeWaveformRenderPointCount(512, 1f))
     }
 
     @Test

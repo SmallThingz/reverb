@@ -17,8 +17,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
@@ -33,7 +33,7 @@ internal fun ProgressiveWaveformCanvas(
     startFraction: Float,
     endFraction: Float,
     loading: Boolean,
-    morphProgress: Float,
+    morphProgress: () -> Float,
     morphStartColor: Color? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -43,23 +43,68 @@ internal fun ProgressiveWaveformCanvas(
         (coarseBuiltCount.toFloat() / coarseWaveform.size.toFloat()).coerceIn(0f, 1f)
     val detailAvailableFraction = if (detailWaveform.isEmpty()) 0f else
         (detailBuiltCount.toFloat() / detailWaveform.size.toFloat()).coerceIn(0f, 1f)
-    // Let the blob become a single provisional ribbon before committing the sampled shape.
-    // The worker may finish early, but visual construction still reads as one left-to-right sweep.
-    val coarseTarget = if (morphProgress >= 0.64f) coarseAvailableFraction else 0f
-    val detailTarget = if (morphProgress >= 0.90f && waveformPass == RangeWaveformPass.DETAIL) {
-        detailAvailableFraction
-    } else 0f
-    val visibleCoarse by animateFloatAsState(
+    // Availability animation is independent from the opening morph. Draw-time gates below
+    // turn it into the same left-to-right sweep without reading morph state in composition.
+    val coarseTarget = coarseAvailableFraction
+    val detailTarget = if (waveformPass == RangeWaveformPass.DETAIL) detailAvailableFraction else 0f
+    val visibleCoarse = animateFloatAsState(
         targetValue = coarseTarget,
         animationSpec = tween(durationMillis = 430, easing = FastOutSlowInEasing),
         label = "rangeWaveformCoarseReveal",
     )
-    val visibleDetailRaw by animateFloatAsState(
+    val visibleDetail = animateFloatAsState(
         targetValue = detailTarget,
         animationSpec = tween(durationMillis = 330, easing = FastOutSlowInEasing),
         label = "rangeWaveformDetailReveal",
     )
-    val visibleDetail = minOf(visibleDetailRaw, visibleCoarse)
+    val waveformPath = remember { Path() }
+    val morphBasis = remember(detailWaveform.size) { WaveformMorphBasis(detailWaveform.size) }
+    val amplitudeScratch = remember(detailWaveform.size) { FloatArray(detailWaveform.size) }
+    val builtBrush = remember(colors.primary) {
+        Brush.horizontalGradient(
+            listOf(
+                colors.primary.copy(alpha = 0.24f),
+                colors.primary.copy(alpha = 0.32f),
+                colors.primary.copy(alpha = 0.24f),
+            ),
+        )
+    }
+    val selectedBrush = remember(colors.primary) {
+        Brush.horizontalGradient(
+            listOf(
+                colors.primary.copy(alpha = 0.94f),
+                colors.primary,
+                colors.primary.copy(alpha = 0.94f),
+            ),
+        )
+    }
+    val selectedLightBrush = remember(colors.primary) {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.18f),
+                Color.Transparent,
+                colors.primary.copy(alpha = 0.10f),
+            ),
+        )
+    }
+
+    val unresolvedBrush = remember(colors.primary, morphStartColor) {
+        if (morphStartColor == null) {
+            Brush.horizontalGradient(
+                listOf(
+                    colors.primary.copy(alpha = 0.08f),
+                    colors.primary.copy(alpha = 0.14f),
+                    colors.primary.copy(alpha = 0.08f),
+                ),
+            )
+        } else {
+            // Range zero-pass is the final timeline material, at full strength from frame zero.
+            SolidColor(colors.primary)
+        }
+    }
+    val unresolvedStrokeColor = remember(colors.primary, morphStartColor) {
+        if (morphStartColor == null) colors.primary.copy(alpha = 0.08f) else Color.Transparent
+    }
 
     LaunchedEffect(loading) {
         if (loading) {
@@ -78,45 +123,53 @@ internal fun ProgressiveWaveformCanvas(
     }
 
     Canvas(modifier) {
+        val morph = morphProgress().coerceIn(0f, 1f)
+        if (morphStartColor != null && morph <= 0f) {
+            // The graphics layer maps this full-bounds analytic oval to the measured source
+            // circle exactly; do not approximate the renderer handoff with sampled vertices.
+            drawOval(
+                color = colors.primary,
+                topLeft = Offset.Zero,
+                size = size,
+            )
+            return@Canvas
+        }
+        val availableCoarse = visibleCoarse.value
+        val availableDetail = minOf(visibleDetail.value, availableCoarse)
+        // Multiplying the already animated availability front by a draw-time morph gate keeps
+        // the progressive sweep while avoiding per-frame Compose recomposition.
+        val coarseGate = smoothStep(((morph - 0.56f) / 0.16f).coerceIn(0f, 1f))
+        val detailGate = smoothStep(((morph - 0.86f) / 0.12f).coerceIn(0f, 1f))
+        val effectiveVisibleCoarse = availableCoarse * coarseGate
+        val effectiveVisibleDetail = minOf(availableDetail * detailGate, effectiveVisibleCoarse)
         val path = waveformConstructionPath(
+            path = waveformPath,
+            amplitudes = amplitudeScratch,
+            basis = morphBasis,
             coarseWaveform = coarseWaveform,
             coarseBuiltCount = coarseBuiltCount,
             detailWaveform = detailWaveform,
             detailBuiltCount = detailBuiltCount,
-            visibleCoarseFraction = visibleCoarse,
-            visibleDetailFraction = visibleDetail,
-            morphProgress = morphProgress,
+            visibleCoarseFraction = effectiveVisibleCoarse,
+            visibleDetailFraction = effectiveVisibleDetail,
+            morphProgress = morph,
             phase = wobblePhase,
             width = size.width,
             height = size.height,
         ) ?: return@Canvas
         val centerY = size.height * 0.5f
-        val builtRight = size.width * visibleCoarse.coerceIn(0f, 1f)
-        val detailRight = size.width * visibleDetail.coerceIn(0f, 1f)
+        val builtRight = size.width * effectiveVisibleCoarse.coerceIn(0f, 1f)
+        val detailRight = size.width * effectiveVisibleDetail.coerceIn(0f, 1f)
         val selectedLeft = size.width * startFraction.coerceIn(0f, 1f)
         val selectedRight = size.width * endFraction.coerceIn(startFraction, 1f)
-        val morph = morphProgress.coerceIn(0f, 1f)
         val materialT = (((morph - 0.06f) / 0.82f).coerceIn(0f, 1f)).let { t ->
             t * t * (3f - 2f * t)
         }
-        val unresolvedColor = morphStartColor?.let { lerp(it, colors.primary, materialT) }
-            ?: colors.primary
-        val unresolvedCenterAlpha = if (morphStartColor == null) {
-            0.14f
+        val finalLayerAlpha = if (morphStartColor == null) {
+            1f
         } else {
-            0.92f + (0.14f - 0.92f) * materialT
+            smoothStep(((morph - 0.78f) / 0.22f).coerceIn(0f, 1f))
         }
-        val unresolvedEdgeAlpha = if (morphStartColor == null) {
-            0.08f
-        } else {
-            0.78f + (0.08f - 0.78f) * materialT
-        }
-        val unresolvedStrokeAlpha = if (morphStartColor == null) {
-            0.08f
-        } else {
-            0.30f + (0.08f - 0.30f) * materialT
-        }
-
         drawLine(
             color = colors.onSurfaceVariant.copy(
                 alpha = if (morphStartColor == null) 0.10f else 0.10f * materialT,
@@ -128,63 +181,39 @@ internal fun ProgressiveWaveformCanvas(
 
         // The unresolved suffix remains live material. It contracts from the original blob
         // silhouette into a ribbon while fixed audio is progressively committed from the left.
+        drawPath(path = path, brush = unresolvedBrush)
         drawPath(
             path = path,
-            brush = Brush.horizontalGradient(
-                listOf(
-                    unresolvedColor.copy(alpha = unresolvedEdgeAlpha),
-                    unresolvedColor.copy(alpha = unresolvedCenterAlpha),
-                    unresolvedColor.copy(alpha = unresolvedEdgeAlpha),
-                ),
-            ),
-        )
-        drawPath(
-            path = path,
-            color = unresolvedColor.copy(alpha = unresolvedStrokeAlpha),
+            color = unresolvedStrokeColor,
             style = Stroke(width = 1.dp.toPx()),
         )
 
-        if (builtRight > 0f) {
+        if (builtRight > 0f && finalLayerAlpha > 0.01f) {
             clipRect(left = 0f, right = builtRight) {
                 drawPath(
                     path = path,
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            colors.primary.copy(alpha = 0.24f),
-                            colors.primary.copy(alpha = 0.32f),
-                            colors.primary.copy(alpha = 0.24f),
-                        ),
-                    ),
+                    brush = builtBrush,
+                    alpha = finalLayerAlpha,
                 )
                 drawPath(
                     path = path,
-                    color = colors.primary.copy(alpha = 0.16f),
+                    color = colors.primary.copy(alpha = 0.16f * finalLayerAlpha),
                     style = Stroke(width = 1.25.dp.toPx()),
                 )
                 clipRect(left = selectedLeft, right = selectedRight) {
                     drawPath(
                         path = path,
-                        brush = Brush.horizontalGradient(
-                            listOf(
-                                colors.primary.copy(alpha = 0.94f),
-                                colors.primary,
-                                colors.primary.copy(alpha = 0.94f),
-                            ),
-                        ),
+                        brush = selectedBrush,
+                        alpha = finalLayerAlpha,
                     )
                     drawPath(
                         path = path,
-                        brush = Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.18f),
-                                Color.Transparent,
-                                colors.primary.copy(alpha = 0.10f),
-                            ),
-                        ),
+                        brush = selectedLightBrush,
+                        alpha = finalLayerAlpha,
                     )
                     drawPath(
                         path = path,
-                        color = colors.primary.copy(alpha = 0.24f),
+                        color = colors.primary.copy(alpha = 0.24f * finalLayerAlpha),
                         style = Stroke(width = 1.7.dp.toPx()),
                     )
                 }
@@ -193,16 +222,16 @@ internal fun ProgressiveWaveformCanvas(
 
         // A soft construction front makes the left-to-right materialization read as a sweep,
         // rather than a hard clip edge. The second pass uses a smaller polishing front.
-        if (visibleCoarse in 0.002f..0.998f) {
+        if (finalLayerAlpha > 0.01f && effectiveVisibleCoarse in 0.002f..0.998f) {
             drawLine(
-                color = colors.primary.copy(alpha = 0.12f),
+                color = colors.primary.copy(alpha = 0.12f * finalLayerAlpha),
                 start = Offset(builtRight, size.height * 0.10f),
                 end = Offset(builtRight, size.height * 0.90f),
                 strokeWidth = 13.dp.toPx(),
                 cap = StrokeCap.Round,
             )
             drawLine(
-                color = Color.White.copy(alpha = 0.36f),
+                color = Color.White.copy(alpha = 0.36f * finalLayerAlpha),
                 start = Offset(builtRight, size.height * 0.13f),
                 end = Offset(builtRight, size.height * 0.87f),
                 strokeWidth = 1.15.dp.toPx(),
@@ -210,19 +239,20 @@ internal fun ProgressiveWaveformCanvas(
             )
         }
         if (
+            finalLayerAlpha > 0.01f &&
             waveformPass == RangeWaveformPass.DETAIL &&
-            visibleDetail in 0.002f..0.998f &&
-            visibleCoarse > 0.95f
+            effectiveVisibleDetail in 0.002f..0.998f &&
+            effectiveVisibleCoarse > 0.95f
         ) {
             drawLine(
-                color = colors.tertiary.copy(alpha = 0.13f),
+                color = colors.tertiary.copy(alpha = 0.13f * finalLayerAlpha),
                 start = Offset(detailRight, size.height * 0.13f),
                 end = Offset(detailRight, size.height * 0.87f),
                 strokeWidth = 9.dp.toPx(),
                 cap = StrokeCap.Round,
             )
             drawLine(
-                color = Color.White.copy(alpha = 0.28f),
+                color = Color.White.copy(alpha = 0.28f * finalLayerAlpha),
                 start = Offset(detailRight, size.height * 0.16f),
                 end = Offset(detailRight, size.height * 0.84f),
                 strokeWidth = 0.9.dp.toPx(),
@@ -232,7 +262,60 @@ internal fun ProgressiveWaveformCanvas(
     }
 }
 
+private class WaveformMorphBasis(size: Int) {
+    val pointCount = size.coerceAtLeast(2)
+    val u = FloatArray(pointCount)
+    val circle = FloatArray(pointCount)
+    val sin19 = FloatArray(pointCount)
+    val cos19 = FloatArray(pointCount)
+    val sin31 = FloatArray(pointCount)
+    val cos31 = FloatArray(pointCount)
+    val sin67 = FloatArray(pointCount)
+    val cos67 = FloatArray(pointCount)
+    val sin113 = FloatArray(pointCount)
+    val cos113 = FloatArray(pointCount)
+
+    init {
+        val denominator = (pointCount - 1).toFloat()
+        for (index in 0 until pointCount) {
+            val value = index.toFloat() / denominator
+            u[index] = value
+            val x = (value - 0.5f) * 2f
+            circle[index] = kotlin.math.sqrt((1f - x * x).coerceAtLeast(0f))
+            sin19[index] = kotlin.math.sin(value * 19f)
+            cos19[index] = kotlin.math.cos(value * 19f)
+            sin31[index] = kotlin.math.sin(value * 31f)
+            cos31[index] = kotlin.math.cos(value * 31f)
+            sin67[index] = kotlin.math.sin(value * 67f)
+            cos67[index] = kotlin.math.cos(value * 67f)
+            sin113[index] = kotlin.math.sin(value * 113f)
+            cos113[index] = kotlin.math.cos(value * 113f)
+        }
+    }
+}
+
+private fun smoothStep(value: Float): Float = value * value * (3f - 2f * value)
+
+internal fun rangeWaveformRenderPointCount(totalPoints: Int, morphProgress: Float): Int {
+    val total = totalPoints.coerceAtLeast(2)
+    return when {
+        morphProgress < 0.85f -> minOf(total, 128)
+        morphProgress < 0.995f -> minOf(total, 256)
+        else -> total
+    }
+}
+
+private fun shiftedSin(
+    baseSin: Float,
+    baseCos: Float,
+    phaseSin: Float,
+    phaseCos: Float,
+): Float = baseSin * phaseCos + baseCos * phaseSin
+
 private fun waveformConstructionPath(
+    path: Path,
+    amplitudes: FloatArray,
+    basis: WaveformMorphBasis,
     coarseWaveform: FloatArray,
     coarseBuiltCount: Int,
     detailWaveform: FloatArray,
@@ -244,17 +327,37 @@ private fun waveformConstructionPath(
     width: Float,
     height: Float,
 ): Path? {
-    if (detailWaveform.size < 2 || coarseWaveform.size < 2 || width <= 0f || height <= 0f) return null
+    if (
+        detailWaveform.size < 2 ||
+        coarseWaveform.size < 2 ||
+        amplitudes.size < basis.pointCount ||
+        width <= 0f ||
+        height <= 0f
+    ) return null
+
     val center = height * 0.5f
-    val maxAmplitude = height * 0.44f
-    val minimumAmplitude = height * 0.035f
     val visibleCoarse = visibleCoarseFraction.coerceIn(0f, 1f)
     val visibleDetail = visibleDetailFraction.coerceIn(0f, visibleCoarse)
     val coarseAvailable = (coarseBuiltCount.toFloat() / coarseWaveform.size.toFloat()).coerceIn(0f, 1f)
     val detailAvailable = (detailBuiltCount.toFloat() / detailWaveform.size.toFloat()).coerceIn(0f, 1f)
     val ribbonProgress = ((morphProgress - 0.08f) / 0.92f).coerceIn(0f, 1f)
-    val morph = ribbonProgress * ribbonProgress * (3f - 2f * ribbonProgress)
-    val path = Path()
+    val morph = smoothStep(ribbonProgress)
+    // At morph=0 this is a mathematically exact circle: no waveform floor and a half-height
+    // radius. The floor and final 44% amplitude are introduced continuously with the morph.
+    val minimumAmplitude = height * 0.035f * morph
+    val maxAmplitude = height * (0.50f - 0.06f * morph)
+    val phase19 = phase * 0.70f
+    val phase31 = phase * 2.25f
+    val phase67 = -phase * 1.62f
+    val phase113 = phase * 1.08f
+    val phase19Sin = kotlin.math.sin(phase19)
+    val phase19Cos = kotlin.math.cos(phase19)
+    val phase31Sin = kotlin.math.sin(phase31)
+    val phase31Cos = kotlin.math.cos(phase31)
+    val phase67Sin = kotlin.math.sin(phase67)
+    val phase67Cos = kotlin.math.cos(phase67)
+    val phase113Sin = kotlin.math.sin(phase113)
+    val phase113Cos = kotlin.math.cos(phase113)
 
     fun sampledValue(values: FloatArray, builtCount: Int, u: Float): Float? {
         if (builtCount <= 0 || values.isEmpty()) return null
@@ -271,64 +374,70 @@ private fun waveformConstructionPath(
         val distance = front - u
         if (distance >= 0f) return 1f
         if (distance <= -feather) return 0f
-        val t = ((distance + feather) / feather).coerceIn(0f, 1f)
-        return t * t * (3f - 2f * t)
+        return smoothStep(((distance + feather) / feather).coerceIn(0f, 1f))
     }
 
-    fun blobEnvelopeAt(u: Float): Float {
-        val x = (u - 0.5f) * 2f
-        val circle = kotlin.math.sqrt((1f - x * x).coerceAtLeast(0f))
-        val organic = 1f + 0.018f * kotlin.math.sin(u * 19f + phase * 0.70f)
-        return (circle * organic).coerceIn(0f, 1f)
-    }
-
-    fun provisionalValue(u: Float): Float {
-        val blobEnvelope = blobEnvelopeAt(u)
-        val ribbonWobble = (
-            0.27f +
-                0.070f * kotlin.math.sin(u * 31f + phase * 2.25f) +
-                0.040f * kotlin.math.sin(u * 67f - phase * 1.62f) +
-                0.022f * kotlin.math.sin(u * 113f + phase * 1.08f)
-            ).coerceIn(0.08f, 0.68f)
-        return blobEnvelope + (ribbonWobble - blobEnvelope) * morph
-    }
-
-    fun resolvedDuringMorph(u: Float, resolved: Float): Float {
-        val blobEnvelope = blobEnvelopeAt(u)
-        return blobEnvelope + (resolved.coerceIn(0f, 1f) - blobEnvelope) * morph
+    fun blobEnvelopeAt(index: Int): Float {
+        val organic = 1f + 0.018f * morph * shiftedSin(
+            basis.sin19[index],
+            basis.cos19[index],
+            phase19Sin,
+            phase19Cos,
+        )
+        return (basis.circle[index] * organic).coerceIn(0f, 1f)
     }
 
     fun amplitudeAt(index: Int): Float {
-        val u = index.toFloat() / detailWaveform.lastIndex.toFloat()
-        var sample = provisionalValue(u)
+        val u = basis.u[index]
+        val blobEnvelope = blobEnvelopeAt(index)
+        val ribbonWobble = (
+            0.27f +
+                0.070f * shiftedSin(
+                    basis.sin31[index], basis.cos31[index], phase31Sin, phase31Cos,
+                ) +
+                0.040f * shiftedSin(
+                    basis.sin67[index], basis.cos67[index], phase67Sin, phase67Cos,
+                ) +
+                0.022f * shiftedSin(
+                    basis.sin113[index], basis.cos113[index], phase113Sin, phase113Cos,
+                )
+            ).coerceIn(0.08f, 0.68f)
+        var sample = blobEnvelope + (ribbonWobble - blobEnvelope) * morph
 
         if (u <= coarseAvailable + 0.04f) {
             val coarse = sampledValue(coarseWaveform, coarseBuiltCount, u)
             if (coarse != null) {
-                val fixedShape = resolvedDuringMorph(u, coarse)
-                val weight = revealWeight(visibleCoarse, u, 0.036f)
-                sample += (fixedShape - sample) * weight
+                val fixedShape = blobEnvelope + (coarse.coerceIn(0f, 1f) - blobEnvelope) * morph
+                sample += (fixedShape - sample) * revealWeight(visibleCoarse, u, 0.036f)
             }
         }
         if (u <= detailAvailable + 0.03f) {
             val detail = sampledValue(detailWaveform, detailBuiltCount, u)
             if (detail != null) {
-                val fixedShape = resolvedDuringMorph(u, detail)
-                val weight = revealWeight(visibleDetail, u, 0.024f)
-                sample += (fixedShape - sample) * weight
+                val fixedShape = blobEnvelope + (detail.coerceIn(0f, 1f) - blobEnvelope) * morph
+                sample += (fixedShape - sample) * revealWeight(visibleDetail, u, 0.024f)
             }
         }
         return minimumAmplitude + maxAmplitude * sample.coerceIn(0f, 1f)
     }
 
-    for (index in detailWaveform.indices) {
-        val x = width * index.toFloat() / detailWaveform.lastIndex.toFloat()
-        val amplitude = amplitudeAt(index)
-        if (index == 0) path.moveTo(x, center - amplitude) else path.lineTo(x, center - amplitude)
+    path.reset()
+    // A moving 1080px-wide ribbon does not benefit visually from 512 path vertices. Use an
+    // evenly sampled 256-point contour during the morph, then restore every detail point once
+    // settled. This halves path commands and envelope math on the animation hot path.
+    val renderPointCount = rangeWaveformRenderPointCount(basis.pointCount, morphProgress)
+    val renderDenominator = (renderPointCount - 1).coerceAtLeast(1)
+    val basisLastIndex = basis.pointCount - 1
+    for (point in 0 until renderPointCount) {
+        val basisIndex = point * basisLastIndex / renderDenominator
+        val x = width * point.toFloat() / renderDenominator.toFloat()
+        val amplitude = amplitudeAt(basisIndex)
+        amplitudes[point] = amplitude
+        if (point == 0) path.moveTo(x, center - amplitude) else path.lineTo(x, center - amplitude)
     }
-    for (index in detailWaveform.lastIndex downTo 0) {
-        val x = width * index.toFloat() / detailWaveform.lastIndex.toFloat()
-        path.lineTo(x, center + amplitudeAt(index))
+    for (point in renderPointCount - 1 downTo 0) {
+        val x = width * point.toFloat() / renderDenominator.toFloat()
+        path.lineTo(x, center + amplitudes[point])
     }
     path.close()
     return path
