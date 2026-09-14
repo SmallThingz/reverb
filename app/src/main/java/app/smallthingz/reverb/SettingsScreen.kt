@@ -388,7 +388,7 @@ fun SettingsScreen(
         loopingRetentionSizeBytesValue = prev.loopingRetentionSizeBytes
         selectedExportTreeUri = prev.exportDirectoryUri?.let(Uri::parse)
         if (abandonedExportTreeUri != selectedExportTreeUri) {
-            RecordingRepository.releasePendingDirectoryAndCleanup(context, abandonedExportTreeUri)
+            RecordingRepository.releasePendingDirectory(abandonedExportTreeUri)
         }
 
         selectedTheme = prev.themeMode
@@ -609,7 +609,7 @@ fun SettingsScreen(
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }
-        RecordingRepository.releasePendingDirectoryAndCleanup(context, selectedExportTreeUri)
+        RecordingRepository.releasePendingDirectory(selectedExportTreeUri)
         onThemeChanged(selectedTheme)
 
         val currentService = service
@@ -702,14 +702,14 @@ fun SettingsScreen(
             )
         }.isSuccess
         if (!permissionTaken) {
-            RecordingRepository.releasePendingDirectoryAndCleanup(context, treeUri)
+            RecordingRepository.releasePendingDirectory(treeUri)
             AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
         val previousTreeUri = selectedExportTreeUri
         selectedExportTreeUri = treeUri
         if (previousTreeUri != treeUri) {
-            RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
+            RecordingRepository.releasePendingDirectory(previousTreeUri)
         }
         exportPathText = describeOutputDirectory(context, treeUri)
         saveCurrentToSnapshot(currentSnapshot)
@@ -742,7 +742,7 @@ fun SettingsScreen(
             if (bound) {
                 context.unbindService(connection)
             }
-            RecordingRepository.releasePendingDirectoryAndCleanup(context, currentExportTreeUri)
+            RecordingRepository.releasePendingDirectory(currentExportTreeUri)
         }
     }
 
@@ -1150,7 +1150,7 @@ fun SettingsScreen(
                                 onClick = {
                                     val previousTreeUri = selectedExportTreeUri
                                     selectedExportTreeUri = null
-                                    RecordingRepository.releasePendingDirectoryAndCleanup(context, previousTreeUri)
+                                    RecordingRepository.releasePendingDirectory(previousTreeUri)
                                     refreshExportDirectoryUi()
                                     refreshMoveRecordingsAvailability()
                                     saveCurrentToSnapshot(currentSnapshot)

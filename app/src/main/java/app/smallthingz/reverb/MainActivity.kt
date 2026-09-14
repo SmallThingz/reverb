@@ -157,7 +157,6 @@ class MainActivity : ComponentActivity() {
             mediaRecoveryAllowed = hasMediaRecoveryPermission()
             batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         }
-        RecordingRepository.schedulePersistedPermissionCleanup(this)
         themeMode = configuredThemeMode
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()

@@ -177,21 +177,15 @@ object RecordingRepository {
         }
     }
 
-    fun releasePendingDirectoryAndCleanup(context: Context, uri: Uri?) {
+    fun releasePendingDirectory(uri: Uri?) {
         if (uri != null) {
             synchronized(pendingDirectoryIds) {
                 pendingDirectoryIds -= uri.toString()
             }
         }
-        schedulePersistedPermissionCleanup(context)
-    }
-
-    fun schedulePersistedPermissionCleanup(@Suppress("UNUSED_PARAMETER") context: Context) {
-        // Persisted SAF grants are part of the recovery path for recordings outside the
-        // currently selected directory. Provider scans can transiently report an empty
-        // directory, so automatically releasing a grant can make the only surviving audio
-        // unreachable. Keep grants until the user clears app data or an explicit, verified
-        // destructive workflow is introduced.
+        // Persisted SAF grants intentionally remain part of the recovery path. Provider scans
+        // can transiently report an empty directory, so automatic grant release could make the
+        // only surviving audio unreachable.
     }
 
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
@@ -275,7 +269,6 @@ object RecordingRepository {
                 // directory reconciliation will import a replacement as a fresh observation.
                 dao.deleteById(tracked.id)
                 removePendingDeletionLocked(context, tracked.id)
-                schedulePersistedPermissionCleanup(context)
                 true
             }
         }
@@ -546,9 +539,7 @@ object RecordingRepository {
                     skipped = skipped,
                     failed = failed,
                     cleanupFailed = cleanupFailed,
-                ).also {
-                    if (moved > 0) schedulePersistedPermissionCleanup(context)
-                }
+                )
             }
         }
     }
