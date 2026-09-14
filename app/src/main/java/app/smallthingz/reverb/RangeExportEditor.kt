@@ -305,6 +305,19 @@ internal fun rangeFineTuneDeltaSeconds(
     durationSeconds.coerceAtLeast(0f) *
     dtSeconds.coerceAtLeast(0f)
 
+internal fun rangeFineTuneShuttleRate(
+    horizontalPull: Float,
+    verticalPull: Float,
+): Float {
+    val pull = rangeFineTuneSeekPull(horizontalPull)
+    val magnitude = abs(pull)
+    if (magnitude <= 0.002f) return 0f
+    val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
+    val baseSpeed = 0.30f + 7.70f * normalized.pow(1.7f)
+    val verticalScale = rangeFineTuneSpeedScale(verticalPull).pow(0.32f)
+    return sign(pull) * (baseSpeed * verticalScale).coerceIn(0.15f, 8f)
+}
+
 internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
     RangeEditTarget.START -> values.startSeconds
     RangeEditTarget.CURSOR -> values.cursorSeconds
@@ -356,6 +369,7 @@ internal class RangeExportEditorState(
     private var activeTextDraft: String? = null
 
     private var resumeAfterScrub = false
+    private var fineAdjustShuttleActive = false
     private var lastAuditionAtMillis = 0L
     private var snapInteractionTarget: RangeEditTarget? = null
     private var snapLatch: RangeSnapLatch? = null
@@ -709,37 +723,44 @@ internal class RangeExportEditorState(
         }
     }
 
-    fun beginFineAdjust() {
+    fun beginFineAdjust(shuttleRate: Float) {
         invalidateTextEditing()
         beginSnapInteraction(lastTarget)
-        if (lastTarget == RangeEditTarget.CURSOR) {
-            resumeAfterScrub = isPlaying
-            if (isPlaying) {
-                previewController.stop()
-                isPlaying = false
-            }
-            isScrubbing = true
-            auditionCursor(force = true)
-        } else {
-            pausePreview()
+        resumeAfterScrub = isPlaying
+        fineAdjustShuttleActive = true
+        if (lastTarget == RangeEditTarget.CURSOR) isScrubbing = true
+        snapshot?.let { readySnapshot ->
+            previewController.startShuttle(
+                snapshot = readySnapshot,
+                atSeconds = targetValue(lastTarget).toDouble(),
+                rate = shuttleRate,
+            )
         }
+    }
+
+    fun updateFineAdjustShuttle(shuttleRate: Float) {
+        if (!fineAdjustShuttleActive) return
+        previewController.updateShuttle(
+            atSeconds = targetValue(lastTarget).toDouble(),
+            rate = shuttleRate,
+        )
     }
 
     fun fineAdjust(deltaSeconds: Float, snapThresholdSeconds: Float) {
         val target = lastTarget
         setTarget(target, targetValue(target) + deltaSeconds, snapThresholdSeconds)
-        if (target == RangeEditTarget.CURSOR) auditionCursor()
     }
 
     fun endFineAdjust() {
         endSnapInteraction()
-        if (lastTarget == RangeEditTarget.CURSOR) {
-            isScrubbing = false
-            previewController.stop()
-            if (resumeAfterScrub) {
-                resumeAfterScrub = false
-                startPreview()
-            }
+        if (fineAdjustShuttleActive) {
+            fineAdjustShuttleActive = false
+            previewController.stopShuttle()
+        }
+        if (lastTarget == RangeEditTarget.CURSOR) isScrubbing = false
+        if (resumeAfterScrub) {
+            resumeAfterScrub = false
+            startPreview()
         }
     }
 
@@ -749,6 +770,11 @@ internal class RangeExportEditorState(
     }
 
     fun pausePreview() {
+        if (fineAdjustShuttleActive) {
+            fineAdjustShuttleActive = false
+            previewController.stopShuttle()
+            isScrubbing = false
+        }
         if (!isPlaying) return
         previewController.stop()
         isPlaying = false
@@ -785,6 +811,7 @@ internal class RangeExportEditorState(
     }
 
     private fun auditionCursor(force: Boolean = false) {
+        if (fineAdjustShuttleActive) return
         val readySnapshot = snapshot ?: return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAuditionAtMillis < 55L) return
@@ -1540,6 +1567,9 @@ private fun SpringFineAdjust(
                 val dtSeconds = elapsedNanos / 1_000_000_000f
                 val liveHorizontalPull = horizontalPull
                 val liveY = rangeFineTuneConstrainedY(rawVerticalPull, liveHorizontalPull)
+                state.updateFineAdjustShuttle(
+                    rangeFineTuneShuttleRate(liveHorizontalPull, liveY),
+                )
                 commitAccumulator.add(
                     deltaSeconds = rangeFineTuneDeltaSeconds(
                         horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
@@ -1595,7 +1625,12 @@ private fun SpringFineAdjust(
                     )
                     dragging = true
                     fineAdjustStarted = true
-                    state.beginFineAdjust()
+                    state.beginFineAdjust(
+                        rangeFineTuneShuttleRate(
+                            horizontalPull = horizontalPull,
+                            verticalPull = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull),
+                        ),
+                    )
                 }
 
                 if (!startedOnPuck) {

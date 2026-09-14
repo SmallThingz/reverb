@@ -133,6 +133,40 @@ class RangeExportEditorMathTest {
         )
     }
 
+
+    @Test
+    fun fineTuneShuttleRateTracksDirectionAndAggression() {
+        val near = rangeFineTuneShuttleRate(0.08f, 0f)
+        val middle = rangeFineTuneShuttleRate(0.50f, 0f)
+        val edge = rangeFineTuneShuttleRate(1f, 0f)
+        assertTrue(near > 0f)
+        assertTrue(middle > near)
+        assertTrue(edge > middle)
+        assertTrue(edge <= 8f)
+        assertEquals(-middle, rangeFineTuneShuttleRate(-0.50f, 0f), 0.0001f)
+        assertTrue(rangeFineTuneShuttleRate(0.50f, -0.65f) > middle)
+        assertTrue(rangeFineTuneShuttleRate(0.50f, 0.65f) < middle)
+    }
+
+    @Test
+    fun shuttlePcmResamplerSupportsForwardReverseAndFastPlayback() {
+        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
+            samples.forEachIndexed { index, sample ->
+                bytes[index * 2] = (sample and 0xff).toByte()
+                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+        }
+
+        val source = pcm(100, 200, 300, 400)
+        assertEquals(listOf(100, 200, 300, 400), decode(resampleShuttlePcm16Mono(source, 1f)))
+        assertEquals(listOf(400, 300, 200, 100), decode(resampleShuttlePcm16Mono(source, -1f)))
+        assertEquals(listOf(100, 300), decode(resampleShuttlePcm16Mono(source, 2f)))
+        assertEquals(listOf(400, 200), decode(resampleShuttlePcm16Mono(source, -2f)))
+    }
+
     @Test
     fun fineTunePuckKeepsLargeHitTargetAndSeparatesTapFromDrag() {
         assertEquals(24f, RANGE_FINE_TUNE_PUCK_RADIUS_DP, 0f)

@@ -57,3 +57,4 @@
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
 - Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
 - Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while accumulating the exact integrated delta.
+- Range fine-adjust shuttle audio follows the puck direction: right is forward, left is reverse, and pull magnitude controls playback speed without pausing the audio during the gesture.

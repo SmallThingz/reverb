@@ -6,6 +6,7 @@ import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
 import java.util.WeakHashMap
@@ -14,15 +15,21 @@ import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.roundToLong
+import kotlin.math.floor
 import kotlin.math.pow
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 private const val PREVIEW_SAMPLE_RATE = 24_000
 private const val PREVIEW_WRITE_BYTES = 2_400
 private const val SCRUB_AUDITION_SECONDS = 0.14
 private const val SCRUB_AUDITION_LEAD_SECONDS = 0.02
 private const val PREVIEW_PROGRESS_INTERVAL_MILLIS = 32L
+private const val SHUTTLE_OUTPUT_BLOCK_SECONDS = 0.032
+private const val SHUTTLE_MIN_ABS_RATE = 0.15f
+private const val SHUTTLE_MAX_ABS_RATE = 8f
 
 internal const val RANGE_WAVEFORM_COARSE_BUCKETS = 96
 internal const val RANGE_WAVEFORM_DETAIL_BUCKETS = 512
@@ -41,6 +48,42 @@ internal fun shapeWaveformMagnitude(raw: Float): Float {
 
 internal fun normalizeWaveformEnvelope(raw: FloatArray): FloatArray =
     FloatArray(raw.size) { index -> shapeWaveformMagnitude(raw[index]) }
+
+
+internal fun resampleShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteArray {
+    val frameCount = input.size / 2
+    if (frameCount <= 0 || !signedRate.isFinite()) return ByteArray(0)
+    val speed = abs(signedRate).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
+    val outputFrames = (frameCount.toFloat() / speed).roundToInt().coerceAtLeast(1)
+    val output = ByteArray(outputFrames * 2)
+
+    fun sample(frame: Int): Int {
+        val index = frame.coerceIn(0, frameCount - 1) * 2
+        return ((input[index + 1].toInt() shl 8) or (input[index].toInt() and 0xff)).toShort().toInt()
+    }
+
+    for (outFrame in 0 until outputFrames) {
+        val forwardPosition = (outFrame.toFloat() * speed).coerceAtMost((frameCount - 1).toFloat())
+        val sourcePosition = if (signedRate >= 0f) {
+            forwardPosition
+        } else {
+            (frameCount - 1).toFloat() - forwardPosition
+        }
+        val first = floor(sourcePosition).toInt().coerceIn(0, frameCount - 1)
+        val second = if (signedRate >= 0f) {
+            (first + 1).coerceAtMost(frameCount - 1)
+        } else {
+            (first - 1).coerceAtLeast(0)
+        }
+        val fraction = abs(sourcePosition - first.toFloat()).coerceIn(0f, 1f)
+        val value = (sample(first) + (sample(second) - sample(first)) * fraction)
+            .roundToInt()
+            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        output[outFrame * 2] = (value and 0xff).toByte()
+        output[outFrame * 2 + 1] = ((value ushr 8) and 0xff).toByte()
+    }
+    return output
+}
 
 internal enum class RangeWaveformPass(
     val bucketCount: Int,
@@ -99,6 +142,13 @@ internal class TimelineAudioPreviewController : Closeable {
     private val trackLock = Any()
     private val releasedTracks = WeakHashMap<AudioTrack, Boolean>()
 
+    private data class ShuttleCommand(val positionSeconds: Double, val rate: Float)
+
+    private val shuttleCommand = AtomicReference<ShuttleCommand?>(null)
+
+    @Volatile
+    private var activeShuttleToken = 0L
+
     @Volatile
     private var activeTrack: AudioTrack? = null
 
@@ -154,6 +204,40 @@ internal class TimelineAudioPreviewController : Closeable {
         }
     }
 
+    fun startShuttle(
+        snapshot: ReverbService.TimelineSnapshot,
+        atSeconds: Double,
+        rate: Float,
+    ) {
+        if (closed) return
+        cancelCurrent()
+        val token = generation.incrementAndGet()
+        activeShuttleToken = token
+        shuttleCommand.set(
+            ShuttleCommand(
+                positionSeconds = atSeconds.coerceIn(0.0, snapshot.durationSeconds),
+                rate = rate.coerceIn(-SHUTTLE_MAX_ABS_RATE, SHUTTLE_MAX_ABS_RATE),
+            ),
+        )
+        enqueueLatest { shuttle(token, snapshot) }
+    }
+
+    fun updateShuttle(atSeconds: Double, rate: Float) {
+        val token = activeShuttleToken
+        if (closed || token == 0L || generation.get() != token) return
+        shuttleCommand.set(
+            ShuttleCommand(
+                positionSeconds = atSeconds,
+                rate = rate.coerceIn(-SHUTTLE_MAX_ABS_RATE, SHUTTLE_MAX_ABS_RATE),
+            ),
+        )
+    }
+
+    fun stopShuttle() {
+        if (closed || activeShuttleToken == 0L) return
+        cancelCurrent()
+    }
+
     fun stop() {
         if (closed) return
         cancelCurrent()
@@ -174,6 +258,8 @@ internal class TimelineAudioPreviewController : Closeable {
 
     private fun cancelCurrent() {
         generation.incrementAndGet()
+        activeShuttleToken = 0L
+        shuttleCommand.set(null)
         executor.queue.clear()
         val track = synchronized(trackLock) {
             activeTrack.also { activeTrack = null }
@@ -184,6 +270,88 @@ internal class TimelineAudioPreviewController : Closeable {
             } else {
                 // close() calls cancelCurrent() before shutting this executor down, so this is
                 // only a defensive fallback for an unexpected late cancellation.
+                releaseTrackOnce(track)
+            }
+        }
+    }
+
+    private fun shuttle(token: Long, snapshot: ReverbService.TimelineSnapshot) {
+        var track: AudioTrack? = null
+        try {
+            checkCurrent(token)
+            track = createTrack(volume = 0.82f, minimumBufferBytes = PREVIEW_WRITE_BYTES * 2)
+            synchronized(trackLock) {
+                checkCurrent(token)
+                activeTrack = track
+            }
+            track.play()
+
+            while (isCurrent(token)) {
+                val command = shuttleCommand.get() ?: break
+                val rate = command.rate
+                val magnitude = abs(rate)
+                if (magnitude < SHUTTLE_MIN_ABS_RATE) {
+                    Thread.sleep(8L)
+                    continue
+                }
+
+                val center = command.positionSeconds.coerceIn(0.0, snapshot.durationSeconds)
+                val sourceDuration = (SHUTTLE_OUTPUT_BLOCK_SECONDS * magnitude.toDouble())
+                    .coerceAtLeast(0.002)
+                val start = if (rate >= 0f) center else (center - sourceDuration).coerceAtLeast(0.0)
+                val end = if (rate >= 0f) {
+                    (center + sourceDuration).coerceAtMost(snapshot.durationSeconds)
+                } else {
+                    center
+                }
+                if (end <= start) {
+                    Thread.sleep(8L)
+                    continue
+                }
+
+                val lease = snapshot.acquireRange(start, end)
+                if (lease == null) {
+                    Thread.sleep(8L)
+                    continue
+                }
+                val raw = ByteArrayOutputStream()
+                try {
+                    lease.readNormalized(
+                        targetSampleRate = PREVIEW_SAMPLE_RATE,
+                        targetChannelCount = 1,
+                        targetSampleFormat = PcmSampleFormat.PCM_16,
+                    ) { array, offset, count ->
+                        checkCurrent(token)
+                        raw.write(array, offset, count)
+                        count
+                    }
+                } finally {
+                    lease.close()
+                }
+                val output = resampleShuttlePcm16Mono(raw.toByteArray(), rate)
+                var offset = 0
+                while (offset < output.size) {
+                    checkCurrent(token)
+                    val written = track.write(
+                        output,
+                        offset,
+                        output.size - offset,
+                        AudioTrack.WRITE_BLOCKING,
+                    )
+                    if (written <= 0) throw IOException("Audio shuttle write failed: $written")
+                    offset += written
+                }
+            }
+        } catch (_: PreviewCancelled) {
+            Unit
+        } catch (_: Throwable) {
+            Unit
+        } finally {
+            if (activeShuttleToken == token) activeShuttleToken = 0L
+            if (track != null) {
+                synchronized(trackLock) {
+                    if (activeTrack === track) activeTrack = null
+                }
                 releaseTrackOnce(track)
             }
         }
@@ -278,12 +446,15 @@ internal class TimelineAudioPreviewController : Closeable {
         }
     }
 
-    private fun createTrack(volume: Float): AudioTrack {
+    private fun createTrack(
+        volume: Float,
+        minimumBufferBytes: Int = PREVIEW_WRITE_BYTES * 4,
+    ): AudioTrack {
         val minBuffer = AudioTrack.getMinBufferSize(
             PREVIEW_SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-        ).coerceAtLeast(PREVIEW_WRITE_BYTES * 4)
+        ).coerceAtLeast(minimumBufferBytes)
         return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
