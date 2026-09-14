@@ -22,6 +22,24 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+internal enum class CatalogCorruptionRecoveryMode {
+    FIRST_PAINT,
+    REFRESH,
+}
+
+internal suspend fun <T> recoverCatalogAfterCorruption(
+    mode: CatalogCorruptionRecoveryMode,
+    reset: () -> Unit,
+    rebuild: suspend () -> T,
+    emptyValue: T,
+): T {
+    reset()
+    return when (mode) {
+        CatalogCorruptionRecoveryMode.FIRST_PAINT -> emptyValue
+        CatalogCorruptionRecoveryMode.REFRESH -> rebuild()
+    }
+}
+
 object RecordingRepository {
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -47,8 +65,12 @@ object RecordingRepository {
                     // The database error handler has already preserved the damaged DB and
                     // removed the active copy. Reopen once and rebuild solely from surviving
                     // storage; destructive operations never use this automatic retry path.
-                    RecordingDatabase.resetAfterCorruption()
-                    refreshLocked(context)
+                    recoverCatalogAfterCorruption(
+                        mode = CatalogCorruptionRecoveryMode.REFRESH,
+                        reset = { RecordingDatabase.resetAfterCorruption() },
+                        rebuild = { refreshLocked(context) },
+                        emptyValue = emptyList(),
+                    )
                 }
             }
         }
@@ -74,11 +96,23 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
-                val pending = pendingDeletionIds(context)
-                visibleCatalogRecordings(
-                    RecordingDatabase.getInstance(context).recordingDao().listAll(),
-                    pending,
-                )
+                try {
+                    val pending = pendingDeletionIds(context)
+                    visibleCatalogRecordings(
+                        RecordingDatabase.getInstance(context).recordingDao().listAll(),
+                        pending,
+                    )
+                } catch (corrupt: SQLiteDatabaseCorruptException) {
+                    // The preservation handler froze and copied the corrupt database before
+                    // removing its active files. First paint must not crash while waiting for
+                    // refresh() to rebuild from authoritative storage.
+                    recoverCatalogAfterCorruption(
+                        mode = CatalogCorruptionRecoveryMode.FIRST_PAINT,
+                        reset = { RecordingDatabase.resetAfterCorruption() },
+                        rebuild = { emptyList() },
+                        emptyValue = emptyList(),
+                    )
+                }
             }
         }
     }

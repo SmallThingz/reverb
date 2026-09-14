@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -12,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 class DurabilityInvariantTest {
@@ -50,19 +52,105 @@ class DurabilityInvariantTest {
             val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
             val wal = File(database.path + "-wal").apply { writeBytes(byteArrayOf(5, 6, 7)) }
             val shm = File(database.path + "-shm").apply { writeBytes(byteArrayOf(8, 9)) }
+            val journal = File(database.path + "-journal").apply { writeBytes(byteArrayOf(10, 11, 12)) }
             val recoveryRoot = File(root, "recovery")
 
             val first = requireNotNull(preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
             assertArrayEquals(database.readBytes(), File(first, database.name).readBytes())
             assertArrayEquals(wal.readBytes(), File(first, wal.name).readBytes())
             assertArrayEquals(shm.readBytes(), File(first, shm.name).readBytes())
+            assertArrayEquals(journal.readBytes(), File(first, journal.name).readBytes())
             assertTrue(database.isFile)
             assertTrue(wal.isFile)
             assertTrue(shm.isFile)
+            assertTrue(journal.isFile)
 
             val second = requireNotNull(preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
             assertTrue(second.name != first.name)
             assertArrayEquals(database.readBytes(), File(second, database.name).readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_rejectsSourceMutationDuringCopy() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "source-mutation-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val recoveryRoot = File(root, "recovery")
+            val preserved = preserveCorruptRecordingDatabase(
+                database,
+                recoveryRoot,
+                "snapshot",
+                InjectedRecordingDatabaseRecoveryIo(
+                    copyOverride = { source, target ->
+                        target.writeBytes(source.readBytes())
+                        source.writeBytes(byteArrayOf(9, 9, 9, 9))
+                    },
+                ),
+            )
+
+            assertEquals(null, preserved)
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+            assertTrue(File(recoveryRoot, "snapshot.partial").isDirectory)
+            assertArrayEquals(byteArrayOf(9, 9, 9, 9), database.readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_rejectsNewSidecarDuringCopy() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "sidecar-race-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val wal = File(database.path + "-wal")
+            val recoveryRoot = File(root, "recovery")
+            val preserved = preserveCorruptRecordingDatabase(
+                database,
+                recoveryRoot,
+                "snapshot",
+                InjectedRecordingDatabaseRecoveryIo(
+                    copyOverride = { source, target ->
+                        target.writeBytes(source.readBytes())
+                        wal.writeBytes(byteArrayOf(5, 6, 7))
+                    },
+                ),
+            )
+
+            assertEquals(null, preserved)
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+            assertTrue(wal.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_rejectsMismatchedCopy() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "copy-mismatch-").toFile()
+        try {
+            val original = byteArrayOf(1, 2, 3, 4)
+            val database = File(root, "recordings.db").apply { writeBytes(original) }
+            val recoveryRoot = File(root, "recovery")
+            val preserved = preserveCorruptRecordingDatabase(
+                database,
+                recoveryRoot,
+                "snapshot",
+                InjectedRecordingDatabaseRecoveryIo(
+                    copyOverride = { source, target ->
+                        target.writeBytes(source.readBytes() + byteArrayOf(99))
+                    },
+                ),
+            )
+
+            assertEquals(null, preserved)
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+            assertArrayEquals(original, database.readBytes())
         } finally {
             root.deleteRecursively()
         }
@@ -80,6 +168,213 @@ class DurabilityInvariantTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_atomicPublishFailureNeverCreatesFinalSnapshot() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "publish-failure-").toFile()
+        try {
+            val original = byteArrayOf(1, 2, 3, 4)
+            val database = File(root, "recordings.db").apply { writeBytes(original) }
+            val recoveryRoot = File(root, "recovery")
+            val preserved = preserveCorruptRecordingDatabase(
+                database,
+                recoveryRoot,
+                "snapshot",
+                InjectedRecordingDatabaseRecoveryIo(
+                    atomicMoveError = AtomicMoveNotSupportedException(
+                        "snapshot.partial",
+                        "snapshot",
+                        "injected",
+                    ),
+                ),
+            )
+
+            assertEquals(null, preserved)
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+            val partial = File(recoveryRoot, "snapshot.partial")
+            assertTrue(partial.isDirectory)
+            assertArrayEquals(original, File(partial, database.name).readBytes())
+            assertArrayEquals(original, database.readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_existingPartialIsNeverPromotedOrOverwritten() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "partial-collision-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val recoveryRoot = File(root, "recovery").apply { mkdirs() }
+            val stalePartial = File(recoveryRoot, "snapshot.partial").apply { mkdir() }
+            val marker = File(stalePartial, "marker").apply { writeText("stale") }
+
+            val preserved = requireNotNull(
+                preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"),
+            )
+
+            assertEquals("snapshot-1", preserved.name)
+            assertTrue(stalePartial.isDirectory)
+            assertEquals("stale", marker.readText())
+            assertArrayEquals(database.readBytes(), File(preserved, database.name).readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_rejectsSidecarDisappearanceAfterCopy() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "sidecar-disappear-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val wal = File(database.path + "-wal").apply { writeBytes(byteArrayOf(5, 6, 7)) }
+            val recoveryRoot = File(root, "recovery")
+            val io = InjectedRecordingDatabaseRecoveryIo(
+                afterCopy = { source, _ ->
+                    if (source == wal) assertTrue(wal.delete())
+                },
+            )
+
+            assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", io))
+            assertTrue(database.isFile)
+            assertFalse(wal.exists())
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+            assertTrue(File(recoveryRoot, "snapshot.partial").isDirectory)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_failsClosedWhenPrePublicationDirectorySyncFails() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "sync-failure-").toFile()
+        try {
+            val original = byteArrayOf(1, 2, 3, 4)
+            val database = File(root, "recordings.db").apply { writeBytes(original) }
+            val recoveryRoot = File(root, "recovery")
+            val io = InjectedRecordingDatabaseRecoveryIo(failForceAt = 3)
+
+            assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", io))
+            assertArrayEquals(original, database.readBytes())
+            assertTrue(File(recoveryRoot, "snapshot.partial").isDirectory)
+            assertFalse(File(recoveryRoot, "snapshot").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_postPublicationDirectorySyncFailureKeepsSourceAndReturnsFailure() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "post-publish-sync-").toFile()
+        try {
+            val original = byteArrayOf(1, 2, 3, 4)
+            val database = File(root, "recordings.db").apply { writeBytes(original) }
+            val recoveryRoot = File(root, "recovery")
+            val io = InjectedRecordingDatabaseRecoveryIo(failForceAt = 4)
+
+            assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", io))
+            assertArrayEquals(original, database.readBytes())
+            val final = File(recoveryRoot, "snapshot")
+            assertTrue(final.isDirectory)
+            assertFalse(File(recoveryRoot, "snapshot.partial").exists())
+            assertArrayEquals(original, File(final, database.name).readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_retryAfterFailedPublicationPreservesBothAttempts() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "retry-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val recoveryRoot = File(root, "recovery")
+            val firstIo = InjectedRecordingDatabaseRecoveryIo(
+                atomicMoveError = AtomicMoveNotSupportedException("snapshot.partial", "snapshot", "injected"),
+            )
+            assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", firstIo))
+
+            val retry = requireNotNull(preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot"))
+            assertEquals("snapshot-1", retry.name)
+            assertTrue(File(recoveryRoot, "snapshot.partial").isDirectory)
+            assertArrayEquals(database.readBytes(), File(retry, database.name).readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun catalogCorruption_firstPaintResetsButDoesNotRunProviderRebuild() = runBlocking {
+        val events = mutableListOf<String>()
+        val result = recoverCatalogAfterCorruption(
+            mode = CatalogCorruptionRecoveryMode.FIRST_PAINT,
+            reset = { events += "reset" },
+            rebuild = {
+                events += "rebuild"
+                listOf("unexpected")
+            },
+            emptyValue = emptyList(),
+        )
+
+        assertEquals(emptyList<String>(), result)
+        assertEquals(listOf("reset"), events)
+    }
+
+    @Test
+    fun catalogCorruption_refreshResetsThenRebuildsFromAuthoritativeStorage() = runBlocking {
+        val events = mutableListOf<String>()
+        val recovered = RecordingEntity(
+            id = "recovered",
+            displayName = "recovered.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 10L,
+            durationMillis = 20L,
+            sizeBytes = 30L,
+            codecSummary = "WAV",
+            storageType = RecordingStorageType.FILE.name,
+            directoryId = "storage",
+            createdAtMillis = 10L,
+        )
+        val result = recoverCatalogAfterCorruption(
+            mode = CatalogCorruptionRecoveryMode.REFRESH,
+            reset = { events += "reset" },
+            rebuild = {
+                events += "rebuild"
+                listOf(recovered)
+            },
+            emptyValue = emptyList(),
+        )
+
+        assertEquals(listOf(recovered), result)
+        assertEquals(listOf("reset", "rebuild"), events)
+    }
+
+    @Test
+    fun catalogCorruption_refreshRetriesOnlyOnceAndPropagatesRepeatedFailure() {
+        val events = mutableListOf<String>()
+        val error = assertThrows(IOException::class.java) {
+            runBlocking {
+                recoverCatalogAfterCorruption(
+                    mode = CatalogCorruptionRecoveryMode.REFRESH,
+                    reset = { events += "reset" },
+                    rebuild = {
+                        events += "rebuild"
+                        throw IOException("still unavailable")
+                    },
+                    emptyValue = emptyList<String>(),
+                )
+            }
+        }
+
+        assertEquals("still unavailable", error.message)
+        assertEquals(listOf("reset", "rebuild"), events)
     }
 
     @Test
@@ -812,4 +1107,33 @@ class DurabilityInvariantTest {
         assertTrue(isRecordingEligibleForMove("keep-me", pending))
     }
 
+}
+
+private class InjectedRecordingDatabaseRecoveryIo(
+    private val copyOverride: ((File, File) -> Unit)? = null,
+    private val afterCopy: ((File, File) -> Unit)? = null,
+    private val failForceAt: Int? = null,
+    private val atomicMoveError: IOException? = null,
+) : RecordingDatabaseRecoveryIo {
+    private var forceCalls = 0
+
+    override fun sha256(file: File): ByteArray = DefaultRecordingDatabaseRecoveryIo.sha256(file)
+
+    override fun copyAndSync(source: File, target: File) {
+        val copy = copyOverride
+        if (copy != null) copy(source, target)
+        else DefaultRecordingDatabaseRecoveryIo.copyAndSync(source, target)
+        afterCopy?.invoke(source, target)
+    }
+
+    override fun forceDirectory(directory: File) {
+        forceCalls++
+        if (forceCalls == failForceAt) throw IOException("Injected directory sync failure")
+        DefaultRecordingDatabaseRecoveryIo.forceDirectory(directory)
+    }
+
+    override fun atomicMove(source: File, target: File) {
+        atomicMoveError?.let { throw it }
+        DefaultRecordingDatabaseRecoveryIo.atomicMove(source, target)
+    }
 }

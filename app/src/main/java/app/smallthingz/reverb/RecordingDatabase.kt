@@ -13,7 +13,11 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 
 data class RecordingEntity(
     val id: String,
@@ -241,8 +245,8 @@ private class PreservingRecordingDatabaseErrorHandler(
         val preserved = preserveCorruptRecordingDatabase(databaseFile, recoveryRoot)
             ?: throw SQLiteException("Recording database is corrupt and could not be preserved")
 
-        val removed = SQLiteDatabase.deleteDatabase(databaseFile)
-        if (!removed && recordingDatabaseSidecars(databaseFile).any(File::exists)) {
+        SQLiteDatabase.deleteDatabase(databaseFile)
+        if (recordingDatabaseSidecars(databaseFile).any(File::exists)) {
             throw SQLiteException("Recording database was preserved at ${preserved.name} but could not be reset")
         }
         databaseFile.parentFile?.takeIf(File::isDirectory)?.let(::forceRecordingDatabaseDirectoryDurable)
@@ -256,10 +260,42 @@ internal fun recordingDatabaseSidecars(databaseFile: File): List<File> = listOf(
     File(databaseFile.path + "-journal"),
 )
 
+internal interface RecordingDatabaseRecoveryIo {
+    fun sha256(file: File): ByteArray
+
+    fun copyAndSync(source: File, target: File)
+
+    fun forceDirectory(directory: File)
+
+    fun atomicMove(source: File, target: File)
+}
+
+internal object DefaultRecordingDatabaseRecoveryIo : RecordingDatabaseRecoveryIo {
+    override fun sha256(file: File): ByteArray = sha256DatabaseFile(file)
+
+    override fun copyAndSync(source: File, target: File) {
+        FileInputStream(source).use { input ->
+            FileOutputStream(target).use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+    }
+
+    override fun forceDirectory(directory: File) {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+    }
+
+    override fun atomicMove(source: File, target: File) {
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+    }
+}
+
 internal fun preserveCorruptRecordingDatabase(
     databaseFile: File,
     recoveryRoot: File,
     recoveryId: String = "${System.currentTimeMillis()}-${java.util.UUID.randomUUID()}",
+    io: RecordingDatabaseRecoveryIo = DefaultRecordingDatabaseRecoveryIo,
 ): File? {
     val sources = recordingDatabaseSidecars(databaseFile).filter(File::isFile)
     if (sources.isEmpty()) return null
@@ -268,38 +304,70 @@ internal fun preserveCorruptRecordingDatabase(
         if (!rootExisted && !recoveryRoot.mkdirs() && !recoveryRoot.isDirectory) {
             throw IOException("Unable to create recording database recovery directory")
         }
-        if (!rootExisted) recoveryRoot.parentFile?.takeIf(File::isDirectory)?.let(::forceRecordingDatabaseDirectoryDurable)
+        if (!rootExisted) {
+            recoveryRoot.parentFile?.takeIf(File::isDirectory)?.let(io::forceDirectory)
+        }
 
         var suffix = 0
         var destination: File
         do {
             destination = File(recoveryRoot, if (suffix == 0) recoveryId else "$recoveryId-$suffix")
             suffix++
-        } while (destination.exists())
-        if (!destination.mkdir()) throw IOException("Unable to create recording database recovery snapshot")
-        forceRecordingDatabaseDirectoryDurable(recoveryRoot)
+        } while (destination.exists() || File(recoveryRoot, destination.name + ".partial").exists())
+        val staging = File(recoveryRoot, destination.name + ".partial")
+        if (!staging.mkdir()) throw IOException("Unable to create recording database recovery snapshot")
+        io.forceDirectory(recoveryRoot)
 
+        val sourceDigests = LinkedHashMap<String, ByteArray>(sources.size)
         sources.forEach { source ->
-            val sourceBytes = source.length()
-            val target = File(destination, source.name)
-            FileInputStream(source).use { input ->
-                FileOutputStream(target).use { output ->
-                    input.copyTo(output)
-                    output.fd.sync()
-                }
-            }
-            if (target.length() != sourceBytes) {
-                throw IOException("Incomplete recording database recovery copy: ${source.name}")
+            sourceDigests[source.name] = io.sha256(source)
+        }
+        sources.forEach { source ->
+            val target = File(staging, source.name)
+            io.copyAndSync(source, target)
+            val expectedDigest = sourceDigests.getValue(source.name)
+            if (!expectedDigest.contentEquals(io.sha256(target))) {
+                throw IOException("Recording database recovery copy mismatch: ${source.name}")
             }
         }
-        forceRecordingDatabaseDirectoryDurable(destination)
-        forceRecordingDatabaseDirectoryDurable(recoveryRoot)
+
+        val finalSources = recordingDatabaseSidecars(databaseFile).filter(File::isFile)
+        if (finalSources.map(File::getName) != sources.map(File::getName)) {
+            throw IOException("Recording database sidecar set changed during recovery")
+        }
+        finalSources.forEach { source ->
+            val expectedDigest = sourceDigests.getValue(source.name)
+            if (!expectedDigest.contentEquals(io.sha256(source))) {
+                throw IOException("Recording database source changed during recovery: ${source.name}")
+            }
+        }
+
+        io.forceDirectory(staging)
+        try {
+            io.atomicMove(staging, destination)
+        } catch (error: AtomicMoveNotSupportedException) {
+            throw IOException("Atomic recording database recovery publication is unavailable", error)
+        }
+        io.forceDirectory(recoveryRoot)
         destination
     }.getOrNull()
 }
 
+private fun sha256DatabaseFile(file: File): ByteArray {
+    val digest = MessageDigest.getInstance("SHA-256")
+    FileInputStream(file).use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (count > 0) digest.update(buffer, 0, count)
+        }
+    }
+    return digest.digest()
+}
+
 private fun forceRecordingDatabaseDirectoryDurable(directory: File) {
-    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+    DefaultRecordingDatabaseRecoveryIo.forceDirectory(directory)
 }
 
 private fun SQLiteDatabase.upsertRecording(recording: RecordingEntity) {

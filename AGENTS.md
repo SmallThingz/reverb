@@ -56,6 +56,7 @@
 - The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its appearance must not shrink its touch target.
 - Recording catalog metadata/waveform caches are identity-bound; provider identity uncertainty may preserve known metadata but must invalidate cache trust, and identity-sensitive actions must revalidate before use.
 - A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed.
+- Corrupt catalog preservation stages into a `.partial` recovery directory, verifies the frozen DB/sidecar membership and content digests before and after copy, and atomically publishes plus fsyncs the recovery parent before the active database may be reset.
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
 - Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
 - Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while accumulating the exact integrated delta.
