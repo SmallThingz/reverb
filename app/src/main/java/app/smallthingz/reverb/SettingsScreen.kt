@@ -223,26 +223,6 @@ fun SettingsScreen(
     var canMove by remember { mutableStateOf(false) }
     var batteryOptimizationRestricted by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
 
-    // Pre-computed label lists
-    var formatLabels by remember { mutableStateOf(availableFormats.map { resources.getString(it.labelRes) }) }
-    var sampleFormatLabels by remember {
-        mutableStateOf(PcmSampleFormat.entries.map { resources.getString(it.labelRes) })
-    }
-    var sourceLabels by remember { mutableStateOf(availableSourceModes.map { resources.getString(it.labelRes) }) }
-    var channelModeLabels by remember { mutableStateOf(ChannelMode.entries.map { resources.getString(it.labelRes) }) }
-    var routeLabels by remember { mutableStateOf(InputRouteMode.entries.map { resources.getString(it.labelRes) }) }
-    var sampleRateLabels by remember { mutableStateOf(emptyList<String>()) }
-
-    // Selection labels
-    var selectedFormatLabel by remember { mutableStateOf(resources.getString(supportedFormats().first().labelRes)) }
-    var selectedSampleFormatLabel by remember { mutableStateOf(resources.getString(PcmSampleFormat.PCM_16.labelRes)) }
-    var selectedSourceLabel by remember {
-        mutableStateOf(resources.getString(AudioSourceMode.availableModes().first().labelRes))
-    }
-    var selectedChannelModeLabel by remember { mutableStateOf(resources.getString(ChannelMode.MONO.labelRes)) }
-    var selectedRouteLabel by remember { mutableStateOf(resources.getString(InputRouteMode.AUTO.labelRes)) }
-    var selectedSampleRateLabel by remember { mutableStateOf(sampleRateLabel(48_000)) }
-
     fun refreshExportDirectoryUi() {
         exportPathText = describeOutputDirectory(context, selectedExportTreeUri)
     }
@@ -280,8 +260,6 @@ fun SettingsScreen(
         )
         val rate = preferred.takeIf { it in availableSampleRates } ?: availableSampleRates.first()
         selectedSampleRate = rate
-        sampleRateLabels = availableSampleRates.map { sampleRateLabel(it) }
-        selectedSampleRateLabel = sampleRateLabel(rate)
     }
 
     fun refreshChannelModes(
@@ -291,8 +269,6 @@ fun SettingsScreen(
         availableChannelModes = ChannelMode.entries
         val cm = preferredChannelMode?.takeIf { it in availableChannelModes } ?: availableChannelModes.first()
         selectedChannelMode = cm
-        channelModeLabels = availableChannelModes.map { resources.getString(it.labelRes) }
-        selectedChannelModeLabel = resources.getString(cm.labelRes)
         refreshSampleRates(preferredRate)
     }
 
@@ -304,8 +280,6 @@ fun SettingsScreen(
         availableSourceModes = AudioSourceMode.availableModes()
         val s = preferredSource?.takeIf { it in availableSourceModes } ?: availableSourceModes.first()
         selectedSource = s
-        sourceLabels = availableSourceModes.map { resources.getString(it.labelRes) }
-        selectedSourceLabel = resources.getString(s.labelRes)
         refreshChannelModes(preferredChannelMode, preferredRate)
     }
 
@@ -420,18 +394,12 @@ fun SettingsScreen(
         selectedTheme = prev.themeMode
         onThemeChanged(prev.themeMode)
         selectedFormat = prev.format ?: availableFormats.first()
-        selectedFormatLabel = resources.getString((prev.format ?: availableFormats.first()).labelRes)
         selectedCodec = prev.codec ?: availableCodecs.first()
         selectedRoute = prev.route ?: availableRouteModes.first()
-        selectedRouteLabel = resources.getString((prev.route ?: availableRouteModes.first()).labelRes)
         selectedSampleFormat = prev.sampleFormat
-        selectedSampleFormatLabel = resources.getString(selectedSampleFormat.labelRes)
         selectedSource = prev.source ?: availableSourceModes.first()
-        selectedSourceLabel = resources.getString(selectedSource.labelRes)
         selectedChannelMode = prev.channelMode ?: ChannelMode.MONO
-        selectedChannelModeLabel = resources.getString(selectedChannelMode.labelRes)
         selectedSampleRate = prev.sampleRate.takeIf { it > 0 } ?: selectedSampleRate
-        selectedSampleRateLabel = sampleRateLabel(selectedSampleRate)
 
         refreshCodecOptions(
             preferredCodec = prev.codec,
@@ -699,17 +667,11 @@ fun SettingsScreen(
 
         availableFormats = supportedFormats()
         selectedFormat = configuredFormat.takeIf { it in availableFormats } ?: availableFormats.first()
-        formatLabels = availableFormats.map { resources.getString(it.labelRes) }
-        selectedFormatLabel = resources.getString(selectedFormat.labelRes)
 
         availableRouteModes = InputRouteMode.entries
         selectedRoute = configuredRouteVal
-        routeLabels = availableRouteModes.map { resources.getString(it.labelRes) }
-        selectedRouteLabel = resources.getString(configuredRouteVal.labelRes)
 
         selectedSampleFormat = configuredSampleFormatVal
-        sampleFormatLabels = PcmSampleFormat.entries.map { resources.getString(it.labelRes) }
-        selectedSampleFormatLabel = resources.getString(configuredSampleFormatVal.labelRes)
 
         refreshCodecOptions(
             preferredCodec = configuredCodec,
@@ -1029,15 +991,15 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (formatLabels.size > 1) {
+                if (availableFormats.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.format_label),
-                        selectedValue = selectedFormatLabel,
-                        options = formatLabels,
-                        onOptionSelected = { label ->
-                            selectedFormatLabel = label
-                            selectedFormat = availableFormats.first { resources.getString(it.labelRes) == label }
+                        selectedValue = selectedFormat,
+                        options = availableFormats,
+                        optionLabel = { resources.getString(it.labelRes) },
+                        onOptionSelected = { format ->
+                            selectedFormat = format
                             refreshCodecOptions(
                                 preferredCodec = selectedCodec,
                                 preferredSource = selectedSource,
@@ -1051,17 +1013,15 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (channelModeLabels.size > 1) {
+                if (availableChannelModes.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.channel_mode_label),
-                        selectedValue = selectedChannelModeLabel,
-                        options = channelModeLabels,
-                        onOptionSelected = { label ->
-                            selectedChannelModeLabel = label
-                            selectedChannelMode = availableChannelModes.first {
-                                resources.getString(it.labelRes) == label
-                            }
+                        selectedValue = selectedChannelMode,
+                        options = availableChannelModes,
+                        optionLabel = { resources.getString(it.labelRes) },
+                        onOptionSelected = { channelMode ->
+                            selectedChannelMode = channelMode
                             refreshSampleRates(selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
@@ -1075,17 +1035,15 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (sampleFormatLabels.size > 1) {
+                if (PcmSampleFormat.entries.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.sample_format_label),
-                        selectedValue = selectedSampleFormatLabel,
-                        options = sampleFormatLabels,
-                        onOptionSelected = { label ->
-                            selectedSampleFormatLabel = label
-                            selectedSampleFormat = PcmSampleFormat.entries.first {
-                                resources.getString(it.labelRes) == label
-                            }
+                        selectedValue = selectedSampleFormat,
+                        options = PcmSampleFormat.entries,
+                        optionLabel = { resources.getString(it.labelRes) },
+                        onOptionSelected = { sampleFormat ->
+                            selectedSampleFormat = sampleFormat
                             refreshSourceModes(
                                 preferredSource = selectedSource,
                                 preferredChannelMode = selectedChannelMode,
@@ -1098,16 +1056,15 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (sampleRateLabels.size > 1) {
+                if (availableSampleRates.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.sample_rate_label),
-                        selectedValue = selectedSampleRateLabel,
-                        options = sampleRateLabels,
-                        onOptionSelected = { label ->
-                            selectedSampleRateLabel = label
-                            availableSampleRates.firstOrNull { sampleRateLabel(it) == label }
-                                ?.let { selectedSampleRate = it }
+                        selectedValue = selectedSampleRate,
+                        options = availableSampleRates,
+                        optionLabel = ::sampleRateLabel,
+                        onOptionSelected = { sampleRate ->
+                            selectedSampleRate = sampleRate
                             refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
                             pushUndoState()
@@ -1120,15 +1077,15 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (sourceLabels.size > 1) {
+                if (availableSourceModes.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.audio_source_label),
-                        selectedValue = selectedSourceLabel,
-                        options = sourceLabels,
-                        onOptionSelected = { label ->
-                            selectedSourceLabel = label
-                            selectedSource = availableSourceModes.first { resources.getString(it.labelRes) == label }
+                        selectedValue = selectedSource,
+                        options = availableSourceModes,
+                        optionLabel = { resources.getString(it.labelRes) },
+                        onOptionSelected = { source ->
+                            selectedSource = source
                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
                             saveCurrentToSnapshot(currentSnapshot)
@@ -1137,15 +1094,15 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (routeLabels.size > 1) {
+                if (availableRouteModes.size > 1) {
                     SettingsDropdown(
                         active = active,
                         label = stringResource(R.string.input_route_label),
-                        selectedValue = selectedRouteLabel,
-                        options = routeLabels,
-                        onOptionSelected = { label ->
-                            selectedRouteLabel = label
-                            selectedRoute = availableRouteModes.first { resources.getString(it.labelRes) == label }
+                        selectedValue = selectedRoute,
+                        options = availableRouteModes,
+                        optionLabel = { resources.getString(it.labelRes) },
+                        onOptionSelected = { route ->
+                            selectedRoute = route
                             refreshSourceModes(
                                 preferredSource = selectedSource,
                                 preferredChannelMode = selectedChannelMode,
@@ -1674,12 +1631,13 @@ private fun ThemeSelector(
 }
 
 @Composable
-private fun SettingsDropdown(
+private fun <T> SettingsDropdown(
     active: Boolean,
     label: String,
-    selectedValue: String,
-    options: List<String>,
-    onOptionSelected: (String) -> Unit,
+    selectedValue: T,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onOptionSelected: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1717,7 +1675,7 @@ private fun SettingsDropdown(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = selectedValue,
+                        text = optionLabel(selectedValue),
                         style = MaterialTheme.typography.bodyLarge,
                         color = chrome.ink,
                         maxLines = 1,
@@ -1738,10 +1696,11 @@ private fun SettingsDropdown(
         ) {
             options.forEach { option ->
                 val selected = option == selectedValue
+                val optionText = optionLabel(option)
                 DropdownMenuItem(
                     text = {
                         Text(
-                            text = option,
+                            text = optionText,
                             color = if (selected) chrome.ink else chrome.muted,
                         )
                     },

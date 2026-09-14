@@ -18,6 +18,7 @@
 - Library recording playback expands the tapped recording card vertically in place; never replace it with a player dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim.
 - Saved recording waveforms are cached in the catalog against a content revision and mirrored into the open Library state; never reuse a cache after the physical content identity, size, or duration changes.
 - Library editors, confirmations, errors, and permission prompts use Reverb-styled sheets instead of stock alert dialogs; About remains a custom animated top panel.
+- Settings choice identity is the typed enum/value, never its localized display label; labels are presentation-only so duplicate translations or locale changes cannot retarget a setting.
 
 # Reverb durability invariants
 

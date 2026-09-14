@@ -649,7 +649,7 @@ internal class TimelineAudioPreviewController : Closeable {
             }
         } catch (_: PreviewCancelled) {
             Unit
-        } catch (_: Throwable) {
+        } catch (_: Exception) {
             Unit
         } finally {
             if (activeShuttleToken == token) activeShuttleToken = 0L
@@ -738,7 +738,7 @@ internal class TimelineAudioPreviewController : Closeable {
             postIfCurrent(token, onFinished)
         } catch (_: PreviewCancelled) {
             Unit
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             if (isCurrent(token)) postIfCurrent(token) { onError(error) }
         } finally {
             runCatching { child?.close() }
