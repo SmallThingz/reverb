@@ -1011,13 +1011,18 @@ private fun MainCaptureContent(
             ReverbService.BufferSlot.ONE_SHOT -> oneShotBlobActivity
             ReverbService.BufferSlot.LOOPING -> loopingBlobActivity
         }
-        val sourceGeometry = rangeMorphSourceGeometry(
-            rootBoundsInRoot = homeRootBoundsInRoot[0],
-            blobBoundsInRoot = homeBlobBoundsInRoot[0],
-            active = isListening && activeBuffer == rangeBuffer,
-            enabled = rangeEnabled,
-            activity = rangeBlobActivity,
-        )
+        // Freeze the source model at the renderer handoff. The home blob is no longer present
+        // after this branch is entered, so later visualizer/service updates must not move the
+        // starting endpoint underneath an in-flight morph.
+        val sourceGeometry = remember(rangeBuffer, activeRangeSnapshot) {
+            rangeMorphSourceGeometry(
+                rootBoundsInRoot = homeRootBoundsInRoot[0],
+                blobBoundsInRoot = homeBlobBoundsInRoot[0],
+                active = isListening && activeBuffer == rangeBuffer,
+                enabled = rangeEnabled,
+                activity = rangeBlobActivity,
+            )
+        }
         RangeExportHomeContent(
             snapshot = activeRangeSnapshot,
             initialDurationSeconds = rangeMetrics.seconds.coerceAtLeast(0.05f),

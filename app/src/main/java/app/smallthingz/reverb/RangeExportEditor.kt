@@ -521,9 +521,6 @@ internal class RangeExportEditorState(
             }
         }
     }
-            }
-        }
-    }
 
     fun finishWaveformConstruction() {
         waveformLoading = false
@@ -972,6 +969,15 @@ internal fun RangeExportHomeContent(
             return@LaunchedEffect
         }
         transitionStarted = true
+    }
+    LaunchedEffect(selectedBuffer, transitionStarted) {
+        if (!transitionStarted) {
+            interactionReady = false
+            return@LaunchedEffect
+        }
+        // Source geometry can keep changing with live activity after the morph starts. Readiness
+        // must depend only on the opening animation or those updates can cancel this waiter and
+        // leave the settled range editor permanently disabled.
         snapshotFlow { transitionProgress.value }.first { it >= 0.98f }
         interactionReady = true
     }
