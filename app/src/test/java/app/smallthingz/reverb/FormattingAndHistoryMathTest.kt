@@ -238,6 +238,21 @@ class FormattingAndHistoryMathTest {
         )
         assertFalse(sameRecordingActionTarget(selected, selected.copy(fileIdentity = "stat:b")))
         assertFalse(sameRecordingActionTarget(selected, selected.copy(fileIdentity = "")))
+        assertTrue(sameRecordingActionTarget(selected, selected.copy(displayName = "renamed-label.wav")))
+
+        val provider = selected.copy(
+            id = "content://media/external/audio/media/42",
+            storageType = RecordingStorageType.MEDIASTORE.name,
+            fileIdentity = "provider:MEDIASTORE:item:2000:7",
+        )
+        assertTrue(sameRecordingActionTarget(provider, provider.copy(displayName = "other-label.wav")))
+        assertFalse(
+            sameRecordingActionTarget(
+                provider,
+                provider.copy(fileIdentity = "provider:MEDIASTORE:item:2000:8"),
+            ),
+        )
+        assertFalse(sameRecordingActionTarget(provider, provider.copy(fileIdentity = "")))
 
         val legacy = selected.copy(fileIdentity = "")
         assertTrue(sameRecordingActionTarget(legacy, legacy.copy(displayName = "renamed-label.wav")))

@@ -58,6 +58,7 @@
 - Chunk-store close/checkpoint failures must surface to the service; after an atomic retention-boundary replacement becomes visible, in-memory geometry must follow the published bytes even if the following directory fsync reports failure.
 - The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its appearance must not shrink its touch target.
 - Recording catalog metadata/waveform caches are identity-bound; provider identity uncertainty may preserve known metadata but must invalidate cache trust, and identity-sensitive actions must revalidate before use.
+- User-initiated recording mutations are bound to the selected asset identity; delayed delete/undo work and queued rename requests must never retarget a later object that reuses the same path or provider URI.
 - A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed.
 - Corrupt catalog preservation stages into a `.partial` recovery directory, verifies the frozen DB/sidecar membership and content digests before and after copy, and atomically publishes plus fsyncs the recovery parent before the active database may be reset.
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.

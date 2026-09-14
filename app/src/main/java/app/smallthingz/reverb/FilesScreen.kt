@@ -215,8 +215,29 @@ fun FilesScreen(
                     deletionsCommittedInBackground = false
                     isDeleting = false
                 } else {
+                    var pendingTargetInvalidated = false
                     pendingDeletions.keys.toList().forEach { id ->
-                        if (id !in storedById) pendingDeletions.remove(id)
+                        val requested = pendingDeletions[id]
+                        val updated = storedById[id]
+                        when {
+                            updated == null || requested == null -> pendingDeletions.remove(id)
+                            !sameRecordingActionTarget(requested, updated) -> {
+                                pendingDeletions.remove(id)
+                                pendingTargetInvalidated = true
+                            }
+                        }
+                    }
+                    if (pendingDeletions.isEmpty()) {
+                        deletionJob?.cancel()
+                        deletionJob = null
+                        isDeleting = false
+                        if (notice?.canUndo == true) notice = null
+                        if (pendingTargetInvalidated) {
+                            notice = LibraryNotice(
+                                resources.getString(R.string.recording_delete_failed),
+                                FeedbackTone.ERROR,
+                            )
+                        }
                     }
                 }
             } catch (cancelled: CancellationException) {
