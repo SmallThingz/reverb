@@ -326,9 +326,12 @@ internal fun rangeFineTuneShuttleRate(
     val magnitude = abs(pull)
     if (magnitude <= 0.002f) return 0f
     val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    val baseSpeed = 0.30f + 7.70f * normalized.pow(1.7f)
+    // Once shuttle audio starts, keep it at least real-time. Sub-1x tape-style
+    // playback is the warbly/undersampled sound users hear during precise drags.
+    // Precision still changes cursor velocity; it no longer pitch-stretches the audio.
+    val baseSpeed = 1f + 7f * normalized.pow(2f)
     val verticalScale = rangeFineTuneSpeedScale(verticalPull).pow(0.32f)
-    return sign(pull) * (baseSpeed * verticalScale).coerceIn(0.15f, 8f)
+    return sign(pull) * (baseSpeed * verticalScale).coerceIn(1f, 8f)
 }
 
 internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
@@ -1600,9 +1603,7 @@ private fun SpringFineAdjust(
                 val dtSeconds = elapsedNanos / 1_000_000_000f
                 val liveHorizontalPull = horizontalPull
                 val liveY = rangeFineTuneConstrainedY(rawVerticalPull, liveHorizontalPull)
-                state.updateFineAdjustShuttle(
-                    rangeFineTuneShuttleRate(liveHorizontalPull, liveY),
-                )
+                val shuttleRate = rangeFineTuneShuttleRate(liveHorizontalPull, liveY)
                 commitAccumulator.add(
                     deltaSeconds = rangeFineTuneDeltaSeconds(
                         horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
@@ -1618,6 +1619,9 @@ private fun SpringFineAdjust(
                         state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
                     }
                 }
+                // Publish the audio command after any coalesced cursor commit so the next
+                // grain is centered on the freshest timeline position, not the prior frame.
+                state.updateFineAdjustShuttle(shuttleRate)
             }
         }
     }

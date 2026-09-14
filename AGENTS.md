@@ -65,5 +65,5 @@
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
 - Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
 - Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while accumulating the exact integrated delta.
-- Range fine-adjust shuttle audio follows the puck direction: right is forward, left is reverse, and pull magnitude controls playback speed without pausing the audio during the gesture.
+- Range fine-adjust shuttle audio follows the puck direction: right is forward, left is reverse, and pull magnitude controls playback speed without pausing the audio during the gesture; audible shuttle playback never drops below 1x and shuttle audition uses normal-pitch grains crossfaded across blocks instead of time-stretch resampling.
 - Blob-to-range uses one continuous material path after the initial renderer handoff: its bounds and envelope morph from the blob body into the timeline waveform; never implement this transition as overlapping blob/timeline opacity fades.

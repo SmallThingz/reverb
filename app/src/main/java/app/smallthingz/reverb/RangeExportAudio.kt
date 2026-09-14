@@ -17,7 +17,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.floor
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -27,8 +26,9 @@ private const val PREVIEW_WRITE_BYTES = 2_400
 private const val SCRUB_AUDITION_SECONDS = 0.14
 private const val SCRUB_AUDITION_LEAD_SECONDS = 0.02
 private const val PREVIEW_PROGRESS_INTERVAL_MILLIS = 32L
-private const val SHUTTLE_OUTPUT_BLOCK_SECONDS = 0.032
-private const val SHUTTLE_MIN_ABS_RATE = 0.15f
+private const val SHUTTLE_GRAIN_OUTPUT_SECONDS = 0.040
+private const val SHUTTLE_CROSSFADE_SECONDS = 0.008
+private const val SHUTTLE_MIN_ABS_RATE = 1f
 private const val SHUTTLE_MAX_ABS_RATE = 8f
 
 internal const val RANGE_WAVEFORM_COARSE_BUCKETS = 96
@@ -50,39 +50,79 @@ internal fun normalizeWaveformEnvelope(raw: FloatArray): FloatArray =
     FloatArray(raw.size) { index -> shapeWaveformMagnitude(raw[index]) }
 
 
-internal fun resampleShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteArray {
+internal fun orientShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteArray {
     val frameCount = input.size / 2
     if (frameCount <= 0 || !signedRate.isFinite()) return ByteArray(0)
-    val speed = abs(signedRate).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
-    val outputFrames = (frameCount.toFloat() / speed).roundToInt().coerceAtLeast(1)
-    val output = ByteArray(outputFrames * 2)
-
-    fun sample(frame: Int): Int {
-        val index = frame.coerceIn(0, frameCount - 1) * 2
-        return ((input[index + 1].toInt() shl 8) or (input[index].toInt() and 0xff)).toShort().toInt()
-    }
-
-    for (outFrame in 0 until outputFrames) {
-        val forwardPosition = (outFrame.toFloat() * speed).coerceAtMost((frameCount - 1).toFloat())
-        val sourcePosition = if (signedRate >= 0f) {
-            forwardPosition
-        } else {
-            (frameCount - 1).toFloat() - forwardPosition
-        }
-        val first = floor(sourcePosition).toInt().coerceIn(0, frameCount - 1)
-        val second = if (signedRate >= 0f) {
-            (first + 1).coerceAtMost(frameCount - 1)
-        } else {
-            (first - 1).coerceAtLeast(0)
-        }
-        val fraction = abs(sourcePosition - first.toFloat()).coerceIn(0f, 1f)
-        val value = (sample(first) + (sample(second) - sample(first)) * fraction)
-            .roundToInt()
-            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        output[outFrame * 2] = (value and 0xff).toByte()
-        output[outFrame * 2 + 1] = ((value ushr 8) and 0xff).toByte()
+    val usableBytes = frameCount * 2
+    if (signedRate >= 0f) return input.copyOf(usableBytes)
+    val output = ByteArray(usableBytes)
+    for (outFrame in 0 until frameCount) {
+        val sourceFrame = frameCount - 1 - outFrame
+        output[outFrame * 2] = input[sourceFrame * 2]
+        output[outFrame * 2 + 1] = input[sourceFrame * 2 + 1]
     }
     return output
+}
+
+internal data class ShuttleCrossfadeResult(
+    val output: ByteArray,
+    val tail: ByteArray,
+)
+
+internal fun crossfadeShuttlePcm16Mono(
+    previousTail: ByteArray?,
+    current: ByteArray,
+    overlapFrames: Int,
+): ShuttleCrossfadeResult {
+    val currentFrames = current.size / 2
+    if (currentFrames <= 0) return ShuttleCrossfadeResult(ByteArray(0), previousTail ?: ByteArray(0))
+    val requestedOverlap = overlapFrames.coerceAtLeast(0)
+    val tailFrames = minOf(requestedOverlap, currentFrames)
+    val bodyFrames = currentFrames - tailFrames
+    val previousFrames = (previousTail?.size ?: 0) / 2
+    val mixedFrames = minOf(previousFrames, bodyFrames, requestedOverlap)
+    val output = ByteArray(bodyFrames * 2)
+
+    fun read(bytes: ByteArray, frame: Int): Int {
+        val index = frame * 2
+        return ((bytes[index + 1].toInt() shl 8) or (bytes[index].toInt() and 0xff)).toShort().toInt()
+    }
+    fun write(bytes: ByteArray, frame: Int, value: Int) {
+        val index = frame * 2
+        bytes[index] = (value and 0xff).toByte()
+        bytes[index + 1] = ((value ushr 8) and 0xff).toByte()
+    }
+
+    var outFrame = 0
+    if (mixedFrames > 0 && previousTail != null) {
+        val previousStart = previousFrames - mixedFrames
+        repeat(mixedFrames) { index ->
+            val t = (index + 1).toFloat() / (mixedFrames + 1).toFloat()
+            val blend = t * t * (3f - 2f * t)
+            val previous = read(previousTail, previousStart + index)
+            val next = read(current, index)
+            val mixed = (previous * (1f - blend) + next * blend)
+                .roundToInt()
+                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            write(output, outFrame++, mixed)
+        }
+    }
+    val currentBodyStart = mixedFrames
+    for (frame in currentBodyStart until bodyFrames) {
+        var value = read(current, frame)
+        if (previousFrames == 0 && requestedOverlap > 0 && frame < requestedOverlap) {
+            val t = (frame + 1).toFloat() / (requestedOverlap + 1).toFloat()
+            val fade = t * t * (3f - 2f * t)
+            value = (value * fade).roundToInt()
+        }
+        write(output, outFrame++, value)
+    }
+    val tail = if (tailFrames > 0) {
+        current.copyOfRange(bodyFrames * 2, currentFrames * 2)
+    } else {
+        ByteArray(0)
+    }
+    return ShuttleCrossfadeResult(output, tail)
 }
 
 internal enum class RangeWaveformPass(
@@ -285,19 +325,27 @@ internal class TimelineAudioPreviewController : Closeable {
                 activeTrack = track
             }
             track.play()
+            val overlapFrames = (SHUTTLE_CROSSFADE_SECONDS * PREVIEW_SAMPLE_RATE.toDouble())
+                .roundToInt()
+                .coerceAtLeast(1)
+            var previousTail = ByteArray(0)
 
             while (isCurrent(token)) {
                 val command = shuttleCommand.get() ?: break
                 val rate = command.rate
                 val magnitude = abs(rate)
                 if (magnitude < SHUTTLE_MIN_ABS_RATE) {
+                    // Keep the pending tail across the tiny center dead-zone so a direction
+                    // reversal can crossfade instead of restarting at an arbitrary phase.
                     Thread.sleep(8L)
                     continue
                 }
 
                 val center = command.positionSeconds.coerceIn(0.0, snapshot.durationSeconds)
-                val sourceDuration = (SHUTTLE_OUTPUT_BLOCK_SECONDS * magnitude.toDouble())
-                    .coerceAtLeast(0.002)
+                // Scrub audio is granular, not tape-stretched. The cursor already carries
+                // the seek velocity, so each output grain stays at normal pitch while its
+                // source position moves faster/slower with the gesture.
+                val sourceDuration = SHUTTLE_GRAIN_OUTPUT_SECONDS
                 val start = if (rate >= 0f) center else (center - sourceDuration).coerceAtLeast(0.0)
                 val end = if (rate >= 0f) {
                     (center + sourceDuration).coerceAtMost(snapshot.durationSeconds)
@@ -305,16 +353,21 @@ internal class TimelineAudioPreviewController : Closeable {
                     center
                 }
                 if (end <= start) {
+                    previousTail = ByteArray(0)
                     Thread.sleep(8L)
                     continue
                 }
 
                 val lease = snapshot.acquireRange(start, end)
                 if (lease == null) {
+                    previousTail = ByteArray(0)
                     Thread.sleep(8L)
                     continue
                 }
-                val raw = ByteArrayOutputStream()
+                val expectedRawBytes = ((end - start) * PREVIEW_SAMPLE_RATE.toDouble() * 2.0)
+                    .roundToInt()
+                    .coerceAtLeast(0)
+                val raw = ByteArrayOutputStream(expectedRawBytes)
                 try {
                     lease.readNormalized(
                         targetSampleRate = PREVIEW_SAMPLE_RATE,
@@ -328,14 +381,16 @@ internal class TimelineAudioPreviewController : Closeable {
                 } finally {
                     lease.close()
                 }
-                val output = resampleShuttlePcm16Mono(raw.toByteArray(), rate)
+                val oriented = orientShuttlePcm16Mono(raw.toByteArray(), rate)
+                val blended = crossfadeShuttlePcm16Mono(previousTail, oriented, overlapFrames)
+                previousTail = blended.tail
                 var offset = 0
-                while (offset < output.size) {
+                while (offset < blended.output.size) {
                     checkCurrent(token)
                     val written = track.write(
-                        output,
+                        blended.output,
                         offset,
-                        output.size - offset,
+                        blended.output.size - offset,
                         AudioTrack.WRITE_BLOCKING,
                     )
                     if (written <= 0) throw IOException("Audio shuttle write failed: $written")

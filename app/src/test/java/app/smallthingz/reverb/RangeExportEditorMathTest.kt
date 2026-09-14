@@ -149,17 +149,18 @@ class RangeExportEditorMathTest {
         val near = rangeFineTuneShuttleRate(0.08f, 0f)
         val middle = rangeFineTuneShuttleRate(0.50f, 0f)
         val edge = rangeFineTuneShuttleRate(1f, 0f)
-        assertTrue(near > 0f)
+        assertTrue(near >= 1f)
         assertTrue(middle > near)
         assertTrue(edge > middle)
         assertTrue(edge <= 8f)
         assertEquals(-middle, rangeFineTuneShuttleRate(-0.50f, 0f), 0.0001f)
         assertTrue(rangeFineTuneShuttleRate(0.50f, -0.65f) > middle)
-        assertTrue(rangeFineTuneShuttleRate(0.50f, 0.65f) < middle)
+        assertTrue(rangeFineTuneShuttleRate(0.50f, 0.65f) <= middle)
+        assertTrue(rangeFineTuneShuttleRate(0.08f, 0.90f) >= 1f)
     }
 
     @Test
-    fun shuttlePcmResamplerSupportsForwardReverseAndFastPlayback() {
+    fun shuttlePcmKeepsNormalPitchAndOnlyChangesDirection() {
         fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
             samples.forEachIndexed { index, sample ->
                 bytes[index * 2] = (sample and 0xff).toByte()
@@ -171,10 +172,34 @@ class RangeExportEditorMathTest {
         }
 
         val source = pcm(100, 200, 300, 400)
-        assertEquals(listOf(100, 200, 300, 400), decode(resampleShuttlePcm16Mono(source, 1f)))
-        assertEquals(listOf(400, 300, 200, 100), decode(resampleShuttlePcm16Mono(source, -1f)))
-        assertEquals(listOf(100, 300), decode(resampleShuttlePcm16Mono(source, 2f)))
-        assertEquals(listOf(400, 200), decode(resampleShuttlePcm16Mono(source, -2f)))
+        assertEquals(listOf(100, 200, 300, 400), decode(orientShuttlePcm16Mono(source, 1f)))
+        assertEquals(listOf(100, 200, 300, 400), decode(orientShuttlePcm16Mono(source, 8f)))
+        assertEquals(listOf(400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -1f)))
+        assertEquals(listOf(400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -8f)))
+    }
+
+    @Test
+    fun shuttleCrossfadeBridgesDiscontinuousGrains() {
+        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
+            samples.forEachIndexed { index, sample ->
+                bytes[index * 2] = (sample and 0xff).toByte()
+                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+        }
+
+        val first = crossfadeShuttlePcm16Mono(null, pcm(0, 0, 1000, 1000), overlapFrames = 2)
+        assertEquals(listOf(0, 0), decode(first.output))
+        assertEquals(listOf(1000, 1000), decode(first.tail))
+
+        val second = crossfadeShuttlePcm16Mono(first.tail, pcm(-1000, -1000, 0, 0), overlapFrames = 2)
+        val mixed = decode(second.output)
+        assertEquals(2, mixed.size)
+        assertTrue(mixed[0] in 450..500)
+        assertTrue(mixed[1] in -500..-450)
+        assertEquals(listOf(0, 0), decode(second.tail))
     }
 
     @Test
