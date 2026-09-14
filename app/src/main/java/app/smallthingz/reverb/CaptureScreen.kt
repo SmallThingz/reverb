@@ -1028,6 +1028,7 @@ private fun MainCaptureContent(
                 active = isListening && activeBuffer == rangeBuffer,
                 enabled = rangeEnabled,
                 activity = rangeBlobActivity,
+                renderedBaseRadiusFraction = rangeBlobController.currentBaseRadiusFraction(),
             )
         }
         RangeExportHomeContent(

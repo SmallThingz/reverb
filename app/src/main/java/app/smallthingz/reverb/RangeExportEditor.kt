@@ -153,12 +153,16 @@ internal fun rangeMorphSourceGeometry(
     active: Boolean,
     enabled: Boolean,
     activity: Float,
+    renderedBaseRadiusFraction: Float? = null,
 ): RangeMorphSourceGeometry? {
     val root = rootBoundsInRoot ?: return null
     val blob = blobBoundsInRoot ?: return null
     val viewSize = minOf(blob.width, blob.height)
     if (viewSize <= 0f || root.width <= 0f || root.height <= 0f) return null
-    val bodyDiameter = viewSize * 2f * rangeBlobBaseRadiusFraction(active, enabled, activity)
+    val baseRadius = renderedBaseRadiusFraction
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?: rangeBlobBaseRadiusFraction(active, enabled, activity)
+    val bodyDiameter = viewSize * 2f * baseRadius
     return RangeMorphSourceGeometry(
         rootLeftInRootPx = root.left,
         rootTopInRootPx = root.top,

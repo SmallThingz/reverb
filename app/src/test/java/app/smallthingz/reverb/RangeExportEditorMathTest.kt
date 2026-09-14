@@ -26,6 +26,16 @@ class RangeExportEditorMathTest {
         assertEquals(600f, source.centerYInLocalPx, 0.0001f)
 
         assertEquals(0.4f, rangeBlobMorphStartScaleX(200f, 500f), 0.0001f)
+        val renderedSource = rangeMorphSourceGeometry(
+            rootBoundsInRoot = Rect(10f, 20f, 610f, 820f),
+            blobBoundsInRoot = Rect(160f, 220f, 460f, 520f),
+            active = false,
+            enabled = true,
+            activity = 0f,
+            renderedBaseRadiusFraction = 0.25f,
+        )!!
+        assertEquals(150f, renderedSource.bodyDiameterPx, 0.0001f)
+
         assertEquals(200f / 146f, rangeBlobMorphStartScaleY(200f, 146f), 0.0001f)
         assertEquals(-150f, rangeBlobMorphTranslation(0f, 100f, 250f), 0.0001f)
         assertEquals(-75f, rangeBlobMorphTranslation(0.5f, 100f, 250f), 0.0001f)

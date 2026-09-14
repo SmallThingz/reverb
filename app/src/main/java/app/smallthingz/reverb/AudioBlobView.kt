@@ -104,6 +104,9 @@ internal class AudioBlobView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun currentBaseRadiusFraction(): Float =
+        0.095f + currentLife * (0.235f + currentActivity.coerceIn(0f, 1f) * 0.018f)
+
     fun updateState(
         active: Boolean,
         enabled: Boolean,
@@ -531,4 +534,6 @@ internal class AudioBlobController {
         latestFrame = ReverbService.VisualizationFrame.EMPTY
         view?.clearFrame()
     }
+
+    fun currentBaseRadiusFraction(): Float? = view?.currentBaseRadiusFraction()
 }
