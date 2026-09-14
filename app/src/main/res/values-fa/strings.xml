@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">ایجاد فایل ممکن نشد.</string>
     <string name="clear_buffer">پاک کردن</string>
     <string name="record_all_memory">خروجی کامل</string>
-    <string name="custom_export_start_label">شروع</string>
-    <string name="custom_export_end_label">پایان</string>
-    <string name="custom_export_range_invalid">پایان باید بعد از شروع باشد.</string>
     <string name="export_limit_dialog_title">محدودیت خروجی</string>
     <string name="export_limit_dialog_message">طول فعلی بیش از حد بزرگ است. فقط %1$s آخر صادر می‌شود.</string>
     <string name="saving">در حال ذخیره…</string>
     <string name="save_failed">ذخیره ضبط ممکن نشد.</string>
     <string name="nothing_to_export">چیزی برای خروجی گرفتن وجود ندارد.</string>
     <string name="allow">اجازه دادن</string>
-    <string name="exit">خروج</string>
     <string name="done">انجام شد</string>
     <string name="export">خروجی</string>
     <string name="no_app_available">برنامه سازگار موجود نیست.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">نگهداری</string>
     <string name="retention_time_label">زمان</string>
     <string name="retention_time_invalid">از MM:SS یا HH:MM:SS استفاده کنید.</string>
-    <string name="retention_size_label">اندازه (MiB)</string>
     <string name="recording_settings_title">صدا</string>
     <string name="storage_settings_title">ذخیره‌سازی</string>
-    <string name="background_persistence_title">پس‌زمینه</string>
     <string name="format_label">قالب</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">نرخ نمونه‌برداری</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">ضبطی برای انتقال وجود ندارد.</string>
     <string name="wake_lock_label">بیدار نگه داشتن CPU</string>
     <string name="wake_lock_summary">در زمان بافر زنده یک wake lock جزئی نگه می‌دارد. بیشترین پایداری و بیشترین مصرف باتری.</string>
-    <string name="battery_optimization_status_limited">بهینه‌سازی باتری: محدود</string>
-    <string name="battery_optimization_button">تنظیمات باتری</string>
     <string name="audio_input_init_failed">راه‌اندازی میکروفن ممکن نشد.</string>
     <string name="custom_memory_size_invalid">یک عدد معتبر وارد کنید.</string>
     <string name="permission_required">مجوز لازم است</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">حذف ضبط ممکن نشد.</string>
     <string name="recording_info">اطلاعات</string>
     <string name="about_version">نسخه %1$s</string>
-    <string name="recording_details_name">نام:</string>
     <string name="recording_details_started">شروع:</string>
     <string name="recording_details_duration">مدت:</string>
     <string name="recording_details_size">اندازه:</string>

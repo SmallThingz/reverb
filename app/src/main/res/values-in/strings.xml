@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">Tidak dapat membuat file.</string>
     <string name="clear_buffer">Bersihkan</string>
     <string name="record_all_memory">Ekspor penuh</string>
-    <string name="custom_export_start_label">Mulai</string>
-    <string name="custom_export_end_label">Selesai</string>
-    <string name="custom_export_range_invalid">Akhir harus setelah awal.</string>
     <string name="export_limit_dialog_title">Batas ekspor</string>
     <string name="export_limit_dialog_message">Durasi saat ini terlalu besar. Hanya %1$s terakhir yang akan diekspor.</string>
     <string name="saving">Menyimpan…</string>
     <string name="save_failed">Rekaman tidak dapat disimpan.</string>
     <string name="nothing_to_export">Tidak ada yang bisa diekspor.</string>
     <string name="allow">Izinkan</string>
-    <string name="exit">Keluar</string>
     <string name="done">Selesai</string>
     <string name="export">Ekspor</string>
     <string name="no_app_available">Tidak ada aplikasi yang kompatibel.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">Retensi</string>
     <string name="retention_time_label">Waktu</string>
     <string name="retention_time_invalid">Gunakan MM:SS atau HH:MM:SS.</string>
-    <string name="retention_size_label">Ukuran (MiB)</string>
     <string name="recording_settings_title">Audio</string>
     <string name="storage_settings_title">Penyimpanan</string>
-    <string name="background_persistence_title">Latar belakang</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">Laju sampel</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">Tidak ada rekaman untuk dipindahkan.</string>
     <string name="wake_lock_label">Jaga CPU tetap aktif</string>
     <string name="wake_lock_summary">Menahan wake lock parsial saat buffering langsung. Kelangsungan hidup tertinggi, biaya baterai tertinggi.</string>
-    <string name="battery_optimization_status_limited">Optimasi baterai: dibatasi</string>
-    <string name="battery_optimization_button">Pengaturan baterai</string>
     <string name="audio_input_init_failed">Mikrofon tidak dapat dimulai.</string>
     <string name="custom_memory_size_invalid">Masukkan angka yang valid.</string>
     <string name="permission_required">Izin diperlukan</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">Rekaman tidak dapat dihapus.</string>
     <string name="recording_info">Info</string>
     <string name="about_version">Versi %1$s</string>
-    <string name="recording_details_name">Nama:</string>
     <string name="recording_details_started">Mulai:</string>
     <string name="recording_details_duration">Durasi:</string>
     <string name="recording_details_size">Ukuran:</string>

@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">Dosya oluşturulamadı.</string>
     <string name="clear_buffer">Temizle</string>
     <string name="record_all_memory">Tümünü dışa aktar</string>
-    <string name="custom_export_start_label">Başlangıç</string>
-    <string name="custom_export_end_label">Bitiş</string>
-    <string name="custom_export_range_invalid">Bitiş başlangıçtan sonra olmalıdır.</string>
     <string name="export_limit_dialog_title">Dışa aktarma sınırı</string>
     <string name="export_limit_dialog_message">Geçerli uzunluk çok büyük. Yalnızca son %1$s dışa aktarılacak.</string>
     <string name="saving">Kaydediliyor…</string>
     <string name="save_failed">Kayıt kaydedilemedi.</string>
     <string name="nothing_to_export">Dışa aktarılacak bir şey yok.</string>
     <string name="allow">İzin ver</string>
-    <string name="exit">Çıkış</string>
     <string name="done">Bitti</string>
     <string name="export">Dışa aktar</string>
     <string name="no_app_available">Uyumlu uygulama yok.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">Saklama</string>
     <string name="retention_time_label">Süre</string>
     <string name="retention_time_invalid">MM:SS veya HH:MM:SS kullanın.</string>
-    <string name="retention_size_label">Boyut (MiB)</string>
     <string name="recording_settings_title">Ses</string>
     <string name="storage_settings_title">Depolama</string>
-    <string name="background_persistence_title">Arka plan</string>
     <string name="format_label">Biçim</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">Örnekleme hızı</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">Taşınacak kayıt yok.</string>
     <string name="wake_lock_label">CPU uyanık kalsın</string>
     <string name="wake_lock_summary">Canlı arabelleğe alma sırasında kısmi uyandırma kilidi tutar. En yüksek dayanıklılık, en yüksek pil maliyeti.</string>
-    <string name="battery_optimization_status_limited">Pil optimizasyonu: kısıtlı</string>
-    <string name="battery_optimization_button">Pil ayarları</string>
     <string name="audio_input_init_failed">Mikrofon başlatılamadı.</string>
     <string name="custom_memory_size_invalid">Geçerli bir sayı girin.</string>
     <string name="permission_required">İzin gerekli</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">Kayıt silinemedi.</string>
     <string name="recording_info">Bilgi</string>
     <string name="about_version">Sürüm %1$s</string>
-    <string name="recording_details_name">Ad:</string>
     <string name="recording_details_started">Başlangıç:</string>
     <string name="recording_details_duration">Süre:</string>
     <string name="recording_details_size">Boyut:</string>

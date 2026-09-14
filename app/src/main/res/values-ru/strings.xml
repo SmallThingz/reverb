@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">Не удалось создать файл.</string>
     <string name="clear_buffer">Очистить</string>
     <string name="record_all_memory">Экспорт всего</string>
-    <string name="custom_export_start_label">Начало</string>
-    <string name="custom_export_end_label">Конец</string>
-    <string name="custom_export_range_invalid">Конец должен быть позже начала.</string>
     <string name="export_limit_dialog_title">Лимит экспорта</string>
     <string name="export_limit_dialog_message">Текущая длина слишком велика. Экспортируются только последние %1$s.</string>
     <string name="saving">Сохранение…</string>
     <string name="save_failed">Не удалось сохранить запись.</string>
     <string name="nothing_to_export">Нет данных для экспорта.</string>
     <string name="allow">Разрешить</string>
-    <string name="exit">Выход</string>
     <string name="done">Готово</string>
     <string name="export">Экспорт</string>
     <string name="no_app_available">Нет совместимого приложения.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">Хранение</string>
     <string name="retention_time_label">Время</string>
     <string name="retention_time_invalid">Используйте MM:SS или HH:MM:SS.</string>
-    <string name="retention_size_label">Размер (MiB)</string>
     <string name="recording_settings_title">Аудио</string>
     <string name="storage_settings_title">Хранилище</string>
-    <string name="background_persistence_title">Фон</string>
     <string name="format_label">Формат</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">Частота</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">Нет записей для перемещения.</string>
     <string name="wake_lock_label">Не давать CPU заснуть</string>
     <string name="wake_lock_summary">Удерживать частичную блокировку пробуждения во время живого буфера. Максимальная живучесть, максимальный расход батареи.</string>
-    <string name="battery_optimization_status_limited">Оптимизация батареи: с ограничениями</string>
-    <string name="battery_optimization_button">Настройки батареи</string>
     <string name="audio_input_init_failed">Не удалось запустить микрофон.</string>
     <string name="custom_memory_size_invalid">Введите корректное число.</string>
     <string name="permission_required">Требуется разрешение</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">Не удалось удалить запись.</string>
     <string name="recording_info">Информация</string>
     <string name="about_version">Версия %1$s</string>
-    <string name="recording_details_name">Имя:</string>
     <string name="recording_details_started">Начало:</string>
     <string name="recording_details_duration">Длительность:</string>
     <string name="recording_details_size">Размер:</string>

@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">Datei konnte nicht erstellt werden.</string>
     <string name="clear_buffer">Leeren</string>
     <string name="record_all_memory">Alles exportieren</string>
-    <string name="custom_export_start_label">Start</string>
-    <string name="custom_export_end_label">Ende</string>
-    <string name="custom_export_range_invalid">Ende muss nach dem Start liegen.</string>
     <string name="export_limit_dialog_title">Exportlimit</string>
     <string name="export_limit_dialog_message">Aktuelle Länge ist zu groß. Es werden nur die letzten %1$s exportiert.</string>
     <string name="saving">Speichern…</string>
     <string name="save_failed">Aufnahme konnte nicht gespeichert werden.</string>
     <string name="nothing_to_export">Nichts zum Exportieren.</string>
     <string name="allow">Zulassen</string>
-    <string name="exit">Beenden</string>
     <string name="done">Fertig</string>
     <string name="export">Exportieren</string>
     <string name="no_app_available">Keine kompatible App verfügbar.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">Aufbewahrung</string>
     <string name="retention_time_label">Zeit</string>
     <string name="retention_time_invalid">MM:SS oder HH:MM:SS verwenden.</string>
-    <string name="retention_size_label">Größe (MiB)</string>
     <string name="recording_settings_title">Audio</string>
     <string name="storage_settings_title">Speicher</string>
-    <string name="background_persistence_title">Hintergrund</string>
     <string name="format_label">Format</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">Rate</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">Keine Aufnahmen zum Verschieben.</string>
     <string name="wake_lock_label">CPU wach halten</string>
     <string name="wake_lock_summary">Hält während des Live-Puffers einen partiellen Wake Lock. Höchste Stabilität, höchster Akkuverbrauch.</string>
-    <string name="battery_optimization_status_limited">Akkuoptimierung: eingeschränkt</string>
-    <string name="battery_optimization_button">Akku-Einstellungen</string>
     <string name="audio_input_init_failed">Mikrofon konnte nicht gestartet werden.</string>
     <string name="custom_memory_size_invalid">Gültige Zahl eingeben.</string>
     <string name="permission_required">Berechtigung erforderlich</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">Aufnahme konnte nicht gelöscht werden.</string>
     <string name="recording_info">Info</string>
     <string name="about_version">Version %1$s</string>
-    <string name="recording_details_name">Name:</string>
     <string name="recording_details_started">Beginn:</string>
     <string name="recording_details_duration">Dauer:</string>
     <string name="recording_details_size">Größe:</string>

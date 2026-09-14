@@ -5,16 +5,12 @@
     <string name="cant_create_file_generic">تعذر إنشاء الملف.</string>
     <string name="clear_buffer">مسح</string>
     <string name="record_all_memory">تصدير الكل</string>
-    <string name="custom_export_start_label">البداية</string>
-    <string name="custom_export_end_label">النهاية</string>
-    <string name="custom_export_range_invalid">يجب أن تكون النهاية بعد البداية.</string>
     <string name="export_limit_dialog_title">حد التصدير</string>
     <string name="export_limit_dialog_message">المدة الحالية كبيرة جدًا. سيتم تصدير آخر %1$s فقط.</string>
     <string name="saving">جارٍ الحفظ…</string>
     <string name="save_failed">تعذر حفظ التسجيل.</string>
     <string name="nothing_to_export">لا يوجد شيء للتصدير.</string>
     <string name="allow">سماح</string>
-    <string name="exit">خروج</string>
     <string name="done">تم</string>
     <string name="export">تصدير</string>
     <string name="no_app_available">لا يوجد تطبيق متوافق.</string>
@@ -26,10 +22,8 @@
     <string name="retention_mode_title">الاحتفاظ</string>
     <string name="retention_time_label">الوقت</string>
     <string name="retention_time_invalid">استخدم MM:SS أو HH:MM:SS.</string>
-    <string name="retention_size_label">الحجم (MiB)</string>
     <string name="recording_settings_title">الصوت</string>
     <string name="storage_settings_title">التخزين</string>
-    <string name="background_persistence_title">الخلفية</string>
     <string name="format_label">التنسيق</string>
     <string name="format_wav">WAV</string>
     <string name="sample_rate_label">معدل العينة</string>
@@ -57,8 +51,6 @@
     <string name="move_recordings_none">لا توجد تسجيلات لنقلها.</string>
     <string name="wake_lock_label">إبقاء المعالج مستيقظًا</string>
     <string name="wake_lock_summary">يحافظ على wake lock جزئي أثناء التخزين الحي. أعلى بقاء وأعلى استهلاك للبطارية.</string>
-    <string name="battery_optimization_status_limited">تحسين البطارية: مقيّد</string>
-    <string name="battery_optimization_button">إعدادات البطارية</string>
     <string name="audio_input_init_failed">تعذر تشغيل الميكروفون.</string>
     <string name="custom_memory_size_invalid">أدخل رقمًا صالحًا.</string>
     <string name="permission_required">إذن مطلوب</string>
@@ -73,7 +65,6 @@
     <string name="recording_delete_failed">تعذر حذف التسجيل.</string>
     <string name="recording_info">معلومات</string>
     <string name="about_version">الإصدار %1$s</string>
-    <string name="recording_details_name">الاسم:</string>
     <string name="recording_details_started">البداية:</string>
     <string name="recording_details_duration">المدة:</string>
     <string name="recording_details_size">الحجم:</string>
