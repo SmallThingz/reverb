@@ -138,9 +138,7 @@ internal fun revalidateRecordingTileClickAction(
 
 internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot {
     val prefs = getRecorderPreferences(context)
-    val activeBuffer = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)?.let { stored ->
-        runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
-    }
+    val activeBuffer = readCaptureBufferSlotPreference(prefs)
     return recordingTileSnapshot(
         listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
         runtimeCaptureActive = recordingRuntimeCaptureActive,
@@ -217,7 +215,7 @@ abstract class RecordingTileService : TileService() {
     private fun beginForegroundTileStart() {
         val intent = Intent(this, QuickTileActionActivity::class.java)
             .setAction(QuickTileActionActivity.ACTION_START)
-            .putExtra(QuickTileActionActivity.EXTRA_BUFFER_SLOT, bufferSlot.name)
+            .putExtra(QuickTileActionActivity.EXTRA_BUFFER_SLOT, bufferSlot.storageCode.toInt())
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val requestCode = if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) 701 else 702

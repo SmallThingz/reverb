@@ -38,43 +38,49 @@ private data class InputConfigKey(
     val sampleFormat: PcmSampleFormat,
 )
 
-enum class RetentionMode {
-    SIZE,
-    TIME,
+enum class RetentionMode(val storageCode: Byte) {
+    SIZE(0),
+    TIME(1),
     ;
 
     companion object {
-        fun fromStorage(value: Int): RetentionMode = entries.getOrElse(value) { SIZE }
+        fun fromStorageOrNull(value: Int): RetentionMode? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
     }
 }
 
 enum class ExportFormat(
     @param:StringRes @field:StringRes val labelRes: Int,
+    val storageCode: Byte,
 ) {
-    WAV(R.string.format_wav),
+    WAV(R.string.format_wav, 1),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
     val extension: String get() = "wav"
     val outputMimeType: String get() = "audio/wav"
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): ExportFormat? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): ExportFormat = byPrefValue[value] ?: WAV
+        fun fromLegacyPrefValue(value: String?): ExportFormat =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: WAV
     }
 }
 
-enum class ExportCodec {
-    PCM_16,
+enum class ExportCodec(val storageCode: Byte) {
+    PCM_16(1),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): ExportCodec? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): ExportCodec = byPrefValue[value] ?: PCM_16
+        fun fromLegacyPrefValue(value: String?): ExportCodec =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: PCM_16
     }
 }
 
@@ -87,21 +93,21 @@ enum class PcmSampleFormat(
     val bytesPerSample: Int,
     val audioEncoding: Int,
     val wavFormatTag: Short,
+    val storageCode: Byte,
 ) {
-    PCM_8(R.string.sample_format_pcm_8, 8, 1, AudioFormat.ENCODING_PCM_8BIT, WAVE_FORMAT_PCM),
-    PCM_16(R.string.sample_format_pcm_16, 16, 2, AudioFormat.ENCODING_PCM_16BIT, WAVE_FORMAT_PCM),
-    PCM_FLOAT(R.string.sample_format_float_32, 32, 4, AudioFormat.ENCODING_PCM_FLOAT, WAVE_FORMAT_IEEE_FLOAT),
+    PCM_8(R.string.sample_format_pcm_8, 8, 1, AudioFormat.ENCODING_PCM_8BIT, WAVE_FORMAT_PCM, 1),
+    PCM_16(R.string.sample_format_pcm_16, 16, 2, AudioFormat.ENCODING_PCM_16BIT, WAVE_FORMAT_PCM, 2),
+    PCM_FLOAT(R.string.sample_format_float_32, 32, 4, AudioFormat.ENCODING_PCM_FLOAT, WAVE_FORMAT_IEEE_FLOAT, 3),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): PcmSampleFormat? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): PcmSampleFormat {
-            val v = value ?: return PCM_16
-            return byPrefValue[v] ?: PCM_16
-        }
+        fun fromLegacyPrefValue(value: String?): PcmSampleFormat =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: PCM_16
     }
 }
 
@@ -153,20 +159,22 @@ enum class AudioSourceMode(
         get() = this == VOICE_CALL || this == VOICE_UPLINK || this == VOICE_DOWNLINK || this == REMOTE_SUBMIX
 }
 
-enum class InputRouteMode(@param:StringRes @field:StringRes val labelRes: Int) {
-    AUTO(R.string.input_route_auto),
-    BUILTIN_MIC(R.string.input_route_builtin_mic),
+enum class InputRouteMode(
+    @param:StringRes @field:StringRes val labelRes: Int,
+    val storageCode: Byte,
+) {
+    AUTO(R.string.input_route_auto, 0),
+    BUILTIN_MIC(R.string.input_route_builtin_mic, 1),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): InputRouteMode? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): InputRouteMode {
-            val v = value ?: return AUTO
-            return byPrefValue[v] ?: AUTO
-        }
+        fun fromLegacyPrefValue(value: String?): InputRouteMode =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: AUTO
     }
 }
 
@@ -174,45 +182,75 @@ enum class ChannelMode(
     @param:StringRes @field:StringRes val labelRes: Int,
     val channelCount: Int,
     val inputChannelMask: Int,
+    val storageCode: Byte,
 ) {
-    MONO(R.string.channel_mode_mono, 1, AudioFormat.CHANNEL_IN_MONO),
-    STEREO(R.string.channel_mode_stereo, 2, AudioFormat.CHANNEL_IN_STEREO),
+    MONO(R.string.channel_mode_mono, 1, AudioFormat.CHANNEL_IN_MONO, 1),
+    STEREO(R.string.channel_mode_stereo, 2, AudioFormat.CHANNEL_IN_STEREO, 2),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): ChannelMode? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): ChannelMode {
-            val v = value ?: return MONO
-            return byPrefValue[v] ?: MONO
-        }
+        fun fromLegacyPrefValue(value: String?): ChannelMode =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: MONO
     }
 }
 
 enum class AppThemeMode(
     @param:StringRes @field:StringRes val labelRes: Int,
+    val storageCode: Byte,
 ) {
-    SYSTEM(R.string.theme_system),
-    LIGHT(R.string.theme_light),
-    DARK(R.string.theme_dark),
+    SYSTEM(R.string.theme_system, 0),
+    LIGHT(R.string.theme_light, 1),
+    DARK(R.string.theme_dark, 2),
     ;
 
-    val prefValue: String get() = name.lowercase()
+    val legacyPrefValue: String get() = name.lowercase()
 
     companion object {
-        private val byPrefValue = entries.associateBy { it.prefValue }
+        fun fromStorageCode(value: Int): AppThemeMode? =
+            entries.firstOrNull { it.storageCode.toInt() == value }
 
-        fun fromPrefValue(value: String?): AppThemeMode {
-            val v = value ?: return SYSTEM
-            return byPrefValue[v] ?: SYSTEM
-        }
+        fun fromLegacyPrefValue(value: String?): AppThemeMode =
+            entries.firstOrNull { it.legacyPrefValue == value } ?: SYSTEM
     }
+}
+
+private inline fun <T> readByteBackedPreference(
+    prefs: SharedPreferences,
+    key: PrefKey,
+    default: T,
+    crossinline fromStorageCode: (Int) -> T?,
+    crossinline fromLegacyPrefValue: (String?) -> T,
+    crossinline storageCode: (T) -> Byte,
+): T {
+    val encoded = runCatching { prefs.getInt(key, Int.MIN_VALUE) }.getOrNull()
+    if (encoded != null && encoded != Int.MIN_VALUE) return fromStorageCode(encoded) ?: default
+
+    val legacy = runCatching { prefs.getString(key, null) }.getOrNull() ?: return default
+    val decoded = fromLegacyPrefValue(legacy)
+    // SharedPreferences stores integral values as Ints. Keep enum payloads byte-sized and
+    // migrate legacy strings in memory immediately; apply() persists the same semantics async.
+    prefs.edit().putInt(key, storageCode(decoded).toInt()).apply()
+    return decoded
 }
 
 fun getRecorderPreferences(context: Context): SharedPreferences {
     return context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
+}
+
+internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
+    val encoded = runCatching { prefs.getInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE) }.getOrNull()
+    if (encoded != null && encoded != Int.MIN_VALUE) {
+        return ReverbService.BufferSlot.fromStorageCode(encoded)
+    }
+    val legacy = runCatching { prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null) }.getOrNull() ?: return null
+    val slot = ReverbService.BufferSlot.fromLegacyName(legacy) ?: return null
+    prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, slot.storageCode.toInt()).apply()
+    return slot
 }
 
 fun getConfiguredRetentionMode(context: Context): RetentionMode =
@@ -231,11 +269,14 @@ fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-fun getConfiguredThemeMode(context: Context): AppThemeMode {
-    return AppThemeMode.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.THEME_MODE, AppThemeMode.SYSTEM.prefValue),
-    )
-}
+fun getConfiguredThemeMode(context: Context): AppThemeMode = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.THEME_MODE,
+    default = AppThemeMode.SYSTEM,
+    fromStorageCode = AppThemeMode::fromStorageCode,
+    fromLegacyPrefValue = AppThemeMode::fromLegacyPrefValue,
+    storageCode = AppThemeMode::storageCode,
+)
 
 fun getConfiguredRetentionSeconds(context: Context): Long =
     retentionConfigurationForRead(context).loopingSeconds
@@ -317,7 +358,7 @@ fun finishOnboarding(
     val prefs = getRecorderPreferences(context)
     val committed = prefs.edit()
         .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
-        .putInt(PrefKey.RETENTION_MODE, updated.mode.ordinal)
+        .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
         .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
         .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
         .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
@@ -332,7 +373,7 @@ fun finishOnboarding(
     writeRetentionRecoveryConfiguration(context, current)
     prefs.edit()
         .putBoolean(PrefKey.ONBOARDING_SHOWN, false)
-        .putInt(PrefKey.RETENTION_MODE, current.mode.ordinal)
+        .putInt(PrefKey.RETENTION_MODE, current.mode.storageCode.toInt())
         .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, current.oneShotSeconds)
         .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, current.oneShotSizeBytes)
         .putLong(PrefKey.RETENTION_SECONDS, current.loopingSeconds)
@@ -342,23 +383,32 @@ fun finishOnboarding(
     return false
 }
 
-fun getConfiguredOutputFormat(context: Context): ExportFormat {
-    return ExportFormat.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.OUTPUT_FORMAT, ExportFormat.WAV.prefValue),
-    )
-}
+fun getConfiguredOutputFormat(context: Context): ExportFormat = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.OUTPUT_FORMAT,
+    default = ExportFormat.WAV,
+    fromStorageCode = ExportFormat::fromStorageCode,
+    fromLegacyPrefValue = ExportFormat::fromLegacyPrefValue,
+    storageCode = ExportFormat::storageCode,
+)
 
-fun getConfiguredOutputCodec(context: Context): ExportCodec {
-    return ExportCodec.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.OUTPUT_CODEC, ExportCodec.PCM_16.prefValue),
-    )
-}
+fun getConfiguredOutputCodec(context: Context): ExportCodec = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.OUTPUT_CODEC,
+    default = ExportCodec.PCM_16,
+    fromStorageCode = ExportCodec::fromStorageCode,
+    fromLegacyPrefValue = ExportCodec::fromLegacyPrefValue,
+    storageCode = ExportCodec::storageCode,
+)
 
-fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat {
-    return PcmSampleFormat.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.PCM_SAMPLE_FORMAT, PcmSampleFormat.PCM_16.prefValue),
-    )
-}
+fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.PCM_SAMPLE_FORMAT,
+    default = PcmSampleFormat.PCM_16,
+    fromStorageCode = PcmSampleFormat::fromStorageCode,
+    fromLegacyPrefValue = PcmSampleFormat::fromLegacyPrefValue,
+    storageCode = PcmSampleFormat::storageCode,
+)
 
 fun isCodecCompatibleWithFormat(
     format: ExportFormat,
@@ -374,20 +424,23 @@ fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
     )
 }
 
-fun getConfiguredInputRouteMode(context: Context): InputRouteMode {
-    return InputRouteMode.fromPrefValue(
-        getRecorderPreferences(context).getString(PrefKey.INPUT_ROUTE, InputRouteMode.AUTO.prefValue),
-    )
-}
+fun getConfiguredInputRouteMode(context: Context): InputRouteMode = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.INPUT_ROUTE,
+    default = InputRouteMode.AUTO,
+    fromStorageCode = InputRouteMode::fromStorageCode,
+    fromLegacyPrefValue = InputRouteMode::fromLegacyPrefValue,
+    storageCode = InputRouteMode::storageCode,
+)
 
-fun getConfiguredChannelMode(context: Context): ChannelMode {
-    return ChannelMode.fromPrefValue(
-        getRecorderPreferences(context).getString(
-            PrefKey.CHANNEL_MODE,
-            ReverbConfig.DEFAULT_CHANNEL_MODE.prefValue,
-        ),
-    )
-}
+fun getConfiguredChannelMode(context: Context): ChannelMode = readByteBackedPreference(
+    prefs = getRecorderPreferences(context),
+    key = PrefKey.CHANNEL_MODE,
+    default = ReverbConfig.DEFAULT_CHANNEL_MODE,
+    fromStorageCode = ChannelMode::fromStorageCode,
+    fromLegacyPrefValue = ChannelMode::fromLegacyPrefValue,
+    storageCode = ChannelMode::storageCode,
+)
 
 fun getConfiguredSampleRate(context: Context): Int {
     val prefs = getRecorderPreferences(context)

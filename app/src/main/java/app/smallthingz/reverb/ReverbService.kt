@@ -301,8 +301,8 @@ class ReverbService : Service() {
         writer.println("  activeBuffer=$activeBufferSlot")
         writer.println("  sampleRate=$sampleRate")
         writer.println("  channelCount=${channelMode.channelCount}")
-        writer.println("  format=${outputFormat.prefValue}")
-        writer.println("  codec=${outputCodec.prefValue}")
+        writer.println("  format=${outputFormat.legacyPrefValue}")
+        writer.println("  codec=${outputCodec.legacyPrefValue}")
         writer.println("  fillRate=$fillRate")
         writer.println("  exportDir=${describeConfiguredOutputDirectory(this)}")
         writer.println(
@@ -352,14 +352,14 @@ class ReverbService : Service() {
         val prefs = getRecorderPreferences(this)
         var targetChanged = false
         val generation = synchronized(listeningIntentLock) {
-            val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
-            if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot.name) {
+            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
+            if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
             } else if (!captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
                 activeBufferSlot = bufferSlot
                 targetChanged = true
                 listeningCommandGeneration.incrementAndGet()
-            } else if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
+            } else if (!prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed selection")
                 }
@@ -415,7 +415,7 @@ class ReverbService : Service() {
         val prefs = getRecorderPreferences(this)
         val generation = synchronized(listeningIntentLock) {
             val previousEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
+            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
             val needsPersistence = captureIntentNeedsPersistence(
@@ -435,7 +435,7 @@ class ReverbService : Service() {
                 else listeningCommandGeneration.get()
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
-                if (enabled) editor.putString(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.name)
+                if (enabled) editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.storageCode.toInt())
                 if (!editor.commit()) {
                     if (!restoreCaptureIntentPreferences(
                             prefs = prefs,
@@ -470,12 +470,12 @@ class ReverbService : Service() {
     private fun restoreCaptureIntentPreferences(
         prefs: SharedPreferences,
         previousEnabled: Boolean? = null,
-        previousStoredSlot: String?,
+        previousStoredSlot: BufferSlot?,
     ): Boolean {
         val editor = prefs.edit()
         if (previousEnabled != null) editor.putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled)
         if (previousStoredSlot == null) editor.remove(PrefKey.CAPTURE_BUFFER_SLOT)
-        else editor.putString(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot)
+        else editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot.storageCode.toInt())
         return editor.commit()
     }
 
@@ -483,10 +483,8 @@ class ReverbService : Service() {
         return getRecorderPreferences(this).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
     }
 
-    private fun persistedCaptureBufferSlot(): BufferSlot? {
-        val stored = getRecorderPreferences(this).getString(PrefKey.CAPTURE_BUFFER_SLOT, null) ?: return null
-        return runCatching { BufferSlot.valueOf(stored) }.getOrNull()
-    }
+    private fun persistedCaptureBufferSlot(): BufferSlot? =
+        readCaptureBufferSlotPreference(getRecorderPreferences(this))
 
     private fun resolveConfiguredCaptureBufferSlot(): BufferSlot {
         val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
@@ -521,9 +519,9 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         if (activeBufferSlot == bufferSlot) return true
         val prefs = getRecorderPreferences(this)
-        val previousStoredSlot = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)
+        val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
         if (captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
-            if (!prefs.edit().putString(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.name).commit()) {
+            if (!prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
                 }
@@ -2368,8 +2366,8 @@ class ReverbService : Service() {
         Log.d(
             TAG,
             "debug-state state=$state " +
-                "sampleRate=$sampleRate channels=${channelMode.channelCount} codec=${outputCodec.prefValue} " +
-                "format=${outputFormat.prefValue} logicalRetention=${cachedRetentionSampleBytes} " +
+                "sampleRate=$sampleRate channels=${channelMode.channelCount} codec=${outputCodec.legacyPrefValue} " +
+                "format=${outputFormat.legacyPrefValue} logicalRetention=${cachedRetentionSampleBytes} " +
                 "persistedFilled=${persisted?.filledBytes ?: 0} persistedDuration=${persisted?.durationSeconds ?: 0.0} " +
                 "chunks=${persisted?.chunkCount ?: 0} oneShotFilled=${oneShot?.filledBytes ?: 0} " +
                 "oneShotDuration=${oneShot?.durationSeconds ?: 0.0}",
@@ -2386,8 +2384,8 @@ class ReverbService : Service() {
                 append(" state=").append(state)
                 append(" sampleRate=").append(sampleRate)
                 append(" channelCount=").append(channelMode.channelCount)
-                append(" format=").append(outputFormat.prefValue)
-                append(" codec=").append(outputCodec.prefValue)
+                append(" format=").append(outputFormat.legacyPrefValue)
+                append(" codec=").append(outputCodec.legacyPrefValue)
                 append(" persistedFilled=").append(persisted?.filledBytes ?: 0)
                 append(" persistedDuration=").append(persisted?.durationSeconds ?: 0.0)
                 append(" persistedChunks=").append(persisted?.chunkCount ?: 0)
@@ -2465,9 +2463,17 @@ class ReverbService : Service() {
         fun fileCancelled() = Unit
     }
 
-    enum class BufferSlot {
-        ONE_SHOT,
-        LOOPING,
+    enum class BufferSlot(val storageCode: Byte) {
+        ONE_SHOT(0),
+        LOOPING(1),
+        ;
+
+        companion object {
+            fun fromStorageCode(value: Int): BufferSlot? =
+                entries.firstOrNull { it.storageCode.toInt() == value }
+
+            fun fromLegacyName(value: String?): BufferSlot? = entries.firstOrNull { it.name == value }
+        }
     }
 
     class TimelineSnapshot internal constructor(
@@ -2615,14 +2621,14 @@ internal fun foregroundServiceTypesForWork(
 }
 
 internal fun captureSlotNeedsPersistence(
-    previousStoredSlot: String?,
+    previousStoredSlot: ReverbService.BufferSlot?,
     requestedSlot: ReverbService.BufferSlot,
-): Boolean = previousStoredSlot != requestedSlot.name
+): Boolean = previousStoredSlot != requestedSlot
 
 internal fun captureIntentNeedsPersistence(
     previousEnabled: Boolean,
     requestedEnabled: Boolean,
-    previousStoredSlot: String?,
+    previousStoredSlot: ReverbService.BufferSlot?,
     requestedSlot: ReverbService.BufferSlot,
 ): Boolean = previousEnabled != requestedEnabled ||
     (requestedEnabled && captureSlotNeedsPersistence(previousStoredSlot, requestedSlot))

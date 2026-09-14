@@ -129,10 +129,8 @@ class QuickTileActionActivity : ComponentActivity() {
         handler.postDelayed(::waitForRuntimeCapture, CAPTURE_POLL_MILLIS)
     }
 
-    private fun requestedBufferSlot(): ReverbService.BufferSlot? {
-        val stored = intent.getStringExtra(EXTRA_BUFFER_SLOT) ?: return null
-        return runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
-    }
+    private fun requestedBufferSlot(): ReverbService.BufferSlot? =
+        ReverbService.BufferSlot.fromStorageCode(intent.getIntExtra(EXTRA_BUFFER_SLOT, -1))
 
     private fun finishAction() {
         if (finished) return

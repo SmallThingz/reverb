@@ -797,7 +797,7 @@ private fun MainScreen(
     onThemeChanged: (AppThemeMode) -> Unit,
 ) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    var settingsBufferTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var settingsBufferTargetCode by rememberSaveable { mutableIntStateOf(-1) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var librarySelectionActive by remember { mutableStateOf(false) }
@@ -811,7 +811,7 @@ private fun MainScreen(
         enabled = showSettings && !showAboutDialog,
         onBack = {
             showSettings = false
-            settingsBufferTarget = null
+            settingsBufferTargetCode = -1
         },
     )
     val libraryBackMotion = rememberPredictiveBackMotion(
@@ -896,12 +896,10 @@ private fun MainScreen(
                 active = showSettings,
                 onBack = {
                     showSettings = false
-                    settingsBufferTarget = null
+                    settingsBufferTargetCode = -1
                 },
                 onThemeChanged = onThemeChanged,
-                focusRetentionBuffer = settingsBufferTarget?.let { stored ->
-                    runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
-                },
+                focusRetentionBuffer = ReverbService.BufferSlot.fromStorageCode(settingsBufferTargetCode),
             )
         }
 
@@ -923,7 +921,7 @@ private fun MainScreen(
                             libraryDragProgress = 0f
                             panelDragTarget = when {
                                 offset.y <= size.height * 0.48f -> {
-                                    settingsBufferTarget = null
+                                    settingsBufferTargetCode = -1
                                     MainPanelDragTarget.SETTINGS
                                 }
                                 offset.y >= size.height * 0.52f -> MainPanelDragTarget.LIBRARY
@@ -949,7 +947,7 @@ private fun MainScreen(
                             when (panelDragTarget) {
                                 MainPanelDragTarget.SETTINGS -> {
                                     showSettings = shouldCommitPanelReveal(settingsDragProgress)
-                                    if (!showSettings) settingsBufferTarget = null
+                                    if (!showSettings) settingsBufferTargetCode = -1
                                 }
                                 MainPanelDragTarget.LIBRARY -> {
                                     showLibrary = shouldCommitPanelReveal(libraryDragProgress)
@@ -968,7 +966,7 @@ private fun MainScreen(
                 AppTopBar(
                     onBrandClick = { showAboutDialog = true },
                     onSettingsClick = {
-                        settingsBufferTarget = null
+                        settingsBufferTargetCode = -1
                         showSettings = true
                     },
                 )
@@ -981,7 +979,7 @@ private fun MainScreen(
                         onOpenLibrary = { showLibrary = true },
                         onRecordingSaved = { refreshLibrarySnapshot() },
                         onOpenBufferSettings = { bufferSlot ->
-                            settingsBufferTarget = bufferSlot.name
+                            settingsBufferTargetCode = bufferSlot.storageCode.toInt()
                             showSettings = true
                         },
                     )
@@ -1089,7 +1087,7 @@ private fun MainScreen(
                         onBrandClick = { showAboutDialog = true },
                         onSettingsClick = {
                             closeLibrary()
-                            settingsBufferTarget = null
+                            settingsBufferTargetCode = -1
                             showSettings = true
                         },
                         onDismissLibrary = ::closeLibrary,
@@ -1109,7 +1107,7 @@ private fun MainScreen(
                     onBrandClick = { showAboutDialog = true },
                     onSettingsClick = {
                         closeLibrary()
-                        settingsBufferTarget = null
+                        settingsBufferTargetCode = -1
                         showSettings = true
                     },
                 )

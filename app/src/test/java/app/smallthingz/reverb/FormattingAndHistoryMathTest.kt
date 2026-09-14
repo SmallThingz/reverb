@@ -587,17 +587,53 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun persistedSettingEnumsUseStableByteCodesAndReadLegacyNames() {
+        assertEquals(0, ReverbService.BufferSlot.ONE_SHOT.storageCode.toInt())
+        assertEquals(1, ReverbService.BufferSlot.LOOPING.storageCode.toInt())
+        assertEquals(ReverbService.BufferSlot.LOOPING, ReverbService.BufferSlot.fromStorageCode(1))
+        assertEquals(ReverbService.BufferSlot.ONE_SHOT, ReverbService.BufferSlot.fromLegacyName("ONE_SHOT"))
+
+        assertEquals(0, RetentionMode.SIZE.storageCode.toInt())
+        assertEquals(1, RetentionMode.TIME.storageCode.toInt())
+        assertEquals(RetentionMode.TIME, RetentionMode.fromStorageOrNull(1))
+
+        assertEquals(1, ExportFormat.WAV.storageCode.toInt())
+        assertEquals(ExportFormat.WAV, ExportFormat.fromStorageCode(1))
+        assertEquals(ExportFormat.WAV, ExportFormat.fromLegacyPrefValue("wav"))
+
+        assertEquals(2, PcmSampleFormat.PCM_16.storageCode.toInt())
+        assertEquals(PcmSampleFormat.PCM_FLOAT, PcmSampleFormat.fromStorageCode(3))
+        assertEquals(PcmSampleFormat.PCM_16, PcmSampleFormat.fromLegacyPrefValue("pcm_16"))
+
+        assertEquals(ChannelMode.STEREO, ChannelMode.fromStorageCode(2))
+        assertEquals(ChannelMode.MONO, ChannelMode.fromLegacyPrefValue("mono"))
+        assertEquals(InputRouteMode.BUILTIN_MIC, InputRouteMode.fromStorageCode(1))
+        assertEquals(AppThemeMode.DARK, AppThemeMode.fromStorageCode(2))
+
+        val codes = buildList {
+            addAll(RetentionMode.entries.map { it.storageCode })
+            addAll(ExportFormat.entries.map { it.storageCode })
+            addAll(ExportCodec.entries.map { it.storageCode })
+            addAll(PcmSampleFormat.entries.map { it.storageCode })
+            addAll(ChannelMode.entries.map { it.storageCode })
+            addAll(InputRouteMode.entries.map { it.storageCode })
+            addAll(AppThemeMode.entries.map { it.storageCode })
+        }
+        assertTrue(codes.all { it.toInt() in 0..255 })
+    }
+
+    @Test
     fun recorderIntentPersistence_onlyWritesWhenDurableIntentChanges() {
         assertFalse(
             captureSlotNeedsPersistence(
-                ReverbService.BufferSlot.LOOPING.name,
+                ReverbService.BufferSlot.LOOPING,
                 ReverbService.BufferSlot.LOOPING,
             ),
         )
         assertTrue(captureSlotNeedsPersistence(null, ReverbService.BufferSlot.LOOPING))
         assertTrue(
             captureSlotNeedsPersistence(
-                ReverbService.BufferSlot.ONE_SHOT.name,
+                ReverbService.BufferSlot.ONE_SHOT,
                 ReverbService.BufferSlot.LOOPING,
             ),
         )
@@ -606,7 +642,7 @@ class FormattingAndHistoryMathTest {
             captureIntentNeedsPersistence(
                 previousEnabled = true,
                 requestedEnabled = true,
-                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING,
                 requestedSlot = ReverbService.BufferSlot.LOOPING,
             ),
         )
@@ -614,7 +650,7 @@ class FormattingAndHistoryMathTest {
             captureIntentNeedsPersistence(
                 previousEnabled = true,
                 requestedEnabled = true,
-                previousStoredSlot = ReverbService.BufferSlot.ONE_SHOT.name,
+                previousStoredSlot = ReverbService.BufferSlot.ONE_SHOT,
                 requestedSlot = ReverbService.BufferSlot.LOOPING,
             ),
         )
@@ -622,7 +658,7 @@ class FormattingAndHistoryMathTest {
             captureIntentNeedsPersistence(
                 previousEnabled = false,
                 requestedEnabled = true,
-                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING,
                 requestedSlot = ReverbService.BufferSlot.LOOPING,
             ),
         )
@@ -630,7 +666,7 @@ class FormattingAndHistoryMathTest {
             captureIntentNeedsPersistence(
                 previousEnabled = true,
                 requestedEnabled = false,
-                previousStoredSlot = ReverbService.BufferSlot.LOOPING.name,
+                previousStoredSlot = ReverbService.BufferSlot.LOOPING,
                 requestedSlot = ReverbService.BufferSlot.LOOPING,
             ),
         )

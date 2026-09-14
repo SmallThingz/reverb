@@ -449,7 +449,7 @@ class DurabilityInvariantTest {
         val size = retentionConfigurationFromPreferences(
             RetentionPreferenceValues(
                 modePresent = true,
-                modeOrdinal = RetentionMode.SIZE.ordinal,
+                modeCode = RetentionMode.SIZE.storageCode.toInt(),
                 oneShotSeconds = 3_601L,
                 oneShotSizeBytes = 777_777_778L,
                 loopingSeconds = 7_203L,
@@ -470,7 +470,7 @@ class DurabilityInvariantTest {
         val time = retentionConfigurationFromPreferences(
             RetentionPreferenceValues(
                 modePresent = true,
-                modeOrdinal = RetentionMode.TIME.ordinal,
+                modeCode = RetentionMode.TIME.storageCode.toInt(),
                 oneShotSeconds = 4_567L,
                 oneShotSizeBytes = 123_456_790L,
                 loopingSeconds = 8_901L,
@@ -496,7 +496,7 @@ class DurabilityInvariantTest {
         val digest = retentionConfigurationDigest(expected)
         val valid = RetentionPreferenceValues(
             modePresent = true,
-            modeOrdinal = expected.mode.ordinal,
+            modeCode = expected.mode.storageCode.toInt(),
             oneShotSeconds = expected.oneShotSeconds,
             oneShotSizeBytes = expected.oneShotSizeBytes,
             loopingSeconds = expected.loopingSeconds,
@@ -511,7 +511,7 @@ class DurabilityInvariantTest {
         assertTrue(retentionPreferenceDigestMatches(valid, expected))
 
         val mutations = listOf(
-            valid.copy(modeOrdinal = RetentionMode.TIME.ordinal),
+            valid.copy(modeCode = RetentionMode.TIME.storageCode.toInt()),
             valid.copy(oneShotSeconds = expected.oneShotSeconds + 1L),
             valid.copy(oneShotSizeBytes = expected.oneShotSizeBytes - 2L),
             valid.copy(loopingSeconds = expected.loopingSeconds + 1L),
@@ -541,7 +541,7 @@ class DurabilityInvariantTest {
         val inferred = retentionConfigurationFromPreferences(
             RetentionPreferenceValues(
                 modePresent = false,
-                modeOrdinal = null,
+                modeCode = null,
                 oneShotSeconds = null,
                 oneShotSizeBytes = 700_000_002L,
                 loopingSeconds = null,
@@ -572,14 +572,14 @@ class DurabilityInvariantTest {
         assertEquals(
             null,
             retentionConfigurationFromPreferences(
-                RetentionPreferenceValues(true, RetentionMode.SIZE.ordinal, null, -2L, null, 4L),
+                RetentionPreferenceValues(true, RetentionMode.SIZE.storageCode.toInt(), null, -2L, null, 4L),
                 recoveryFallback = recovery,
             ),
         )
         assertEquals(
             null,
             retentionConfigurationFromPreferences(
-                RetentionPreferenceValues(true, RetentionMode.TIME.ordinal, 1L, 2L, null, 4L),
+                RetentionPreferenceValues(true, RetentionMode.TIME.storageCode.toInt(), 1L, 2L, null, 4L),
                 recoveryFallback = recovery,
             ),
         )

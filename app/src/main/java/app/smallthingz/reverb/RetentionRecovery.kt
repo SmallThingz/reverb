@@ -22,7 +22,7 @@ internal data class RetentionConfiguration(
 
 internal data class RetentionPreferenceValues(
     val modePresent: Boolean,
-    val modeOrdinal: Int?,
+    val modeCode: Int?,
     val oneShotSeconds: Long?,
     val oneShotSizeBytes: Long?,
     val loopingSeconds: Long?,
@@ -53,7 +53,7 @@ internal fun defaultRetentionConfiguration(): RetentionConfiguration = Retention
 internal fun readRetentionPreferenceValues(prefs: SharedPreferences): RetentionPreferenceValues =
     RetentionPreferenceValues(
         modePresent = prefs.contains(PrefKey.RETENTION_MODE),
-        modeOrdinal = safePreferenceInt(prefs, PrefKey.RETENTION_MODE),
+        modeCode = safePreferenceInt(prefs, PrefKey.RETENTION_MODE),
         oneShotSeconds = safePreferenceLong(prefs, PrefKey.ONE_SHOT_RETENTION_SECONDS),
         oneShotSizeBytes = safePreferenceLong(prefs, PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE),
         loopingSeconds = safePreferenceLong(prefs, PrefKey.RETENTION_SECONDS),
@@ -94,7 +94,7 @@ internal fun retentionConfigurationFromPreferences(
         return null
     }
     val mode = if (values.modePresent) {
-        values.modeOrdinal?.let { ordinal -> RetentionMode.entries.getOrNull(ordinal) } ?: return null
+        values.modeCode?.let(RetentionMode::fromStorageOrNull) ?: return null
     } else {
         val completeSize = values.oneShotSizeBytes != null && values.loopingSizeBytes != null
         val completeTime = values.oneShotSeconds != null && values.loopingSeconds != null
@@ -221,7 +221,7 @@ private fun canonicalRetentionConfigurationBytes(configuration: RetentionConfigu
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(RETENTION_RECOVERY_MAGIC)
             putInt(RETENTION_RECOVERY_VERSION)
-            putInt(configuration.mode.ordinal)
+            putInt(configuration.mode.storageCode.toInt())
             putLong(configuration.oneShotSeconds)
             putLong(configuration.oneShotSizeBytes)
             putLong(configuration.loopingSeconds)
@@ -246,7 +246,7 @@ internal fun decodeRetentionRecoveryConfiguration(bytes: ByteArray): RetentionCo
     }
     val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
     buffer.position(8)
-    val mode = RetentionMode.entries.getOrNull(buffer.int) ?: return null
+    val mode = RetentionMode.fromStorageOrNull(buffer.int) ?: return null
     val oneShotSeconds = buffer.long
     val oneShotSizeBytes = buffer.long
     val loopingSeconds = buffer.long
@@ -294,7 +294,7 @@ internal fun restoreRetentionConfigurationToPreferences(
     prefs: SharedPreferences,
     configuration: RetentionConfiguration,
 ): Boolean = prefs.edit()
-    .putInt(PrefKey.RETENTION_MODE, configuration.mode.ordinal)
+    .putInt(PrefKey.RETENTION_MODE, configuration.mode.storageCode.toInt())
     .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, configuration.oneShotSeconds)
     .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, configuration.oneShotSizeBytes)
     .putLong(PrefKey.RETENTION_SECONDS, configuration.loopingSeconds)

@@ -809,13 +809,13 @@ internal class PersistentAudioChunkStore internal constructor(
             get() = if (sampleRate > 0) sampleFrames.toDouble() / sampleRate.toDouble() else 0.0
     }
 
-    internal enum class ChunkState(val code: Int) {
+    internal enum class ChunkState(val code: Byte) {
         ACTIVE(1),
         FINALIZED(2),
         ;
 
         companion object {
-            fun fromCode(code: Int): ChunkState? = entries.firstOrNull { it.code == code }
+            fun fromCode(code: Int): ChunkState? = entries.firstOrNull { it.code.toInt() == code }
         }
     }
 
@@ -1918,7 +1918,7 @@ internal class PersistentAudioChunkStore internal constructor(
         record: ChunkRecord,
     ) {
         writeLongLE(bytes, offset, record.headerGeneration)
-        writeIntLE(bytes, offset + 8, record.state.code)
+        writeIntLE(bytes, offset + 8, record.state.code.toInt())
         writeIntLE(bytes, offset + 12, record.payloadChecksum)
         writeLongLE(bytes, offset + 16, record.payloadBytes)
         writeLongLE(bytes, offset + 24, record.sampleFrames)
@@ -2004,7 +2004,7 @@ internal class PersistentAudioChunkStore internal constructor(
         var offset = INDEX_HEADER_BYTES
         for (record in chunks) {
             writeIntLE(bytes, offset, record.id.toInt())
-            writeIntLE(bytes, offset + 4, record.state.code)
+            writeIntLE(bytes, offset + 4, record.state.code.toInt())
             writeLongLE(bytes, offset + 8, record.createdAtMillis)
             writeLongLE(bytes, offset + 16, record.payloadBytes)
             writeLongLE(bytes, offset + 24, record.sampleFrames)
@@ -2212,18 +2212,9 @@ internal class PersistentAudioChunkStore internal constructor(
         const val INDEX_CRC_BYTES = 4
         const val MAX_INDEX_BYTES = 64L * 1024L * 1024L
 
-        fun sampleFormatCode(format: PcmSampleFormat): Int = when (format) {
-            PcmSampleFormat.PCM_8 -> 1
-            PcmSampleFormat.PCM_16 -> 2
-            PcmSampleFormat.PCM_FLOAT -> 3
-        }
+        fun sampleFormatCode(format: PcmSampleFormat): Int = format.storageCode.toInt()
 
-        fun sampleFormatFromCode(code: Int): PcmSampleFormat? = when (code) {
-            1 -> PcmSampleFormat.PCM_8
-            2 -> PcmSampleFormat.PCM_16
-            3 -> PcmSampleFormat.PCM_FLOAT
-            else -> null
-        }
+        fun sampleFormatFromCode(code: Int): PcmSampleFormat? = PcmSampleFormat.fromStorageCode(code)
 
         fun unsignedDistance(from: UInt, to: UInt): Long {
             return (to.toLong() - from.toLong()) and 0xffff_ffffL
