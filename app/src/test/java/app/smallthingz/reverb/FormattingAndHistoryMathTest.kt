@@ -885,6 +885,26 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileStart_alwaysUsesForegroundBridge() {
+        assertEquals(
+            RecordingTileExecutionRoute.FOREGROUND_START,
+            recordingTileExecutionRoute(RecordingTileClickAction.START),
+        )
+        assertEquals(
+            RecordingTileExecutionRoute.BOUND_SERVICE,
+            recordingTileExecutionRoute(RecordingTileClickAction.SWITCH),
+        )
+        assertEquals(
+            RecordingTileExecutionRoute.BOUND_SERVICE,
+            recordingTileExecutionRoute(RecordingTileClickAction.STOP),
+        )
+        assertEquals(
+            RecordingTileExecutionRoute.NONE,
+            recordingTileExecutionRoute(RecordingTileClickAction.NONE),
+        )
+    }
+
+    @Test
     fun quickTileRevalidation_distinguishesDurableIntentFromRuntimeCapture() {
         fun snapshot(
             runtimeCaptureActive: Boolean,

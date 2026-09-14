@@ -39,6 +39,20 @@ internal enum class RecordingTileClickAction {
     NONE,
 }
 
+internal enum class RecordingTileExecutionRoute {
+    FOREGROUND_START,
+    BOUND_SERVICE,
+    NONE,
+}
+
+internal fun recordingTileExecutionRoute(action: RecordingTileClickAction): RecordingTileExecutionRoute = when (action) {
+    RecordingTileClickAction.START -> RecordingTileExecutionRoute.FOREGROUND_START
+    RecordingTileClickAction.SWITCH,
+    RecordingTileClickAction.STOP,
+    -> RecordingTileExecutionRoute.BOUND_SERVICE
+    RecordingTileClickAction.NONE -> RecordingTileExecutionRoute.NONE
+}
+
 internal fun recordingTileUiState(
     bufferSlot: ReverbService.BufferSlot,
     snapshot: RecordingTileSnapshot,
@@ -185,10 +199,10 @@ abstract class RecordingTileService : TileService() {
             return
         }
         val action = {
-            if (requestedAction == RecordingTileClickAction.START) {
-                beginForegroundTileStart()
-            } else {
-                beginTileAction(requestedAction)
+            when (recordingTileExecutionRoute(requestedAction)) {
+                RecordingTileExecutionRoute.FOREGROUND_START -> beginForegroundTileStart()
+                RecordingTileExecutionRoute.BOUND_SERVICE -> beginTileAction(requestedAction)
+                RecordingTileExecutionRoute.NONE -> Unit
             }
         }
         if (isLocked) unlockAndRun(action) else action()
@@ -285,11 +299,16 @@ abstract class RecordingTileService : TileService() {
                             bufferSlot = bufferSlot,
                             liveSnapshot = snapshot,
                         )
-                        when (action) {
-                            RecordingTileClickAction.START -> recorder.enableListening(bufferSlot)
-                            RecordingTileClickAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
-                            RecordingTileClickAction.STOP -> recorder.disableListening()
-                            RecordingTileClickAction.NONE -> Unit
+                        when (recordingTileExecutionRoute(action)) {
+                            RecordingTileExecutionRoute.FOREGROUND_START -> beginForegroundTileStart()
+                            RecordingTileExecutionRoute.BOUND_SERVICE -> when (action) {
+                                RecordingTileClickAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
+                                RecordingTileClickAction.STOP -> recorder.disableListening()
+                                RecordingTileClickAction.START,
+                                RecordingTileClickAction.NONE,
+                                -> Unit
+                            }
+                            RecordingTileExecutionRoute.NONE -> Unit
                         }
                         finishTileAction(this@TileActionConnection)
                     }
