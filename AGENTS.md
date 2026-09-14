@@ -33,6 +33,9 @@
 - A verified move target becomes recoverable before source cleanup; delete the source only after re-verifying byte identity, and never discard the verified target because source cleanup is uncertain.
 - Durable capture intent/destination changes use synchronous persistence; active PCM is force-synced on a bounded background cadence, and replacement PCM must be durable before retention evicts older audio.
 - FILE catalog entries bind to a stable filesystem-object identity; stale path reuse must fail closed for delete/rename/read/play/share/copy, and explicit FILE deletion must atomically claim the selected object under a journaled tombstone before destruction.
+- Retention zero means a capture buffer is Off, never cleared; only explicit Clear may destroy all retained history.
+- Retention prefs carry a digest and a CRC-checked no-backup recovery snapshot; no retention that can evict audio may reach a chunk store until that exact config is durably recoverable. If history exists and retention provenance is unprovable, fail closed instead of applying defaults.
+- Explicit looping-retention shrink keeps the maximum newest frame-aligned window; partial boundary trimming waits for active read leases rather than dropping an extra whole chunk.
 
 - Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob renderer/animation to implement the timeline.
 - Range-export fine adjustment is a 2D spring field: horizontal pull controls direction/base jog rate and is intentionally more sensitive than Y, upward pull accelerates, downward pull increases precision, jog rate is a percentage of total timeline duration, Y uses a tall low-sensitivity cosh field that stiffens toward horizontal edges, the foreground-colored puck tracks touch X 1:1 inside its visual bounds while seek sensitivity is applied separately, and release returns monotonically to center.

@@ -215,11 +215,8 @@ fun getRecorderPreferences(context: Context): SharedPreferences {
     return context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
 }
 
-fun getConfiguredRetentionMode(context: Context): RetentionMode {
-    return RetentionMode.fromStorage(
-        getRecorderPreferences(context).getInt(PrefKey.RETENTION_MODE, RetentionMode.SIZE.ordinal),
-    )
-}
+fun getConfiguredRetentionMode(context: Context): RetentionMode =
+    retentionConfigurationForRead(context).mode
 
 fun isWakeLockEnabled(context: Context): Boolean {
     return getRecorderPreferences(context).getBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
@@ -240,29 +237,17 @@ fun getConfiguredThemeMode(context: Context): AppThemeMode {
     )
 }
 
-fun getConfiguredRetentionSeconds(context: Context): Long {
-    return getRecorderPreferences(context)
-        .getLong(PrefKey.RETENTION_SECONDS, ReverbConfig.DEFAULT_RETENTION_SECONDS)
-        .coerceAtLeast(0L)
-}
+fun getConfiguredRetentionSeconds(context: Context): Long =
+    retentionConfigurationForRead(context).loopingSeconds
 
-fun getConfiguredRetentionSizeBytes(context: Context): Long {
-    return getRecorderPreferences(context)
-        .getLong(PrefKey.AUDIO_MEMORY_SIZE, ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES)
-        .coerceAtLeast(0L)
-}
+fun getConfiguredRetentionSizeBytes(context: Context): Long =
+    retentionConfigurationForRead(context).loopingSizeBytes
 
-fun getConfiguredOneShotRetentionSeconds(context: Context): Long {
-    return getRecorderPreferences(context)
-        .getLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, getConfiguredRetentionSeconds(context))
-        .coerceAtLeast(0L)
-}
+fun getConfiguredOneShotRetentionSeconds(context: Context): Long =
+    retentionConfigurationForRead(context).oneShotSeconds
 
-fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long {
-    return getRecorderPreferences(context)
-        .getLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, getConfiguredRetentionSizeBytes(context))
-        .coerceAtLeast(0L)
-}
+fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long =
+    retentionConfigurationForRead(context).oneShotSizeBytes
 
 private fun configuredSizeHasWholeFrame(
     context: Context,
@@ -298,46 +283,46 @@ fun finishOnboarding(
     loopingEnabled: Boolean,
 ): Boolean {
     if (!oneShotEnabled && !loopingEnabled) return false
-    val prefs = getRecorderPreferences(context)
-    val editor = prefs.edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true)
-    when (getConfiguredRetentionMode(context)) {
-        RetentionMode.TIME -> {
-            val oneShotValue = getConfiguredOneShotRetentionSeconds(context)
-            val loopingValue = getConfiguredRetentionSeconds(context)
-            editor.putLong(
-                PrefKey.ONE_SHOT_RETENTION_SECONDS,
-                if (oneShotEnabled) oneShotValue.takeIf { it > 0L } ?: ReverbConfig.DEFAULT_RETENTION_SECONDS else 0L,
-            )
-            editor.putLong(
-                PrefKey.RETENTION_SECONDS,
-                if (loopingEnabled) loopingValue.takeIf { it > 0L } ?: ReverbConfig.DEFAULT_RETENTION_SECONDS else 0L,
-            )
-        }
-
-        RetentionMode.SIZE -> {
-            val oneShotValue = getConfiguredOneShotRetentionSizeBytes(context)
-            val loopingValue = getConfiguredRetentionSizeBytes(context)
-            editor.putLong(
-                PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
-                if (oneShotEnabled) {
-                    oneShotValue.takeIf { configuredSizeHasWholeFrame(context, it) }
-                        ?: ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES
-                } else {
-                    0L
-                },
-            )
-            editor.putLong(
-                PrefKey.AUDIO_MEMORY_SIZE,
-                if (loopingEnabled) {
-                    loopingValue.takeIf { configuredSizeHasWholeFrame(context, it) }
-                        ?: ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES
-                } else {
-                    0L
-                },
-            )
-        }
+    if (!retentionMutationIsSafe(context)) return false
+    val current = retentionConfigurationForRead(context)
+    val defaults = defaultRetentionConfiguration()
+    val updated = when (current.mode) {
+        RetentionMode.TIME -> current.copy(
+            oneShotSeconds = if (oneShotEnabled) {
+                current.oneShotSeconds.takeIf { it > 0L } ?: defaults.oneShotSeconds
+            } else {
+                0L
+            },
+            loopingSeconds = if (loopingEnabled) {
+                current.loopingSeconds.takeIf { it > 0L } ?: defaults.loopingSeconds
+            } else {
+                0L
+            },
+        )
+        RetentionMode.SIZE -> current.copy(
+            oneShotSizeBytes = if (oneShotEnabled) {
+                current.oneShotSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                    ?: defaults.oneShotSizeBytes
+            } else {
+                0L
+            },
+            loopingSizeBytes = if (loopingEnabled) {
+                current.loopingSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                    ?: defaults.loopingSizeBytes
+            } else {
+                0L
+            },
+        )
     }
-    return editor.commit()
+    return getRecorderPreferences(context).edit()
+        .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
+        .putInt(PrefKey.RETENTION_MODE, updated.mode.ordinal)
+        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
+        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
+        .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
+        .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
+        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
+        .commit()
 }
 
 fun getConfiguredOutputFormat(context: Context): ExportFormat {

@@ -70,6 +70,33 @@ internal fun oneShotRetainedChunkBytes(
     return available - available % frameBytes.toLong()
 }
 
+internal fun loopingDropChunkBytesForSize(
+    excessBytes: Long,
+    chunkPayloadBytes: Long,
+    frameBytes: Int,
+): Long {
+    if (excessBytes <= 0L || chunkPayloadBytes <= 0L || frameBytes <= 0) return 0L
+    val frame = frameBytes.toLong()
+    val dropFrames = ((excessBytes - 1L) / frame + 1L).coerceAtLeast(1L)
+    return minOf(chunkPayloadBytes, dropFrames * frame)
+}
+
+internal fun loopingDropChunkBytesForTime(
+    excessSeconds: Double,
+    chunkSampleFrames: Long,
+    sampleRate: Int,
+    frameBytes: Int,
+): Long {
+    if (!excessSeconds.isFinite() || excessSeconds <= 0.0 || chunkSampleFrames <= 0L || sampleRate <= 0 || frameBytes <= 0) {
+        return 0L
+    }
+    val rawFrames = excessSeconds * sampleRate.toDouble()
+    val tolerance = minOf(0.25, 8.0 * Math.ulp(rawFrames))
+    if (rawFrames <= tolerance) return 0L
+    val dropFrames = ceil(rawFrames - tolerance).toLong().coerceIn(1L, chunkSampleFrames)
+    return dropFrames * frameBytes.toLong()
+}
+
 internal fun oneShotRetainedChunkBytesForTime(
     retentionSeconds: Long,
     retainedDurationBeforeChunk: Double,
@@ -136,6 +163,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private var retainedDurationSeconds = 0.0
     private var retainedDurationCompensation = 0.0
     private var pendingOneShotRetentionTruncation = false
+    private var pendingLoopingRetentionTruncation = false
 
     private var retentionMode = RetentionMode.SIZE
     private var retentionValue = Long.MAX_VALUE
@@ -209,10 +237,16 @@ internal class PersistentAudioChunkStore internal constructor(
         if (overwriteOldest && activeRecord != null && retentionExceededLocked()) {
             finalizeActiveLocked()
         }
-        val cleaned = if (overwriteOldest) {
-            normalizedRetention > 0L && cleanupRetentionLocked()
-        } else {
-            truncateOneShotRetentionLocked()
+        val cleaned = when {
+            normalizedRetention == 0L -> {
+                // Retention zero means this capture buffer is disabled, not cleared. History
+                // remains exportable until an explicit Clear or a later non-zero shrink.
+                pendingOneShotRetentionTruncation = false
+                pendingLoopingRetentionTruncation = false
+                false
+            }
+            overwriteOldest -> cleanupRetentionLocked(exactBoundary = true)
+            else -> truncateOneShotRetentionLocked()
         }
         if (cleaned || formatChanged || normalizedRetention == 0L) {
             writeIndexLocked()
@@ -482,6 +516,8 @@ internal class PersistentAudioChunkStore internal constructor(
         while (chunks.isNotEmpty()) {
             removeFirstChunkAndRetireLocked()
         }
+        pendingOneShotRetentionTruncation = false
+        pendingLoopingRetentionTruncation = false
         lastWriteAtMillis = 0L
         writeIndexLocked()
     }
@@ -726,7 +762,7 @@ internal class PersistentAudioChunkStore internal constructor(
         val id: UInt,
         val file: File,
         var state: ChunkState,
-        val createdAtMillis: Long,
+        var createdAtMillis: Long,
         var payloadBytes: Long,
         var sampleFrames: Long,
         val sampleRate: Int,
@@ -1377,10 +1413,18 @@ internal class PersistentAudioChunkStore internal constructor(
         return true
     }
 
-    private fun truncateFinalizedChunkLocked(record: ChunkRecord, payloadBytes: Long) {
+    private fun truncateFinalizedChunkLocked(
+        record: ChunkRecord,
+        payloadBytes: Long,
+        sourcePayloadOffsetBytes: Long = 0L,
+        replacementCreatedAtMillis: Long = record.createdAtMillis,
+    ) {
         require(record.refCount == 0) { "Cannot truncate a referenced chunk" }
         require(payloadBytes in 1 until record.payloadBytes) { "Invalid truncated payload size: $payloadBytes" }
         require(payloadBytes % record.frameBytes.toLong() == 0L) { "Truncated payload must be frame aligned" }
+        require(sourcePayloadOffsetBytes >= 0L) { "Invalid source payload offset" }
+        require(sourcePayloadOffsetBytes % record.frameBytes.toLong() == 0L) { "Source offset must be frame aligned" }
+        require(sourcePayloadOffsetBytes + payloadBytes <= record.payloadBytes) { "Truncated payload exceeds source" }
 
         if (record === activeRecord) finalizeActiveLocked()
         val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
@@ -1392,7 +1436,7 @@ internal class PersistentAudioChunkStore internal constructor(
             id = record.id,
             file = temp,
             state = ChunkState.ACTIVE,
-            createdAtMillis = record.createdAtMillis,
+            createdAtMillis = replacementCreatedAtMillis,
             payloadBytes = 0L,
             sampleFrames = 0L,
             sampleRate = record.sampleRate,
@@ -1409,7 +1453,7 @@ internal class PersistentAudioChunkStore internal constructor(
             writeInitialChunkHeader(replacement, output)
             val checksum = CRC32()
             RandomAccessFile(record.file, "r").use { input ->
-                input.seek(record.payloadOffsetBytes)
+                input.seek(record.payloadOffsetBytes + sourcePayloadOffsetBytes)
                 output.seek(replacement.payloadOffsetBytes)
                 val scratch = ByteArray(64 * 1024)
                 var remaining = payloadBytes
@@ -1447,45 +1491,71 @@ internal class PersistentAudioChunkStore internal constructor(
         val oldDuration = record.durationSeconds
         val removedBytes = record.payloadBytes - replacement.payloadBytes
         record.state = replacement.state
+        record.createdAtMillis = replacement.createdAtMillis
         record.payloadBytes = replacement.payloadBytes
         record.sampleFrames = replacement.sampleFrames
         record.payloadChecksum = replacement.payloadChecksum
         record.headerGeneration = replacement.headerGeneration
         retainedPayloadBytes = (retainedPayloadBytes - removedBytes).coerceAtLeast(0L)
         addRetainedDurationLocked(record.durationSeconds - oldDuration)
+        forceDirectoryDurable(chunksDirectory)
     }
 
-    private fun cleanupRetentionLocked(): Boolean {
+    private fun cleanupRetentionLocked(
+        exactBoundary: Boolean = pendingLoopingRetentionTruncation,
+    ): Boolean {
         if (!overwriteOldest) return false
         var changed = false
+        if (exactBoundary) pendingLoopingRetentionTruncation = false
         if (retentionValue <= 0L) {
-            while (chunks.isNotEmpty()) {
+            // Zero retention disables capture. It is never an implicit destructive clear.
+            // Explicit clear() is the only operation allowed to remove all retained history.
+            return false
+        }
+
+        while (retentionExceededLocked() && chunks.isNotEmpty()) {
+            val oldest = chunks.first()
+            if (oldest === activeRecord) {
+                if (exactBoundary) pendingLoopingRetentionTruncation = true
+                break
+            }
+            val dropBytes = loopingDropBytesLocked(oldest)
+            if (dropBytes <= 0L) break
+            if (dropBytes >= oldest.payloadBytes || !exactBoundary) {
                 removeFirstChunkAndRetireLocked()
                 changed = true
+                continue
             }
-            return changed
-        }
-
-        when (retentionMode) {
-            RetentionMode.SIZE -> {
-                while (retainedPayloadBytes > retentionValue && chunks.isNotEmpty()) {
-                    val oldest = chunks.first()
-                    if (oldest === activeRecord) break
-                    removeFirstChunkAndRetireLocked()
-                    changed = true
-                }
+            if (oldest.refCount > 0) {
+                pendingLoopingRetentionTruncation = true
+                break
             }
 
-            RetentionMode.TIME -> {
-                while (retainedDurationSeconds > retentionValue.toDouble() && chunks.isNotEmpty()) {
-                    val oldest = chunks.first()
-                    if (oldest === activeRecord) break
-                    removeFirstChunkAndRetireLocked()
-                    changed = true
-                }
-            }
+            val droppedFrames = dropBytes / oldest.frameBytes.toLong()
+            val advancedMillis = droppedFrames * 1000L / oldest.sampleRate.coerceAtLeast(1).toLong()
+            truncateFinalizedChunkLocked(
+                record = oldest,
+                payloadBytes = oldest.payloadBytes - dropBytes,
+                sourcePayloadOffsetBytes = dropBytes,
+                replacementCreatedAtMillis = oldest.createdAtMillis + advancedMillis,
+            )
+            changed = true
         }
         return changed
+    }
+
+    private fun loopingDropBytesLocked(record: ChunkRecord): Long = when (retentionMode) {
+        RetentionMode.SIZE -> loopingDropChunkBytesForSize(
+            excessBytes = (retainedPayloadBytes - retentionValue).coerceAtLeast(0L),
+            chunkPayloadBytes = record.payloadBytes,
+            frameBytes = record.frameBytes,
+        )
+        RetentionMode.TIME -> loopingDropChunkBytesForTime(
+            excessSeconds = (retainedDurationSeconds - retentionValue.toDouble()).coerceAtLeast(0.0),
+            chunkSampleFrames = record.sampleFrames,
+            sampleRate = record.sampleRate,
+            frameBytes = record.frameBytes,
+        )
     }
 
     private fun retentionExceededLocked(): Boolean = when (retentionMode) {
@@ -1496,7 +1566,14 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun retentionCleanupWillRetireChunkLocked(): Boolean {
         if (!overwriteOldest || !retentionExceededLocked()) return false
         val oldest = chunks.firstOrNull() ?: return false
-        return oldest !== activeRecord && activeRecord?.payloadBytes?.let { it > activeDurablePayloadBytes } == true
+        if (oldest === activeRecord) return false
+        val activeDirty = activeRecord?.payloadBytes?.let { it > activeDurablePayloadBytes } == true
+        if (!activeDirty) return false
+        if (pendingLoopingRetentionTruncation && oldest.refCount > 0) {
+            val dropBytes = loopingDropBytesLocked(oldest)
+            if (dropBytes in 1 until oldest.payloadBytes) return false
+        }
+        return true
     }
 
     private fun writableBytesLocked(frameBytes: Int): Long {
@@ -1560,8 +1637,16 @@ internal class PersistentAudioChunkStore internal constructor(
         if (record.refCount == 0 && record.pendingDelete) {
             tryDeleteRetiredRecordLocked(record)
         }
-        if (!closed && pendingOneShotRetentionTruncation && record.refCount == 0) {
-            if (truncateOneShotRetentionLocked()) writeIndexLocked()
+        if (!closed && record.refCount == 0) {
+            var changed = false
+            if (pendingOneShotRetentionTruncation) {
+                changed = truncateOneShotRetentionLocked() || changed
+            }
+            if (pendingLoopingRetentionTruncation) {
+                if (retentionCleanupWillRetireChunkLocked()) syncActivePayloadLocked()
+                changed = cleanupRetentionLocked(exactBoundary = true) || changed
+            }
+            if (changed) writeIndexLocked()
         }
     }
 

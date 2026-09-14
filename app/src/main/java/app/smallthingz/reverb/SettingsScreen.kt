@@ -455,6 +455,11 @@ fun SettingsScreen(
         loopingRetentionTimeError = null
         loopingRetentionSizeError = null
 
+        if (!retentionMutationIsSafe(context)) {
+            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+            return false
+        }
+
         val format = selectedFormat
         val codec = selectedCodec
         val sampleFormat = selectedSampleFormat
@@ -536,6 +541,13 @@ fun SettingsScreen(
 
         oneShotRetentionTimeSecondsValue = oneShotRetentionTime
         loopingRetentionTimeSecondsValue = loopingRetentionTime
+        val retentionConfiguration = RetentionConfiguration(
+            mode = activeRetentionMode,
+            oneShotSeconds = oneShotRetentionTime.toLong(),
+            oneShotSizeBytes = requestedOneShotSizeBytes,
+            loopingSeconds = loopingRetentionTime.toLong(),
+            loopingSizeBytes = requestedLoopingSizeBytes,
+        )
 
         val preferences = getRecorderPreferences(context)
         val previousCachedOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
@@ -559,6 +571,7 @@ fun SettingsScreen(
             .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, requestedOneShotSizeBytes)
             .putLong(PrefKey.RETENTION_SECONDS, loopingRetentionTime.toLong())
             .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedLoopingSizeBytes)
+            .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(retentionConfiguration))
             .putString(PrefKey.OUTPUT_FORMAT, format.prefValue)
             .putString(PrefKey.OUTPUT_CODEC, codec.prefValue)
             .putString(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.prefValue)
@@ -578,12 +591,23 @@ fun SettingsScreen(
         }
         if (!settingsEditor.commit()) {
             val previous = originalSnapshot
+            val previousRetentionConfiguration = RetentionConfiguration(
+                mode = previous.retentionMode,
+                oneShotSeconds = previous.oneShotRetentionTime.toLong(),
+                oneShotSizeBytes = previous.oneShotRetentionSizeBytes,
+                loopingSeconds = previous.loopingRetentionTime.toLong(),
+                loopingSizeBytes = previous.loopingRetentionSizeBytes,
+            )
             getRecorderPreferences(context).edit()
                 .putInt(PrefKey.RETENTION_MODE, previous.retentionMode.ordinal)
                 .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, previous.oneShotRetentionTime.toLong())
                 .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, previous.oneShotRetentionSizeBytes)
                 .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
                 .putLong(PrefKey.AUDIO_MEMORY_SIZE, previous.loopingRetentionSizeBytes)
+                .putString(
+                    PrefKey.RETENTION_CONFIG_DIGEST,
+                    retentionConfigurationDigest(previousRetentionConfiguration),
+                )
                 .putString(PrefKey.OUTPUT_FORMAT, (previous.format ?: ExportFormat.WAV).prefValue)
                 .putString(PrefKey.OUTPUT_CODEC, (previous.codec ?: ExportCodec.PCM_16).prefValue)
                 .putString(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.prefValue)

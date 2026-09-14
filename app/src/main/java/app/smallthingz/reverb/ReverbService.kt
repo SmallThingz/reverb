@@ -193,10 +193,7 @@ class ReverbService : Service() {
                 switchActiveBufferOnAudioThread(resolveConfiguredCaptureBufferSlot(), notifyTiles = false)
                 syncOneShotFullQuickTileOnAudioThread()
             } catch (error: Exception) {
-                reportPersistentStoreFailure("initialize", error)
-                if (isListeningEnabled()) {
-                    failListeningOnAudioThread(getString(R.string.recorder_state_persist_failed), error)
-                }
+                pauseListeningAfterPersistenceFailure("initialize", error)
                 return@post
             }
             mainHandler.post {
@@ -796,8 +793,7 @@ class ReverbService : Service() {
             loadConfiguration()
             configurePersistentBuffer()
         } catch (error: Exception) {
-            reportPersistentStoreFailure("configure before capture", error)
-            failListeningOnAudioThread(getString(R.string.recorder_state_persist_failed), error, generation)
+            pauseListeningAfterPersistenceFailure("configure before capture", error)
             return
         }
 
@@ -1453,10 +1449,7 @@ class ReverbService : Service() {
             try {
                 applyConfiguredPreferencesOnAudioThread()
             } catch (error: Exception) {
-                reportPersistentStoreFailure("apply recorder settings", error)
-                if (state == STATE_LISTENING) {
-                    failListeningOnAudioThread(getString(R.string.recorder_state_persist_failed), error)
-                }
+                pauseListeningAfterPersistenceFailure("apply recorder settings", error)
             }
         }
     }
@@ -1693,13 +1686,9 @@ class ReverbService : Service() {
 
     private fun pauseListeningAfterPersistenceFailure(operation: String, error: Exception) {
         val generation = synchronized(listeningIntentLock) {
-            if (state != STATE_LISTENING || !isListeningEnabled()) {
-                reportPersistentStoreFailure(operation, error)
-                return
-            }
             persistenceFailureBlocked = true
             val nextGeneration = listeningCommandGeneration.incrementAndGet()
-            state = STATE_PAUSED
+            if (state == STATE_LISTENING) state = STATE_PAUSED
             nextGeneration
         }
         reportPersistentStoreFailure(operation, error)
@@ -2157,13 +2146,48 @@ class ReverbService : Service() {
     }
 
     private fun configurePersistentBuffer() {
-        val mode = getConfiguredRetentionMode(this)
+        val historyExists = loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()
+        val prefs = getRecorderPreferences(this)
+        val preferenceValues = readRetentionPreferenceValues(prefs)
+        val recovery = readRetentionRecoveryConfiguration(this)
+        val primary = retentionConfigurationFromPreferences(
+            values = preferenceValues,
+            recoveryFallback = recovery,
+            // Legacy installs predate the checksum. Trust them only for the one-time
+            // bootstrap where no independent recovery journal exists yet.
+            allowLegacyWithoutDigest = recovery == null,
+        )
+        val resolved = resolveRetentionConfiguration(
+            primary = primary,
+            recovery = recovery,
+            historyExists = historyExists,
+        ) ?: throw IOException(
+            "Retention configuration is unavailable; preserving existing buffered audio",
+        )
+        val configuration = resolved.configuration
+
+        // This is a write-ahead durability barrier. No retention limit that can retire audio
+        // reaches either chunk store until its exact configuration is independently recoverable.
+        if (!writeRetentionRecoveryConfiguration(this, configuration)) {
+            throw IOException("Unable to persist retention recovery configuration")
+        }
+        if (
+            (resolved.source != RetentionConfigurationSource.PREFERENCES ||
+                !retentionPreferenceDigestMatches(preferenceValues, configuration)) &&
+            !restoreRetentionConfigurationToPreferences(prefs, configuration)
+        ) {
+            // The recovery journal is already durable, so this is not grounds to mutate or
+            // discard history. Keep using the journal and surface the preference failure.
+            reportError(getString(R.string.recorder_state_persist_failed))
+        }
+
+        val mode = configuration.mode
         val frameBytes = channelMode.channelCount * pcmSampleFormat.bytesPerSample
         val retentionValue = normalizeRetentionValue(
             mode,
             when (mode) {
-                RetentionMode.SIZE -> getConfiguredRetentionSizeBytes(this)
-                RetentionMode.TIME -> getConfiguredRetentionSeconds(this)
+                RetentionMode.SIZE -> configuration.loopingSizeBytes
+                RetentionMode.TIME -> configuration.loopingSeconds
             },
             frameBytes,
         )
@@ -2178,8 +2202,8 @@ class ReverbService : Service() {
         val oneShotRetentionValue = normalizeRetentionValue(
             mode,
             when (mode) {
-                RetentionMode.SIZE -> getConfiguredOneShotRetentionSizeBytes(this)
-                RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(this)
+                RetentionMode.SIZE -> configuration.oneShotSizeBytes
+                RetentionMode.TIME -> configuration.oneShotSeconds
             },
             frameBytes,
         )

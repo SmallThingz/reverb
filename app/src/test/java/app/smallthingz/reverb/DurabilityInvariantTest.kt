@@ -59,6 +59,200 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun retentionRecovery_roundTripsExactIndependentValues_andRejectsCorruption() {
+        val configuration = RetentionConfiguration(
+            mode = RetentionMode.TIME,
+            oneShotSeconds = 12_345L,
+            oneShotSizeBytes = 987_654_322L,
+            loopingSeconds = 54_321L,
+            loopingSizeBytes = 1_987_654_320L,
+        )
+        val encoded = encodeRetentionRecoveryConfiguration(configuration)
+        assertEquals(configuration, decodeRetentionRecoveryConfiguration(encoded))
+
+        val corrupted = encoded.copyOf().also { bytes -> bytes[19] = (bytes[19].toInt() xor 0x40).toByte() }
+        assertEquals(null, decodeRetentionRecoveryConfiguration(corrupted))
+        assertEquals(null, decodeRetentionRecoveryConfiguration(encoded.copyOf(encoded.size - 1)))
+        assertEquals(null, decodeRetentionRecoveryConfiguration(encoded + byteArrayOf(0)))
+    }
+
+    @Test
+    fun retentionPreferences_preservePreciseIndependentTimeAndSizeValues() {
+        val size = retentionConfigurationFromPreferences(
+            RetentionPreferenceValues(
+                modePresent = true,
+                modeOrdinal = RetentionMode.SIZE.ordinal,
+                oneShotSeconds = 3_601L,
+                oneShotSizeBytes = 777_777_778L,
+                loopingSeconds = 7_203L,
+                loopingSizeBytes = 1_888_888_890L,
+            ),
+        )
+        assertEquals(
+            RetentionConfiguration(
+                RetentionMode.SIZE,
+                3_601L,
+                777_777_778L,
+                7_203L,
+                1_888_888_890L,
+            ),
+            size,
+        )
+
+        val time = retentionConfigurationFromPreferences(
+            RetentionPreferenceValues(
+                modePresent = true,
+                modeOrdinal = RetentionMode.TIME.ordinal,
+                oneShotSeconds = 4_567L,
+                oneShotSizeBytes = 123_456_790L,
+                loopingSeconds = 8_901L,
+                loopingSizeBytes = 2_345_678_902L,
+            ),
+        )
+        assertEquals(RetentionMode.TIME, time?.mode)
+        assertEquals(4_567L, time?.oneShotSeconds)
+        assertEquals(123_456_790L, time?.oneShotSizeBytes)
+        assertEquals(8_901L, time?.loopingSeconds)
+        assertEquals(2_345_678_902L, time?.loopingSizeBytes)
+    }
+
+    @Test
+    fun retentionPreferenceDigest_rejectsEveryValidLookingFieldMutation() {
+        val expected = RetentionConfiguration(
+            RetentionMode.SIZE,
+            oneShotSeconds = 3_601L,
+            oneShotSizeBytes = 700_000_002L,
+            loopingSeconds = 7_203L,
+            loopingSizeBytes = 4_402_970_624L,
+        )
+        val digest = retentionConfigurationDigest(expected)
+        val valid = RetentionPreferenceValues(
+            modePresent = true,
+            modeOrdinal = expected.mode.ordinal,
+            oneShotSeconds = expected.oneShotSeconds,
+            oneShotSizeBytes = expected.oneShotSizeBytes,
+            loopingSeconds = expected.loopingSeconds,
+            loopingSizeBytes = expected.loopingSizeBytes,
+            digestPresent = true,
+            digest = digest,
+        )
+        assertEquals(
+            expected,
+            retentionConfigurationFromPreferences(valid, allowLegacyWithoutDigest = false),
+        )
+        assertTrue(retentionPreferenceDigestMatches(valid, expected))
+
+        val mutations = listOf(
+            valid.copy(modeOrdinal = RetentionMode.TIME.ordinal),
+            valid.copy(oneShotSeconds = expected.oneShotSeconds + 1L),
+            valid.copy(oneShotSizeBytes = expected.oneShotSizeBytes - 2L),
+            valid.copy(loopingSeconds = expected.loopingSeconds + 1L),
+            valid.copy(loopingSizeBytes = expected.loopingSizeBytes / 10L),
+        )
+        mutations.forEach { mutated ->
+            assertEquals(
+                null,
+                retentionConfigurationFromPreferences(mutated, allowLegacyWithoutDigest = false),
+            )
+        }
+
+        val legacy = valid.copy(digestPresent = false, digest = null)
+        assertEquals(null, retentionConfigurationFromPreferences(legacy, allowLegacyWithoutDigest = false))
+        assertEquals(expected, retentionConfigurationFromPreferences(legacy, allowLegacyWithoutDigest = true))
+    }
+
+    @Test
+    fun retentionPreferences_inferOnlyUnambiguousLegacyMode_andRejectPartialOrCorruptState() {
+        val recovery = RetentionConfiguration(
+            RetentionMode.SIZE,
+            oneShotSeconds = 6_001L,
+            oneShotSizeBytes = 1L,
+            loopingSeconds = 12_003L,
+            loopingSizeBytes = 1L,
+        )
+        val inferred = retentionConfigurationFromPreferences(
+            RetentionPreferenceValues(
+                modePresent = false,
+                modeOrdinal = null,
+                oneShotSeconds = null,
+                oneShotSizeBytes = 700_000_002L,
+                loopingSeconds = null,
+                loopingSizeBytes = 1_900_000_004L,
+            ),
+            recoveryFallback = recovery,
+        )
+        assertEquals(RetentionMode.SIZE, inferred?.mode)
+        assertEquals(6_001L, inferred?.oneShotSeconds)
+        assertEquals(12_003L, inferred?.loopingSeconds)
+        assertEquals(700_000_002L, inferred?.oneShotSizeBytes)
+        assertEquals(1_900_000_004L, inferred?.loopingSizeBytes)
+
+        assertEquals(
+            null,
+            retentionConfigurationFromPreferences(
+                RetentionPreferenceValues(false, null, 1L, 2L, 3L, 4L),
+                recoveryFallback = recovery,
+            ),
+        )
+        assertEquals(
+            null,
+            retentionConfigurationFromPreferences(
+                RetentionPreferenceValues(true, 99, null, 2L, null, 4L),
+                recoveryFallback = recovery,
+            ),
+        )
+        assertEquals(
+            null,
+            retentionConfigurationFromPreferences(
+                RetentionPreferenceValues(true, RetentionMode.SIZE.ordinal, null, -2L, null, 4L),
+                recoveryFallback = recovery,
+            ),
+        )
+        assertEquals(
+            null,
+            retentionConfigurationFromPreferences(
+                RetentionPreferenceValues(true, RetentionMode.TIME.ordinal, 1L, 2L, null, 4L),
+                recoveryFallback = recovery,
+            ),
+        )
+    }
+
+    @Test
+    fun retentionResolution_neverAppliesDefaultsOverExistingHistory() {
+        val primary = RetentionConfiguration(RetentionMode.SIZE, 11L, 22L, 33L, 44L)
+        val recovery = RetentionConfiguration(RetentionMode.TIME, 55L, 66L, 77L, 88L)
+
+        assertEquals(
+            ResolvedRetentionConfiguration(primary, RetentionConfigurationSource.PREFERENCES),
+            resolveRetentionConfiguration(primary, recovery, historyExists = true),
+        )
+        assertEquals(
+            ResolvedRetentionConfiguration(recovery, RetentionConfigurationSource.RECOVERY),
+            resolveRetentionConfiguration(null, recovery, historyExists = true),
+        )
+        assertEquals(null, resolveRetentionConfiguration(null, null, historyExists = true))
+        assertEquals(
+            ResolvedRetentionConfiguration(
+                defaultRetentionConfiguration(),
+                RetentionConfigurationSource.DEFAULTS,
+            ),
+            resolveRetentionConfiguration(null, null, historyExists = false),
+        )
+    }
+
+    @Test
+    fun loopingBoundaryMath_dropsOnlyTheMinimumWholeFrames() {
+        assertEquals(2L, loopingDropChunkBytesForSize(1L, 100L, 2))
+        assertEquals(4L, loopingDropChunkBytesForSize(3L, 100L, 2))
+        assertEquals(100L, loopingDropChunkBytesForSize(500L, 100L, 2))
+
+        val rate = 48_000
+        assertEquals(2L, loopingDropChunkBytesForTime(1.0 / rate, 100L, rate, 2))
+        assertEquals(4L, loopingDropChunkBytesForTime(1.1 / rate, 100L, rate, 2))
+        assertEquals(200L, loopingDropChunkBytesForTime(1.0, 100L, rate, 2))
+    }
+
+    @Test
     fun copyDigest_copiesEveryByteAcrossBoundarySizes() {
         val source = ByteArray(262_147) { index -> ((index * 37 + 11) and 0xff).toByte() }
         val expectedDigest = sha256(ByteArrayInputStream(source)).sha256

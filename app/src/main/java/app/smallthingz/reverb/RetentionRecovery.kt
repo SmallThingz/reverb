@@ -1,0 +1,329 @@
+package app.smallthingz.reverb
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.AtomicFile
+import android.system.Os
+import android.system.OsConstants
+import java.io.DataInputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
+import java.util.zip.CRC32
+
+internal data class RetentionConfiguration(
+    val mode: RetentionMode,
+    val oneShotSeconds: Long,
+    val oneShotSizeBytes: Long,
+    val loopingSeconds: Long,
+    val loopingSizeBytes: Long,
+)
+
+internal data class RetentionPreferenceValues(
+    val modePresent: Boolean,
+    val modeOrdinal: Int?,
+    val oneShotSeconds: Long?,
+    val oneShotSizeBytes: Long?,
+    val loopingSeconds: Long?,
+    val loopingSizeBytes: Long?,
+    val digestPresent: Boolean = false,
+    val digest: String? = null,
+)
+
+internal enum class RetentionConfigurationSource {
+    PREFERENCES,
+    RECOVERY,
+    DEFAULTS,
+}
+
+internal data class ResolvedRetentionConfiguration(
+    val configuration: RetentionConfiguration,
+    val source: RetentionConfigurationSource,
+)
+
+internal fun defaultRetentionConfiguration(): RetentionConfiguration = RetentionConfiguration(
+    mode = RetentionMode.SIZE,
+    oneShotSeconds = ReverbConfig.DEFAULT_RETENTION_SECONDS,
+    oneShotSizeBytes = ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES,
+    loopingSeconds = ReverbConfig.DEFAULT_RETENTION_SECONDS,
+    loopingSizeBytes = ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES,
+)
+
+internal fun readRetentionPreferenceValues(prefs: SharedPreferences): RetentionPreferenceValues =
+    RetentionPreferenceValues(
+        modePresent = prefs.contains(PrefKey.RETENTION_MODE),
+        modeOrdinal = safePreferenceInt(prefs, PrefKey.RETENTION_MODE),
+        oneShotSeconds = safePreferenceLong(prefs, PrefKey.ONE_SHOT_RETENTION_SECONDS),
+        oneShotSizeBytes = safePreferenceLong(prefs, PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE),
+        loopingSeconds = safePreferenceLong(prefs, PrefKey.RETENTION_SECONDS),
+        loopingSizeBytes = safePreferenceLong(prefs, PrefKey.AUDIO_MEMORY_SIZE),
+        digestPresent = prefs.contains(PrefKey.RETENTION_CONFIG_DIGEST),
+        digest = safePreferenceString(prefs, PrefKey.RETENTION_CONFIG_DIGEST),
+    )
+
+private fun safePreferenceInt(prefs: SharedPreferences, key: PrefKey): Int? {
+    if (!prefs.contains(key)) return null
+    return runCatching { prefs.getInt(key, Int.MIN_VALUE) }.getOrNull()
+}
+
+private fun safePreferenceLong(prefs: SharedPreferences, key: PrefKey): Long? {
+    if (!prefs.contains(key)) return null
+    return runCatching { prefs.getLong(key, Long.MIN_VALUE) }
+        .getOrNull()
+        ?.takeIf { it >= 0L }
+}
+
+private fun safePreferenceString(prefs: SharedPreferences, key: PrefKey): String? {
+    if (!prefs.contains(key)) return null
+    return runCatching { prefs.getString(key, null) }.getOrNull()
+}
+
+internal fun retentionConfigurationFromPreferences(
+    values: RetentionPreferenceValues,
+    recoveryFallback: RetentionConfiguration? = null,
+    allowLegacyWithoutDigest: Boolean = true,
+): RetentionConfiguration? {
+    if (listOf(
+            values.oneShotSeconds,
+            values.oneShotSizeBytes,
+            values.loopingSeconds,
+            values.loopingSizeBytes,
+        ).any { value -> value != null && value < 0L }
+    ) {
+        return null
+    }
+    val mode = if (values.modePresent) {
+        values.modeOrdinal?.let { ordinal -> RetentionMode.entries.getOrNull(ordinal) } ?: return null
+    } else {
+        val completeSize = values.oneShotSizeBytes != null && values.loopingSizeBytes != null
+        val completeTime = values.oneShotSeconds != null && values.loopingSeconds != null
+        when {
+            completeSize && !completeTime -> RetentionMode.SIZE
+            completeTime && !completeSize -> RetentionMode.TIME
+            else -> return null
+        }
+    }
+
+    when (mode) {
+        RetentionMode.SIZE -> if (values.oneShotSizeBytes == null || values.loopingSizeBytes == null) return null
+        RetentionMode.TIME -> if (values.oneShotSeconds == null || values.loopingSeconds == null) return null
+    }
+
+    val defaults = defaultRetentionConfiguration()
+    val configuration = RetentionConfiguration(
+        mode = mode,
+        oneShotSeconds = values.oneShotSeconds
+            ?: recoveryFallback?.oneShotSeconds
+            ?: defaults.oneShotSeconds,
+        oneShotSizeBytes = values.oneShotSizeBytes
+            ?: recoveryFallback?.oneShotSizeBytes
+            ?: defaults.oneShotSizeBytes,
+        loopingSeconds = values.loopingSeconds
+            ?: recoveryFallback?.loopingSeconds
+            ?: defaults.loopingSeconds,
+        loopingSizeBytes = values.loopingSizeBytes
+            ?: recoveryFallback?.loopingSizeBytes
+            ?: defaults.loopingSizeBytes,
+    )
+    if (values.digestPresent) {
+        val observed = values.digest?.lowercase()?.takeIf(::isSha256Hex) ?: return null
+        if (observed != retentionConfigurationDigest(configuration)) return null
+    } else if (!allowLegacyWithoutDigest) {
+        return null
+    }
+    return configuration
+}
+
+internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration {
+    val prefs = getRecorderPreferences(context)
+    val values = readRetentionPreferenceValues(prefs)
+    retentionConfigurationFromPreferences(
+        values = values,
+        recoveryFallback = null,
+        allowLegacyWithoutDigest = false,
+    )?.let { return it }
+
+    val recovery = readRetentionRecoveryConfiguration(context)
+    return retentionConfigurationFromPreferences(
+        values = values,
+        recoveryFallback = recovery,
+        allowLegacyWithoutDigest = recovery == null,
+    ) ?: recovery ?: defaultRetentionConfiguration()
+}
+
+internal fun retentionMutationIsSafe(context: Context): Boolean {
+    val prefs = getRecorderPreferences(context)
+    val values = readRetentionPreferenceValues(prefs)
+    val recovery = readRetentionRecoveryConfiguration(context)
+    val primary = retentionConfigurationFromPreferences(
+        values = values,
+        recoveryFallback = recovery,
+        allowLegacyWithoutDigest = recovery == null,
+    )
+    return primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
+}
+
+internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
+    val roots = listOf(
+        File(context.noBackupFilesDir, ReverbConfig.BUFFER_CACHE_FOLDER_NAME),
+        File(context.noBackupFilesDir, ReverbConfig.ONE_SHOT_BUFFER_CACHE_FOLDER_NAME),
+    )
+    return roots.any { root ->
+        val chunks = File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
+        if (!chunks.exists()) false else chunks.listFiles()?.any { it.isFile } ?: true
+    }
+}
+
+internal fun resolveRetentionConfiguration(
+    primary: RetentionConfiguration?,
+    recovery: RetentionConfiguration?,
+    historyExists: Boolean,
+): ResolvedRetentionConfiguration? = when {
+    primary != null -> ResolvedRetentionConfiguration(primary, RetentionConfigurationSource.PREFERENCES)
+    recovery != null -> ResolvedRetentionConfiguration(recovery, RetentionConfigurationSource.RECOVERY)
+    historyExists -> null
+    else -> ResolvedRetentionConfiguration(defaultRetentionConfiguration(), RetentionConfigurationSource.DEFAULTS)
+}
+
+internal fun retentionConfigurationDigest(configuration: RetentionConfiguration): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(canonicalRetentionConfigurationBytes(configuration))
+        .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+internal fun retentionPreferenceDigestMatches(
+    values: RetentionPreferenceValues,
+    configuration: RetentionConfiguration,
+): Boolean {
+    if (!values.digestPresent) return false
+    val digest = values.digest?.lowercase()?.takeIf(::isSha256Hex) ?: return false
+    return digest == retentionConfigurationDigest(configuration)
+}
+
+private fun isSha256Hex(value: String): Boolean =
+    value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
+
+private fun canonicalRetentionConfigurationBytes(configuration: RetentionConfiguration): ByteArray {
+    require(configuration.oneShotSeconds >= 0L)
+    require(configuration.oneShotSizeBytes >= 0L)
+    require(configuration.loopingSeconds >= 0L)
+    require(configuration.loopingSizeBytes >= 0L)
+    return ByteArray(RETENTION_RECOVERY_CRC_OFFSET).also { bytes ->
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putInt(RETENTION_RECOVERY_MAGIC)
+            putInt(RETENTION_RECOVERY_VERSION)
+            putInt(configuration.mode.ordinal)
+            putLong(configuration.oneShotSeconds)
+            putLong(configuration.oneShotSizeBytes)
+            putLong(configuration.loopingSeconds)
+            putLong(configuration.loopingSizeBytes)
+        }
+    }
+}
+
+internal fun encodeRetentionRecoveryConfiguration(configuration: RetentionConfiguration): ByteArray {
+    val bytes = canonicalRetentionConfigurationBytes(configuration).copyOf(RETENTION_RECOVERY_FILE_BYTES)
+    ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        .putInt(RETENTION_RECOVERY_CRC_OFFSET, crc32(bytes, 0, RETENTION_RECOVERY_CRC_OFFSET))
+    return bytes
+}
+
+internal fun decodeRetentionRecoveryConfiguration(bytes: ByteArray): RetentionConfiguration? {
+    if (bytes.size != RETENTION_RECOVERY_FILE_BYTES) return null
+    if (readIntLittleEndian(bytes, 0) != RETENTION_RECOVERY_MAGIC) return null
+    if (readIntLittleEndian(bytes, 4) != RETENTION_RECOVERY_VERSION) return null
+    if (readIntLittleEndian(bytes, RETENTION_RECOVERY_CRC_OFFSET) != crc32(bytes, 0, RETENTION_RECOVERY_CRC_OFFSET)) {
+        return null
+    }
+    val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+    buffer.position(8)
+    val mode = RetentionMode.entries.getOrNull(buffer.int) ?: return null
+    val oneShotSeconds = buffer.long
+    val oneShotSizeBytes = buffer.long
+    val loopingSeconds = buffer.long
+    val loopingSizeBytes = buffer.long
+    if (oneShotSeconds < 0L || oneShotSizeBytes < 0L || loopingSeconds < 0L || loopingSizeBytes < 0L) return null
+    return RetentionConfiguration(
+        mode = mode,
+        oneShotSeconds = oneShotSeconds,
+        oneShotSizeBytes = oneShotSizeBytes,
+        loopingSeconds = loopingSeconds,
+        loopingSizeBytes = loopingSizeBytes,
+    )
+}
+
+internal fun readRetentionRecoveryConfiguration(context: Context): RetentionConfiguration? {
+    val atomicFile = AtomicFile(retentionRecoveryFile(context))
+    return runCatching {
+        // openRead() first so AtomicFile can recover its backup/new-file state after a crash.
+        val bytes = atomicFile.openRead().use { input -> DataInputStream(input).readBytes() }
+        decodeRetentionRecoveryConfiguration(bytes)
+    }.getOrNull()
+}
+
+internal fun writeRetentionRecoveryConfiguration(
+    context: Context,
+    configuration: RetentionConfiguration,
+): Boolean {
+    val atomicFile = AtomicFile(retentionRecoveryFile(context))
+    val bytes = runCatching { encodeRetentionRecoveryConfiguration(configuration) }.getOrNull() ?: return false
+    var output: java.io.FileOutputStream? = null
+    return try {
+        output = atomicFile.startWrite()
+        output.write(bytes)
+        output.fd.sync()
+        atomicFile.finishWrite(output)
+        output = null
+        syncRetentionRecoveryDirectory(context)
+    } catch (_: Exception) {
+        output?.let(atomicFile::failWrite)
+        false
+    }
+}
+
+internal fun restoreRetentionConfigurationToPreferences(
+    prefs: SharedPreferences,
+    configuration: RetentionConfiguration,
+): Boolean = prefs.edit()
+    .putInt(PrefKey.RETENTION_MODE, configuration.mode.ordinal)
+    .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, configuration.oneShotSeconds)
+    .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, configuration.oneShotSizeBytes)
+    .putLong(PrefKey.RETENTION_SECONDS, configuration.loopingSeconds)
+    .putLong(PrefKey.AUDIO_MEMORY_SIZE, configuration.loopingSizeBytes)
+    .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(configuration))
+    .commit()
+
+private fun retentionRecoveryFile(context: Context): File =
+    File(context.noBackupFilesDir, RETENTION_RECOVERY_FILE_NAME)
+
+private fun syncRetentionRecoveryDirectory(context: Context): Boolean {
+    val directory = context.noBackupFilesDir
+    val descriptor = runCatching {
+        Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
+    }.getOrNull() ?: return false
+    return try {
+        Os.fsync(descriptor)
+        true
+    } catch (_: Exception) {
+        false
+    } finally {
+        runCatching { Os.close(descriptor) }
+    }
+}
+
+private fun crc32(bytes: ByteArray, offset: Int, count: Int): Int = CRC32().run {
+    update(bytes, offset, count)
+    value.toInt()
+}
+
+private fun readIntLittleEndian(bytes: ByteArray, offset: Int): Int =
+    (bytes[offset].toInt() and 0xff) or
+        ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+        ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+        (bytes[offset + 3].toInt() shl 24)
+
+private const val RETENTION_RECOVERY_FILE_NAME = "retention-config.v1"
+private const val RETENTION_RECOVERY_MAGIC = 0x5254524e // RTRN
+private const val RETENTION_RECOVERY_VERSION = 1
+private const val RETENTION_RECOVERY_CRC_OFFSET = 44
+private const val RETENTION_RECOVERY_FILE_BYTES = 48
