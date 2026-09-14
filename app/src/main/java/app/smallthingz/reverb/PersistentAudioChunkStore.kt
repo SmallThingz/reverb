@@ -951,16 +951,7 @@ internal class PersistentAudioChunkStore internal constructor(
             output.write(payload)
             output.fd.sync()
         }
-        try {
-            Files.move(
-                temp.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
+        publishRetirementTombstoneAtomically(temp, target)
         forceDirectoryDurable(retiredDirectory)
     }
 
@@ -2184,5 +2175,24 @@ internal class PersistentAudioChunkStore internal constructor(
                 bytes[offset + index] = (value ushr (index * 8)).toByte()
             }
         }
+    }
+}
+
+internal fun publishRetirementTombstoneAtomically(
+    temp: File,
+    target: File,
+    atomicMove: (File, File) -> Unit = { source, destination ->
+        Files.move(
+            source.toPath(),
+            destination.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    },
+) {
+    try {
+        atomicMove(temp, target)
+    } catch (error: AtomicMoveNotSupportedException) {
+        throw IOException("Atomic retirement-tombstone publication is unavailable", error)
     }
 }

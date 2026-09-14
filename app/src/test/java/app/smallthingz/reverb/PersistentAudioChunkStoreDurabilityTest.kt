@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.util.Random
 import org.junit.Assert.assertArrayEquals
@@ -360,6 +361,21 @@ class PersistentAudioChunkStoreDurabilityTest {
             assertArrayEquals(expected, readAll(reopened))
         }
     }
+    @Test
+    fun retirementTombstone_neverFallsBackToNonAtomicReplacement() = withStoreRoot { root ->
+        val retired = File(root, "retired").apply { mkdirs() }
+        val target = File(retired, "7").apply { writeText("old") }
+        val temp = File(retired, "7.tmp").apply { writeText("new") }
+
+        assertThrows(IOException::class.java) {
+            publishRetirementTombstoneAtomically(temp, target) { source, destination ->
+                throw AtomicMoveNotSupportedException(source.path, destination.path, "injected")
+            }
+        }
+        assertEquals("old", target.readText())
+        assertEquals("new", temp.readText())
+    }
+
 
     @Test
     fun retiredLeaseChunk_neverResurrectsWhenBothIndexesAreLost() = withStoreRoot { root ->
