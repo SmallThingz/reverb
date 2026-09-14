@@ -1494,10 +1494,9 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun liveSafPublish_isHiddenUntilVerifiedCopyCompletes() {
-        val active = setOf("content://provider/final")
-        assertFalse(shouldExposeDocumentOutput("content://provider/final", active))
-        assertTrue(shouldExposeDocumentOutput("content://provider/other", active))
+    fun safPublication_requiresRenameSupportToStayHiddenUntilVerified() {
+        assertTrue(canSafelyPublishDocumentOutput(supportsRename = true))
+        assertFalse(canSafelyPublishDocumentOutput(supportsRename = false))
     }
 
     @Test

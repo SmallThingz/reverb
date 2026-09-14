@@ -29,7 +29,7 @@
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation.
-- FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial output must never enter the Library as a finished recording.
+- FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial output must never enter the Library as a finished recording. SAF providers that cannot rename verified staging fail closed instead of copying into a visible final-name document.
 - Legacy old-session `export` staging may use structural recovery; `copy` staging and current-process staging remain hidden and non-destructive.
 - New export/trim staging is recoverable after process loss only when a durable verification record still matches the exact content and stable FILE/provider object identity; unverified tracked staging remains hidden, cleanup revokes recovery authority before destructive removal, and publication carries that identity proof through finalization.
 - An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.

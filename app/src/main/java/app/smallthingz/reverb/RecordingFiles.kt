@@ -43,8 +43,6 @@ private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
 private const val STAGING_SESSION_SEPARATOR = "__"
 private val OUTPUT_STAGING_SESSION_ID = UUID.randomUUID().toString()
-private val documentPublishLock = Any()
-private val activeDocumentPublishIds = mutableSetOf<String>()
 
 internal enum class StagingOutputKind(val wireName: String) {
     EXPORT("export"), // Legacy pre-verification-marker staging.
@@ -804,15 +802,8 @@ private fun finalizeDocumentOutputTarget(
     val finalName = findAvailableDisplayName(target.displayName) { candidate ->
         tree.findFile(candidate)?.uri?.let { it != sourceUri } == true
     }
-    if (!documentSupportsRename(context, sourceUri)) {
-        return publishStagedDocumentByVerifiedCopy(
-            context,
-            target,
-            treeUri,
-            sourceUri,
-            finalName,
-            expectedFingerprint,
-        )
+    if (!canSafelyPublishDocumentOutput(documentSupportsRename(context, sourceUri))) {
+        throw IOException("Output provider cannot safely publish verified staging without rename support")
     }
     val renamedUri = try {
         DocumentsContract.renameDocument(context.contentResolver, sourceUri, finalName)
@@ -854,108 +845,7 @@ private fun documentSupportsRename(context: Context, uri: Uri): Boolean = runCat
 }.onFailure { Log.w(TAG, "Unable to inspect document publish capabilities for $uri", it) }
     .getOrDefault(false)
 
-@Throws(IOException::class)
-private fun publishStagedDocumentByVerifiedCopy(
-    context: Context,
-    target: RecordingOutputTarget,
-    treeUri: Uri,
-    sourceUri: Uri,
-    finalName: String,
-    expectedFingerprint: StableOutputFingerprint,
-): RecordingOutputTarget {
-    val finalUri = synchronized(documentPublishLock) {
-        val created = DocumentsContract.createDocument(
-            context.contentResolver,
-            DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
-            target.mimeType,
-            finalName,
-        ) ?: throw IOException("Unable to create final output document")
-        activeDocumentPublishIds += created.toString()
-        created
-    }
-    try {
-        val actualName = runCatching { DocumentFile.fromSingleUri(context, finalUri)?.name }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
-            ?: finalName
-        val finalTarget = target.copy(
-            id = finalUri.toString(),
-            displayName = actualName,
-            uri = finalUri,
-            staging = false,
-        )
-        var copiedFinalDigest: CopyDigest? = null
-        try {
-            val sourceDigest = context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                openWritableParcelFileDescriptor(context, finalTarget).use { descriptor ->
-                    FileOutputStream(descriptor.fileDescriptor).use { output ->
-                        val digest = copyWithSha256(input, output)
-                        copiedFinalDigest = digest
-                        output.fd.sync()
-                        digest
-                    }
-                }
-            } ?: throw IOException("Unable to reopen verified staging document")
-            if (sourceDigest.byteCount <= 0L) throw IOException("Verified staging document was empty")
-            if (!copyDigestMatches(expectedFingerprint.digest, sourceDigest)) {
-                throw IOException("Staging document changed while publishing")
-            }
-            val sourceAfterCopy = readStableOutputFingerprint(
-                context,
-                RecordingStorageType.DOCUMENT,
-                sourceUri.toString(),
-            ) ?: throw IOException("Unable to revalidate staging document after publish copy")
-            if (!stableOutputFingerprintMatches(
-                    RecordingStorageType.DOCUMENT,
-                    expectedFingerprint,
-                    sourceAfterCopy,
-                )) {
-                throw IOException("Staging document identity changed while publishing")
-            }
-            val finalFingerprint = readStableOutputFingerprint(
-                context,
-                RecordingStorageType.DOCUMENT,
-                finalUri.toString(),
-            ) ?: throw IOException("Unable to verify final output document")
-            if (!copyDigestMatches(sourceDigest, finalFingerprint.digest)) {
-                throw IOException("Final output document verification failed")
-            }
-            if (!removeVerifiedExportStaging(context, target.storageType, target.id)) {
-                throw IOException("Unable to revoke staging recovery authority before publication")
-            }
-            val stagingDeleted = suppressAndDeleteOutputTarget(
-                context,
-                target,
-                expectedDigest = sourceDigest,
-            )
-            if (!stagingDeleted) {
-                Log.w(TAG, "Published staging document retained under cleanup journal: $sourceUri")
-            }
-            return finalTarget
-        } catch (error: Exception) {
-            val finalDeleted = copiedFinalDigest?.let { expectedDigest ->
-                suppressAndDeleteOutputTarget(
-                    context,
-                    finalTarget,
-                    expectedDigest = expectedDigest,
-                )
-            } ?: false
-            if (!finalDeleted) {
-                Log.w(TAG, "Failed final document retained because cleanup authority was uncertain: $finalUri")
-            }
-            throw if (error is IOException) error else IOException("Unable to publish verified staging document", error)
-        }
-    } finally {
-        synchronized(documentPublishLock) { activeDocumentPublishIds -= finalUri.toString() }
-    }
-}
-
-internal fun shouldExposeDocumentOutput(id: String, activePublishIds: Set<String>): Boolean =
-    id !in activePublishIds
-
-private fun isDocumentPublishInProgress(uri: Uri): Boolean = synchronized(documentPublishLock) {
-    !shouldExposeDocumentOutput(uri.toString(), activeDocumentPublishIds)
-}
+internal fun canSafelyPublishDocumentOutput(supportsRename: Boolean): Boolean = supportsRename
 
 fun buildRecordingEntity(
     context: Context,
@@ -1852,7 +1742,6 @@ private fun listDocumentTreeRecordings(
     files.asSequence()
         .filter { it.isFile }
         .filter { file -> file.uri.toString() !in suppressedIds }
-        .filter { file -> !isDocumentPublishInProgress(file.uri) }
         .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
         .mapNotNull { file ->
             val uri = file.uri
