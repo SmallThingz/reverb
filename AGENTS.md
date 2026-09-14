@@ -26,7 +26,8 @@
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation.
 - FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial output must never enter the Library as a finished recording.
-- Crash recovery may auto-publish only a structurally complete old-session `export` staging artifact; `copy` staging and current-process staging remain hidden and non-destructive.
+- Legacy old-session `export` staging may use structural recovery; `copy` staging and current-process staging remain hidden and non-destructive.
+- New export/trim staging is recoverable after process loss only when a durable verification record still matches the exact content and stable FILE/provider object identity; unverified tracked staging remains hidden, cleanup revokes recovery authority before destructive removal, and publication carries that identity proof through finalization.
 - An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.
 - Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable recording intent; retry on a foreground bind or explicit start.
 - Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted.

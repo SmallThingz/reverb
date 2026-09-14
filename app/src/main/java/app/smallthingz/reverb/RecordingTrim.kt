@@ -58,7 +58,7 @@ private fun writeTrimmedRecordingCopy(
                 requestedDisplayName = "${trimmedRecordingBaseName(recording.displayName)}.wav",
                 mimeType = ExportFormat.WAV.outputMimeType,
                 startedAtMillis = startedAtMillis,
-                stagingKind = StagingOutputKind.EXPORT,
+                stagingKind = StagingOutputKind.EXPORT_TRACKED,
             ).also { target = it }
             val writer = WavAudioFileWriter(
                 context = context,
@@ -78,7 +78,8 @@ private fun writeTrimmedRecordingCopy(
             }
             if (writer.totalSampleBytesWritten <= 0L) throw IOException("Trim produced no audio")
             val expectedBytes = writer.totalFileBytesWritten
-            cleanupDigest = verifyWavOutputTargetAndDigest(
+            val stagingId = outputTarget.id
+            val verifiedOutput = verifyWavOutputTargetAndDigest(
                 context = context,
                 target = outputTarget,
                 expectedFileBytes = expectedBytes,
@@ -87,8 +88,15 @@ private fun writeTrimmedRecordingCopy(
                 payloadBytes = writer.totalSampleBytesWritten,
                 expectedPayloadSha256 = writer.payloadSha256,
             )
+            cleanupDigest = verifiedOutput.digest
+            if (!putVerifiedExportStaging(context, outputTarget, verifiedOutput)) {
+                Log.w(TRIM_TAG, "Verified trim recovery marker could not be persisted: ${outputTarget.id}")
+            }
             verifiedComplete = true
-            val finalized = finalizeOutputTarget(context, outputTarget).also { target = it }
+            val finalized = finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
+            if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId)) {
+                Log.w(TRIM_TAG, "Unable to clear verified trim recovery marker: $stagingId")
+            }
             val durationMillis = selectedFrames * 1000L / layout.sampleRate.toLong()
             buildRecordingEntity(
                 context = context,

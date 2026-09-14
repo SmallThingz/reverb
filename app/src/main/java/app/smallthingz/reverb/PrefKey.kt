@@ -25,6 +25,7 @@ enum class PrefKey {
     THEME_MODE,
     PENDING_RECORDING_DELETIONS,
     PENDING_OUTPUT_CLEANUP,
+    VERIFIED_EXPORT_STAGING,
 }
 
 fun SharedPreferences.getString(key: PrefKey, default: String?): String? = getString(key.name, default)

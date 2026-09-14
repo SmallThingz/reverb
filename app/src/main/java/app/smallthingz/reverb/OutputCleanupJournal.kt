@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -16,7 +17,9 @@ import java.util.UUID
 
 private const val OUTPUT_CLEANUP_RECORD_VERSION_V1 = "v1"
 private const val OUTPUT_CLEANUP_RECORD_VERSION = "v2"
+private const val VERIFIED_EXPORT_STAGING_VERSION = "v1"
 private val outputCleanupJournalLock = Any()
+private val verifiedExportStagingLock = Any()
 
 internal data class PendingOutputCleanupRecord(
     val storageType: RecordingStorageType,
@@ -27,8 +30,17 @@ internal data class PendingOutputCleanupRecord(
     val providerIdentity: String? = null,
 )
 
-private data class OutputCleanupFingerprint(
+internal data class StableOutputFingerprint(
     val digest: CopyDigest,
+    val fileKey: String?,
+    val providerIdentity: String?,
+)
+
+internal data class VerifiedExportStagingRecord(
+    val storageType: RecordingStorageType,
+    val id: String,
+    val byteCount: Long,
+    val sha256Hex: String,
     val fileKey: String?,
     val providerIdentity: String?,
 )
@@ -65,6 +77,29 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
         null
     }
     return PendingOutputCleanupRecord(storageType, id, byteCount, sha256Hex, fileKey, providerIdentity)
+}
+
+internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String = buildString {
+    append(VERIFIED_EXPORT_STAGING_VERSION).append('|')
+    append(record.storageType.name).append('|')
+    append(encodeCleanupField(record.id)).append('|')
+    append(record.byteCount).append('|')
+    append(record.sha256Hex.lowercase()).append('|')
+    append(encodeCleanupField(record.fileKey.orEmpty())).append('|')
+    append(encodeCleanupField(record.providerIdentity.orEmpty()))
+}
+
+internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagingRecord? {
+    val parts = raw.split('|')
+    if (parts.size != 7 || parts[0] != VERIFIED_EXPORT_STAGING_VERSION) return null
+    val storageType = RecordingStorageType.entries.firstOrNull { it.name == parts[1] } ?: return null
+    val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
+    val byteCount = parts[3].toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val sha256Hex = parts[4].lowercase()
+    if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
+    val fileKey = decodeCleanupField(parts[5])?.takeIf { it.isNotBlank() }
+    val providerIdentity = decodeCleanupField(parts[6])?.takeIf { it.isNotBlank() }
+    return VerifiedExportStagingRecord(storageType, id, byteCount, sha256Hex, fileKey, providerIdentity)
 }
 
 internal enum class PendingOutputCleanupMatch {
@@ -117,12 +152,132 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
     }
 }
 
+internal fun verifiedExportStagingRecordMatches(
+    record: VerifiedExportStagingRecord,
+    fingerprint: StableOutputFingerprint,
+): Boolean {
+    if (!record.sha256Hex.equals(fingerprint.digest.sha256.toHexString(), ignoreCase = true) ||
+        record.byteCount != fingerprint.digest.byteCount
+    ) {
+        return false
+    }
+    return when (record.storageType) {
+        RecordingStorageType.FILE -> {
+            val expected = record.fileKey ?: return false
+            fingerprint.fileKey?.let { fileIdentityMatches(expected, it) } == true
+        }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
+            val expected = record.providerIdentity ?: return false
+            fingerprint.providerIdentity?.let { providerRecordingIdentityMatches(expected, it) } == true
+        }
+    }
+}
+
+internal fun stableOutputFingerprintMatches(
+    storageType: RecordingStorageType,
+    expected: StableOutputFingerprint,
+    actual: StableOutputFingerprint,
+): Boolean {
+    if (!copyDigestMatches(expected.digest, actual.digest)) return false
+    return when (storageType) {
+        RecordingStorageType.FILE -> {
+            val expectedIdentity = expected.fileKey ?: return false
+            actual.fileKey?.let { fileIdentityMatches(expectedIdentity, it) } == true
+        }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
+            val expectedIdentity = expected.providerIdentity ?: return false
+            actual.providerIdentity?.let { providerRecordingIdentityMatches(expectedIdentity, it) } == true
+        }
+    }
+}
+
+internal fun putVerifiedExportStaging(
+    context: Context,
+    target: RecordingOutputTarget,
+    fingerprint: StableOutputFingerprint,
+): Boolean {
+    if (!target.staging || fingerprint.digest.byteCount <= 0L) return false
+    when (target.storageType) {
+        RecordingStorageType.FILE -> if (fingerprint.fileKey.isNullOrBlank()) return false
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> if (fingerprint.providerIdentity.isNullOrBlank()) return false
+    }
+    val record = VerifiedExportStagingRecord(
+        storageType = target.storageType,
+        id = target.id,
+        byteCount = fingerprint.digest.byteCount,
+        sha256Hex = fingerprint.digest.sha256.toHexString(),
+        fileKey = fingerprint.fileKey,
+        providerIdentity = fingerprint.providerIdentity,
+    )
+    return synchronized(verifiedExportStagingLock) {
+        val current = verifiedExportStagingEntriesLocked(context)
+        val updated = current.filterNotTo(mutableSetOf()) { raw ->
+            decodeVerifiedExportStagingRecord(raw)?.let { record ->
+                record.storageType == target.storageType && record.id == target.id
+            } == true
+        }
+        updated += encodeVerifiedExportStagingRecord(record)
+        writeVerifiedExportStagingEntriesLocked(context, updated)
+    }
+}
+
+internal fun removeVerifiedExportStaging(
+    context: Context,
+    storageType: RecordingStorageType,
+    id: String,
+): Boolean = synchronized(verifiedExportStagingLock) {
+        val current = verifiedExportStagingEntriesLocked(context)
+        val updated = current.filterNotTo(mutableSetOf()) { raw ->
+            decodeVerifiedExportStagingRecord(raw)?.let { record ->
+                record.storageType == storageType && record.id == id
+            } == true
+        }
+        if (updated.size == current.size) return@synchronized true
+        writeVerifiedExportStagingEntriesLocked(context, updated)
+    }
+
+@SuppressLint("UseKtx") // The commit() Boolean is part of the fail-closed durability contract.
+private fun writeVerifiedExportStagingEntriesLocked(context: Context, entries: Set<String>): Boolean {
+    val editor = getRecorderPreferences(context).edit()
+    if (entries.isEmpty()) editor.remove(PrefKey.VERIFIED_EXPORT_STAGING)
+    else editor.putStringSet(PrefKey.VERIFIED_EXPORT_STAGING, entries)
+    return editor.commit()
+}
+
+internal fun verifiedExportStagingFingerprint(
+    context: Context,
+    storageType: RecordingStorageType,
+    id: String,
+): StableOutputFingerprint? {
+    val record = synchronized(verifiedExportStagingLock) {
+        verifiedExportStagingEntriesLocked(context).firstNotNullOfOrNull { raw ->
+            decodeVerifiedExportStagingRecord(raw)?.takeIf { it.id == id && it.storageType == storageType }
+        }
+    } ?: return null
+    val fingerprint = readStableOutputFingerprint(context, storageType, id) ?: return null
+    return fingerprint.takeIf { verifiedExportStagingRecordMatches(record, it) }
+}
+
+private fun verifiedExportStagingEntriesLocked(context: Context): Set<String> =
+    getRecorderPreferences(context).getStringSet(PrefKey.VERIFIED_EXPORT_STAGING, emptySet())
+        ?.toSet()
+        .orEmpty()
+
 internal fun suppressAndDeleteOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedDigest: CopyDigest,
 ): Boolean {
     val id = target.id
+    // Cleanup revokes crash-recovery authority before any destructive attempt. If that
+    // synchronous preference update cannot be made durable, fail closed and keep the bytes.
+    if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
     val existing = pendingOutputCleanupRecord(context, id)
     if (existing != null) {
         if (!pendingOutputCleanupRecordMatchesDigest(existing, expectedDigest)) return false
@@ -143,7 +298,7 @@ internal fun suppressAndDeleteOutputTarget(
         OutputCleanupAssetState.UNAVAILABLE -> return false
         OutputCleanupAssetState.PRESENT -> Unit
     }
-    val fingerprint = readOutputCleanupFingerprint(context, target.storageType, id) ?: return false
+    val fingerprint = readStableOutputFingerprint(context, target.storageType, id) ?: return false
     if (!copyDigestMatches(expectedDigest, fingerprint.digest)) return false
     val record = PendingOutputCleanupRecord(
         storageType = target.storageType,
@@ -193,7 +348,7 @@ internal fun retryPendingOutputCleanup(context: Context) {
             OutputCleanupAssetState.UNAVAILABLE -> continue
             OutputCleanupAssetState.PRESENT -> Unit
         }
-        val fingerprint = readOutputCleanupFingerprint(context, record.storageType, record.id) ?: continue
+        val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id) ?: continue
         when (classifyPendingOutputCleanup(
             record,
             fingerprint.digest.byteCount,
@@ -269,13 +424,13 @@ private fun writePendingOutputCleanupEntriesLocked(context: Context, entries: Se
     return editor.commit()
 }
 
-private fun readOutputCleanupFingerprint(
+internal fun readStableOutputFingerprint(
     context: Context,
     storageType: RecordingStorageType,
     id: String,
-): OutputCleanupFingerprint? = runCatching {
+): StableOutputFingerprint? = runCatching {
     when (storageType) {
-        RecordingStorageType.FILE -> readStableFileOutputCleanupFingerprint(File(id))
+        RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id))
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> {
@@ -286,12 +441,12 @@ private fun readOutputCleanupFingerprint(
                 ?: return@runCatching null
             val after = resolveProviderRecordingIdentity(context, storageType, uri)
             if (!providerRecordingIdentityMatches(before, after)) return@runCatching null
-            OutputCleanupFingerprint(digest, fileKey = null, providerIdentity = before)
+            StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
         }
     }
 }.getOrNull()
 
-private fun readStableFileOutputCleanupFingerprint(file: File): OutputCleanupFingerprint? = runCatching {
+internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprint? = runCatching {
     FileInputStream(file).use { input ->
         val openedIdentity = resolveFileDescriptorIdentity(input.fd)
             .takeIf { it.isNotBlank() } ?: return@runCatching null
@@ -300,7 +455,7 @@ private fun readStableFileOutputCleanupFingerprint(file: File): OutputCleanupFin
         if (openedIdentity != closedIdentity) return@runCatching null
         val pathIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
         if (!fileDescriptorIdentityMatches(pathIdentity, closedIdentity)) return@runCatching null
-        OutputCleanupFingerprint(digest, fileKey = pathIdentity, providerIdentity = null)
+        StableOutputFingerprint(digest, fileKey = pathIdentity, providerIdentity = null)
     }
 }.getOrNull()
 
@@ -368,7 +523,7 @@ private fun pendingProviderOutputCleanupStillMatches(
     record: PendingOutputCleanupRecord,
 ): Boolean {
     if (record.storageType == RecordingStorageType.FILE || record.providerIdentity.isNullOrBlank()) return false
-    val fingerprint = readOutputCleanupFingerprint(context, record.storageType, record.id) ?: return false
+    val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id) ?: return false
     return pendingOutputCleanupMatches(
         record,
         fingerprint.digest.byteCount,

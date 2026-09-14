@@ -1275,7 +1275,8 @@ class ReverbService : Service() {
                             ).toLong()
                         }
                         val expectedOutputBytes = writer.totalFileBytesWritten
-                        cleanupDigest = verifyWavOutputTargetAndDigest(
+                        val stagingId = target.id
+                        val verifiedOutput = verifyWavOutputTargetAndDigest(
                             context = this@ReverbService,
                             target = target,
                             expectedFileBytes = expectedOutputBytes,
@@ -1284,10 +1285,17 @@ class ReverbService : Service() {
                             payloadBytes = writer.totalSampleBytesWritten,
                             expectedPayloadSha256 = writer.payloadSha256,
                         )
+                        cleanupDigest = verifiedOutput.digest
+                        if (!putVerifiedExportStaging(this@ReverbService, target, verifiedOutput)) {
+                            Log.w(TAG, "Verified export recovery marker could not be persisted: ${target.id}")
+                        }
                         verifiedComplete = true
                         ensureExportNotCancelled(exportToken)
-                        val finalizedTarget = finalizeOutputTarget(this@ReverbService, target)
+                        val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
                         outTarget = finalizedTarget
+                        if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId)) {
+                            Log.w(TAG, "Unable to clear verified export recovery marker: $stagingId")
+                        }
                         ensureExportNotCancelled(exportToken)
                         val recording = buildRecordingEntity(
                             this@ReverbService,

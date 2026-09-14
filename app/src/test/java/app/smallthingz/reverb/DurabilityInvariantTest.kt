@@ -669,6 +669,36 @@ class DurabilityInvariantTest {
         assertFalse(shouldRecoverStagingOutput(exportMetadata, currentSessionId = "session-a"))
         assertTrue(shouldRecoverStagingOutput(exportMetadata, currentSessionId = "session-b"))
 
+        val trackedStaging = stagingOutputName(
+            finalDisplayName = "tracked.wav",
+            token = "token-v2",
+            sessionId = "session-old",
+            kind = StagingOutputKind.EXPORT_TRACKED,
+        )
+        val trackedMetadata = parseStagingOutputMetadata(trackedStaging)
+        assertEquals(StagingOutputKind.EXPORT_TRACKED, trackedMetadata?.kind)
+        assertFalse(
+            shouldRecoverStagingOutput(
+                trackedMetadata,
+                currentSessionId = "session-new",
+                verifiedTrackedExport = false,
+            ),
+        )
+        assertTrue(
+            shouldRecoverStagingOutput(
+                trackedMetadata,
+                currentSessionId = "session-new",
+                verifiedTrackedExport = true,
+            ),
+        )
+        assertFalse(
+            shouldRecoverStagingOutput(
+                trackedMetadata,
+                currentSessionId = "session-old",
+                verifiedTrackedExport = true,
+            ),
+        )
+
         val copyStaging = stagingOutputName(
             finalDisplayName = "clip.wav",
             token = "token-2",
@@ -772,6 +802,40 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun stagedFilePublish_rejectsObjectThatReplacedVerifiedStagingPath() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "publish-race-").toFile()
+        try {
+            val verifiedBytes = byteArrayOf(1, 3, 5, 7, 9)
+            val replacementBytes = byteArrayOf(2, 4, 6, 8)
+            val staged = File(directory, stagingOutputName("clip.wav", "verified-token")).apply {
+                writeBytes(verifiedBytes)
+            }
+            val expected = StableOutputFingerprint(
+                digest = staged.inputStream().use(::sha256),
+                fileKey = resolveFileIdentity(staged).takeIf { it.isNotBlank() } ?: "stat:1:2:3:4:5",
+                providerIdentity = null,
+            )
+            val replacement = File(directory, "replacement.tmp").apply { writeBytes(replacementBytes) }
+            Files.move(
+                replacement.toPath(),
+                staged.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+
+            assertThrows(IOException::class.java) {
+                publishStagedFile(staged, "clip.wav", expected)
+            }
+
+            assertFalse(File(directory, "clip.wav").exists())
+            assertTrue(staged.isFile)
+            assertArrayEquals(replacementBytes, staged.readBytes())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun renameRollback_requiresExactOriginalPhysicalIdentity() {
         assertTrue(renameRollbackRestoredOriginal("old-id", "old-id"))
         assertFalse(renameRollbackRestoredOriginal("old-id", "new-id"))
@@ -869,6 +933,94 @@ class DurabilityInvariantTest {
         assertEquals(record.fileKey, firstIntent.fileIdentity)
         assertEquals(firstIntent.claimToken, secondIntent.claimToken)
         assertTrue(requireNotNull(deletionClaimFile(firstIntent)).name.startsWith(".reverb-delete-"))
+    }
+
+    @Test
+    fun verifiedExportStaging_requiresExactDigestAndStableObjectIdentity() {
+        val digest = CopyDigest(4L, ByteArray(32) { 0x01 })
+        val fileRecord = VerifiedExportStagingRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "recordings/staged.wav",
+            byteCount = digest.byteCount,
+            sha256Hex = digest.sha256.toHexString(),
+            fileKey = "stat:1:2:100:5:77",
+            providerIdentity = null,
+        )
+        val fileFingerprint = StableOutputFingerprint(
+            digest = digest,
+            fileKey = fileRecord.fileKey,
+            providerIdentity = null,
+        )
+        val encoded = encodeVerifiedExportStagingRecord(fileRecord)
+        assertEquals(fileRecord, decodeVerifiedExportStagingRecord(encoded))
+        assertTrue(verifiedExportStagingRecordMatches(fileRecord, fileFingerprint))
+        assertFalse(
+            verifiedExportStagingRecordMatches(
+                fileRecord,
+                fileFingerprint.copy(fileKey = "stat:1:3:100:5:78"),
+            ),
+        )
+        assertFalse(
+            verifiedExportStagingRecordMatches(
+                fileRecord,
+                fileFingerprint.copy(digest = CopyDigest(4L, ByteArray(32) { 0x02 })),
+            ),
+        )
+
+        val providerIdentity = "provider:MEDIASTORE:item:4:7"
+        val providerRecord = fileRecord.copy(
+            storageType = RecordingStorageType.MEDIASTORE,
+            id = "content://media/external/audio/media/7",
+            fileKey = null,
+            providerIdentity = providerIdentity,
+        )
+        val providerFingerprint = StableOutputFingerprint(digest, null, providerIdentity)
+        assertTrue(verifiedExportStagingRecordMatches(providerRecord, providerFingerprint))
+        assertFalse(
+            verifiedExportStagingRecordMatches(
+                providerRecord,
+                providerFingerprint.copy(providerIdentity = "provider:MEDIASTORE:item:4:8"),
+            ),
+        )
+        assertFalse(verifiedExportStagingRecordMatches(providerRecord.copy(providerIdentity = null), providerFingerprint))
+        assertTrue(stableOutputFingerprintMatches(RecordingStorageType.FILE, fileFingerprint, fileFingerprint))
+        assertFalse(
+            stableOutputFingerprintMatches(
+                RecordingStorageType.FILE,
+                fileFingerprint,
+                fileFingerprint.copy(fileKey = "stat:1:3:100:5:78"),
+            ),
+        )
+        assertTrue(
+            verifiedFilePublishMatches(
+                fileFingerprint,
+                fileFingerprint.copy(fileKey = "stat:1:2:101:6:77"),
+            ),
+        )
+        assertFalse(
+            verifiedFilePublishMatches(
+                fileFingerprint,
+                fileFingerprint.copy(fileKey = "stat:1:3:101:6:77"),
+            ),
+        )
+        assertFalse(
+            verifiedFilePublishMatches(
+                fileFingerprint,
+                fileFingerprint.copy(digest = CopyDigest(4L, ByteArray(32) { 0x03 })),
+            ),
+        )
+        assertTrue(
+            sameProviderObjectAcrossMutation(
+                "provider:MEDIASTORE:item:4:7",
+                "provider:MEDIASTORE:item:4:8",
+            ),
+        )
+        assertFalse(
+            sameProviderObjectAcrossMutation(
+                "provider:MEDIASTORE:item:4:7",
+                "provider:MEDIASTORE:other:4:8",
+            ),
+        )
     }
 
     @Test

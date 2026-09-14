@@ -47,7 +47,8 @@ private val documentPublishLock = Any()
 private val activeDocumentPublishIds = mutableSetOf<String>()
 
 internal enum class StagingOutputKind(val wireName: String) {
-    EXPORT("export"),
+    EXPORT("export"), // Legacy pre-verification-marker staging.
+    EXPORT_TRACKED("export-v2"),
     COPY("copy"),
 }
 
@@ -537,7 +538,7 @@ fun createOutputTarget(
         displayName,
         mimeType,
         startedAtMillis,
-        stagingKind = StagingOutputKind.EXPORT,
+        stagingKind = StagingOutputKind.EXPORT_TRACKED,
     )
 }
 
@@ -617,21 +618,43 @@ fun resolveOutputTargetSize(
 }
 
 @Throws(IOException::class)
-fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+internal fun finalizeOutputTarget(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedFingerprint: StableOutputFingerprint,
+): RecordingOutputTarget {
     return when (target.storageType) {
-        RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target)
-        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target)
-        RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target)
+        RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target, expectedFingerprint)
+        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint)
+        RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target, expectedFingerprint)
     }
 }
 
 @Throws(IOException::class)
-private fun finalizeMediaStoreOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+private fun requireCurrentOutputFingerprint(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedFingerprint: StableOutputFingerprint,
+) {
+    val current = readStableOutputFingerprint(context, target.storageType, target.id)
+        ?: throw IOException("Unable to bind output staging to a stable object")
+    if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) {
+        throw IOException("Output staging changed after verification")
+    }
+}
+
+@Throws(IOException::class)
+private fun finalizeMediaStoreOutputTarget(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedFingerprint: StableOutputFingerprint,
+): RecordingOutputTarget {
     val uri = requireNotNull(target.uri)
     if (!target.staging) {
         publishMediaStoreUri(context, uri)
         return target
     }
+    requireCurrentOutputFingerprint(context, target, expectedFingerprint)
     val finalName = findAvailableDisplayName(target.displayName) { candidate ->
         mediaStoreNameExists(context, candidate)
     }
@@ -642,12 +665,23 @@ private fun finalizeMediaStoreOutputTarget(context: Context, target: RecordingOu
     if (context.contentResolver.update(uri, values, null, null) <= 0) {
         throw IOException("Unable to publish MediaStore recording: $uri")
     }
+    val published = readStableOutputFingerprint(context, RecordingStorageType.MEDIASTORE, uri.toString())
+        ?: throw IOException("Unable to verify published MediaStore recording")
+    if (!copyDigestMatches(expectedFingerprint.digest, published.digest) ||
+        !sameProviderObjectAcrossMutation(expectedFingerprint.providerIdentity, published.providerIdentity)
+    ) {
+        throw IOException("Published MediaStore recording no longer matches verified staging")
+    }
     val actualName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: finalName
     return target.copy(displayName = actualName, staging = false)
 }
 
 @Throws(IOException::class)
-private fun finalizeFileOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+private fun finalizeFileOutputTarget(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedFingerprint: StableOutputFingerprint,
+): RecordingOutputTarget {
     if (!target.staging) {
         target.file?.let { file ->
             if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
@@ -657,7 +691,12 @@ private fun finalizeFileOutputTarget(context: Context, target: RecordingOutputTa
         return target
     }
     val source = requireNotNull(target.file)
-    val destination = publishStagedFile(source, target.displayName)
+    val current = readStableFileOutputFingerprint(source)
+        ?: throw IOException("Unable to bind output staging to a stable file")
+    if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
+        throw IOException("Output staging file changed after verification")
+    }
+    val destination = publishStagedFile(source, target.displayName, expectedFingerprint)
     if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
         MediaScannerConnection.scanFile(context, arrayOf(destination.absolutePath), arrayOf(target.mimeType), null)
     }
@@ -670,8 +709,15 @@ private fun finalizeFileOutputTarget(context: Context, target: RecordingOutputTa
 }
 
 @Throws(IOException::class)
-internal fun publishStagedFile(source: File, finalDisplayName: String): File {
+internal fun publishStagedFile(
+    source: File,
+    finalDisplayName: String,
+    expectedFingerprint: StableOutputFingerprint? = null,
+): File {
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
+    if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
+        throw IOException("Verified file output has no stable object identity")
+    }
     while (true) {
         val finalName = findAvailableDisplayName(finalDisplayName) { candidate -> File(parent, candidate).exists() }
         val destination = File(parent, finalName)
@@ -679,6 +725,13 @@ internal fun publishStagedFile(source: File, finalDisplayName: String): File {
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
             // when a racing destination exists its replacement semantics are provider-specific.
             Files.move(source.toPath(), destination.toPath())
+            if (expectedFingerprint != null) {
+                val published = readStableFileOutputFingerprint(destination)
+                if (published == null || !verifiedFilePublishMatches(expectedFingerprint, published)) {
+                    preserveUnexpectedPublishedFile(source, destination, finalDisplayName)
+                    throw IOException("Published file was not the verified staging object")
+                }
+            }
             forceRecordingDirectoryDurable(parent)
             return destination
         } catch (_: FileAlreadyExistsException) {
@@ -687,10 +740,56 @@ internal fun publishStagedFile(source: File, finalDisplayName: String): File {
     }
 }
 
+internal fun verifiedFilePublishMatches(
+    expected: StableOutputFingerprint,
+    published: StableOutputFingerprint,
+): Boolean {
+    val expectedIdentity = expected.fileKey ?: return false
+    val publishedIdentity = published.fileKey ?: return false
+    return copyDigestMatches(expected.digest, published.digest) &&
+        sameFileObjectAcrossRename(expectedIdentity, publishedIdentity)
+}
+
+private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisplayName: String) {
+    try {
+        Files.move(moved.toPath(), source.toPath())
+        source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
+            runCatching { forceRecordingDirectoryDurable(parent) }
+        }
+        return
+    } catch (_: FileAlreadyExistsException) {
+        // A new object owns the original staging path. Keep the moved object hidden too.
+    } catch (_: IOException) {
+        // Fall through to a hidden COPY staging name.
+    } catch (_: SecurityException) {
+        // Fall through to a hidden COPY staging name.
+    }
+
+    val parent = moved.parentFile ?: return
+    for (index in 0 until 10_000) {
+        val token = "publish-race-${UUID.randomUUID()}-$index"
+        val hidden = File(parent, stagingOutputName(finalDisplayName, token, kind = StagingOutputKind.COPY))
+        try {
+            Files.move(moved.toPath(), hidden.toPath())
+            runCatching { forceRecordingDirectoryDurable(parent) }
+            return
+        } catch (_: FileAlreadyExistsException) {
+            continue
+        } catch (_: Exception) {
+            return
+        }
+    }
+}
+
 @Throws(IOException::class)
-private fun finalizeDocumentOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
+private fun finalizeDocumentOutputTarget(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedFingerprint: StableOutputFingerprint,
+): RecordingOutputTarget {
     if (!target.staging) return target
     val sourceUri = requireNotNull(target.uri)
+    requireCurrentOutputFingerprint(context, target, expectedFingerprint)
     val treeUri = target.directoryId.toUri()
     val tree = DocumentFile.fromTreeUri(context, treeUri)
         ?: throw IOException("Unable to access output directory while publishing recording")
@@ -698,13 +797,30 @@ private fun finalizeDocumentOutputTarget(context: Context, target: RecordingOutp
         tree.findFile(candidate)?.uri?.let { it != sourceUri } == true
     }
     if (!documentSupportsRename(context, sourceUri)) {
-        return publishStagedDocumentByVerifiedCopy(context, target, treeUri, sourceUri, finalName)
+        return publishStagedDocumentByVerifiedCopy(
+            context,
+            target,
+            treeUri,
+            sourceUri,
+            finalName,
+            expectedFingerprint,
+        )
     }
     val renamedUri = try {
         DocumentsContract.renameDocument(context.contentResolver, sourceUri, finalName)
     } catch (error: Exception) {
         throw IOException("Output provider failed to atomically publish recording", error)
     } ?: throw IOException("Output provider failed to atomically publish recording")
+    val published = readStableOutputFingerprint(context, RecordingStorageType.DOCUMENT, renamedUri.toString())
+        ?: throw IOException("Unable to verify published document recording")
+    if (!copyDigestMatches(expectedFingerprint.digest, published.digest)) {
+        throw IOException("Published document content no longer matches verified staging")
+    }
+    if (renamedUri == sourceUri &&
+        !sameProviderObjectAcrossMutation(expectedFingerprint.providerIdentity, published.providerIdentity)
+    ) {
+        throw IOException("Published document object no longer matches verified staging")
+    }
     val actualName = DocumentFile.fromSingleUri(context, renamedUri)?.name
         ?.takeIf { it.isNotBlank() }
         ?: finalName
@@ -737,6 +853,7 @@ private fun publishStagedDocumentByVerifiedCopy(
     treeUri: Uri,
     sourceUri: Uri,
     finalName: String,
+    expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
     val finalUri = synchronized(documentPublishLock) {
         val created = DocumentsContract.createDocument(
@@ -772,13 +889,31 @@ private fun publishStagedDocumentByVerifiedCopy(
                 }
             } ?: throw IOException("Unable to reopen verified staging document")
             if (sourceDigest.byteCount <= 0L) throw IOException("Verified staging document was empty")
-            val finalDigest = context.contentResolver.openInputStream(finalUri)?.use(::sha256)
-                ?: throw IOException("Unable to verify final output document")
-            if (
-                sourceDigest.byteCount != finalDigest.byteCount ||
-                !sourceDigest.sha256.contentEquals(finalDigest.sha256)
-            ) {
+            if (!copyDigestMatches(expectedFingerprint.digest, sourceDigest)) {
+                throw IOException("Staging document changed while publishing")
+            }
+            val sourceAfterCopy = readStableOutputFingerprint(
+                context,
+                RecordingStorageType.DOCUMENT,
+                sourceUri.toString(),
+            ) ?: throw IOException("Unable to revalidate staging document after publish copy")
+            if (!stableOutputFingerprintMatches(
+                    RecordingStorageType.DOCUMENT,
+                    expectedFingerprint,
+                    sourceAfterCopy,
+                )) {
+                throw IOException("Staging document identity changed while publishing")
+            }
+            val finalFingerprint = readStableOutputFingerprint(
+                context,
+                RecordingStorageType.DOCUMENT,
+                finalUri.toString(),
+            ) ?: throw IOException("Unable to verify final output document")
+            if (!copyDigestMatches(sourceDigest, finalFingerprint.digest)) {
                 throw IOException("Final output document verification failed")
+            }
+            if (!removeVerifiedExportStaging(context, target.storageType, target.id)) {
+                throw IOException("Unable to revoke staging recovery authority before publication")
             }
             val stagingDeleted = suppressAndDeleteOutputTarget(
                 context,
@@ -900,6 +1035,15 @@ internal fun resolveProviderRecordingIdentity(
 
 internal fun providerRecordingIdentityMatches(stored: String, current: String): Boolean =
     stored.isNotBlank() && current.isNotBlank() && stored == current
+
+internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): Boolean {
+    if (before.isNullOrBlank() || after.isNullOrBlank()) return false
+    val beforeParts = before.split(':')
+    val afterParts = after.split(':')
+    return beforeParts.size == 5 && afterParts.size == 5 &&
+        beforeParts[0] == "provider" && afterParts[0] == "provider" &&
+        beforeParts[1] == afterParts[1] && beforeParts[2] == afterParts[2]
+}
 
 internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
     return when (val storageType = resolveRecordingStorageType(recording)) {
@@ -1161,15 +1305,12 @@ fun copyRecordingToConfiguredDirectory(
         if (verifiedTargetSize != copiedBytes) {
             throw IOException("Recording copy size mismatch: copied=$copiedBytes target=$verifiedTargetSize")
         }
-        val targetInput = when (resolvedTarget.storageType) {
-            RecordingStorageType.FILE -> FileInputStream(requireNotNull(resolvedTarget.file))
-            RecordingStorageType.DOCUMENT,
-            RecordingStorageType.MEDIASTORE,
-            -> context.contentResolver.openInputStream(requireNotNull(resolvedTarget.uri))
-                ?: throw IOException("Unable to reopen copied recording")
-        }
-        val targetDigest = targetInput.use(::sha256)
-        if (targetDigest.byteCount != copiedBytes || !targetDigest.sha256.contentEquals(sourceDigest.sha256)) {
+        val targetFingerprint = readStableOutputFingerprint(
+            context,
+            resolvedTarget.storageType,
+            resolvedTarget.id,
+        ) ?: throw IOException("Unable to bind copied recording to a stable output object")
+        if (!copyDigestMatches(sourceDigest, targetFingerprint.digest)) {
             throw IOException("Recording copy content verification failed")
         }
         val sourceAfterCopy = runCatching {
@@ -1186,7 +1327,7 @@ fun copyRecordingToConfiguredDirectory(
             preserveVerifiedCopyOnFailure = true
             throw IOException("Recording source changed during copy")
         }
-        val finalizedTarget = finalizeOutputTarget(context, resolvedTarget)
+        val finalizedTarget = finalizeOutputTarget(context, resolvedTarget, targetFingerprint)
         target = finalizedTarget
 
         val copiedIdentity = when (finalizedTarget.storageType) {
@@ -1437,22 +1578,59 @@ internal fun verifyWavOutputTargetAndDigest(
     payloadOffsetBytes: Long,
     payloadBytes: Long,
     expectedPayloadSha256: ByteArray,
-): CopyDigest {
-    val input = when (target.storageType) {
-        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
+): StableOutputFingerprint {
+    return when (target.storageType) {
+        RecordingStorageType.FILE -> {
+            val file = requireNotNull(target.file)
+            FileInputStream(file).use { source ->
+                val openedIdentity = resolveFileDescriptorIdentity(source.fd)
+                    .takeIf { it.isNotBlank() }
+                    ?: throw IOException("Unable to identify exported recording")
+                val digest = verifyWavOutputStreamAndDigest(
+                    input = source,
+                    expectedFileBytes = expectedFileBytes,
+                    expectedPrefix = expectedPrefix,
+                    payloadOffsetBytes = payloadOffsetBytes,
+                    payloadBytes = payloadBytes,
+                    expectedPayloadSha256 = expectedPayloadSha256,
+                )
+                val closedIdentity = resolveFileDescriptorIdentity(source.fd)
+                if (openedIdentity != closedIdentity) {
+                    throw IOException("Exported recording changed while verifying")
+                }
+                val pathIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() }
+                    ?: throw IOException("Unable to identify exported recording path")
+                if (!fileDescriptorIdentityMatches(pathIdentity, closedIdentity)) {
+                    throw IOException("Export staging path changed while verifying")
+                }
+                StableOutputFingerprint(digest, fileKey = pathIdentity, providerIdentity = null)
+            }
+        }
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
-    } ?: throw IOException("Unable to reopen exported recording")
-    return input.use { source ->
-        verifyWavOutputStreamAndDigest(
-            input = source,
-            expectedFileBytes = expectedFileBytes,
-            expectedPrefix = expectedPrefix,
-            payloadOffsetBytes = payloadOffsetBytes,
-            payloadBytes = payloadBytes,
-            expectedPayloadSha256 = expectedPayloadSha256,
-        )
+        -> {
+            val uri = requireNotNull(target.uri)
+            val before = resolveProviderRecordingIdentity(context, target.storageType, uri)
+                .takeIf { it.isNotBlank() }
+                ?: throw IOException("Unable to identify exported provider object")
+            val input = context.contentResolver.openInputStream(uri)
+                ?: throw IOException("Unable to reopen exported recording")
+            val digest = input.use { source ->
+                verifyWavOutputStreamAndDigest(
+                    input = source,
+                    expectedFileBytes = expectedFileBytes,
+                    expectedPrefix = expectedPrefix,
+                    payloadOffsetBytes = payloadOffsetBytes,
+                    payloadBytes = payloadBytes,
+                    expectedPayloadSha256 = expectedPayloadSha256,
+                )
+            }
+            val after = resolveProviderRecordingIdentity(context, target.storageType, uri)
+            if (!providerRecordingIdentityMatches(before, after)) {
+                throw IOException("Exported provider object changed while verifying")
+            }
+            StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
+        }
     }
 }
 
@@ -1512,7 +1690,12 @@ private fun recoverStagedFileOutputs(
         val name = file.name
         if (!file.isFile || !isStagingOutputName(name)) return@forEach
         val metadata = parseStagingOutputMetadata(name) ?: return@forEach
-        if (!shouldRecoverStagingOutput(metadata)) return@forEach
+        val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
+            verifiedExportStagingFingerprint(context, RecordingStorageType.FILE, file.absolutePath)
+        } else {
+            null
+        }
+        if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true) || file.length() <= 0L) return@forEach
         val duration = runCatching { FileInputStream(file).use(::readRecoverableStagingWavDurationMillis) }
             .onFailure { Log.w(TAG, "Unable to inspect staging recording $file", it) }
@@ -1528,9 +1711,11 @@ private fun recoverStagedFileOutputs(
             file = file,
             staging = true,
         )
-        val recovered = runCatching { finalizeOutputTarget(context, target) }
+        val publishFingerprint = trackedFingerprint ?: readStableFileOutputFingerprint(file) ?: return@forEach
+        val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging recording $file", it) }
             .isSuccess
+        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id)
         changed = changed || recovered
     }
     return changed
@@ -1548,7 +1733,12 @@ private fun recoverStagedDocumentOutputs(
         val name = file.name ?: return@forEach
         if (!file.isFile || !isStagingOutputName(name)) return@forEach
         val metadata = parseStagingOutputMetadata(name) ?: return@forEach
-        if (!shouldRecoverStagingOutput(metadata)) return@forEach
+        val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
+            verifiedExportStagingFingerprint(context, RecordingStorageType.DOCUMENT, file.uri.toString())
+        } else {
+            null
+        }
+        if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
         val duration = runCatching {
             context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
@@ -1570,9 +1760,15 @@ private fun recoverStagedDocumentOutputs(
             uri = file.uri,
             staging = true,
         )
-        val recovered = runCatching { finalizeOutputTarget(context, target) }
+        val publishFingerprint = trackedFingerprint ?: readStableOutputFingerprint(
+            context,
+            RecordingStorageType.DOCUMENT,
+            file.uri.toString(),
+        ) ?: return@forEach
+        val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging document ${file.uri}", it) }
             .isSuccess
+        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id)
         changed = changed || recovered
     }
     return changed
@@ -1749,7 +1945,16 @@ private fun listMediaStoreRecordings(
                     if (pending) {
                         val metadata = parseStagingOutputMetadata(storedName)
                         if (metadata != null) {
-                            if (!shouldRecoverStagingOutput(metadata)) {
+                            val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
+                                verifiedExportStagingFingerprint(
+                                    context,
+                                    RecordingStorageType.MEDIASTORE,
+                                    uri.toString(),
+                                )
+                            } else {
+                                null
+                            }
+                            if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) {
                                 continue
                             }
                             val strictDuration = runCatching {
@@ -1767,9 +1972,16 @@ private fun listMediaStoreRecordings(
                                 uri = uri,
                                 staging = true,
                             )
-                            val finalized = runCatching { finalizeOutputTarget(context, stagedTarget) }
-                                .onFailure { Log.w(TAG, "Unable to publish recovered pending recording $uri", it) }
+                            val publishFingerprint = trackedFingerprint ?: readStableOutputFingerprint(
+                                context,
+                                RecordingStorageType.MEDIASTORE,
+                                uri.toString(),
+                            ) ?: continue
+                            val finalized = runCatching {
+                                finalizeOutputTarget(context, stagedTarget, publishFingerprint)
+                            }.onFailure { Log.w(TAG, "Unable to publish recovered pending recording $uri", it) }
                                 .getOrNull() ?: continue
+                            removeVerifiedExportStaging(context, stagedTarget.storageType, stagedTarget.id)
                             name = finalized.displayName
                             durationMillis = strictDuration
                             media = inspectRecordingMedia(context, uri, name)
@@ -1957,7 +2169,16 @@ internal fun isCurrentProcessStagingOutput(name: String): Boolean =
 internal fun shouldRecoverStagingOutput(
     metadata: StagingOutputMetadata?,
     currentSessionId: String = OUTPUT_STAGING_SESSION_ID,
-): Boolean = metadata?.kind == StagingOutputKind.EXPORT && metadata.sessionId != currentSessionId
+    verifiedTrackedExport: Boolean = false,
+): Boolean {
+    val resolved = metadata ?: return false
+    if (resolved.sessionId == currentSessionId) return false
+    return when (resolved.kind) {
+        StagingOutputKind.EXPORT -> true // Legacy staging predates durable verification markers.
+        StagingOutputKind.EXPORT_TRACKED -> verifiedTrackedExport
+        StagingOutputKind.COPY -> false
+    }
+}
 
 internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
     sizeBytes > 0L && durationMillis > 0L
