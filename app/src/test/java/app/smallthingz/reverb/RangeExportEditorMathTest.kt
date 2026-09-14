@@ -266,6 +266,33 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun progressiveWaveformBatchingPreservesExactFinalPrefixWithBoundedPublishes() {
+        val accumulator = ProgressiveWaveformAccumulator(
+            bucketCount = RANGE_WAVEFORM_DETAIL_BUCKETS,
+            targetPublishCount = 32,
+        )
+        val updates = mutableListOf<ProgressiveWaveformSnapshot>()
+        repeat(RANGE_WAVEFORM_DETAIL_BUCKETS) { index ->
+            accumulator.record(
+                index = index,
+                magnitude = index.toFloat() / RANGE_WAVEFORM_DETAIL_BUCKETS.toFloat(),
+            )?.let(updates::add)
+        }
+        accumulator.finish()?.let(updates::add)
+
+        assertTrue(updates.size <= 32)
+        val final = updates.last()
+        assertEquals(RANGE_WAVEFORM_DETAIL_BUCKETS, final.builtCount)
+        assertEquals(RANGE_WAVEFORM_DETAIL_BUCKETS, final.values.size)
+        assertEquals(0f, final.values.first(), 0f)
+        assertEquals(
+            (RANGE_WAVEFORM_DETAIL_BUCKETS - 1).toFloat() / RANGE_WAVEFORM_DETAIL_BUCKETS.toFloat(),
+            final.values.last(),
+            0.000001f,
+        )
+    }
+
+    @Test
     fun waveformSecondPassUsesMoreDetailWithStillFixedSampleBudget() {
         val coarse = RangeWaveformPass.COARSE
         val detail = RangeWaveformPass.DETAIL

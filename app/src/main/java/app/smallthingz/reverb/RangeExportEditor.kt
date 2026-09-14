@@ -433,21 +433,17 @@ internal class RangeExportEditorState(
         detailWaveformBuiltCount = 0
     }
 
-    fun publishWaveformBucket(pass: RangeWaveformPass, index: Int, magnitude: Float) {
+    fun publishWaveformSnapshot(pass: RangeWaveformPass, snapshot: ProgressiveWaveformSnapshot) {
         when (pass) {
             RangeWaveformPass.COARSE -> {
-                if (index !in coarseWaveform.indices) return
-                val next = coarseWaveform.copyOf()
-                next[index] = magnitude.coerceIn(0f, 1f)
-                coarseWaveform = next
-                coarseWaveformBuiltCount = maxOf(coarseWaveformBuiltCount, index + 1)
+                if (snapshot.values.size != coarseWaveform.size) return
+                coarseWaveform = snapshot.values
+                coarseWaveformBuiltCount = snapshot.builtCount.coerceIn(0, coarseWaveform.size)
             }
             RangeWaveformPass.DETAIL -> {
-                if (index !in detailWaveform.indices) return
-                val next = detailWaveform.copyOf()
-                next[index] = magnitude.coerceIn(0f, 1f)
-                detailWaveform = next
-                detailWaveformBuiltCount = maxOf(detailWaveformBuiltCount, index + 1)
+                if (snapshot.values.size != detailWaveform.size) return
+                detailWaveform = snapshot.values
+                detailWaveformBuiltCount = snapshot.builtCount.coerceIn(0, detailWaveform.size)
             }
         }
     }
@@ -891,19 +887,22 @@ internal fun RangeExportHomeContent(
         state.resetWaveformConstruction()
 
         suspend fun constructPass(pass: RangeWaveformPass) {
-            val updates = Channel<Pair<Int, Float>>(Channel.UNLIMITED)
+            val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
             val worker = launch(Dispatchers.IO) {
+                val accumulator = ProgressiveWaveformAccumulator(pass.bucketCount)
                 try {
                     readySnapshot.readWaveformEnvelopeProgressive(pass) { index, magnitude ->
-                        updates.trySend(index to magnitude).isSuccess
+                        val update = accumulator.record(index, magnitude)
+                        update == null || updates.trySend(update).isSuccess
                     }
+                    accumulator.finish()?.let { updates.trySend(it) }
                 } finally {
                     updates.close()
                 }
             }
             try {
-                for ((index, magnitude) in updates) {
-                    state.publishWaveformBucket(pass, index, magnitude)
+                for (update in updates) {
+                    state.publishWaveformSnapshot(pass, update)
                 }
                 worker.join()
             } finally {

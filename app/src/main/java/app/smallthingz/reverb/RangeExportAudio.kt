@@ -125,6 +125,39 @@ internal fun crossfadeShuttlePcm16Mono(
     return ShuttleCrossfadeResult(output, tail)
 }
 
+internal data class ProgressiveWaveformSnapshot(
+    val values: FloatArray,
+    val builtCount: Int,
+)
+
+internal class ProgressiveWaveformAccumulator(
+    bucketCount: Int,
+    targetPublishCount: Int = 32,
+) {
+    private val values = FloatArray(bucketCount.coerceAtLeast(0))
+    private val publishStride = if (values.isEmpty()) 1 else
+        ((values.size + targetPublishCount.coerceAtLeast(1) - 1) / targetPublishCount.coerceAtLeast(1))
+            .coerceAtLeast(1)
+    private var builtCount = 0
+    private var lastPublishedCount = 0
+
+    fun record(index: Int, magnitude: Float): ProgressiveWaveformSnapshot? {
+        if (index !in values.indices) return null
+        values[index] = magnitude.coerceIn(0f, 1f)
+        builtCount = maxOf(builtCount, index + 1)
+        if (builtCount < values.size && builtCount - lastPublishedCount < publishStride) return null
+        return snapshot()
+    }
+
+    fun finish(): ProgressiveWaveformSnapshot? =
+        if (builtCount > lastPublishedCount) snapshot() else null
+
+    private fun snapshot(): ProgressiveWaveformSnapshot {
+        lastPublishedCount = builtCount
+        return ProgressiveWaveformSnapshot(values.copyOf(), builtCount)
+    }
+}
+
 internal enum class RangeWaveformPass(
     val bucketCount: Int,
     val probesPerBucket: Int,

@@ -317,33 +317,32 @@ internal fun RecordingInlinePlayer(
         waveformLoading = true
 
         suspend fun constructPass(pass: RangeWaveformPass) {
-            val updates = Channel<Pair<Int, Float>>(Channel.UNLIMITED)
+            val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
             val worker = launch(Dispatchers.IO) {
+                val accumulator = ProgressiveWaveformAccumulator(pass.bucketCount)
                 try {
                     readRecordingWaveformEnvelopeProgressive(appContext, recording, pass) { index, magnitude ->
-                        updates.trySend(index to magnitude).isSuccess
+                        val update = accumulator.record(index, magnitude)
+                        update == null || updates.trySend(update).isSuccess
                     }
+                    accumulator.finish()?.let { updates.trySend(it) }
                 } finally {
                     updates.close()
                 }
             }
             try {
-                for ((index, magnitude) in updates) {
+                for (update in updates) {
                     when (pass) {
                         RangeWaveformPass.COARSE -> {
-                            val next = coarseWaveform.copyOf()
-                            if (index in next.indices) {
-                                next[index] = magnitude
-                                coarseWaveform = next
-                                coarseBuiltCount = maxOf(coarseBuiltCount, index + 1)
+                            if (update.values.size == coarseWaveform.size) {
+                                coarseWaveform = update.values
+                                coarseBuiltCount = update.builtCount.coerceIn(0, coarseWaveform.size)
                             }
                         }
                         RangeWaveformPass.DETAIL -> {
-                            val next = detailWaveform.copyOf()
-                            if (index in next.indices) {
-                                next[index] = magnitude
-                                detailWaveform = next
-                                detailBuiltCount = maxOf(detailBuiltCount, index + 1)
+                            if (update.values.size == detailWaveform.size) {
+                                detailWaveform = update.values
+                                detailBuiltCount = update.builtCount.coerceIn(0, detailWaveform.size)
                             }
                         }
                     }
