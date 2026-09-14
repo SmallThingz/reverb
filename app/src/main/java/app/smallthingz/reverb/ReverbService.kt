@@ -2116,39 +2116,42 @@ class ReverbService : Service() {
     }
 
     private fun configurePersistentBuffer() {
-        val historyExists = loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()
-        val prefs = getRecorderPreferences(this)
-        val preferenceValues = readRetentionPreferenceValues(prefs)
-        val recovery = readRetentionRecoveryConfiguration(this)
-        val primary = retentionConfigurationFromPreferences(
-            values = preferenceValues,
-            recoveryFallback = recovery,
-            // Legacy installs predate the checksum. Trust them only for the one-time
-            // bootstrap where no independent recovery journal exists yet.
-            allowLegacyWithoutDigest = recovery == null,
-        )
-        val resolved = resolveRetentionConfiguration(
-            primary = primary,
-            recovery = recovery,
-            historyExists = historyExists,
-        ) ?: throw IOException(
-            "Retention configuration is unavailable; preserving existing buffered audio",
-        )
-        val configuration = resolved.configuration
+        val configuration = withRetentionPersistenceLock {
+            val historyExists = loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()
+            val prefs = getRecorderPreferences(this)
+            val preferenceValues = readRetentionPreferenceValues(prefs)
+            val recovery = readRetentionRecoveryConfiguration(this)
+            val primary = retentionConfigurationFromPreferences(
+                values = preferenceValues,
+                recoveryFallback = recovery,
+                // Legacy installs predate the checksum. Trust them only for the one-time
+                // bootstrap where no independent recovery journal exists yet.
+                allowLegacyWithoutDigest = recovery == null,
+            )
+            val resolved = resolveRetentionConfiguration(
+                primary = primary,
+                recovery = recovery,
+                historyExists = historyExists,
+            ) ?: throw IOException(
+                "Retention configuration is unavailable; preserving existing buffered audio",
+            )
+            val resolvedConfiguration = resolved.configuration
 
-        // This is a write-ahead durability barrier. No retention limit that can retire audio
-        // reaches either chunk store until its exact configuration is independently recoverable.
-        if (!writeRetentionRecoveryConfiguration(this, configuration)) {
-            throw IOException("Unable to persist retention recovery configuration")
-        }
-        if (
-            (resolved.source != RetentionConfigurationSource.PREFERENCES ||
-                !retentionPreferenceDigestMatches(preferenceValues, configuration)) &&
-            !restoreRetentionConfigurationToPreferences(prefs, configuration)
-        ) {
-            // The recovery journal is already durable, so this is not grounds to mutate or
-            // discard history. Keep using the journal and surface the preference failure.
-            reportError(getString(R.string.recorder_state_persist_failed))
+            // This is a write-ahead durability barrier. No retention limit that can retire audio
+            // reaches either chunk store until its exact configuration is independently recoverable.
+            if (!writeRetentionRecoveryConfiguration(this, resolvedConfiguration)) {
+                throw IOException("Unable to persist retention recovery configuration")
+            }
+            if (
+                (resolved.source != RetentionConfigurationSource.PREFERENCES ||
+                    !retentionPreferenceDigestMatches(preferenceValues, resolvedConfiguration)) &&
+                !restoreRetentionConfigurationToPreferences(prefs, resolvedConfiguration)
+            ) {
+                // The recovery journal is already durable, so this is not grounds to mutate or
+                // discard history. Keep using the journal and surface the preference failure.
+                reportError(getString(R.string.recorder_state_persist_failed))
+            }
+            resolvedConfiguration
         }
 
         val mode = configuration.mode

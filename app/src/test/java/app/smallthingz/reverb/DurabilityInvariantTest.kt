@@ -586,6 +586,17 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun retentionReadPolicy_treatsRecoveryFirstCrashAsUncommittedWithoutHistory() {
+        val primary = RetentionConfiguration(RetentionMode.SIZE, 11L, 22L, 33L, 44L)
+        val recovery = RetentionConfiguration(RetentionMode.TIME, 55L, 66L, 77L, 88L)
+
+        assertEquals(primary, preferredRetentionConfigurationForRead(primary, recovery, historyExists = false))
+        assertEquals(recovery, preferredRetentionConfigurationForRead(primary, recovery, historyExists = true))
+        assertEquals(primary, preferredRetentionConfigurationForRead(primary, primary, historyExists = true))
+        assertEquals(recovery, preferredRetentionConfigurationForRead(null, recovery, historyExists = true))
+    }
+
+    @Test
     fun retentionResolution_neverAppliesConflictingDurableStateOverExistingHistory() {
         val primary = RetentionConfiguration(RetentionMode.SIZE, 11L, 22L, 33L, 44L)
         val recovery = RetentionConfiguration(RetentionMode.TIME, 55L, 66L, 77L, 88L)
@@ -610,6 +621,39 @@ class DurabilityInvariantTest {
                 RetentionConfigurationSource.DEFAULTS,
             ),
             resolveRetentionConfiguration(null, null, historyExists = false),
+        )
+    }
+
+    @Test
+    fun retentionTransaction_writesRecoveryBeforePreferencesAndRollsBackFailedPhases() {
+        fun run(writeRecoverySucceeds: Boolean, commitPreferencesSucceeds: Boolean): Pair<Boolean, List<String>> {
+            val events = mutableListOf<String>()
+            val result = persistRetentionTransaction(
+                writeNewRecovery = {
+                    events += "recovery:new"
+                    writeRecoverySucceeds
+                },
+                commitNewPreferences = {
+                    events += "preferences:new"
+                    commitPreferencesSucceeds
+                },
+                restoreRecovery = {
+                    events += "recovery:old"
+                    true
+                },
+                restorePreferences = {
+                    events += "preferences:old"
+                    true
+                },
+            )
+            return result to events
+        }
+
+        assertEquals(true to listOf("recovery:new", "preferences:new"), run(true, true))
+        assertEquals(false to listOf("recovery:new", "recovery:old"), run(false, true))
+        assertEquals(
+            false to listOf("recovery:new", "preferences:new", "recovery:old", "preferences:old"),
+            run(true, false),
         )
     }
 

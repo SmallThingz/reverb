@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
@@ -417,6 +418,7 @@ fun SettingsScreen(
         hasUnsavedChanges = false
     }
 
+    @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
     fun persistSettings(): Boolean {
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
@@ -518,48 +520,7 @@ fun SettingsScreen(
         )
 
         val preferences = getRecorderPreferences(context)
-        val previousCachedOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
         val previous = originalSnapshot
-        val previousRetentionConfiguration = RetentionConfiguration(
-            mode = previous.retentionMode,
-            oneShotSeconds = previous.oneShotRetentionTime.toLong(),
-            oneShotSizeBytes = previous.oneShotRetentionSizeBytes,
-            loopingSeconds = previous.loopingRetentionTime.toLong(),
-            loopingSizeBytes = previous.loopingRetentionSizeBytes,
-        )
-
-        fun restorePreviousSettings(): Boolean {
-            // Restore the independently durable retention provenance first. If preference
-            // rollback then fails, a disagreement with existing history is fail-closed.
-            val recoveryRestored = writeRetentionRecoveryConfiguration(context, previousRetentionConfiguration)
-            val preferencesRestored = getRecorderPreferences(context).edit()
-                .putInt(PrefKey.RETENTION_MODE, previous.retentionMode.storageCode.toInt())
-                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, previous.oneShotRetentionTime.toLong())
-                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, previous.oneShotRetentionSizeBytes)
-                .putLong(PrefKey.RETENTION_SECONDS, previous.loopingRetentionTime.toLong())
-                .putLong(PrefKey.AUDIO_MEMORY_SIZE, previous.loopingRetentionSizeBytes)
-                .putString(
-                    PrefKey.RETENTION_CONFIG_DIGEST,
-                    retentionConfigurationDigest(previousRetentionConfiguration),
-                )
-                .putInt(PrefKey.OUTPUT_FORMAT, (previous.format ?: ExportFormat.WAV).storageCode.toInt())
-                .putInt(PrefKey.OUTPUT_CODEC, (previous.codec ?: ExportCodec.PCM_16).storageCode.toInt())
-                .putInt(PrefKey.PCM_SAMPLE_FORMAT, previous.sampleFormat.storageCode.toInt())
-                .putInt(PrefKey.AUDIO_SOURCE, previous.source?.storageCode?.toInt() ?: AudioSourceMode.defaultMode().storageCode.toInt())
-                .putInt(PrefKey.CHANNEL_MODE, (previous.channelMode ?: ChannelMode.MONO).storageCode.toInt())
-                .putInt(PrefKey.INPUT_ROUTE, (previous.route ?: InputRouteMode.AUTO).storageCode.toInt())
-                .putInt(PrefKey.SAMPLE_RATE, previous.sampleRate)
-                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, previous.wakeLockEnabled)
-                .putInt(PrefKey.THEME_MODE, previous.themeMode.storageCode.toInt())
-                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, previousCachedOneShotFull)
-                .apply {
-                    val previousExportDirectoryUri = previous.exportDirectoryUri
-                    if (previousExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
-                    else putString(PrefKey.EXPORT_DIRECTORY_URI, previousExportDirectoryUri)
-                }
-                .commit()
-            return recoveryRestored && preferencesRestored
-        }
 
         val invalidateCachedOneShotFull = shouldInvalidateCachedOneShotFull(
             previousMode = originalSnapshot.retentionMode,
@@ -599,13 +560,56 @@ fun SettingsScreen(
         } else {
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
-        if (!settingsEditor.commit()) {
-            restorePreviousSettings()
-            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
-            return false
+        val persisted = withRetentionPersistenceLock {
+            // Roll back to the state that was actually durable when this transaction started,
+            // not to the UI's older edit snapshot. Another writer may have committed since
+            // Settings opened.
+            val rollbackRetention = retentionConfigurationForRead(context)
+            val rollbackFormat = getConfiguredOutputFormat(context)
+            val rollbackCodec = getConfiguredOutputCodec(context)
+            val rollbackSampleFormat = getConfiguredPcmSampleFormat(context)
+            val rollbackSource = getConfiguredAudioSourceMode(context)
+            val rollbackChannelMode = getConfiguredChannelMode(context)
+            val rollbackRoute = getConfiguredInputRouteMode(context)
+            val rollbackSampleRate = getConfiguredSampleRate(context)
+            val rollbackWakeLock = isWakeLockEnabled(context)
+            val rollbackTheme = getConfiguredThemeMode(context)
+            val rollbackOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+            val rollbackExportDirectoryUri = getConfiguredExportTreeUri(context)?.toString()
+
+            persistRetentionTransaction(
+                // Recovery is the write-ahead side of the transaction. If the process dies before
+                // preferences commit, restart sees a mismatch and existing history fails closed.
+                writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
+                commitNewPreferences = { settingsEditor.commit() },
+                restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
+                restorePreferences = {
+                    preferences.edit()
+                        .putInt(PrefKey.RETENTION_MODE, rollbackRetention.mode.storageCode.toInt())
+                        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, rollbackRetention.oneShotSeconds)
+                        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rollbackRetention.oneShotSizeBytes)
+                        .putLong(PrefKey.RETENTION_SECONDS, rollbackRetention.loopingSeconds)
+                        .putLong(PrefKey.AUDIO_MEMORY_SIZE, rollbackRetention.loopingSizeBytes)
+                        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(rollbackRetention))
+                        .putInt(PrefKey.OUTPUT_FORMAT, rollbackFormat.storageCode.toInt())
+                        .putInt(PrefKey.OUTPUT_CODEC, rollbackCodec.storageCode.toInt())
+                        .putInt(PrefKey.PCM_SAMPLE_FORMAT, rollbackSampleFormat.storageCode.toInt())
+                        .putInt(PrefKey.AUDIO_SOURCE, rollbackSource.storageCode.toInt())
+                        .putInt(PrefKey.CHANNEL_MODE, rollbackChannelMode.storageCode.toInt())
+                        .putInt(PrefKey.INPUT_ROUTE, rollbackRoute.storageCode.toInt())
+                        .putInt(PrefKey.SAMPLE_RATE, rollbackSampleRate)
+                        .putBoolean(PrefKey.WAKE_LOCK_ENABLED, rollbackWakeLock)
+                        .putInt(PrefKey.THEME_MODE, rollbackTheme.storageCode.toInt())
+                        .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, rollbackOneShotFull)
+                        .apply {
+                            if (rollbackExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
+                            else putString(PrefKey.EXPORT_DIRECTORY_URI, rollbackExportDirectoryUri)
+                        }
+                        .commit()
+                },
+            )
         }
-        if (!writeRetentionRecoveryConfiguration(context, retentionConfiguration)) {
-            restorePreviousSettings()
+        if (!persisted) {
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }
@@ -640,13 +644,14 @@ fun SettingsScreen(
 
     fun bindUiFromPreferences() {
         val configuredThemeMode = getConfiguredThemeMode(context)
-        val configuredMode = getConfiguredRetentionMode(context)
-        val configuredOneShotTime = getConfiguredOneShotRetentionSeconds(context)
+        val retention = retentionConfigurationForRead(context)
+        val configuredMode = retention.mode
+        val configuredOneShotTime = retention.oneShotSeconds
             .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
-        val configuredLoopingTime = getConfiguredRetentionSeconds(context)
+        val configuredLoopingTime = retention.loopingSeconds
             .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
-        val storedOneShotSizeBytes = getConfiguredOneShotRetentionSizeBytes(context)
-        val storedLoopingSizeBytes = getConfiguredRetentionSizeBytes(context)
+        val storedOneShotSizeBytes = retention.oneShotSizeBytes
+        val storedLoopingSizeBytes = retention.loopingSizeBytes
         val configuredFormat = getConfiguredOutputFormat(context)
         val configuredCodec = getConfiguredOutputCodec(context)
         val configuredSampleFormatVal = getConfiguredPcmSampleFormat(context)

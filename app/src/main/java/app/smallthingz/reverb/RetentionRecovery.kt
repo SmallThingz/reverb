@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.AtomicFile
@@ -41,6 +42,29 @@ internal data class ResolvedRetentionConfiguration(
     val configuration: RetentionConfiguration,
     val source: RetentionConfigurationSource,
 )
+
+private val retentionPersistenceLock = Any()
+
+internal fun <T> withRetentionPersistenceLock(block: () -> T): T =
+    synchronized(retentionPersistenceLock) { block() }
+
+internal fun persistRetentionTransaction(
+    writeNewRecovery: () -> Boolean,
+    commitNewPreferences: () -> Boolean,
+    restoreRecovery: () -> Boolean,
+    restorePreferences: () -> Boolean,
+): Boolean = withRetentionPersistenceLock {
+    if (!writeNewRecovery()) {
+        restoreRecovery()
+        return@withRetentionPersistenceLock false
+    }
+    if (!commitNewPreferences()) {
+        restoreRecovery()
+        restorePreferences()
+        return@withRetentionPersistenceLock false
+    }
+    true
+}
 
 internal fun defaultRetentionConfiguration(): RetentionConfiguration = RetentionConfiguration(
     mode = RetentionMode.SIZE,
@@ -135,36 +159,53 @@ internal fun retentionConfigurationFromPreferences(
     return configuration
 }
 
-internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration {
-    val prefs = getRecorderPreferences(context)
-    val values = readRetentionPreferenceValues(prefs)
-    val recovery = readRetentionRecoveryConfiguration(context)
-    val verifiedPrimary = retentionConfigurationFromPreferences(
-        values = values,
-        recoveryFallback = null,
-        allowLegacyWithoutDigest = false,
-    )
-    if (recovery != null && verifiedPrimary != recovery) return recovery
-    if (verifiedPrimary != null) return verifiedPrimary
+internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration =
+    withRetentionPersistenceLock {
+        val prefs = getRecorderPreferences(context)
+        val values = readRetentionPreferenceValues(prefs)
+        val recovery = readRetentionRecoveryConfiguration(context)
+        val verifiedPrimary = retentionConfigurationFromPreferences(
+            values = values,
+            recoveryFallback = null,
+            allowLegacyWithoutDigest = false,
+        )
+        val historyExists = verifiedPrimary != null && recovery != null && verifiedPrimary != recovery &&
+            hasPersistedBufferHistoryArtifacts(context)
+        preferredRetentionConfigurationForRead(verifiedPrimary, recovery, historyExists)?.let {
+            return@withRetentionPersistenceLock it
+        }
 
-    return retentionConfigurationFromPreferences(
-        values = values,
-        recoveryFallback = recovery,
-        allowLegacyWithoutDigest = recovery == null,
-    ) ?: recovery ?: defaultRetentionConfiguration()
+        retentionConfigurationFromPreferences(
+            values = values,
+            recoveryFallback = recovery,
+            allowLegacyWithoutDigest = recovery == null,
+        ) ?: recovery ?: defaultRetentionConfiguration()
+    }
+
+internal fun preferredRetentionConfigurationForRead(
+    verifiedPrimary: RetentionConfiguration?,
+    recovery: RetentionConfiguration?,
+    historyExists: Boolean,
+): RetentionConfiguration? = when {
+    verifiedPrimary != null && recovery != null && verifiedPrimary != recovery ->
+        if (historyExists) recovery else verifiedPrimary
+    verifiedPrimary != null -> verifiedPrimary
+    recovery != null -> recovery
+    else -> null
 }
 
-internal fun retentionMutationIsSafe(context: Context): Boolean {
-    val prefs = getRecorderPreferences(context)
-    val values = readRetentionPreferenceValues(prefs)
-    val recovery = readRetentionRecoveryConfiguration(context)
-    val primary = retentionConfigurationFromPreferences(
-        values = values,
-        recoveryFallback = recovery,
-        allowLegacyWithoutDigest = recovery == null,
-    )
-    return primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
-}
+internal fun retentionMutationIsSafe(context: Context): Boolean =
+    withRetentionPersistenceLock {
+        val prefs = getRecorderPreferences(context)
+        val values = readRetentionPreferenceValues(prefs)
+        val recovery = readRetentionRecoveryConfiguration(context)
+        val primary = retentionConfigurationFromPreferences(
+            values = values,
+            recoveryFallback = recovery,
+            allowLegacyWithoutDigest = recovery == null,
+        )
+        primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
+    }
 
 internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
     val roots = listOf(
@@ -290,6 +331,7 @@ internal fun writeRetentionRecoveryConfiguration(
     }
 }
 
+@SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
 internal fun restoreRetentionConfigurationToPreferences(
     prefs: SharedPreferences,
     configuration: RetentionConfiguration,

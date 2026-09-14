@@ -301,14 +301,20 @@ private fun configuredSizeHasWholeFrame(
     return normalizeRetentionValue(RetentionMode.SIZE, sizeBytes, frameBytes) > 0L
 }
 
-fun isConfiguredOneShotBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
-    RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, getConfiguredOneShotRetentionSizeBytes(context))
-    RetentionMode.TIME -> getConfiguredOneShotRetentionSeconds(context) > 0L
+fun isConfiguredOneShotBufferEnabled(context: Context): Boolean {
+    val retention = retentionConfigurationForRead(context)
+    return when (retention.mode) {
+        RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.oneShotSizeBytes)
+        RetentionMode.TIME -> retention.oneShotSeconds > 0L
+    }
 }
 
-fun isConfiguredLoopingBufferEnabled(context: Context): Boolean = when (getConfiguredRetentionMode(context)) {
-    RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, getConfiguredRetentionSizeBytes(context))
-    RetentionMode.TIME -> getConfiguredRetentionSeconds(context) > 0L
+fun isConfiguredLoopingBufferEnabled(context: Context): Boolean {
+    val retention = retentionConfigurationForRead(context)
+    return when (retention.mode) {
+        RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.loopingSizeBytes)
+        RetentionMode.TIME -> retention.loopingSeconds > 0L
+    }
 }
 
 fun isOnboardingPending(context: Context): Boolean {
@@ -319,69 +325,73 @@ fun markOnboardingShown(context: Context): Boolean {
     return getRecorderPreferences(context).edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true).commit()
 }
 
+@SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
 fun finishOnboarding(
     context: Context,
     oneShotEnabled: Boolean,
     loopingEnabled: Boolean,
 ): Boolean {
     if (!oneShotEnabled && !loopingEnabled) return false
-    if (!retentionMutationIsSafe(context)) return false
-    val current = retentionConfigurationForRead(context)
-    val defaults = defaultRetentionConfiguration()
-    val updated = when (current.mode) {
-        RetentionMode.TIME -> current.copy(
-            oneShotSeconds = if (oneShotEnabled) {
-                current.oneShotSeconds.takeIf { it > 0L } ?: defaults.oneShotSeconds
-            } else {
-                0L
+    return withRetentionPersistenceLock {
+        if (!retentionMutationIsSafe(context)) return@withRetentionPersistenceLock false
+        val current = retentionConfigurationForRead(context)
+        val defaults = defaultRetentionConfiguration()
+        val updated = when (current.mode) {
+            RetentionMode.TIME -> current.copy(
+                oneShotSeconds = if (oneShotEnabled) {
+                    current.oneShotSeconds.takeIf { it > 0L } ?: defaults.oneShotSeconds
+                } else {
+                    0L
+                },
+                loopingSeconds = if (loopingEnabled) {
+                    current.loopingSeconds.takeIf { it > 0L } ?: defaults.loopingSeconds
+                } else {
+                    0L
+                },
+            )
+            RetentionMode.SIZE -> current.copy(
+                oneShotSizeBytes = if (oneShotEnabled) {
+                    current.oneShotSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                        ?: defaults.oneShotSizeBytes
+                } else {
+                    0L
+                },
+                loopingSizeBytes = if (loopingEnabled) {
+                    current.loopingSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                        ?: defaults.loopingSizeBytes
+                } else {
+                    0L
+                },
+            )
+        }
+        val prefs = getRecorderPreferences(context)
+        persistRetentionTransaction(
+            writeNewRecovery = { writeRetentionRecoveryConfiguration(context, updated) },
+            commitNewPreferences = {
+                prefs.edit()
+                    .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
+                    .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
+                    .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
+                    .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
+                    .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
+                    .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
+                    .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
+                    .commit()
             },
-            loopingSeconds = if (loopingEnabled) {
-                current.loopingSeconds.takeIf { it > 0L } ?: defaults.loopingSeconds
-            } else {
-                0L
-            },
-        )
-        RetentionMode.SIZE -> current.copy(
-            oneShotSizeBytes = if (oneShotEnabled) {
-                current.oneShotSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
-                    ?: defaults.oneShotSizeBytes
-            } else {
-                0L
-            },
-            loopingSizeBytes = if (loopingEnabled) {
-                current.loopingSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
-                    ?: defaults.loopingSizeBytes
-            } else {
-                0L
+            restoreRecovery = { writeRetentionRecoveryConfiguration(context, current) },
+            restorePreferences = {
+                prefs.edit()
+                    .putBoolean(PrefKey.ONBOARDING_SHOWN, false)
+                    .putInt(PrefKey.RETENTION_MODE, current.mode.storageCode.toInt())
+                    .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, current.oneShotSeconds)
+                    .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, current.oneShotSizeBytes)
+                    .putLong(PrefKey.RETENTION_SECONDS, current.loopingSeconds)
+                    .putLong(PrefKey.AUDIO_MEMORY_SIZE, current.loopingSizeBytes)
+                    .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(current))
+                    .commit()
             },
         )
     }
-    val prefs = getRecorderPreferences(context)
-    val committed = prefs.edit()
-        .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
-        .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
-        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
-        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
-        .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
-        .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
-        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
-        .commit()
-    if (!committed) return false
-    if (writeRetentionRecoveryConfiguration(context, updated)) return true
-
-    // Do not let onboarding become complete unless its retention selection has the same
-    // independent durability barrier as Settings. Roll both sources back on failure.
-    writeRetentionRecoveryConfiguration(context, current)
-    prefs.edit()
-        .putBoolean(PrefKey.ONBOARDING_SHOWN, false)
-        .putInt(PrefKey.RETENTION_MODE, current.mode.storageCode.toInt())
-        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, current.oneShotSeconds)
-        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, current.oneShotSizeBytes)
-        .putLong(PrefKey.RETENTION_SECONDS, current.loopingSeconds)
-        .putLong(PrefKey.AUDIO_MEMORY_SIZE, current.loopingSizeBytes)
-        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(current))
-        .commit()
-    return false
 }
 
 fun getConfiguredOutputFormat(context: Context): ExportFormat = readByteBackedPreference(
@@ -458,17 +468,17 @@ fun getConfiguredMemorySizeBytes(
     channelMode: ChannelMode = getConfiguredChannelMode(context),
     sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
 ): Long {
-    return when (getConfiguredRetentionMode(context)) {
+    val retention = retentionConfigurationForRead(context)
+    return when (retention.mode) {
         RetentionMode.SIZE -> {
-            val configuredSizeBytes = getConfiguredRetentionSizeBytes(context)
             val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
-            if (frameBytes <= 0L || configuredSizeBytes <= 0L) 0L else {
-                (configuredSizeBytes / frameBytes) * frameBytes
+            if (frameBytes <= 0L || retention.loopingSizeBytes <= 0L) 0L else {
+                (retention.loopingSizeBytes / frameBytes) * frameBytes
             }
         }
 
         RetentionMode.TIME -> bytesForRetentionSeconds(
-            getConfiguredRetentionSeconds(context), sampleRate,
+            retention.loopingSeconds, sampleRate,
             channelMode.channelCount, sampleFormat,
         )
     }
