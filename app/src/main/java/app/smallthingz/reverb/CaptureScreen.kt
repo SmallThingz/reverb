@@ -529,7 +529,7 @@ fun CaptureScreen(
                     pendingExportRange = null
                     pendingExportSnapshot = null
                     startExport(
-                        context, service, range, scope,
+                        context, service, range,
                         snapshot = snapshot,
                         setSaving = { isSaving = it },
                         onStatus = { saveStatus = it },
@@ -628,7 +628,7 @@ fun CaptureScreen(
                                 showExportClampDialog = true
                             } else {
                                 startExport(
-                                    context, s, range, scope,
+                                    context, s, range,
                                     snapshot = snapshot,
                                     setSaving = { isSaving = it },
                                     onStatus = { saveStatus = it },
@@ -742,7 +742,7 @@ fun CaptureScreen(
                 showExportClampDialog = true
             } else {
                 startExport(
-                    context, service, range, scope,
+                    context, service, range,
                     snapshot = snapshot,
                     setSaving = { isSaving = it },
                     onStatus = { saveStatus = it },
@@ -1874,7 +1874,6 @@ private fun startExport(
     context: Context,
     service: ReverbService?,
     range: ExportRange,
-    scope: CoroutineScope,
     snapshot: ReverbService.TimelineSnapshot? = null,
     setSaving: (Boolean) -> Unit,
     onStatus: (CaptureSaveStatus?) -> Unit,
@@ -1892,7 +1891,6 @@ private fun startExport(
     onStatus(CaptureSaveStatus.Saving(cancellable = true))
     val receiver = SaveResultReceiver(
             context = context,
-            scope = scope,
             setSaving = setSaving,
             onStatus = onStatus,
             onError = onError,
@@ -1965,7 +1963,6 @@ private fun handleExport(
 
 private class SaveResultReceiver(
     context: Context,
-    private val scope: CoroutineScope,
     private val setSaving: (Boolean) -> Unit,
     private val onStatus: (CaptureSaveStatus?) -> Unit,
     private val onError: (String) -> Unit = {},
@@ -1974,11 +1971,9 @@ private class SaveResultReceiver(
     private val appContext = context.applicationContext
 
     override fun fileReady(recording: RecordingEntity) {
+        onStatus(CaptureSaveStatus.Saved(recording))
         setSaving(false)
-        scope.launch {
-            onStatus(CaptureSaveStatus.Saved(recording))
-            onSaved()
-        }
+        onSaved()
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
