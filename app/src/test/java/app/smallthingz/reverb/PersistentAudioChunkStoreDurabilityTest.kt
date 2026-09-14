@@ -340,6 +340,53 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retirementMarkerSyncFailure_neverDeletesChunkBeforeMarkerIsDurable() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        var failRetiredDirectorySync = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = true,
+            directorySync = { directory ->
+                if (failRetiredDirectorySync && directory.name == "retired") {
+                    throw IOException("Injected retirement-marker directory sync failure")
+                }
+            },
+        )
+        configure(store, 64 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+
+        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val marker = File(File(root, "retired"), "0")
+        failRetiredDirectorySync = true
+        assertThrows(IOException::class.java) { store.clear() }
+
+        // The first 4 KiB chunk has crossed the visible atomic retirement boundary, so
+        // runtime follows that retirement even though marker fsync failed. The chunk bytes
+        // themselves remain untouched until the marker directory becomes durable.
+        assertEquals(4_096L, store.countFilledBytes())
+        assertTrue(marker.isFile)
+        assertTrue(chunk.isFile)
+        store.checkpoint()
+        assertTrue(chunk.isFile)
+
+        failRetiredDirectorySync = false
+        store.checkpoint()
+        assertFalse(chunk.exists())
+        assertFalse(marker.exists())
+        assertEquals(4_096L, store.countFilledBytes())
+
+        store.clear()
+        assertFalse(store.hasData())
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 64 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+    }
+
+    @Test
     fun close_surfacesCheckpointFailureWhileLeavingAudioRecoverable() = withStoreRoot { root ->
         val expected = pcmBytes(8_192)
         val store = PersistentAudioChunkStore(root)
