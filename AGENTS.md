@@ -2,6 +2,7 @@
 
 - Buffer switching is one stationary capture surface, never a pager or sliding screen transition.
 - On buffer changes, the blob and buffer-specific bottom actions use a depth flip. The Library icon stays static and must never flip.
+- Buffer flips are directional and visibly hinged: Looping lifts its left edge; One-shot lifts its right edge.
 - The Library glyph is the Material Rounded bulleted-list icon (`FormatListBulleted`).
 - Library normal and selection top bars use the same 58dp content height; multi-select uses `SelectAll`.
 - Library vertical gestures reserve 13% on each side for close and the center 74% for pull-to-refresh.

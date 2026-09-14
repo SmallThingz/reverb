@@ -67,6 +67,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
@@ -885,6 +886,9 @@ internal fun bufferSwipeProgress(
 }
 
 private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
+private const val BUFFER_FLIP_DURATION_MILLIS = 260
+private const val BUFFER_FLIP_EDGE_PIVOT = 0.28f
+private const val BUFFER_FLIP_MIDPOINT_SCALE = 0.94f
 
 internal fun shouldCommitBufferSwipe(progress: Float): Boolean =
     progress.coerceIn(0f, 1f) >= BUFFER_SWIPE_COMMIT_PROGRESS
@@ -902,12 +906,31 @@ internal fun bufferTransitionFlipDegrees(
 ): Float {
     if (source == target) return 0f
     val p = progress.coerceIn(0f, 1f)
-    val direction = if (source == ReverbService.BufferSlot.ONE_SHOT) -1f else 1f
+    // Direction is defined by the destination face: Looping lifts from the left,
+    // One-shot lifts from the right. Keeping this target-based makes both tap and
+    // swipe navigation visually consistent.
+    val direction = when (target) {
+        ReverbService.BufferSlot.LOOPING -> -1f
+        ReverbService.BufferSlot.ONE_SHOT -> 1f
+    }
     return if (p <= 0.5f) {
         direction * p * 180f
     } else {
         direction * (p - 1f) * 180f
     }
+}
+
+internal fun bufferTransitionPivotFractionX(target: ReverbService.BufferSlot): Float =
+    when (target) {
+        // Pivot toward the opposite side so the named edge visibly lifts.
+        ReverbService.BufferSlot.LOOPING -> 1f - BUFFER_FLIP_EDGE_PIVOT
+        ReverbService.BufferSlot.ONE_SHOT -> BUFFER_FLIP_EDGE_PIVOT
+    }
+
+internal fun bufferTransitionDepthScale(progress: Float): Float {
+    val p = progress.coerceIn(0f, 1f)
+    val distanceFromMidpoint = kotlin.math.abs(p * 2f - 1f)
+    return BUFFER_FLIP_MIDPOINT_SCALE + (1f - BUFFER_FLIP_MIDPOINT_SCALE) * distanceFromMidpoint
 }
 
 @Composable
@@ -990,7 +1013,7 @@ private fun MainCaptureContent(
 
     val transitionProgress by animateFloatAsState(
         targetValue = if (bufferDragging) dragProgress else transitionProgressTarget,
-        animationSpec = if (bufferDragging) snap() else tween(durationMillis = 180),
+        animationSpec = if (bufferDragging) snap() else tween(durationMillis = BUFFER_FLIP_DURATION_MILLIS),
         label = "buffer-transition-progress",
         finishedListener = { settledProgress ->
             val target = transitionTarget ?: return@animateFloatAsState
@@ -1034,6 +1057,8 @@ private fun MainCaptureContent(
     } else {
         0f
     }
+    val flipPivotX = targetBuffer?.let(::bufferTransitionPivotFractionX) ?: 0.5f
+    val flipDepthScale = if (targetBuffer != null) bufferTransitionDepthScale(transitionProgress) else 1f
 
     val displayedMetrics = when (renderedBuffer) {
         ReverbService.BufferSlot.ONE_SHOT -> oneShotMetrics
@@ -1144,6 +1169,8 @@ private fun MainCaptureContent(
                     ReverbService.BufferSlot.LOOPING -> loopingBlobController
                 },
                 flipDegrees = flipDegrees,
+                flipPivotX = flipPivotX,
+                flipDepthScale = flipDepthScale,
                 onListenToggle = { onListenToggle(renderedBuffer) },
                 onOpenBufferSettings = { onOpenBufferSettings(renderedBuffer) },
                 visualizerVisible = visualizerVisible,
@@ -1162,6 +1189,8 @@ private fun MainCaptureContent(
             hasHistory = hasHistory,
             selectedRecording = displayedRecording,
             flipDegrees = flipDegrees,
+            flipPivotX = flipPivotX,
+            flipDepthScale = flipDepthScale,
             onSelectBuffer = onActivateBuffer,
             onExportFull = { onExportFull(renderedBuffer) },
             onExportCustom = { onExportCustom(renderedBuffer) },
@@ -1185,6 +1214,8 @@ private fun CaptureControlCluster(
     hasHistory: Boolean,
     selectedRecording: Boolean,
     flipDegrees: Float,
+    flipPivotX: Float,
+    flipDepthScale: Float,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
     onExportFull: () -> Unit,
     onExportCustom: () -> Unit,
@@ -1240,6 +1271,8 @@ private fun CaptureControlCluster(
                     contentDescription = stringResource(R.string.record_all_memory),
                     enabled = serviceReady && !isSaving && hasHistory,
                     flipDegrees = flipDegrees,
+                    flipPivotX = flipPivotX,
+                    flipDepthScale = flipDepthScale,
                     onClick = onExportFull,
                 )
                 CaptureActionButton(
@@ -1247,6 +1280,8 @@ private fun CaptureControlCluster(
                     contentDescription = stringResource(R.string.export_range_title),
                     enabled = serviceReady && !isSaving && hasHistory,
                     flipDegrees = flipDegrees,
+                    flipPivotX = flipPivotX,
+                    flipDepthScale = flipDepthScale,
                     onClick = onExportCustom,
                 )
                 CaptureActionButton(
@@ -1255,6 +1290,8 @@ private fun CaptureControlCluster(
                     enabled = serviceReady && !isSaving && hasHistory && !selectedRecording,
                     destructive = true,
                     flipDegrees = flipDegrees,
+                    flipPivotX = flipPivotX,
+                    flipDepthScale = flipDepthScale,
                     onClick = onClearBuffer,
                 )
                 CaptureActionButton(
@@ -1459,6 +1496,8 @@ internal fun BufferBlobPage(
     service: ReverbService?,
     blobController: AudioBlobController,
     flipDegrees: Float,
+    flipPivotX: Float = 0.5f,
+    flipDepthScale: Float = 1f,
     onListenToggle: () -> Unit,
     onOpenBufferSettings: () -> Unit,
     visualizerVisible: Boolean,
@@ -1523,6 +1562,8 @@ internal fun BufferBlobPage(
             secondaryText = summaryText,
             visualizerVisible = visualizerVisible,
             flipDegrees = flipDegrees,
+            flipPivotX = flipPivotX,
+            flipDepthScale = flipDepthScale,
             contentAlpha = contentAlpha,
             modifier = Modifier.size(blobSize),
             onClick = if (disabled) onOpenBufferSettings else onListenToggle,
@@ -1538,6 +1579,8 @@ private fun CaptureActionButton(
     enabled: Boolean,
     destructive: Boolean = false,
     flipDegrees: Float = 0f,
+    flipPivotX: Float = 0.5f,
+    flipDepthScale: Float = 1f,
     onClick: () -> Unit,
 ) {
     val chrome = appChrome()
@@ -1559,6 +1602,8 @@ private fun CaptureActionButton(
                 .size(25.dp)
                 .graphicsLayer {
                     rotationY = flipDegrees
+                    transformOrigin = TransformOrigin(flipPivotX, 0.5f)
+                    scaleY = flipDepthScale
                     cameraDistance = 24.dp.toPx()
                 },
         )
@@ -1611,6 +1656,8 @@ private fun AudioBlobControl(
     secondaryText: String? = null,
     visualizerVisible: Boolean = true,
     flipDegrees: Float = 0f,
+    flipPivotX: Float = 0.5f,
+    flipDepthScale: Float = 1f,
     contentAlpha: Float = 1f,
 ) {
     val active = isListening
@@ -1656,8 +1703,9 @@ private fun AudioBlobControl(
             .graphicsLayer(
                 alpha = if (!dimmed && visuallyEnabled && !isSaving) 1f else 0.56f,
                 scaleX = pressScale,
-                scaleY = pressScale,
+                scaleY = pressScale * flipDepthScale,
                 rotationY = flipDegrees,
+                transformOrigin = TransformOrigin(flipPivotX, 0.5f),
                 cameraDistance = flipCameraDistancePx,
             )
             .clickable(
