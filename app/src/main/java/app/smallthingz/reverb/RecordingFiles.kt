@@ -920,6 +920,15 @@ internal fun recordingDestructiveIdentityMatches(context: Context, recording: Re
     return recordingContentIdentityMatches(context, recording)
 }
 
+internal fun recordingDeletionIdentityMatches(context: Context, recording: RecordingEntity): Boolean =
+    when (resolveRecordingStorageType(recording)) {
+        RecordingStorageType.FILE -> recordingDestructiveIdentityMatches(context, recording)
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> recording.fileIdentity.isBlank() || recordingContentIdentityMatches(context, recording)
+        null -> false
+    }
+
 internal fun resolveFileIdentity(file: File): String {
     val attributes = runCatching {
         Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
@@ -1036,11 +1045,13 @@ internal fun recordingAssetState(
     }
 }
 
-fun deleteRecordingAsset(
+internal fun deleteVerifiedRecordingAsset(
     context: Context,
     recording: RecordingEntity,
 ): Boolean {
-    if (!recordingDestructiveIdentityMatches(context, recording)) return false
+    // Callers must have content-fingerprinted this exact provider asset immediately before
+    // reaching this function. A concrete provider identity, when available, must still match.
+    if (!recordingDeletionIdentityMatches(context, recording)) return false
     when (recordingAssetState(context, recording)) {
         RecordingAssetState.MISSING,
         RecordingAssetState.UNAVAILABLE,
@@ -1164,7 +1175,7 @@ fun copyRecordingToConfiguredDirectory(
             throw IOException("Recording copy content verification failed")
         }
         val sourceAfterCopy = runCatching {
-            openRecordingInputStream(context, recording)?.use(::sha256)
+            sha256StableRecording(context, recording)
         }.onFailure {
             // The verified target may now be the only surviving copy. Do not turn source
             // disappearance/provider failure into target cleanup.
@@ -1180,17 +1191,25 @@ fun copyRecordingToConfiguredDirectory(
         val finalizedTarget = finalizeOutputTarget(context, resolvedTarget)
         target = finalizedTarget
 
-        recording.copy(
-            id = finalizedTarget.id,
-            displayName = finalizedTarget.displayName,
-            sizeBytes = verifiedTargetSize,
-            storageType = finalizedTarget.storageType.name,
-            directoryId = finalizedTarget.directoryId,
-            fileIdentity = if (finalizedTarget.storageType == RecordingStorageType.FILE) {
-                finalizedTarget.file?.let(::resolveFileIdentity).orEmpty()
-            } else {
-                ""
-            },
+        val copiedIdentity = when (finalizedTarget.storageType) {
+            RecordingStorageType.FILE -> finalizedTarget.file?.let(::resolveFileIdentity).orEmpty()
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> finalizedTarget.uri?.let { uri ->
+                resolveProviderRecordingIdentity(context, finalizedTarget.storageType, uri)
+            }.orEmpty()
+        }
+        rebindRecordingWaveformCache(
+            source = recording,
+            target = recording.copy(
+                id = finalizedTarget.id,
+                displayName = finalizedTarget.displayName,
+                sizeBytes = verifiedTargetSize,
+                storageType = finalizedTarget.storageType.name,
+                directoryId = finalizedTarget.directoryId,
+                fileIdentity = copiedIdentity,
+                missingSinceMillis = null,
+            ),
         )
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
@@ -2061,10 +2080,13 @@ private fun renameFileRecording(
             if (parent.absolutePath == getSharedMusicRecordingsDirectory().absolutePath) {
                 MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(recording.mimeType), null)
             }
-            return recording.copy(
-                id = target.absolutePath,
-                displayName = uniqueName,
-                fileIdentity = renamedIdentity,
+            return rebindRecordingWaveformCache(
+                source = recording,
+                target = recording.copy(
+                    id = target.absolutePath,
+                    displayName = uniqueName,
+                    fileIdentity = renamedIdentity,
+                ),
             )
         } catch (_: FileAlreadyExistsException) {
             suffix++
@@ -2129,11 +2151,7 @@ private fun renameMediaStoreRecording(
         displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
         fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri),
     )
-    renamed.copy(
-        waveformRevision = if (renamed.waveformData.isNotBlank() && renamed.fileIdentity.isNotBlank()) {
-            recordingWaveformRevision(renamed)
-        } else "",
-    )
+    rebindRecordingWaveformCache(recording, renamed)
 }.onFailure { Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", it) }.getOrNull()
 
 private fun renameDocumentRecording(
@@ -2157,11 +2175,7 @@ private fun renameDocumentRecording(
             displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
             fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri),
         )
-        renamed.copy(
-            waveformRevision = if (renamed.waveformData.isNotBlank() && renamed.fileIdentity.isNotBlank()) {
-                recordingWaveformRevision(renamed)
-            } else "",
-        )
+        rebindRecordingWaveformCache(recording, renamed)
     }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
 }
 

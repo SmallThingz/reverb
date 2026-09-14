@@ -40,6 +40,20 @@ internal fun isValidRecordingWaveformCache(
         decodeRecordingWaveform(waveformData) != null
 }
 
+internal fun rebindRecordingWaveformCache(
+    source: RecordingEntity,
+    target: RecordingEntity,
+): RecordingEntity {
+    val revision = recordingWaveformRevision(target)
+    val data = source.waveformData
+    val keep = revision.isNotBlank() &&
+        isValidRecordingWaveformCache(source, data, source.waveformRevision)
+    return target.copy(
+        waveformData = if (keep) data else "",
+        waveformRevision = if (keep) revision else "",
+    )
+}
+
 internal fun encodeRecordingWaveform(values: FloatArray): String {
     if (values.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return ""
     val bytes = ByteArray(values.size) { index ->

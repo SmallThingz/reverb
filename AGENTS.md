@@ -54,6 +54,8 @@
 - Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss handler must stay disabled while an expanded inline player owns Back.
 - Cancelled or failed pre-commit outputs use a content-fingerprinted cleanup journal; Library recovery suppresses those exact assets until deletion succeeds, and identity reuse must never authorize deletion of replacement bytes.
 - The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its appearance must not shrink its touch target.
+- Recording catalog metadata/waveform caches are identity-bound; provider identity uncertainty may preserve known metadata but must invalidate cache trust, and identity-sensitive actions must revalidate before use.
+- A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed.
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
 - Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
 - Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while accumulating the exact integrated delta.

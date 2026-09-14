@@ -224,7 +224,7 @@ object RecordingRepository {
                             removePendingDeletionLocked(context, tracked.id)
                             false
                         } else {
-                            deleteRecordingAsset(context, tracked)
+                            deleteVerifiedRecordingAsset(context, tracked)
                         }
                     }
                 }
@@ -344,7 +344,7 @@ object RecordingRepository {
         context: Context,
         recording: RecordingEntity,
     ): PendingDeletionIntent? = runCatching {
-        if (!recordingDestructiveIdentityMatches(context, recording)) return@runCatching null
+        if (!recordingDeletionIdentityMatches(context, recording)) return@runCatching null
         val digest = sha256StableRecording(context, recording) ?: return@runCatching null
         if (digest.byteCount <= 0L) return@runCatching null
         val isFile = resolveRecordingStorageType(recording) == RecordingStorageType.FILE
@@ -702,7 +702,7 @@ object RecordingRepository {
                         removePendingDeletionLocked(context, source.id)
                         return false
                     }
-                    if (!deleteRecordingAsset(context, source)) return false
+                    if (!deleteVerifiedRecordingAsset(context, source)) return false
                     // Physical deletion is never replayed for provider assets. The phase marker
                     // lets restart cleanup retire metadata immediately when it can be persisted.
                     putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
@@ -1048,19 +1048,28 @@ internal fun mergeObservedRecording(
     nowMillis: Long,
 ): RecordingEntity {
     val sameAsset = existing?.let { observedRecordingIsSameAsset(it, observed) } ?: false
-    val fallback = existing?.takeIf { sameAsset }
+    val observedStorageType = resolveRecordingStorageType(observed)
+    val providerIdentityUnproven = existing != null &&
+        existing.id == observed.id && existing.storageType == observed.storageType &&
+        (observedStorageType == RecordingStorageType.DOCUMENT ||
+            observedStorageType == RecordingStorageType.MEDIASTORE) &&
+        existing.fileIdentity.isNotBlank() && observed.fileIdentity.isBlank()
+    val metadataFallback = existing?.takeIf { sameAsset || providerIdentityUnproven }
+    val waveformFallback = existing?.takeIf { sameAsset }
     val merged = observed.copy(
-        mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: fallback?.mimeType.orEmpty(),
-        durationMillis = observed.durationMillis.takeIf { it > 0L } ?: fallback?.durationMillis ?: 0L,
-        sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: fallback?.sizeBytes ?: 0L,
-        codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: fallback?.codecSummary.orEmpty(),
+        mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: metadataFallback?.mimeType.orEmpty(),
+        durationMillis = observed.durationMillis.takeIf { it > 0L } ?: metadataFallback?.durationMillis ?: 0L,
+        sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: metadataFallback?.sizeBytes ?: 0L,
+        codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: metadataFallback?.codecSummary.orEmpty(),
         fileIdentity = when {
             observed.fileIdentity.isNotBlank() -> observed.fileIdentity
-            sameAsset -> fallback?.fileIdentity.orEmpty()
+            sameAsset || providerIdentityUnproven -> metadataFallback?.fileIdentity.orEmpty()
             else -> ""
         },
-        createdAtMillis = fallback?.createdAtMillis ?: observed.createdAtMillis,
-        lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null || !sameAsset) {
+        createdAtMillis = metadataFallback?.createdAtMillis ?: observed.createdAtMillis,
+        lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null ||
+            (!sameAsset && !providerIdentityUnproven)
+        ) {
             nowMillis
         } else {
             existing.lastSeenAtMillis
@@ -1069,10 +1078,10 @@ internal fun mergeObservedRecording(
     )
     val revision = recordingWaveformRevision(merged)
     val preserveWaveform = revision.isNotBlank() &&
-        fallback?.waveformRevision == revision &&
-        decodeRecordingWaveform(fallback.waveformData) != null
+        waveformFallback?.waveformRevision == revision &&
+        decodeRecordingWaveform(waveformFallback.waveformData) != null
     return merged.copy(
-        waveformData = if (preserveWaveform) fallback.waveformData else "",
+        waveformData = if (preserveWaveform) waveformFallback.waveformData else "",
         waveformRevision = if (preserveWaveform) revision else "",
     )
 }

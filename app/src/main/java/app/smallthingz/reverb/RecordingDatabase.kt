@@ -280,8 +280,7 @@ internal fun preserveCorruptRecordingDatabase(
         forceRecordingDatabaseDirectoryDurable(recoveryRoot)
 
         sources.forEach { source ->
-            val sourceBytes = source.length().takeIf { it >= 0L }
-                ?: throw IOException("Unable to size recording database recovery source")
+            val sourceBytes = source.length()
             val target = File(destination, source.name)
             FileInputStream(source).use { input ->
                 FileOutputStream(target).use { output ->

@@ -239,7 +239,15 @@ internal fun RecordingInlinePlayer(
                 }
                 RecordingStorageType.DOCUMENT,
                 RecordingStorageType.MEDIASTORE,
-                -> player.setDataSource(appContext, recording.id.toUri())
+                -> {
+                    if (!recordingContentIdentityMatches(appContext, recording)) {
+                        throw IllegalStateException("Recording changed in provider")
+                    }
+                    player.setDataSource(appContext, recording.id.toUri())
+                    if (!recordingContentIdentityMatches(appContext, recording)) {
+                        throw IllegalStateException("Recording changed in provider while opening")
+                    }
+                }
                 null -> throw IllegalArgumentException("Unknown recording storage type")
             }
             player.prepareAsync()

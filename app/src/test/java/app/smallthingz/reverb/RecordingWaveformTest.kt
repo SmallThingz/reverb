@@ -179,6 +179,41 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun waveformCacheRebindsOnlyAcrossVerifiedIdentities() {
+        val source = RecordingEntity(
+            id = "old", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
+            storageType = RecordingStorageType.FILE.name, directoryId = "old-dir", fileIdentity = "stat:old",
+        )
+        val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.6f })
+        val cachedSource = source.copy(
+            waveformData = encoded, waveformRevision = recordingWaveformRevision(source),
+        )
+        val target = source.copy(
+            id = "content://media/9", storageType = RecordingStorageType.MEDIASTORE.name,
+            directoryId = MEDIA_STORE_DIRECTORY_ID, fileIdentity = "provider:MEDIASTORE:new",
+        )
+
+        val rebound = rebindRecordingWaveformCache(cachedSource, target)
+        assertEquals(encoded, rebound.waveformData)
+        assertEquals(recordingWaveformRevision(target), rebound.waveformRevision)
+
+        val malformed = rebindRecordingWaveformCache(cachedSource.copy(waveformData = "bad"), target)
+        assertEquals("", malformed.waveformData)
+        assertEquals("", malformed.waveformRevision)
+
+        val staleSource = rebindRecordingWaveformCache(
+            cachedSource.copy(waveformRevision = "stale-source-revision"), target,
+        )
+        assertEquals("", staleSource.waveformData)
+        assertEquals("", staleSource.waveformRevision)
+
+        val unproven = rebindRecordingWaveformCache(cachedSource, target.copy(fileIdentity = ""))
+        assertEquals("", unproven.waveformData)
+        assertEquals("", unproven.waveformRevision)
+    }
+
+    @Test
     fun providerIdentity_requiresTrustworthyRevisionAndChangesWithContentRevision() {
         val first = providerRecordingIdentity(
             RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 10L,

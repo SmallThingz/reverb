@@ -182,20 +182,36 @@ class FormattingAndHistoryMathTest {
         val changed = mergeObservedRecording(cached, observed.copy(fileIdentity = "stat:b"), nowMillis = 40L)
         assertEquals("", changed.waveformData)
         assertEquals("", changed.waveformRevision)
+
+        val malformed = cached.copy(waveformData = "not-base64!")
+        val healed = mergeObservedRecording(malformed, observed, nowMillis = 40L)
+        assertEquals("", healed.waveformData)
+        assertEquals("", healed.waveformRevision)
     }
 
     @Test
-    fun mergeObservedRecording_clearsProviderWaveformWhenRevisionCannotBeProven() {
+    fun mergeObservedRecording_preservesProviderMetadataButClearsCacheWhenIdentityCannotBeProven() {
         val existing = RecordingEntity(
             id = "content://media/1", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
             storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
             fileIdentity = "provider:MEDIASTORE:x:2000:9",
-            waveformData = "cached", waveformRevision = "revision",
+            waveformData = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.4f }),
+            waveformRevision = "revision", createdAtMillis = 10L, lastSeenAtMillis = 20L,
         )
-        val observed = existing.copy(fileIdentity = "", waveformData = "", waveformRevision = "")
+        val observed = existing.copy(
+            mimeType = "", durationMillis = 0L, sizeBytes = 0L, codecSummary = "",
+            fileIdentity = "", waveformData = "", waveformRevision = "",
+            createdAtMillis = 999L, lastSeenAtMillis = 999L,
+        )
         val merged = mergeObservedRecording(existing, observed, nowMillis = 40L)
-        assertEquals("", merged.fileIdentity)
+        assertEquals(existing.fileIdentity, merged.fileIdentity)
+        assertEquals(existing.mimeType, merged.mimeType)
+        assertEquals(existing.durationMillis, merged.durationMillis)
+        assertEquals(existing.sizeBytes, merged.sizeBytes)
+        assertEquals(existing.codecSummary, merged.codecSummary)
+        assertEquals(existing.createdAtMillis, merged.createdAtMillis)
+        assertEquals(existing.lastSeenAtMillis, merged.lastSeenAtMillis)
         assertEquals("", merged.waveformData)
         assertEquals("", merged.waveformRevision)
     }
