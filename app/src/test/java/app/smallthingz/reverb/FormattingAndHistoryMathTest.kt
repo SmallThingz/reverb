@@ -1689,11 +1689,11 @@ class FormattingAndHistoryMathTest {
         assertEquals(oneShot, bufferTransitionDisplayedSlot(oneShot, looping, 0.49f))
         assertEquals(looping, bufferTransitionDisplayedSlot(oneShot, looping, 0.5f))
         assertEquals(-45f, bufferTransitionFlipDegrees(oneShot, looping, 0.25f), 0.0001f)
-        assertEquals(-90f, bufferTransitionFlipDegrees(oneShot, looping, 0.5f), 0.0001f)
+        assertEquals(90f, bufferTransitionFlipDegrees(oneShot, looping, 0.5f), 0.0001f)
         assertEquals(45f, bufferTransitionFlipDegrees(oneShot, looping, 0.75f), 0.0001f)
         assertEquals(0f, bufferTransitionFlipDegrees(oneShot, looping, 1f), 0.0001f)
         assertEquals(45f, bufferTransitionFlipDegrees(looping, oneShot, 0.25f), 0.0001f)
-        assertEquals(90f, bufferTransitionFlipDegrees(looping, oneShot, 0.5f), 0.0001f)
+        assertEquals(-90f, bufferTransitionFlipDegrees(looping, oneShot, 0.5f), 0.0001f)
         assertEquals(-45f, bufferTransitionFlipDegrees(looping, oneShot, 0.75f), 0.0001f)
 
         assertEquals(0.5f, bufferTransitionPivotFractionX(), 0.0001f)

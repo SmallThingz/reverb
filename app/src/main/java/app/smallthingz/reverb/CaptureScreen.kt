@@ -946,9 +946,11 @@ internal fun bufferTransitionFlipDegrees(
         ReverbService.BufferSlot.LOOPING -> -1f
         ReverbService.BufferSlot.ONE_SHOT -> 1f
     }
-    return if (p <= 0.5f) {
+    return if (p < 0.5f) {
         direction * p * 180f
     } else {
+        // The rendered face switches to the target at the midpoint, so use the
+        // complementary edge-on angle from that exact frame onward.
         direction * (p - 1f) * 180f
     }
 }
