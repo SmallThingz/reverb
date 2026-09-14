@@ -7,6 +7,16 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun blobMorphStartsAtBlobGeometryAndSettlesAtTimeline() {
+        assertEquals(0.4f, rangeBlobMorphStartScaleX(200f, 500f), 0.0001f)
+        assertTrue(rangeBlobMorphStartScaleY(200f, 146f) > 1f)
+        assertEquals(58f, rangeBlobMorphTranslationY(0f, 58f), 0.0001f)
+        assertEquals(29f, rangeBlobMorphTranslationY(0.5f, 58f), 0.0001f)
+        assertEquals(0f, rangeBlobMorphTranslationY(1f, 58f), 0.0001f)
+        assertTrue(RANGE_BLOB_MORPH_HANDOFF_PROGRESS in 0.05f..0.10f)
+    }
+
+    @Test
     fun cursorRemainsIndependentOfSelectedRange() {
         val update = adjustRangeEditTarget(
             values = RangeEditValues(startSeconds = 20f, cursorSeconds = 30f, endSeconds = 80f),

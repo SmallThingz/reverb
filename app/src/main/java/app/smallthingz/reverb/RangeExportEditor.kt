@@ -107,6 +107,19 @@ internal const val RANGE_SNAP_HOLD_MILLIS = 1_250L
 internal const val RANGE_SNAP_STATIONARY_MILLIS = 90L
 internal const val RANGE_SNAP_RELEASE_MULTIPLIER = 1.35f
 internal const val RANGE_SNAP_POINTER_JITTER_FRACTION = 0.08f
+internal const val RANGE_BLOB_MORPH_HANDOFF_PROGRESS = 0.07f
+private const val RANGE_BLOB_VISUAL_DIAMETER_FRACTION = 0.43f
+private const val RANGE_BLOB_ENVELOPE_HEIGHT_FRACTION = 0.95f
+
+internal fun rangeBlobMorphStartScaleX(blobDiameterPx: Float, timelineWidthPx: Float): Float =
+    (blobDiameterPx / timelineWidthPx.coerceAtLeast(1f)).coerceAtLeast(0f)
+
+internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: Float): Float =
+    (blobDiameterPx / (timelineHeightPx.coerceAtLeast(1f) * RANGE_BLOB_ENVELOPE_HEIGHT_FRACTION))
+        .coerceAtLeast(0f)
+
+internal fun rangeBlobMorphTranslationY(progress: Float, startOffsetPx: Float): Float =
+    startOffsetPx * (1f - progress.coerceIn(0f, 1f))
 
 internal fun rangeSnapReleaseThreshold(snapThresholdSeconds: Float): Float =
     snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_RELEASE_MULTIPLIER
@@ -845,6 +858,7 @@ internal fun RangeExportHomeContent(
     modifier: Modifier = Modifier,
 ) {
     val state = remember(selectedBuffer) { RangeExportEditorState(initialDurationSeconds) }
+    val colors = MaterialTheme.colorScheme
     var transitionStarted by remember(selectedBuffer) { mutableStateOf(false) }
     val transitionProgress by animateFloatAsState(
         targetValue = if (transitionStarted) 1f else 0f,
@@ -921,18 +935,31 @@ internal fun RangeExportHomeContent(
             val compact = maxHeight < 390.dp
             val density = LocalDensity.current
             val blobSize = minOf(maxWidth * 0.90f, maxHeight * 0.94f, 372.dp)
-            // AudioBlobView's live body is roughly two thirds of its square view. Transform the
-            // existing view wrapper so that body, not the view bounds, lands on the timeline.
-            val blobVisualDiameter = blobSize * 0.66f
-            val targetBlobScaleX = ((maxWidth - 24.dp).coerceAtLeast(1.dp) / blobVisualDiameter)
-                .coerceIn(1.18f, 1.72f)
-            val targetBlobScaleY = (146.dp / blobVisualDiameter).coerceIn(0.50f, 0.78f)
-            val blobFade = (1f - ((visualTransitionProgress - 0.34f) / 0.54f).coerceIn(0f, 1f))
-            val timelineFade = ((visualTransitionProgress - 0.12f) / 0.62f).coerceIn(0f, 1f)
+            // AudioBlobView's live body is roughly two thirds of its square view. The live view
+            // owns only the initial frame; the same-sized waveform-material path then takes over
+            // and continuously widens/flattens into the final timeline geometry.
+            val blobVisualDiameter = blobSize * RANGE_BLOB_VISUAL_DIAMETER_FRACTION
             val chromeFade = rangeChromeFade
-            val timelineScaleX = 0.30f + 0.70f * visualTransitionProgress
-            val timelineScaleY = 1.62f - 0.62f * visualTransitionProgress
-            if (visualTransitionProgress < 0.995f) {
+            val morphGeometryProgress = ((
+                visualTransitionProgress - RANGE_BLOB_MORPH_HANDOFF_PROGRESS
+            ) / (1f - RANGE_BLOB_MORPH_HANDOFF_PROGRESS)).coerceIn(0f, 1f)
+            val timelineBodyWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
+            val timelineBodyHeight = 146.dp
+            val blobDiameterPx = with(density) { blobVisualDiameter.toPx() }
+            val timelineWidthPx = with(density) { timelineBodyWidth.toPx() }
+            val timelineHeightPx = with(density) { timelineBodyHeight.toPx() }
+            val startTimelineScaleX = rangeBlobMorphStartScaleX(blobDiameterPx, timelineWidthPx)
+            val startTimelineScaleY = rangeBlobMorphStartScaleY(blobDiameterPx, timelineHeightPx)
+            val timelineScaleX = startTimelineScaleX +
+                (1f - startTimelineScaleX) * morphGeometryProgress
+            val timelineScaleY = startTimelineScaleY +
+                (1f - startTimelineScaleY) * morphGeometryProgress
+            val morphStartColor = when {
+                isListening && activeBuffer == selectedBuffer -> colors.primary
+                selectedBuffer == ReverbService.BufferSlot.ONE_SHOT && oneShotFull -> colors.primaryContainer
+                else -> colors.surfaceContainerHighest
+            }
+            if (visualTransitionProgress <= RANGE_BLOB_MORPH_HANDOFF_PROGRESS) {
                 BufferBlobPage(
                     bufferSlot = selectedBuffer,
                     activeBuffer = activeBuffer,
@@ -948,15 +975,10 @@ internal fun RangeExportHomeContent(
                     onOpenBufferSettings = {},
                     visualizerVisible = visualizerVisible,
                     interactionEnabled = false,
-                    contentAlpha = (1f - visualTransitionProgress * 2.7f).coerceIn(0f, 1f),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            alpha = blobFade
-                            scaleX = 1f + (targetBlobScaleX - 1f) * visualTransitionProgress
-                            scaleY = 1f + (targetBlobScaleY - 1f) * visualTransitionProgress
-                            translationY = -with(density) { 58.dp.toPx() } * visualTransitionProgress
-                        },
+                    contentAlpha = (1f -
+                        visualTransitionProgress / RANGE_BLOB_MORPH_HANDOFF_PROGRESS
+                    ).coerceIn(0f, 1f),
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
             Column(
@@ -988,15 +1010,24 @@ internal fun RangeExportHomeContent(
                 }
                 RangeExportTimeline(
                     state = state,
-                    morphProgress = visualTransitionProgress,
+                    morphProgress = morphGeometryProgress,
+                    morphStartColor = morphStartColor,
                     chromeAlpha = chromeFade,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(if (compact) 232.dp else 250.dp)
                         .graphicsLayer {
-                            alpha = timelineFade
+                            // Binary renderer hand-off, not a crossfade. At the first non-zero
+                            // morph frame this path already occupies the blob's body geometry.
+                            alpha = if (
+                                visualTransitionProgress <= RANGE_BLOB_MORPH_HANDOFF_PROGRESS
+                            ) 0f else 1f
                             scaleX = timelineScaleX
                             scaleY = timelineScaleY
+                            translationY = rangeBlobMorphTranslationY(
+                                morphGeometryProgress,
+                                with(density) { 58.dp.toPx() },
+                            )
                         },
                 )
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
@@ -1042,6 +1073,7 @@ internal fun RangeExportHomeContent(
 private fun RangeExportTimeline(
     state: RangeExportEditorState,
     morphProgress: Float,
+    morphStartColor: androidx.compose.ui.graphics.Color? = null,
     chromeAlpha: Float,
     modifier: Modifier = Modifier,
 ) {
@@ -1116,6 +1148,7 @@ private fun RangeExportTimeline(
                 endFraction = state.endSeconds / state.durationSeconds,
                 loading = state.waveformLoading,
                 morphProgress = morphProgress,
+                morphStartColor = morphStartColor,
                 modifier = Modifier.fillMaxSize(),
             )
         }

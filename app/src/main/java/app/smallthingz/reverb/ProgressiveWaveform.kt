@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
@@ -33,6 +34,7 @@ internal fun ProgressiveWaveformCanvas(
     endFraction: Float,
     loading: Boolean,
     morphProgress: Float,
+    morphStartColor: Color? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -93,9 +95,32 @@ internal fun ProgressiveWaveformCanvas(
         val detailRight = size.width * visibleDetail.coerceIn(0f, 1f)
         val selectedLeft = size.width * startFraction.coerceIn(0f, 1f)
         val selectedRight = size.width * endFraction.coerceIn(startFraction, 1f)
+        val morph = morphProgress.coerceIn(0f, 1f)
+        val materialT = (((morph - 0.06f) / 0.82f).coerceIn(0f, 1f)).let { t ->
+            t * t * (3f - 2f * t)
+        }
+        val unresolvedColor = morphStartColor?.let { lerp(it, colors.primary, materialT) }
+            ?: colors.primary
+        val unresolvedCenterAlpha = if (morphStartColor == null) {
+            0.14f
+        } else {
+            0.92f + (0.14f - 0.92f) * materialT
+        }
+        val unresolvedEdgeAlpha = if (morphStartColor == null) {
+            0.08f
+        } else {
+            0.78f + (0.08f - 0.78f) * materialT
+        }
+        val unresolvedStrokeAlpha = if (morphStartColor == null) {
+            0.08f
+        } else {
+            0.30f + (0.08f - 0.30f) * materialT
+        }
 
         drawLine(
-            color = colors.onSurfaceVariant.copy(alpha = 0.10f),
+            color = colors.onSurfaceVariant.copy(
+                alpha = if (morphStartColor == null) 0.10f else 0.10f * materialT,
+            ),
             start = Offset(0f, centerY),
             end = Offset(size.width, centerY),
             strokeWidth = 1.dp.toPx(),
@@ -107,15 +132,15 @@ internal fun ProgressiveWaveformCanvas(
             path = path,
             brush = Brush.horizontalGradient(
                 listOf(
-                    colors.primary.copy(alpha = 0.08f),
-                    colors.primary.copy(alpha = 0.14f),
-                    colors.primary.copy(alpha = 0.08f),
+                    unresolvedColor.copy(alpha = unresolvedEdgeAlpha),
+                    unresolvedColor.copy(alpha = unresolvedCenterAlpha),
+                    unresolvedColor.copy(alpha = unresolvedEdgeAlpha),
                 ),
             ),
         )
         drawPath(
             path = path,
-            color = colors.primary.copy(alpha = 0.08f),
+            color = unresolvedColor.copy(alpha = unresolvedStrokeAlpha),
             style = Stroke(width = 1.dp.toPx()),
         )
 
@@ -227,7 +252,7 @@ private fun waveformConstructionPath(
     val visibleDetail = visibleDetailFraction.coerceIn(0f, visibleCoarse)
     val coarseAvailable = (coarseBuiltCount.toFloat() / coarseWaveform.size.toFloat()).coerceIn(0f, 1f)
     val detailAvailable = (detailBuiltCount.toFloat() / detailWaveform.size.toFloat()).coerceIn(0f, 1f)
-    val ribbonProgress = ((morphProgress - 0.20f) / 0.80f).coerceIn(0f, 1f)
+    val ribbonProgress = ((morphProgress - 0.08f) / 0.92f).coerceIn(0f, 1f)
     val morph = ribbonProgress * ribbonProgress * (3f - 2f * ribbonProgress)
     val path = Path()
 
@@ -252,7 +277,9 @@ private fun waveformConstructionPath(
 
     fun blobEnvelopeAt(u: Float): Float {
         val x = (u - 0.5f) * 2f
-        return 0.12f + 0.76f * kotlin.math.sqrt((1f - x * x).coerceAtLeast(0f))
+        val circle = kotlin.math.sqrt((1f - x * x).coerceAtLeast(0f))
+        val organic = 1f + 0.018f * kotlin.math.sin(u * 19f + phase * 0.70f)
+        return (circle * organic).coerceIn(0f, 1f)
     }
 
     fun provisionalValue(u: Float): Float {
