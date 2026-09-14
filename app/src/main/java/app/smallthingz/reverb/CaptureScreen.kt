@@ -566,47 +566,33 @@ fun CaptureScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        val onListenToggle = remember(service, isSaving, isListening, activeBuffer) {
-            { bufferSlot: ReverbService.BufferSlot ->
-                val s = service
-                if (s != null && !isSaving) {
-                    val recordingThisBuffer = isListening && activeBuffer == bufferSlot
-                    val result = when {
-                        recordingThisBuffer -> s.disableListening()
-                        isListening -> s.selectCaptureBuffer(bufferSlot)
-                        else -> s.enableListening(bufferSlot)
-                    }
-                    if (result.accepted) {
-                        latestListeningCommandGeneration = maxOf(
-                            latestListeningCommandGeneration,
-                            result.generation,
-                        )
-                        isListening = !recordingThisBuffer
-                        activeBuffer = bufferSlot
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    }
-                }
-            }
-        }
-        val onActivateBuffer = remember(
-            service, isSaving, oneShotEnabled, oneShotFull, loopingEnabled,
+        val onListenToggle = remember(
+            service, isSaving, isListening, activeBuffer,
+            oneShotEnabled, oneShotFull, loopingEnabled,
         ) {
             { bufferSlot: ReverbService.BufferSlot ->
-                selectedBuffer = bufferSlot
                 val recorder = service
-                val canActivate = canActivateCaptureBuffer(
-                    requested = bufferSlot,
-                    oneShotEnabled = oneShotEnabled,
-                    oneShotFull = oneShotFull,
-                    loopingEnabled = loopingEnabled,
-                )
-                if (recorder != null && !isSaving && canActivate) {
-                    val result = recorder.selectCaptureBuffer(bufferSlot)
-                    if (result.accepted) {
+                if (recorder != null && !isSaving) {
+                    val action = captureBlobTapAction(
+                        requested = bufferSlot,
+                        isListening = isListening,
+                        activeBuffer = activeBuffer,
+                        oneShotEnabled = oneShotEnabled,
+                        oneShotFull = oneShotFull,
+                        loopingEnabled = loopingEnabled,
+                    )
+                    val result = when (action) {
+                        CaptureBlobTapAction.STOP -> recorder.disableListening()
+                        CaptureBlobTapAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
+                        CaptureBlobTapAction.START -> recorder.enableListening(bufferSlot)
+                        CaptureBlobTapAction.NONE -> null
+                    }
+                    if (result?.accepted == true) {
                         latestListeningCommandGeneration = maxOf(
                             latestListeningCommandGeneration,
                             result.generation,
                         )
+                        isListening = action != CaptureBlobTapAction.STOP
                         activeBuffer = bufferSlot
                         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     }
@@ -796,7 +782,6 @@ fun CaptureScreen(
             onExportFull = onExportFull,
             onExportCustom = onExportCustom,
             onSelectBuffer = { selectedBuffer = it },
-            onActivateBuffer = onActivateBuffer,
             onOpenBufferSettings = onOpenBufferSettings,
             visualizerVisible = visualizerVisible,
             onOpenLibrary = onOpenLibrary,
@@ -892,6 +877,27 @@ internal fun isCaptureBlockedByOtherBuffer(
     activeBuffer: ReverbService.BufferSlot?,
 ): Boolean = isListening && activeBuffer != null && activeBuffer != bufferSlot
 
+internal enum class CaptureBlobTapAction {
+    START,
+    STOP,
+    SWITCH,
+    NONE,
+}
+
+internal fun captureBlobTapAction(
+    requested: ReverbService.BufferSlot,
+    isListening: Boolean,
+    activeBuffer: ReverbService.BufferSlot?,
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+): CaptureBlobTapAction = when {
+    isListening && activeBuffer == requested -> CaptureBlobTapAction.STOP
+    !canActivateCaptureBuffer(requested, oneShotEnabled, oneShotFull, loopingEnabled) -> CaptureBlobTapAction.NONE
+    isListening -> CaptureBlobTapAction.SWITCH
+    else -> CaptureBlobTapAction.START
+}
+
 internal fun oppositeBufferSlot(bufferSlot: ReverbService.BufferSlot): ReverbService.BufferSlot =
     when (bufferSlot) {
         ReverbService.BufferSlot.ONE_SHOT -> ReverbService.BufferSlot.LOOPING
@@ -913,7 +919,6 @@ internal fun bufferSwipeProgress(
 
 private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
 private const val BUFFER_FLIP_DURATION_MILLIS = 260
-private const val BUFFER_FLIP_EDGE_PIVOT = 0.28f
 private const val BUFFER_FLIP_MIDPOINT_SCALE = 0.94f
 private val CAPTURE_CONTROL_CLUSTER_HEIGHT = 112.dp
 private val CAPTURE_CONTROL_BOTTOM_SPACER = 18.dp
@@ -935,9 +940,8 @@ internal fun bufferTransitionFlipDegrees(
 ): Float {
     if (source == target) return 0f
     val p = progress.coerceIn(0f, 1f)
-    // Direction is defined by the destination face: Looping lifts from the left,
-    // One-shot lifts from the right. Keeping this target-based makes both tap and
-    // swipe navigation visually consistent.
+    // Opposite navigation directions use opposite rotations. The outgoing face reaches
+    // +/-90 degrees and the incoming face appears from the complementary angle.
     val direction = when (target) {
         ReverbService.BufferSlot.LOOPING -> -1f
         ReverbService.BufferSlot.ONE_SHOT -> 1f
@@ -949,12 +953,7 @@ internal fun bufferTransitionFlipDegrees(
     }
 }
 
-internal fun bufferTransitionPivotFractionX(target: ReverbService.BufferSlot): Float =
-    when (target) {
-        // Pivot toward the opposite side so the named edge visibly lifts.
-        ReverbService.BufferSlot.LOOPING -> 1f - BUFFER_FLIP_EDGE_PIVOT
-        ReverbService.BufferSlot.ONE_SHOT -> BUFFER_FLIP_EDGE_PIVOT
-    }
+internal fun bufferTransitionPivotFractionX(): Float = 0.5f
 
 internal fun bufferTransitionDepthScale(progress: Float): Float {
     val p = progress.coerceIn(0f, 1f)
@@ -989,7 +988,6 @@ private fun MainCaptureContent(
     onExportFull: (ReverbService.BufferSlot) -> Unit,
     onExportCustom: (ReverbService.BufferSlot) -> Unit,
     onSelectBuffer: (ReverbService.BufferSlot) -> Unit,
-    onActivateBuffer: (ReverbService.BufferSlot) -> Unit,
     onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit,
     visualizerVisible: Boolean,
     onOpenLibrary: () -> Unit,
@@ -1111,7 +1109,7 @@ private fun MainCaptureContent(
     } else {
         0f
     }
-    val flipPivotX = targetBuffer?.let(::bufferTransitionPivotFractionX) ?: 0.5f
+    val flipPivotX = bufferTransitionPivotFractionX()
     val flipDepthScale = if (targetBuffer != null) bufferTransitionDepthScale(transitionProgress) else 1f
 
     val displayedMetrics = when (renderedBuffer) {
@@ -1249,7 +1247,7 @@ private fun MainCaptureContent(
             flipDegrees = flipDegrees,
             flipPivotX = flipPivotX,
             flipDepthScale = flipDepthScale,
-            onSelectBuffer = onActivateBuffer,
+            onSelectBuffer = requestBufferNavigation,
             onExportFull = { onExportFull(renderedBuffer) },
             onExportCustom = { onExportCustom(renderedBuffer) },
             onClearBuffer = { onClearBuffer(renderedBuffer) },
@@ -1579,9 +1577,9 @@ internal fun BufferBlobPage(
     val filled = uiState == CaptureBufferUiState.FILLED
     val disabled = uiState == CaptureBufferUiState.DISABLED
     val serviceReady = service != null
-    val captureEnabled = serviceReady && !blockedByOther &&
+    val captureEnabled = serviceReady &&
         (uiState == CaptureBufferUiState.READY || recordingThisBuffer)
-    val clickEnabled = interactionEnabled && !isSaving && (disabled || (!blockedByOther && captureEnabled))
+    val clickEnabled = interactionEnabled && !isSaving && (disabled || captureEnabled)
 
     val displayedCurrentSeconds = metrics.seconds.coerceAtLeast(0f).toInt()
     val currentBytes = metrics.bytes.coerceAtLeast(0L)

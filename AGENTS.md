@@ -2,14 +2,15 @@
 
 - Buffer switching is one stationary capture surface, never a pager or sliding screen transition.
 - On buffer changes, the blob and buffer-specific bottom actions use a depth flip. The Library icon stays static and must never flip.
-- Buffer flips are directional and visibly hinged: Looping lifts its left edge; One-shot lifts its right edge.
+- Buffer flips pivot around the visual center, never an edge. One-shot→Looping and Looping→One-shot use opposite Y-rotation signs; the outgoing face reaches ±90° and the incoming face enters from the complementary ∓90° so tap, swipe, and cancelled reversals stay physically coherent.
 - The Library glyph is the Material Rounded bulleted-list icon (`FormatListBulleted`).
 - Library normal and selection top bars use the same 58dp content height; multi-select uses `SelectAll`.
 - Library vertical gestures reserve 13% on each side for close and the center 74% for pull-to-refresh.
 - The currently displayed buffer page owns the selector highlight; the other buffer stays visually dimmed even if it is the active capture destination. Disabled buffers remain viewable, show Off, and cannot become active.
 - Quick Settings tile taps must never surface MainActivity: usable tiles start/switch capture, the recording tile stops, disabled/full is unavailable, and long-press opens Reverb. On modern Android, cold OFF→ON may use the transparent no-history QuickTileActionActivity only until microphone capture is actually active.
 - Brand marks keep the main stroke on the current foreground color and derive echo/accent strokes from the Material primary color; Android 12+ launcher accents use system Material You colors and Android 13+ keeps a monochrome themed-icon mask.
-- Buffer selector taps navigate and activate the tapped usable buffer; horizontal swipes navigate only. Only the blob starts or stops recording.
+- Buffer selector cards are navigation only, exactly like horizontal swipes: they change the displayed buffer and never change the active capture destination or listening state. Never wire selector navigation to `selectCaptureBuffer`, `enableListening`, or `disableListening`.
+- The blob is the capture control. Tapping a usable displayed blob starts it when idle, stops it when already recording, or switches capture from the other active buffer to it without an intermediate stop. Tapping One-shot may take capture from Looping only when One-shot is enabled and not full; disabled/full One-shot must leave Looping recording untouched.
 - The Library action is always visible and must open even when the library is empty.
 - Both buffer readouts use the configured retention mode for their primary metric.
 - Export-limit warnings appear only inside export flows; never place them on the capture blob.

@@ -567,6 +567,68 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun blobTap_ownsCaptureSwitching_andUnavailableOneShotNeverStealsLooping() {
+        val oneShot = ReverbService.BufferSlot.ONE_SHOT
+        val looping = ReverbService.BufferSlot.LOOPING
+
+        assertEquals(
+            CaptureBlobTapAction.SWITCH,
+            captureBlobTapAction(
+                requested = oneShot,
+                isListening = true,
+                activeBuffer = looping,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            CaptureBlobTapAction.NONE,
+            captureBlobTapAction(
+                requested = oneShot,
+                isListening = true,
+                activeBuffer = looping,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            CaptureBlobTapAction.NONE,
+            captureBlobTapAction(
+                requested = oneShot,
+                isListening = true,
+                activeBuffer = looping,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            CaptureBlobTapAction.STOP,
+            captureBlobTapAction(
+                requested = looping,
+                isListening = true,
+                activeBuffer = looping,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+        assertEquals(
+            CaptureBlobTapAction.START,
+            captureBlobTapAction(
+                requested = oneShot,
+                isListening = false,
+                activeBuffer = looping,
+                oneShotEnabled = true,
+                oneShotFull = false,
+                loopingEnabled = true,
+            ),
+        )
+    }
+
+    @Test
     fun captureReaderTransition_adoptsNewGenerationWithoutSilentlyStoppingCapture() {
         assertEquals(
             CaptureReaderTransition.ADOPT,
@@ -1631,10 +1693,12 @@ class FormattingAndHistoryMathTest {
         assertEquals(45f, bufferTransitionFlipDegrees(oneShot, looping, 0.75f), 0.0001f)
         assertEquals(0f, bufferTransitionFlipDegrees(oneShot, looping, 1f), 0.0001f)
         assertEquals(45f, bufferTransitionFlipDegrees(looping, oneShot, 0.25f), 0.0001f)
+        assertEquals(90f, bufferTransitionFlipDegrees(looping, oneShot, 0.5f), 0.0001f)
         assertEquals(-45f, bufferTransitionFlipDegrees(looping, oneShot, 0.75f), 0.0001f)
 
-        assertTrue(bufferTransitionPivotFractionX(looping) > 0.5f)
-        assertTrue(bufferTransitionPivotFractionX(oneShot) < 0.5f)
+        assertEquals(0.5f, bufferTransitionPivotFractionX(), 0.0001f)
+        assertTrue(bufferTransitionFlipDegrees(oneShot, looping, 0.25f) < 0f)
+        assertTrue(bufferTransitionFlipDegrees(looping, oneShot, 0.25f) > 0f)
         assertEquals(1f, bufferTransitionDepthScale(0f), 0.0001f)
         assertEquals(0.94f, bufferTransitionDepthScale(0.5f), 0.0001f)
         assertEquals(1f, bufferTransitionDepthScale(1f), 0.0001f)
