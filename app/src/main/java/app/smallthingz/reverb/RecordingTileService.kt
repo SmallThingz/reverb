@@ -64,6 +64,24 @@ internal fun isTileCaptureActuallyRecording(
     runtimeCaptureActive: Boolean,
 ): Boolean = listeningIntentEnabled && runtimeCaptureActive
 
+internal fun recordingTileSnapshot(
+    listeningIntentEnabled: Boolean,
+    runtimeCaptureActive: Boolean,
+    activeBuffer: ReverbService.BufferSlot?,
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+): RecordingTileSnapshot = RecordingTileSnapshot(
+    listening = isTileCaptureActuallyRecording(
+        listeningIntentEnabled = listeningIntentEnabled,
+        runtimeCaptureActive = runtimeCaptureActive,
+    ),
+    activeBuffer = activeBuffer,
+    oneShotEnabled = oneShotEnabled,
+    oneShotFull = oneShotFull,
+    loopingEnabled = loopingEnabled,
+)
+
 internal fun recordingTileClickAction(
     bufferSlot: ReverbService.BufferSlot,
     snapshot: RecordingTileSnapshot,
@@ -109,11 +127,9 @@ internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot 
     val activeBuffer = prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null)?.let { stored ->
         runCatching { ReverbService.BufferSlot.valueOf(stored) }.getOrNull()
     }
-    return RecordingTileSnapshot(
-        listening = isTileCaptureActuallyRecording(
-            listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
-            runtimeCaptureActive = recordingRuntimeCaptureActive,
-        ),
+    return recordingTileSnapshot(
+        listeningIntentEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+        runtimeCaptureActive = recordingRuntimeCaptureActive,
         activeBuffer = activeBuffer,
         oneShotEnabled = isConfiguredOneShotBufferEnabled(context),
         oneShotFull = prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
@@ -256,8 +272,9 @@ abstract class RecordingTileService : TileService() {
                         loopingIsEnabled: Boolean,
                     ) {
                         if (actionConnection !== this@TileActionConnection) return
-                        val snapshot = RecordingTileSnapshot(
-                            listening = listeningEnabled,
+                        val snapshot = recordingTileSnapshot(
+                            listeningIntentEnabled = listeningEnabled,
+                            runtimeCaptureActive = recordingRuntimeCaptureActive,
                             activeBuffer = activeBufferSlot,
                             oneShotEnabled = oneShotIsEnabled,
                             oneShotFull = oneShotIsFull,

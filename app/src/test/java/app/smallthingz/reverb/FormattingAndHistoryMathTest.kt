@@ -885,6 +885,74 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileRevalidation_distinguishesDurableIntentFromRuntimeCapture() {
+        fun snapshot(
+            runtimeCaptureActive: Boolean,
+            oneShotEnabled: Boolean = true,
+            oneShotFull: Boolean = false,
+        ) = recordingTileSnapshot(
+            listeningIntentEnabled = true,
+            runtimeCaptureActive = runtimeCaptureActive,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = oneShotEnabled,
+            oneShotFull = oneShotFull,
+            loopingEnabled = true,
+        )
+
+        val suspended = snapshot(runtimeCaptureActive = false)
+        assertEquals(
+            RecordingTileClickAction.START,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = suspended,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.STOP,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = suspended,
+            ),
+        )
+
+        val recording = snapshot(runtimeCaptureActive = true)
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = recording,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.STOP,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.STOP,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = recording,
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = snapshot(runtimeCaptureActive = false, oneShotEnabled = false),
+            ),
+        )
+        assertEquals(
+            RecordingTileClickAction.NONE,
+            revalidateRecordingTileClickAction(
+                requestedAction = RecordingTileClickAction.START,
+                bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+                liveSnapshot = snapshot(runtimeCaptureActive = false, oneShotFull = true),
+            ),
+        )
+    }
+
+    @Test
     fun quickTileClick_keepsPreBindUserIntentAcrossRecorderRecovery() {
         val idleOneShot = RecordingTileSnapshot(
             listening = false,
