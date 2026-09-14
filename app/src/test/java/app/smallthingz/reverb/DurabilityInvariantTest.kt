@@ -1004,6 +1004,14 @@ class DurabilityInvariantTest {
         assertFalse(pendingOutputCleanupMatches(record, 1234L, "cd".repeat(32), "stat:1:2:100:5:77"))
         assertFalse(pendingOutputCleanupMatches(record, 1234L, hash, "stat:1:3:100:5:78"))
         assertEquals(null, decodePendingOutputCleanupRecord("v1|FILE|broken|12|short|"))
+        val encodedId = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(record.id.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val malformedDigest = "v3|1|$encodedId|1234|short||"
+        val truncated = "v3|1|$encodedId|1234"
+        assertEquals(null, decodePendingOutputCleanupRecord(malformedDigest))
+        assertEquals(record.id, pendingOutputCleanupSuppressedId(malformedDigest))
+        assertEquals(record.id, pendingOutputCleanupSuppressedId(truncated))
+        assertEquals(null, pendingOutputCleanupSuppressedId("v99|1|$encodedId|1234"))
         val firstIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
         val secondIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
         assertEquals(record.id, firstIntent.id)

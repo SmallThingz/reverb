@@ -62,6 +62,7 @@
 - Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss handler must stay disabled while an expanded inline player owns Back.
 - Cancelled or failed pre-commit outputs use a content-fingerprinted cleanup journal; Library recovery suppresses those exact assets until deletion succeeds, and identity reuse must never authorize deletion of replacement bytes.
 - Automated output cleanup requires both content and stable object/provider identity before physical deletion; legacy identity-less provider cleanup remains suppressed and fail-closed rather than deleting or exposing uncertain bytes.
+- Malformed output-cleanup journal entries never gain destructive authority; when their target ID is still recoverable, retain them as suppression-only metadata so journal corruption cannot expose uncertain failed/cancelled output.
 - Copy/publish failure cleanup is bound to the digest of bytes actually copied once a complete copy exists; if the source changes after a verified copy, preserve the hidden copy instead of destroying the only retained version.
 - Export/trim cleanup requires a whole-output digest returned by exact WAV header/payload/EOF verification; before that authority exists, retain hidden staging rather than deleting an unproven path or provider object.
 - Chunk-store close/checkpoint failures must surface to the service; after an atomic retention-boundary replacement becomes visible, in-memory geometry must follow the published bytes even if the following directory fsync reports failure.

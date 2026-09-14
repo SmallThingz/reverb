@@ -159,10 +159,26 @@ internal fun pendingOutputCleanupMatches(
     record, byteCount, sha256Hex, fileKey, providerIdentity,
 ) == PendingOutputCleanupMatch.EXACT
 
-internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchronized(outputCleanupJournalLock) {
-    pendingOutputCleanupEntriesLocked(context).mapNotNullTo(mutableSetOf()) { raw ->
-        decodePendingOutputCleanupRecord(raw)?.id
+internal fun pendingOutputCleanupSuppressedId(raw: String): String? {
+    decodePendingOutputCleanupRecord(raw)?.let { return it.id }
+    val parts = raw.split('|')
+    if (parts.size < 3) return null
+    if (parts[0] !in setOf(
+            OUTPUT_CLEANUP_RECORD_VERSION_V1,
+            OUTPUT_CLEANUP_RECORD_VERSION_V2,
+            OUTPUT_CLEANUP_RECORD_VERSION,
+        )
+    ) {
+        return null
     }
+    // Suppression needs only the target ID, not deletion authority. Recover it even when
+    // another field was torn/corrupted so uncertain output never becomes visible merely
+    // because the cleanup journal can no longer authorize a physical delete.
+    return decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() }
+}
+
+internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchronized(outputCleanupJournalLock) {
+    pendingOutputCleanupEntriesLocked(context).mapNotNullTo(mutableSetOf(), ::pendingOutputCleanupSuppressedId)
 }
 
 internal fun verifiedExportStagingRecordMatches(
@@ -341,7 +357,8 @@ internal fun retryPendingOutputCleanup(context: Context) {
     for (raw in rawEntries) {
         val record = decodePendingOutputCleanupRecord(raw)
         if (record == null) {
-            removePendingOutputCleanupRaw(context, raw)
+            // Malformed cleanup metadata has no destructive authority, but discarding it can
+            // expose a cancelled/failed final-name output. Keep it suppression-only.
             continue
         }
         if (record.storageType == RecordingStorageType.FILE) {
@@ -421,7 +438,7 @@ private fun putPendingOutputCleanup(context: Context, record: PendingOutputClean
     synchronized(outputCleanupJournalLock) {
         val current = pendingOutputCleanupEntriesLocked(context)
         val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            decodePendingOutputCleanupRecord(raw)?.id == record.id
+            pendingOutputCleanupSuppressedId(raw) == record.id
         }
         updated += encodePendingOutputCleanupRecord(record)
         getRecorderPreferences(context).edit()
@@ -432,15 +449,10 @@ private fun putPendingOutputCleanup(context: Context, record: PendingOutputClean
 private fun removePendingOutputCleanup(context: Context, id: String): Boolean = synchronized(outputCleanupJournalLock) {
     val current = pendingOutputCleanupEntriesLocked(context)
     val updated = current.filterNotTo(mutableSetOf()) { raw ->
-        decodePendingOutputCleanupRecord(raw)?.id == id
+        pendingOutputCleanupSuppressedId(raw) == id
     }
     writePendingOutputCleanupEntriesLocked(context, updated)
 }
-
-private fun removePendingOutputCleanupRaw(context: Context, raw: String): Boolean =
-    synchronized(outputCleanupJournalLock) {
-        writePendingOutputCleanupEntriesLocked(context, pendingOutputCleanupEntriesLocked(context) - raw)
-    }
 
 private fun writePendingOutputCleanupEntriesLocked(context: Context, entries: Set<String>): Boolean {
     val editor = getRecorderPreferences(context).edit()
