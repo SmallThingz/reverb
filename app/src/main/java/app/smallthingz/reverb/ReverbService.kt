@@ -162,7 +162,6 @@ class ReverbService : Service() {
             overwriteOldest = false,
         )
         createNotificationChannel()
-        setQuickTileRecordingActive(active = false, refreshTiles = false)
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -216,12 +215,13 @@ class ReverbService : Service() {
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
-        setQuickTileRecordingActive(active = false)
         if (::durabilitySyncExecutor.isInitialized) {
             durabilitySyncExecutor.shutdownNow()
         }
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
+        val stoppedTileSnapshot = RecordingQuickTileStateCache.markServiceStopped(this)
+        RecordingQuickTiles.publishSnapshot(this, stoppedTileSnapshot, requestSystemRefresh = true)
         releaseWakeLock()
         stopForegroundTracked()
 
@@ -350,6 +350,7 @@ class ReverbService : Service() {
         }
 
         val prefs = getRecorderPreferences(this)
+        val previousActiveBuffer = activeBufferSlot
         var targetChanged = false
         val generation = synchronized(listeningIntentLock) {
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
@@ -377,10 +378,14 @@ class ReverbService : Service() {
             reportError(getString(R.string.recorder_state_persist_failed))
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
-        if (targetChanged && isLogicalListeningState(state, isListeningEnabled())) {
-            audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
+        if (targetChanged) {
+            if (isLogicalListeningState(state, isListeningEnabled())) {
+                RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
+                audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
+            } else {
+                audioHandler.post { publishQuickTileSnapshotOnAudioThread(refreshTiles = true) }
+            }
         }
-        RecordingQuickTiles.requestRefresh(this)
         return ListeningCommandResult(accepted = true, generation = generation)
     }
 
@@ -398,11 +403,15 @@ class ReverbService : Service() {
                 recordRunning = recordRunning,
             )
         ) {
-            CaptureReaderTransition.IGNORE -> return
+            CaptureReaderTransition.IGNORE -> {
+                publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
+                return
+            }
             CaptureReaderTransition.RESTART -> startAudioInputOnAudioThread(generation)
             CaptureReaderTransition.ADOPT -> {
                 audioHandler.removeCallbacks(audioReader)
                 audioRecordGeneration = generation
+                publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
                 audioHandler.post(audioReader)
             }
         }
@@ -529,21 +538,18 @@ class ReverbService : Service() {
                 return false
             }
         }
+        val switchingWhileRecording = isLogicalListeningState(state, isListeningEnabled())
+        val previousActiveBuffer = activeBufferSlot
+        if (switchingWhileRecording) {
+            RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
+        }
         activeBufferSlot = bufferSlot
-        if (isLogicalListeningState(state, isListeningEnabled())) {
+        if (switchingWhileRecording) {
             val generation = listeningCommandGeneration.incrementAndGet()
             if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = generation
         }
-        if (notifyTiles) RecordingQuickTiles.requestRefresh(this)
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = notifyTiles)
         return true
-    }
-
-    private fun setQuickTileRecordingActive(
-        active: Boolean,
-        refreshTiles: Boolean = true,
-    ) {
-        recordingRuntimeCaptureActive = active
-        if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
     }
 
     private fun clearOneShotFullQuickTileCacheOnAudioThread() {
@@ -565,7 +571,7 @@ class ReverbService : Service() {
                 prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).apply()
             }
         }
-        if (refreshTiles) RecordingQuickTiles.requestRefresh(this)
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = refreshTiles)
     }
 
     private fun readConfiguredCaptureSnapshot(): RecorderConfigurationSnapshot {
@@ -743,7 +749,6 @@ class ReverbService : Service() {
             pauseListeningAfterForegroundStartFailure(generation, error)
             return
         }
-        RecordingQuickTiles.requestRefresh(this)
     }
 
     private fun pauseListeningAfterForegroundStartFailure(
@@ -770,10 +775,10 @@ class ReverbService : Service() {
             } finally {
                 releaseAudioRecord()
                 updateWakeLockState()
+                publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             }
         }
         updateWakeLockState()
-        setQuickTileRecordingActive(active = false)
         reportError(userFacingError(getString(R.string.audio_input_init_failed), error))
         requestServiceStopWhenExportIdle()
     }
@@ -834,7 +839,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
-        setQuickTileRecordingActive(active = true)
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
     }
 
@@ -851,7 +856,7 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
-            setQuickTileRecordingActive(active = false)
+            publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             try {
                 sealActiveChunks()
             } catch (error: Exception) {
@@ -1592,7 +1597,7 @@ class ReverbService : Service() {
                             loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
                         }
                     } else {
-                        RecordingQuickTiles.requestRefresh(this)
+                        publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
                     }
                 }
             }
@@ -1633,7 +1638,7 @@ class ReverbService : Service() {
         if (!persisted) {
             reportError(getString(R.string.recorder_state_persist_failed))
         }
-        setQuickTileRecordingActive(active = false)
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             requestServiceStopWhenExportIdle()
@@ -1651,6 +1656,13 @@ class ReverbService : Service() {
             }
         } catch (error: Exception) {
             pauseListeningAfterPersistenceFailure("periodic payload sync", error)
+            return
+        }
+        audioHandler.post {
+            publishQuickTileSnapshotOnAudioThread(
+                refreshTiles = true,
+                persistDurations = true,
+            )
         }
     }
 
@@ -1669,7 +1681,7 @@ class ReverbService : Service() {
                 .onFailure { sealError -> reportPersistentStoreFailure("seal after persistence failure", sealError) }
             releaseAudioRecord()
             updateWakeLockState()
-            setQuickTileRecordingActive(active = false)
+            publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             mainHandler.post {
                 if (state != STATE_LISTENING) requestServiceStopWhenExportIdle()
             }
@@ -1827,7 +1839,7 @@ class ReverbService : Service() {
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
         updateWakeLockState()
-        setQuickTileRecordingActive(active = false)
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         reportError(
             if (!persisted) getString(R.string.recorder_state_persist_failed)
             else if (error == null) message
@@ -1836,6 +1848,59 @@ class ReverbService : Service() {
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             requestServiceStopWhenExportIdle()
+        }
+    }
+
+    private fun runtimeCaptureActiveOnAudioThread(): Boolean {
+        check(audioHandler.looper == Looper.myLooper())
+        val record = audioRecord ?: return false
+        if (state != STATE_LISTENING || !isListeningEnabled()) return false
+        if (audioRecordGeneration != listeningCommandGeneration.get()) return false
+        return runCatching {
+            record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+        }.getOrDefault(false)
+    }
+
+    private fun buildRecordingTileSnapshotOnAudioThread(): RecordingTileSnapshot {
+        check(audioHandler.looper == Looper.myLooper())
+        return recordingTileSnapshot(
+            listeningIntentEnabled = isListeningEnabled(),
+            runtimeCaptureActive = runtimeCaptureActiveOnAudioThread(),
+            activeBuffer = activeBufferSlot,
+            oneShotEnabled = oneShotBufferEnabled,
+            oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
+            loopingEnabled = loopingBufferEnabled,
+            oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat(),
+            loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat(),
+        )
+    }
+
+    private fun publishQuickTileSnapshotOnAudioThread(
+        refreshTiles: Boolean,
+        persistDurations: Boolean = false,
+    ): RecordingTileSnapshot {
+        check(audioHandler.looper == Looper.myLooper())
+        val snapshot = try {
+            buildRecordingTileSnapshotOnAudioThread()
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to refresh quick tile snapshot", error)
+            RecordingQuickTileStateCache.read(this).copy(
+                listening = false,
+                activeBuffer = activeBufferSlot,
+                oneShotEnabled = oneShotBufferEnabled,
+                oneShotFull = false,
+                loopingEnabled = loopingBufferEnabled,
+            )
+        }
+        RecordingQuickTiles.publishSnapshot(this, snapshot, requestSystemRefresh = refreshTiles)
+        if (persistDurations) RecordingQuickTileStateCache.persistCurrentDurations(this)
+        return snapshot
+    }
+
+    internal fun getRecordingTileSnapshot(callback: (RecordingTileSnapshot) -> Unit) {
+        audioHandler.post {
+            val snapshot = publishQuickTileSnapshotOnAudioThread(refreshTiles = false)
+            mainHandler.post { callback(snapshot) }
         }
     }
 
@@ -1973,8 +2038,9 @@ class ReverbService : Service() {
             } finally {
                 if (bufferSlot == BufferSlot.ONE_SHOT) {
                     syncOneShotFullQuickTileOnAudioThread()
+                    RecordingQuickTileStateCache.persistCurrentDurations(this)
                 } else {
-                    RecordingQuickTiles.requestRefresh(this)
+                    publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
                 }
             }
         }
@@ -2060,8 +2126,8 @@ class ReverbService : Service() {
             runCatching { sealActiveChunks() }
             releaseAudioRecord()
             updateWakeLockState()
+            publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         }
-        setQuickTileRecordingActive(active = false)
         stopForegroundTracked()
         stopSelf()
     }
