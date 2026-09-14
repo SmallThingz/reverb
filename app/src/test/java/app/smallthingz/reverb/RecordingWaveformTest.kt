@@ -144,6 +144,36 @@ class RecordingWaveformTest {
         assertEquals(recordingWaveformRevision(base), recordingWaveformRevision(base.copy(displayName = "renamed.wav")))
         assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(fileIdentity = "stat:b")))
         assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(sizeBytes = 4_001L)))
+        val provider = base.copy(
+            id = "content://recording/7",
+            storageType = RecordingStorageType.MEDIASTORE.name,
+            fileIdentity = "provider:MEDIASTORE:old",
+        )
+        assertTrue(
+            recordingWaveformRevision(provider) != recordingWaveformRevision(
+                provider.copy(fileIdentity = "provider:MEDIASTORE:new"),
+            ),
+        )
+    }
+
+    @Test
+    fun waveformCacheValidationRejectsWrongRevisionMalformedPayloadAndMissingRows() {
+        val recording = RecordingEntity(
+            id = "id", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
+            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+        )
+        val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.25f })
+        val revision = recordingWaveformRevision(recording)
+
+        assertTrue(isValidRecordingWaveformCache(recording, encoded, revision))
+        assertFalse(isValidRecordingWaveformCache(recording, encoded, "stale"))
+        assertFalse(isValidRecordingWaveformCache(recording, "not-base64!", revision))
+        assertFalse(
+            isValidRecordingWaveformCache(
+                recording.copy(missingSinceMillis = 123L), encoded, revision,
+            ),
+        )
     }
 
     @Test

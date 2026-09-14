@@ -150,11 +150,13 @@ object RecordingRepository {
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
+                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val existing = dao.findById(recording.id)
                 val presentRecording = mergeObservedRecording(
-                    existing = null, observed = recording,
+                    existing = existing, observed = recording,
                     nowMillis = System.currentTimeMillis(),
                 )
-                RecordingDatabase.getInstance(context).recordingDao().upsert(presentRecording)
+                dao.upsert(presentRecording)
                 presentRecording
             }
         }
@@ -166,7 +168,7 @@ object RecordingRepository {
         waveformData: String,
         waveformRevision: String,
     ): Boolean {
-        if (waveformData.isBlank() || waveformRevision.isBlank()) return false
+        if (!isValidRecordingWaveformCache(recording, waveformData, waveformRevision)) return false
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 RecordingDatabase.getInstance(context).recordingDao().updateWaveformCache(
@@ -986,25 +988,66 @@ internal fun visibleCatalogRecordings(
     recording.id !in pendingDeletionIds && recording.missingSinceMillis == null
 }
 
+internal fun sameRecordingActionTarget(
+    previous: RecordingEntity,
+    current: RecordingEntity,
+): Boolean {
+    if (previous.id != current.id || previous.storageType != current.storageType) return false
+    val previousIdentity = previous.fileIdentity
+    val currentIdentity = current.fileIdentity
+    if (previousIdentity.isNotBlank() || currentIdentity.isNotBlank()) {
+        return previousIdentity.isNotBlank() && previousIdentity == currentIdentity
+    }
+    // Legacy/provider rows without a stable identity may still be displayed, but never carry a
+    // selection across a material metadata change that could indicate ID reuse.
+    return previous.sizeBytes == current.sizeBytes &&
+        previous.durationMillis == current.durationMillis &&
+        previous.startedAtMillis == current.startedAtMillis
+}
+
+internal fun observedRecordingIsSameAsset(
+    existing: RecordingEntity,
+    observed: RecordingEntity,
+): Boolean {
+    if (existing.id != observed.id || existing.storageType != observed.storageType) return false
+    val existingIdentity = existing.fileIdentity
+    val observedIdentity = observed.fileIdentity
+    return when (resolveRecordingStorageType(observed)) {
+        RecordingStorageType.FILE -> {
+            // FILE reads/destructive actions independently pin and verify the inode. A blank
+            // observation can therefore preserve a known identity across a transient stat failure.
+            existingIdentity.isBlank() || observedIdentity.isBlank() || existingIdentity == observedIdentity
+        }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> when {
+            existingIdentity.isBlank() -> true // One-time identity bootstrap / legacy row.
+            observedIdentity.isBlank() -> false // Existing provider identity can no longer be proven.
+            else -> existingIdentity == observedIdentity
+        }
+        null -> false
+    }
+}
+
 internal fun mergeObservedRecording(
     existing: RecordingEntity?,
     observed: RecordingEntity,
     nowMillis: Long,
 ): RecordingEntity {
+    val sameAsset = existing?.let { observedRecordingIsSameAsset(it, observed) } ?: false
+    val fallback = existing?.takeIf { sameAsset }
     val merged = observed.copy(
-        mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: existing?.mimeType.orEmpty(),
-        durationMillis = observed.durationMillis.takeIf { it > 0L } ?: existing?.durationMillis ?: 0L,
-        sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: existing?.sizeBytes ?: 0L,
-        codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: existing?.codecSummary.orEmpty(),
-        fileIdentity = when (resolveRecordingStorageType(observed)) {
-            RecordingStorageType.FILE -> observed.fileIdentity.takeIf { it.isNotBlank() } ?: existing?.fileIdentity.orEmpty()
-            RecordingStorageType.DOCUMENT,
-            RecordingStorageType.MEDIASTORE,
-            -> observed.fileIdentity
-            null -> ""
+        mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: fallback?.mimeType.orEmpty(),
+        durationMillis = observed.durationMillis.takeIf { it > 0L } ?: fallback?.durationMillis ?: 0L,
+        sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: fallback?.sizeBytes ?: 0L,
+        codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: fallback?.codecSummary.orEmpty(),
+        fileIdentity = when {
+            observed.fileIdentity.isNotBlank() -> observed.fileIdentity
+            sameAsset -> fallback?.fileIdentity.orEmpty()
+            else -> ""
         },
-        createdAtMillis = existing?.createdAtMillis ?: observed.createdAtMillis,
-        lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null) {
+        createdAtMillis = fallback?.createdAtMillis ?: observed.createdAtMillis,
+        lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null || !sameAsset) {
             nowMillis
         } else {
             existing.lastSeenAtMillis
@@ -1012,9 +1055,9 @@ internal fun mergeObservedRecording(
         missingSinceMillis = null,
     )
     val revision = recordingWaveformRevision(merged)
-    val preserveWaveform = existing?.waveformRevision == revision && existing.waveformData.isNotBlank()
+    val preserveWaveform = fallback?.waveformRevision == revision && fallback.waveformData.isNotBlank()
     return merged.copy(
-        waveformData = if (preserveWaveform) existing.waveformData else "",
+        waveformData = if (preserveWaveform) fallback.waveformData else "",
         waveformRevision = if (preserveWaveform) revision else "",
     )
 }

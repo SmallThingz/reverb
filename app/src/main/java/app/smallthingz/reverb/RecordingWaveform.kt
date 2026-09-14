@@ -27,6 +27,15 @@ internal fun recordingWaveformRevision(recording: RecordingEntity): String {
     }
 }
 
+internal fun isValidRecordingWaveformCache(
+    recording: RecordingEntity,
+    waveformData: String,
+    waveformRevision: String,
+): Boolean =
+    recording.missingSinceMillis == null &&
+        waveformRevision == recordingWaveformRevision(recording) &&
+        decodeRecordingWaveform(waveformData) != null
+
 internal fun encodeRecordingWaveform(values: FloatArray): String {
     if (values.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return ""
     val bytes = ByteArray(values.size) { index ->

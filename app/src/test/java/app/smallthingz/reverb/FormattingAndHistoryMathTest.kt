@@ -200,6 +200,125 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun recordingActionTarget_neverRetargetsSelectionAcrossIdentityReuse() {
+        val selected = RecordingEntity(
+            id = "path", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 10L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
+            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+        )
+        assertTrue(
+            sameRecordingActionTarget(
+                selected, selected.copy(waveformData = "cache", waveformRevision = "rev"),
+            ),
+        )
+        assertFalse(sameRecordingActionTarget(selected, selected.copy(fileIdentity = "stat:b")))
+        assertFalse(sameRecordingActionTarget(selected, selected.copy(fileIdentity = "")))
+
+        val legacy = selected.copy(fileIdentity = "")
+        assertTrue(sameRecordingActionTarget(legacy, legacy.copy(displayName = "renamed-label.wav")))
+        assertFalse(sameRecordingActionTarget(legacy, legacy.copy(sizeBytes = 2_002L)))
+        assertFalse(sameRecordingActionTarget(legacy, legacy.copy(durationMillis = 1_001L)))
+        assertFalse(sameRecordingActionTarget(legacy, legacy.copy(startedAtMillis = 11L)))
+    }
+
+    @Test
+    fun mergeObservedRecording_sameFileWithIncompleteInspectionPreservesKnownMetadata() {
+        val existing = RecordingEntity(
+            id = "path", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            directoryId = "dir", fileIdentity = "stat:dev:ino:ctime", createdAtMillis = 10L,
+            lastSeenAtMillis = 20L,
+        )
+        val observed = existing.copy(
+            mimeType = "", durationMillis = 0L, sizeBytes = 0L, codecSummary = "",
+            fileIdentity = "", createdAtMillis = 999L, lastSeenAtMillis = 999L,
+        )
+
+        val merged = mergeObservedRecording(existing, observed, nowMillis = 40L)
+
+        assertTrue(observedRecordingIsSameAsset(existing, observed))
+        assertEquals(existing.mimeType, merged.mimeType)
+        assertEquals(existing.durationMillis, merged.durationMillis)
+        assertEquals(existing.sizeBytes, merged.sizeBytes)
+        assertEquals(existing.codecSummary, merged.codecSummary)
+        assertEquals(existing.fileIdentity, merged.fileIdentity)
+        assertEquals(existing.createdAtMillis, merged.createdAtMillis)
+        assertEquals(existing.lastSeenAtMillis, merged.lastSeenAtMillis)
+    }
+
+    @Test
+    fun mergeObservedRecording_replacedFileDoesNotInheritOldMetadataOrWaveform() {
+        val base = RecordingEntity(
+            id = "path", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            directoryId = "dir", fileIdentity = "stat:old", createdAtMillis = 10L, lastSeenAtMillis = 20L,
+        )
+        val cached = base.copy(
+            waveformData = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.5f }),
+            waveformRevision = recordingWaveformRevision(base),
+        )
+        val replacement = base.copy(
+            mimeType = "", durationMillis = 0L, sizeBytes = 0L, codecSummary = "",
+            fileIdentity = "stat:new", createdAtMillis = 777L, lastSeenAtMillis = 777L,
+            waveformData = "", waveformRevision = "",
+        )
+
+        val merged = mergeObservedRecording(cached, replacement, nowMillis = 888L)
+
+        assertFalse(observedRecordingIsSameAsset(cached, replacement))
+        assertEquals("", merged.mimeType)
+        assertEquals(0L, merged.durationMillis)
+        assertEquals(0L, merged.sizeBytes)
+        assertEquals("", merged.codecSummary)
+        assertEquals("stat:new", merged.fileIdentity)
+        assertEquals(777L, merged.createdAtMillis)
+        assertEquals(888L, merged.lastSeenAtMillis)
+        assertEquals("", merged.waveformData)
+        assertEquals("", merged.waveformRevision)
+    }
+
+    @Test
+    fun observedRecordingIdentity_detectsProviderRevisionReplacement() {
+        val existing = RecordingEntity(
+            id = "content://recording/7", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "PCM",
+            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "media-dir",
+            fileIdentity = "provider:MEDIASTORE:old",
+        )
+        val same = existing.copy()
+        val replaced = existing.copy(fileIdentity = "provider:MEDIASTORE:new")
+        val identityUnavailable = existing.copy(fileIdentity = "")
+
+        assertTrue(observedRecordingIsSameAsset(existing, same))
+        assertFalse(observedRecordingIsSameAsset(existing, replaced))
+        assertFalse(observedRecordingIsSameAsset(existing, identityUnavailable))
+        assertTrue(observedRecordingIsSameAsset(existing.copy(fileIdentity = ""), same))
+    }
+
+    @Test
+    fun mergeObservedRecording_storageTypeChangeDoesNotCarryFileIdentity() {
+        val existing = RecordingEntity(
+            id = "same-id", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2L, sizeBytes = 4L, codecSummary = "PCM",
+            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:file",
+        )
+        val observed = existing.copy(
+            storageType = RecordingStorageType.MEDIASTORE.name,
+            fileIdentity = "",
+            createdAtMillis = 999L,
+        )
+
+        val merged = mergeObservedRecording(existing, observed, nowMillis = 1_000L)
+
+        assertFalse(observedRecordingIsSameAsset(existing, observed))
+        assertEquals("", merged.fileIdentity)
+        assertEquals(999L, merged.createdAtMillis)
+        assertEquals(1_000L, merged.lastSeenAtMillis)
+    }
+
+    @Test
     fun mergeObservedRecording_doesNotRewriteHealthyLastSeenTimestamp() {
         val existing = RecordingEntity(
             id = "id",

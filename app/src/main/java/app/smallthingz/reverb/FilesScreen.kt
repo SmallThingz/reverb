@@ -159,18 +159,30 @@ fun FilesScreen(
         syncSelectionActive()
     }
 
-    fun reconcileTransientRecordings(storedById: Map<String, RecordingEntity>) {
-        contextMenuRecordingId = contextMenuRecordingId?.takeIf { it in storedById }
-        renameRecording = renameRecording?.let { storedById[it.id] }
+    fun reconcileTransientRecordings(
+        previousById: Map<String, RecordingEntity>,
+        storedById: Map<String, RecordingEntity>,
+    ) {
+        fun retainId(id: String?): String? {
+            id ?: return null
+            val previous = previousById[id] ?: return null
+            val current = storedById[id] ?: return null
+            return id.takeIf { sameRecordingActionTarget(previous, current) }
+        }
+
+        contextMenuRecordingId = retainId(contextMenuRecordingId)
+        renameRecording = renameRecording?.let { previous ->
+            storedById[previous.id]?.takeIf { current -> sameRecordingActionTarget(previous, current) }
+        }
         if (renameRecording == null) showRenameDialog = false
-        infoRecording = infoRecording?.let { storedById[it.id] }
+        infoRecording = infoRecording?.let { previous ->
+            storedById[previous.id]?.takeIf { current -> sameRecordingActionTarget(previous, current) }
+        }
         if (infoRecording == null) showInfoDialog = false
-        setExpandedRecording(expandedRecordingId?.takeIf { it in storedById })
-        trimRequestRecordingId = retainedTrimRequestRecordingId(
-            expandedRecordingId = expandedRecordingId,
-            trimRequestRecordingId = trimRequestRecordingId,
-            availableRecordingIds = storedById.keys,
-        )
+
+        val retainedExpandedId = retainId(expandedRecordingId)
+        setExpandedRecording(retainedExpandedId)
+        trimRequestRecordingId = retainId(trimRequestRecordingId)?.takeIf { it == retainedExpandedId }
     }
 
     fun refresh(showSpinner: Boolean = true) {
@@ -180,16 +192,21 @@ fun FilesScreen(
             try {
                 val stored = RecordingRepository.refresh(context)
                 if (generation != refreshGeneration[0]) return@launch
+                val previousById = recordings.associateBy { it.id }
                 recordings = stored
                 hasLoaded = true
                 val storedById = stored.associateBy { it.id }
                 selectedIds.keys.toList().forEach { id ->
+                    val previous = selectedIds[id]
                     val updated = storedById[id]
-                    if (updated == null) selectedIds.remove(id)
-                    else if (selectedIds[id] != updated) selectedIds[id] = updated
+                    if (previous == null || updated == null || !sameRecordingActionTarget(previous, updated)) {
+                        selectedIds.remove(id)
+                    } else if (previous != updated) {
+                        selectedIds[id] = updated
+                    }
                 }
                 syncSelectionActive()
-                reconcileTransientRecordings(storedById)
+                reconcileTransientRecordings(previousById, storedById)
                 if (deletionsCommittedInBackground) {
                     pendingDeletions.clear()
                     deletionsCommittedInBackground = false
@@ -216,16 +233,21 @@ fun FilesScreen(
 
     LaunchedEffect(initialRecordings) {
         if (pendingDeletions.isEmpty() && initialRecordings != recordings) {
+            val previousById = recordings.associateBy { it.id }
             recordings = initialRecordings
             hasLoaded = true
             val currentById = initialRecordings.associateBy { it.id }
             selectedIds.keys.toList().forEach { id ->
+                val previous = selectedIds[id]
                 val updated = currentById[id]
-                if (updated == null) selectedIds.remove(id)
-                else if (selectedIds[id] != updated) selectedIds[id] = updated
+                if (previous == null || updated == null || !sameRecordingActionTarget(previous, updated)) {
+                    selectedIds.remove(id)
+                } else if (previous != updated) {
+                    selectedIds[id] = updated
+                }
             }
             syncSelectionActive()
-            reconcileTransientRecordings(currentById)
+            reconcileTransientRecordings(previousById, currentById)
         }
     }
 
@@ -644,10 +666,19 @@ fun FilesScreen(
                                         onTrimSaved = { refresh(showSpinner = false) },
                                         onWaveformCached = { cached ->
                                             recordings = recordings.map { current ->
-                                                if (current.id == cached.id) current.copy(
-                                                    waveformData = cached.waveformData,
-                                                    waveformRevision = cached.waveformRevision,
-                                                ) else current
+                                                if (
+                                                    current.id == cached.id &&
+                                                    isValidRecordingWaveformCache(
+                                                        current, cached.waveformData, cached.waveformRevision,
+                                                    )
+                                                ) {
+                                                    current.copy(
+                                                        waveformData = cached.waveformData,
+                                                        waveformRevision = cached.waveformRevision,
+                                                    )
+                                                } else {
+                                                    current
+                                                }
                                             }
                                         },
                                         onPlaybackFailed = {

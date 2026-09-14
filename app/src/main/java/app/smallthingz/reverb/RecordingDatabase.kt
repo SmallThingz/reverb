@@ -32,6 +32,8 @@ data class RecordingEntity(
 interface RecordingDao {
     suspend fun listAll(): List<RecordingEntity>
 
+    suspend fun findById(id: String): RecordingEntity?
+
     suspend fun listByDirectory(directoryId: String): List<RecordingEntity>
 
     suspend fun upsert(recording: RecordingEntity)
@@ -102,6 +104,19 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             ).use(::readRecordings)
         }
 
+        override suspend fun findById(id: String): RecordingEntity? {
+            return readableDatabase.query(
+                TABLE_RECORDINGS,
+                null,
+                "$COLUMN_ID = ?",
+                arrayOf(id),
+                null,
+                null,
+                null,
+                "1",
+            ).use(::readRecordings).firstOrNull()
+        }
+
         override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> {
             return readableDatabase.query(
                 TABLE_RECORDINGS,
@@ -130,10 +145,12 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             return writableDatabase.update(
                 TABLE_RECORDINGS,
                 values,
-                "$COLUMN_ID = ? AND $COLUMN_FILE_IDENTITY = ? AND $COLUMN_SIZE_BYTES = ? AND " +
-                    "$COLUMN_DURATION_MILLIS = ?",
+                "$COLUMN_ID = ? AND $COLUMN_STORAGE_TYPE = ? AND $COLUMN_FILE_IDENTITY = ? AND " +
+                    "$COLUMN_SIZE_BYTES = ? AND $COLUMN_DURATION_MILLIS = ? AND " +
+                    "$COLUMN_MISSING_SINCE_MILLIS IS NULL",
                 arrayOf(
                     recording.id,
+                    recording.storageType,
                     recording.fileIdentity,
                     recording.sizeBytes.toString(),
                     recording.durationMillis.toString(),
