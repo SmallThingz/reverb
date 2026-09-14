@@ -175,6 +175,22 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun mergeObservedRecording_clearsProviderWaveformWhenRevisionCannotBeProven() {
+        val existing = RecordingEntity(
+            id = "content://media/1", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 500L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
+            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
+            fileIdentity = "provider:MEDIASTORE:x:2000:9",
+            waveformData = "cached", waveformRevision = "revision",
+        )
+        val observed = existing.copy(fileIdentity = "", waveformData = "", waveformRevision = "")
+        val merged = mergeObservedRecording(existing, observed, nowMillis = 40L)
+        assertEquals("", merged.fileIdentity)
+        assertEquals("", merged.waveformData)
+        assertEquals("", merged.waveformRevision)
+    }
+
+    @Test
     fun mergeObservedRecording_doesNotRewriteHealthyLastSeenTimestamp() {
         val existing = RecordingEntity(
             id = "id",

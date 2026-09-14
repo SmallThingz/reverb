@@ -60,6 +60,11 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> id.toUri().also { candidate ->
+            val expectedIdentity = source.getStringExtra("recording_file_identity").orEmpty()
+            if (expectedIdentity.isNotBlank()) {
+                val currentIdentity = resolveProviderRecordingIdentity(context, storage, candidate)
+                if (currentIdentity.isBlank() || currentIdentity != expectedIdentity) return null
+            }
             val readable = runCatching {
                 context.contentResolver.openFileDescriptor(candidate, "r")?.use { true } ?: false
             }.getOrDefault(false)

@@ -12,16 +12,19 @@ import kotlin.math.abs
 
 private const val RECORDING_WAVEFORM_CACHE_VERSION = 1
 
-internal fun recordingWaveformRevision(recording: RecordingEntity): String = buildString {
-    append(RECORDING_WAVEFORM_CACHE_VERSION)
-    append('|')
-    append(recording.storageType)
-    append('|')
-    append(recording.fileIdentity.ifBlank { recording.id })
-    append('|')
-    append(recording.sizeBytes)
-    append('|')
-    append(recording.durationMillis)
+internal fun recordingWaveformRevision(recording: RecordingEntity): String {
+    val identity = recording.fileIdentity.takeIf { it.isNotBlank() } ?: return ""
+    return buildString {
+        append(RECORDING_WAVEFORM_CACHE_VERSION)
+        append('|')
+        append(recording.storageType)
+        append('|')
+        append(identity)
+        append('|')
+        append(recording.sizeBytes)
+        append('|')
+        append(recording.durationMillis)
+    }
 }
 
 internal fun encodeRecordingWaveform(values: FloatArray): String {

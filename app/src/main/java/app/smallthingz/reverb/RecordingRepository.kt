@@ -996,7 +996,13 @@ internal fun mergeObservedRecording(
         durationMillis = observed.durationMillis.takeIf { it > 0L } ?: existing?.durationMillis ?: 0L,
         sizeBytes = observed.sizeBytes.takeIf { it > 0L } ?: existing?.sizeBytes ?: 0L,
         codecSummary = observed.codecSummary.takeIf { it.isNotBlank() } ?: existing?.codecSummary.orEmpty(),
-        fileIdentity = observed.fileIdentity.takeIf { it.isNotBlank() } ?: existing?.fileIdentity.orEmpty(),
+        fileIdentity = when (resolveRecordingStorageType(observed)) {
+            RecordingStorageType.FILE -> observed.fileIdentity.takeIf { it.isNotBlank() } ?: existing?.fileIdentity.orEmpty()
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> observed.fileIdentity
+            null -> ""
+        },
         createdAtMillis = existing?.createdAtMillis ?: observed.createdAtMillis,
         lastSeenAtMillis = if (existing == null || existing.missingSinceMillis != null) {
             nowMillis

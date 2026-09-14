@@ -172,7 +172,12 @@ fun buildRecordingUri(
 
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> recording.id.toUri()
+        -> {
+            check(recordingContentIdentityMatches(context, recording)) {
+                "Recording changed in provider: ${recording.id}"
+            }
+            recording.id.toUri()
+        }
         null -> throw IllegalArgumentException("Unknown recording storage type: ${recording.storageType}")
     }
 }
@@ -816,22 +821,95 @@ fun buildRecordingEntity(
     codecSummary: String,
     knownSizeBytes: Long? = null,
 ): RecordingEntity {
+    val sizeBytes = knownSizeBytes?.takeIf { it > 0L } ?: resolveOutputTargetSize(context, target)
+    val identity = when (target.storageType) {
+        RecordingStorageType.FILE -> target.file?.let(::resolveFileIdentity).orEmpty()
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> target.uri?.let { resolveProviderRecordingIdentity(context, target.storageType, it) }.orEmpty()
+    }
     return RecordingEntity(
         id = target.id,
         displayName = target.displayName,
         mimeType = target.mimeType,
         startedAtMillis = target.startedAtMillis,
         durationMillis = durationMillis,
-        sizeBytes = knownSizeBytes?.takeIf { it > 0L } ?: resolveOutputTargetSize(context, target),
+        sizeBytes = sizeBytes,
         codecSummary = codecSummary,
         storageType = target.storageType.name,
         directoryId = target.directoryId,
-        fileIdentity = if (target.storageType == RecordingStorageType.FILE) {
-            target.file?.let(::resolveFileIdentity).orEmpty()
-        } else {
-            ""
-        },
+        fileIdentity = identity,
     )
+}
+
+internal fun providerRecordingIdentity(
+    storageType: RecordingStorageType,
+    id: String,
+    sizeBytes: Long,
+    revisionToken: Long,
+): String {
+    if (storageType == RecordingStorageType.FILE || id.isBlank()) return ""
+    if (revisionToken <= 0L) return ""
+    val encodedId = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(id.toByteArray(Charsets.UTF_8))
+    return "provider:${storageType.name}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
+}
+
+internal fun resolveProviderRecordingIdentity(
+    context: Context,
+    storageType: RecordingStorageType,
+    uri: Uri,
+): String = when (storageType) {
+    RecordingStorageType.FILE -> ""
+    RecordingStorageType.DOCUMENT -> {
+        val document = runCatching { DocumentFile.fromSingleUri(context, uri) }.getOrNull() ?: return ""
+        providerRecordingIdentity(
+            storageType = storageType,
+            id = uri.toString(),
+            sizeBytes = document.length().coerceAtLeast(0L),
+            revisionToken = document.lastModified().coerceAtLeast(0L),
+        )
+    }
+    RecordingStorageType.MEDIASTORE -> runCatching {
+        val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        val projection = if (useGeneration) {
+            arrayOf(
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.GENERATION_MODIFIED,
+            )
+        } else {
+            arrayOf(MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED)
+        }
+        context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use ""
+            val sizeBytes = cursor.getLong(0).coerceAtLeast(0L)
+            val modifiedSeconds = cursor.getLong(1).coerceAtLeast(0L)
+            val revision = if (useGeneration) cursor.getLong(2).coerceAtLeast(0L) else 0L
+            val fallbackRevision = if (modifiedSeconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE
+            else modifiedSeconds * 1000L
+            providerRecordingIdentity(
+                storageType,
+                uri.toString(),
+                sizeBytes,
+                revision.takeIf { it > 0L } ?: fallbackRevision,
+            )
+        } ?: ""
+    }.getOrDefault("")
+}
+
+internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
+    return when (val storageType = resolveRecordingStorageType(recording)) {
+        RecordingStorageType.FILE -> recordingFileIdentityMatches(recording)
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> {
+            if (recording.fileIdentity.isBlank()) return true
+            val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
+            current.isNotBlank() && current == recording.fileIdentity
+        }
+        null -> false
+    }
 }
 
 internal fun resolveFileIdentity(file: File): String {
@@ -1501,10 +1579,15 @@ private fun listDocumentTreeRecordings(
             val uri = file.uri
             val name = file.name ?: return@mapNotNull null
             val size = file.length().coerceAtLeast(0L)
+            val modifiedMillis = file.lastModified().coerceAtLeast(0L)
+            val identity = providerRecordingIdentity(
+                RecordingStorageType.DOCUMENT, uri.toString(), size, modifiedMillis,
+            )
             val existing = knownRecordings[uri.toString()]
             if (
-                existing != null && existing.durationMillis > 0L && existing.displayName == name &&
-                (size == 0L || existing.sizeBytes == size)
+                identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
+                existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
+                existing.fileIdentity == identity
             ) {
                 existing
             } else {
@@ -1526,6 +1609,7 @@ private fun listDocumentTreeRecordings(
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.DOCUMENT.name,
                     directoryId = treeUri.toString(),
+                    fileIdentity = identity,
                 )
             }
         }
@@ -1540,15 +1624,17 @@ private fun listMediaStoreRecordings(
     if (!usesMediaStoreDefaultStorage()) return emptyList()
     val resolver = context.contentResolver
     val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-    val projection = arrayOf(
-        MediaStore.MediaColumns._ID,
-        MediaStore.MediaColumns.DISPLAY_NAME,
-        MediaStore.MediaColumns.MIME_TYPE,
-        MediaStore.MediaColumns.SIZE,
-        MediaStore.MediaColumns.DATE_MODIFIED,
-        MediaStore.Audio.AudioColumns.DURATION,
-        MediaStore.MediaColumns.IS_PENDING,
-    )
+    val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    val projection = buildList {
+        add(MediaStore.MediaColumns._ID)
+        add(MediaStore.MediaColumns.DISPLAY_NAME)
+        add(MediaStore.MediaColumns.MIME_TYPE)
+        add(MediaStore.MediaColumns.SIZE)
+        add(MediaStore.MediaColumns.DATE_MODIFIED)
+        add(MediaStore.Audio.AudioColumns.DURATION)
+        if (useGeneration) add(MediaStore.MediaColumns.GENERATION_MODIFIED)
+        add(MediaStore.MediaColumns.IS_PENDING)
+    }.toTypedArray()
     return runCatching {
         resolver.query(
             collection,
@@ -1563,6 +1649,9 @@ private fun listMediaStoreRecordings(
             val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
             val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
             val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DURATION)
+            val generationIndex = if (useGeneration) {
+                cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.GENERATION_MODIFIED)
+            } else -1
             val pendingIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
             buildList {
                 while (cursor.moveToNext()) {
@@ -1572,7 +1661,10 @@ private fun listMediaStoreRecordings(
                     val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
                     val pending = cursor.getInt(pendingIndex) != 0
                     val reportedDuration = cursor.getLong(durationIndex).coerceAtLeast(0L)
-                    val modifiedMillis = cursor.getLong(modifiedIndex).coerceAtLeast(0L) * 1000L
+                    val modifiedSeconds = cursor.getLong(modifiedIndex).coerceAtLeast(0L)
+                    val modifiedMillis = if (modifiedSeconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE
+                    else modifiedSeconds * 1000L
+                    val generation = if (generationIndex >= 0) cursor.getLong(generationIndex).coerceAtLeast(0L) else 0L
                     val mimeType = cursor.getString(mimeIndex) ?: guessMimeType(storedName)
 
                     var name = storedName
@@ -1641,10 +1733,18 @@ private fun listMediaStoreRecordings(
                     }
 
                     val id = uri.toString()
+                    val identity = if (pending) {
+                        resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
+                    } else {
+                        providerRecordingIdentity(
+                            RecordingStorageType.MEDIASTORE, id, size, generation.takeIf { it > 0L } ?: modifiedMillis,
+                        )
+                    }
                     val existing = knownRecordings[id]
                     if (
-                        existing != null && existing.durationMillis > 0L &&
-                        existing.displayName == name && (size == 0L || existing.sizeBytes == size)
+                        identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
+                        existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
+                        existing.fileIdentity == identity
                     ) {
                         add(existing)
                         continue
@@ -1666,6 +1766,7 @@ private fun listMediaStoreRecordings(
                             ),
                             storageType = RecordingStorageType.MEDIASTORE.name,
                             directoryId = MEDIA_STORE_DIRECTORY_ID,
+                            fileIdentity = identity,
                         ),
                     )
                 }
@@ -2002,8 +2103,14 @@ private fun renameMediaStoreRecording(
     if (uniqueName == recording.displayName) return@runCatching recording
     val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName) }
     if (context.contentResolver.update(uri, values, null, null) <= 0) return@runCatching null
-    recording.copy(
+    val renamed = recording.copy(
         displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
+        fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri),
+    )
+    renamed.copy(
+        waveformRevision = if (renamed.waveformData.isNotBlank() && renamed.fileIdentity.isNotBlank()) {
+            recordingWaveformRevision(renamed)
+        } else "",
     )
 }.onFailure { Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", it) }.getOrNull()
 
@@ -2023,9 +2130,15 @@ private fun renameDocumentRecording(
         }
         val renamedUri = DocumentsContract.renameDocument(context.contentResolver, document.uri, uniqueName)
             ?: return@runCatching null
-        recording.copy(
+        val renamed = recording.copy(
             id = renamedUri.toString(),
             displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
+            fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri),
+        )
+        renamed.copy(
+            waveformRevision = if (renamed.waveformData.isNotBlank() && renamed.fileIdentity.isNotBlank()) {
+                recordingWaveformRevision(renamed)
+            } else "",
         )
     }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
 }

@@ -146,6 +146,34 @@ class RecordingWaveformTest {
         assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(sizeBytes = 4_001L)))
     }
 
+    @Test
+    fun providerIdentity_requiresTrustworthyRevisionAndChangesWithContentRevision() {
+        val first = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 10L,
+        )
+        assertTrue(first.isNotBlank())
+        assertEquals(first, providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 10L,
+        ))
+        assertTrue(first != providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 11L,
+        ))
+        assertEquals("", providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/1", 4_000L, 0L,
+        ))
+    }
+
+    @Test
+    fun waveformCache_isDisabledWithoutPhysicalOrProviderIdentity() {
+        val provider = RecordingEntity(
+            id = "content://media/1", displayName = "clip.wav", mimeType = "audio/wav",
+            startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
+            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
+        )
+        assertEquals("", recordingWaveformRevision(provider))
+        assertTrue(recordingWaveformRevision(provider.copy(fileIdentity = "provider:MEDIASTORE:x:4000:9")).isNotBlank())
+    }
+
     private fun writePcm16Wav(sampleRate: Int, samples: ShortArray): File {
         val payload = ByteArray(samples.size * 2)
         samples.forEachIndexed { index, sample ->

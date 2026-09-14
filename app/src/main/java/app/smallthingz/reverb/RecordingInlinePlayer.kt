@@ -284,7 +284,9 @@ internal fun RecordingInlinePlayer(
     LaunchedEffect(recordingRevisionKey) {
         waveformMorphStarted = true
         val expectedRevision = recordingWaveformRevision(recording)
-        val cachedDetail = if (recording.waveformRevision == expectedRevision) {
+        val cachedDetail = if (
+            expectedRevision.isNotBlank() && recording.waveformRevision == expectedRevision
+        ) {
             decodeRecordingWaveform(recording.waveformData)
         } else {
             null
