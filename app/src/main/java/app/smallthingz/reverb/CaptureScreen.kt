@@ -410,9 +410,13 @@ fun CaptureScreen(
                 )
             }
         }
+        // LifecycleRegistry catches newly added observers up to the current state
+        // synchronously. Do not let that catch-up ON_START bypass the deliberate first-frame
+        // bind below; real later starts occur after addObserver returns.
+        var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> bindIfNeeded()
+                Lifecycle.Event.ON_START -> if (observerInstalled) bindIfNeeded()
 
                 Lifecycle.Event.ON_STOP -> {
                     rangeSnapshot?.close()
@@ -436,6 +440,7 @@ fun CaptureScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        observerInstalled = true
         val initialBind = Runnable { bindIfNeeded() }
         view.postOnAnimation(initialBind)
         onDispose {
@@ -1543,6 +1548,23 @@ private fun BufferSegment(
 }
 
 @Composable
+private fun rememberConfiguredRetentionMode(context: Context): RetentionMode {
+    val appContext = context.applicationContext
+    var mode by remember(appContext) { mutableStateOf(getConfiguredRetentionMode(appContext)) }
+    DisposableEffect(appContext) {
+        val prefs = getRecorderPreferences(appContext)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PrefKey.RETENTION_MODE.name) {
+                mode = getConfiguredRetentionMode(appContext)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    return mode
+}
+
+@Composable
 internal fun BufferBlobPage(
     bufferSlot: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
@@ -1566,7 +1588,7 @@ internal fun BufferBlobPage(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val retentionMode = getConfiguredRetentionMode(context)
+    val retentionMode = rememberConfiguredRetentionMode(context)
     val uiState = captureBufferUiState(
         bufferSlot = bufferSlot,
         enabled = bufferEnabled,

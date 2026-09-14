@@ -104,6 +104,8 @@ private data class LibraryNotice(
     val canUndo: Boolean = false,
 )
 
+private val RENAME_ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
+
 @Composable
 fun FilesScreen(
     modifier: Modifier = Modifier,
@@ -365,8 +367,13 @@ fun FilesScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, active) {
+        // LifecycleRegistry synchronously catches a newly added observer up to the current
+        // state. Ignore that synthetic/catch-up ON_RESUME: LaunchedEffect(active) owns the
+        // first-open DB-first, frame-first, delayed reconciliation path. Real later resumes
+        // happen after addObserver returns and still refresh immediately.
+        var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
-            if (active && event == Lifecycle.Event.ON_RESUME) {
+            if (active && observerInstalled && event == Lifecycle.Event.ON_RESUME) {
                 refresh(showSpinner = false)
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
@@ -375,6 +382,7 @@ fun FilesScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        observerInstalled = true
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (active) {
@@ -944,7 +952,6 @@ private fun RenameRecordingDialog(
     }
     var error by remember(recording.id) { mutableStateOf<String?>(null) }
     var isRenaming by remember(recording.id) { mutableStateOf(false) }
-    val illegalChars = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
 
     fun validateAndRename(trimmed: String) {
         if (isRenaming) return
@@ -952,7 +959,7 @@ private fun RenameRecordingDialog(
             error = resources.getString(R.string.rename_recording_invalid)
             return
         }
-        if (trimmed.any { it in illegalChars }) {
+        if (trimmed.any { it in RENAME_ILLEGAL_FILENAME_CHARS }) {
             error = resources.getString(R.string.rename_recording_illegal_chars)
             return
         }

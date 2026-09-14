@@ -155,6 +155,8 @@ internal fun shouldInvalidateCachedOneShotFull(
     }
 }
 
+private val RETENTION_MODE_OPTIONS = listOf(RetentionMode.TIME, RetentionMode.SIZE)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -753,12 +755,16 @@ fun SettingsScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
+        // The initial value was read above during composition. Ignore LifecycleRegistry's
+        // synchronous catch-up ON_RESUME and refresh only on later real resumes.
+        var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
+            if (observerInstalled && event == Lifecycle.Event.ON_RESUME) {
                 refreshBatteryOptimizationUi()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        observerInstalled = true
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
@@ -1417,16 +1423,15 @@ private fun RetentionModeSelector(
     activeMode: RetentionMode,
     onModeSelected: (RetentionMode) -> Unit,
 ) {
-    val modes = listOf(RetentionMode.TIME, RetentionMode.SIZE)
     SettingsSegmentedControl(
-        itemCount = modes.size,
-        selectedIndex = modes.indexOf(activeMode),
-        onSelected = { onModeSelected(modes[it]) },
+        itemCount = RETENTION_MODE_OPTIONS.size,
+        selectedIndex = RETENTION_MODE_OPTIONS.indexOf(activeMode),
+        onSelected = { onModeSelected(RETENTION_MODE_OPTIONS[it]) },
         modifier = Modifier.width(126.dp),
     ) { index, contentColor ->
         Text(
             text = stringResource(
-                if (modes[index] == RetentionMode.TIME) R.string.retention_time_label
+                if (RETENTION_MODE_OPTIONS[index] == RetentionMode.TIME) R.string.retention_time_label
                 else R.string.retention_size_mode_label,
             ),
             style = MaterialTheme.typography.bodyMedium,

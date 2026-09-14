@@ -1993,29 +1993,6 @@ private fun publishMediaStoreUri(context: Context, uri: Uri) {
     }
 }
 
-internal enum class RecoverableDirectoryState {
-    HAS_RECORDINGS,
-    EMPTY_OF_RECORDINGS,
-    UNAVAILABLE,
-}
-
-internal fun inspectRecoverableDocumentDirectory(
-    context: Context,
-    treeUri: Uri,
-): RecoverableDirectoryState {
-    return try {
-        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return RecoverableDirectoryState.UNAVAILABLE
-        if (tree.listFiles().any { it.isFile && isSupportedRecordingName(it.name.orEmpty()) }) {
-            RecoverableDirectoryState.HAS_RECORDINGS
-        } else {
-            RecoverableDirectoryState.EMPTY_OF_RECORDINGS
-        }
-    } catch (error: Exception) {
-        Log.w(TAG, "Unable to inspect recording directory $treeUri", error)
-        RecoverableDirectoryState.UNAVAILABLE
-    }
-}
-
 internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGING_OUTPUT_PREFIX)
 
 internal fun isSupportedRecordingName(name: String): Boolean =
@@ -2059,9 +2036,6 @@ internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = 
 
 internal fun isStagingOutputFromSession(name: String, sessionId: String): Boolean =
     parseStagingOutputMetadata(name)?.sessionId == sessionId
-
-internal fun isCurrentProcessStagingOutput(name: String): Boolean =
-    isStagingOutputFromSession(name, OUTPUT_STAGING_SESSION_ID)
 
 internal fun shouldRecoverStagingOutput(
     metadata: StagingOutputMetadata?,
