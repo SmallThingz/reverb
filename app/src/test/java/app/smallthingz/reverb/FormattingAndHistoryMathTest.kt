@@ -31,6 +31,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun deletionBatch_reportsAnyPartialFailure() {
+        assertFalse(deletionBatchFailed(requestedCount = 3, deletedCount = 3, hadError = false))
+        assertTrue(deletionBatchFailed(requestedCount = 3, deletedCount = 2, hadError = false))
+        assertTrue(deletionBatchFailed(requestedCount = 1, deletedCount = 0, hadError = false))
+        assertTrue(deletionBatchFailed(requestedCount = 3, deletedCount = 3, hadError = true))
+    }
+
+    @Test
     fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
         val steps = recordingDatabaseMigrationSteps(1, 2)
         assertEquals(

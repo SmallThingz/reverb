@@ -93,6 +93,9 @@ internal fun retainedTrimRequestRecordingId(
     id == expandedRecordingId && id in availableRecordingIds
 }
 
+internal fun deletionBatchFailed(requestedCount: Int, deletedCount: Int, hadError: Boolean): Boolean =
+    hadError || deletedCount < requestedCount
+
 private data class LibraryNotice(
     val message: String,
     val tone: FeedbackTone,
@@ -313,7 +316,7 @@ fun FilesScreen(
         }
         pendingDeletions.clear()
         deletionsCommittedInBackground = false
-        if (failed || deleted == 0) {
+        if (deletionBatchFailed(pending.size, deleted, failed)) {
             notice = LibraryNotice(
                 resources.getString(R.string.recording_delete_failed),
                 FeedbackTone.ERROR,
