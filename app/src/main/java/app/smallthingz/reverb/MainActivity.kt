@@ -91,8 +91,11 @@ internal fun panelRevealProgress(dragDistancePx: Float, viewportHeightPx: Float)
 internal fun shouldCommitPanelReveal(progress: Float): Boolean =
     progress.coerceIn(0f, 1f) >= PANEL_COMMIT_PROGRESS
 
-internal fun shouldComposeMainPanel(visible: Boolean, progress: Float): Boolean =
-    visible || progress > 0f
+internal fun shouldComposeMainPanel(
+    previouslyComposed: Boolean,
+    visible: Boolean,
+    progress: Float,
+): Boolean = previouslyComposed || visible || progress > 0f
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
@@ -831,6 +834,8 @@ private fun MainScreen(
     }
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
+    val settingsCompositionRetained = remember { booleanArrayOf(false) }
+    val libraryCompositionRetained = remember { booleanArrayOf(false) }
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
@@ -867,7 +872,14 @@ private fun MainScreen(
     val libraryContentTopPadding = libraryTopPadding + AppTopBarContentHeight
 
     Box(Modifier.fillMaxSize()) {
-        if (shouldComposeMainPanel(showSettings, settingsPanelProgress)) {
+        if (
+            shouldComposeMainPanel(
+                previouslyComposed = settingsCompositionRetained[0],
+                visible = showSettings || settingsDragging,
+                progress = settingsPanelProgress,
+            )
+        ) {
+            settingsCompositionRetained[0] = true
             SettingsScreen(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1016,7 +1028,14 @@ private fun MainScreen(
                 .padding(bottom = if (showSettings) 20.dp else 104.dp),
         )
 
-        if (shouldComposeMainPanel(showLibrary, libraryPanelProgress)) {
+        if (
+            shouldComposeMainPanel(
+                previouslyComposed = libraryCompositionRetained[0],
+                visible = showLibrary || libraryDragging,
+                progress = libraryPanelProgress,
+            )
+        ) {
+            libraryCompositionRetained[0] = true
             Box(
                 modifier = Modifier
                     .fillMaxSize()
