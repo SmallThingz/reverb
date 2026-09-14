@@ -1226,6 +1226,7 @@ class ReverbService : Service() {
                     exportToken.started.set(true)
                     var outTarget: RecordingOutputTarget? = null
                     var verifiedComplete = false
+                    var cleanupDigest: CopyDigest? = null
                     var committed = false
                     try {
                         ensureExportNotCancelled(exportToken)
@@ -1274,18 +1275,14 @@ class ReverbService : Service() {
                             ).toLong()
                         }
                         val expectedOutputBytes = writer.totalFileBytesWritten
-                        requireExportedOutput(target, expectedOutputBytes)
-                        verifyOutputTargetPrefix(
+                        cleanupDigest = verifyWavOutputTargetAndDigest(
                             context = this@ReverbService,
                             target = target,
+                            expectedFileBytes = expectedOutputBytes,
                             expectedPrefix = writer.expectedHeaderBytes,
-                        )
-                        verifyOutputTargetPayloadDigest(
-                            context = this@ReverbService,
-                            target = target,
                             payloadOffsetBytes = writer.payloadOffsetBytes,
                             payloadBytes = writer.totalSampleBytesWritten,
-                            expectedSha256 = writer.payloadSha256,
+                            expectedPayloadSha256 = writer.payloadSha256,
                         )
                         verifiedComplete = true
                         ensureExportNotCancelled(exportToken)
@@ -1343,7 +1340,7 @@ class ReverbService : Service() {
                             committed = committed,
                             preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
                         )) {
-                            deleteOutputTarget(outTarget)
+                            deleteOutputTarget(outTarget, cleanupDigest)
                         }
                         clearExportState(exportToken)
                         Thread.interrupted()
@@ -1522,25 +1519,18 @@ class ReverbService : Service() {
         }
     }
 
-    private fun deleteOutputTarget(target: RecordingOutputTarget?) {
+    private fun deleteOutputTarget(
+        target: RecordingOutputTarget?,
+        expectedDigest: CopyDigest?,
+    ) {
         if (target == null) return
-        if (!suppressAndDeleteOutputTarget(this, target)) {
-            Log.w(TAG, "Deferred cleanup for export target ${target.id}")
-        }
-    }
-
-    @Throws(IOException::class)
-    private fun requireExportedOutput(target: RecordingOutputTarget, expectedSizeBytes: Long) {
-        if (expectedSizeBytes <= 0L) {
-            throw IOException("Export produced empty output: ${target.displayName}")
-        }
-        val size = verifyOutputTargetSize(this, target, expectedSizeBytes)
-        if (size == expectedSizeBytes) {
+        if (expectedDigest == null) {
+            Log.w(TAG, "Retaining unverified export staging because cleanup identity is uncertain: ${target.id}")
             return
         }
-        throw IOException(
-            "Export output size mismatch for ${target.displayName}: expected=$expectedSizeBytes actual=$size",
-        )
+        if (!suppressAndDeleteOutputTarget(this, target, expectedDigest = expectedDigest)) {
+            Log.w(TAG, "Deferred cleanup for export target ${target.id}")
+        }
     }
 
     private fun alignDown(value: Long, alignment: Long): Long {

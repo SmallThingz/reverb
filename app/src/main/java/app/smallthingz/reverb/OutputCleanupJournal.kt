@@ -117,18 +117,15 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
     }
 }
 
-internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOutputTarget): Boolean =
-    suppressAndDeleteOutputTarget(context, target, expectedDigest = null)
-
 internal fun suppressAndDeleteOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
-    expectedDigest: CopyDigest?,
+    expectedDigest: CopyDigest,
 ): Boolean {
     val id = target.id
     val existing = pendingOutputCleanupRecord(context, id)
     if (existing != null) {
-        if (expectedDigest != null && !pendingOutputCleanupRecordMatchesDigest(existing, expectedDigest)) return false
+        if (!pendingOutputCleanupRecordMatchesDigest(existing, expectedDigest)) return false
         val cleaned = deletePendingOutputAsset(context, existing)
         if (cleaned) removePendingOutputCleanup(context, id)
         return cleaned
@@ -147,7 +144,7 @@ internal fun suppressAndDeleteOutputTarget(
         OutputCleanupAssetState.PRESENT -> Unit
     }
     val fingerprint = readOutputCleanupFingerprint(context, target.storageType, id) ?: return false
-    if (expectedDigest != null && !copyDigestMatches(expectedDigest, fingerprint.digest)) return false
+    if (!copyDigestMatches(expectedDigest, fingerprint.digest)) return false
     val record = PendingOutputCleanupRecord(
         storageType = target.storageType,
         id = id,

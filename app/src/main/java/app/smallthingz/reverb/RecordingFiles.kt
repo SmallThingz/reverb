@@ -617,18 +617,6 @@ fun resolveOutputTargetSize(
 }
 
 @Throws(IOException::class)
-internal fun verifyOutputTargetSize(
-    context: Context,
-    target: RecordingOutputTarget,
-    expectedBytes: Long,
-): Long {
-    require(expectedBytes > 0L) { "Expected output size must be positive" }
-    val reportedSize = resolveOutputTargetSize(context, target)
-    if (reportedSize == expectedBytes) return reportedSize
-    return countOutputTargetBytes(context, target, expectedBytes)
-}
-
-@Throws(IOException::class)
 fun finalizeOutputTarget(context: Context, target: RecordingOutputTarget): RecordingOutputTarget {
     return when (target.storageType) {
         RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target)
@@ -802,11 +790,13 @@ private fun publishStagedDocumentByVerifiedCopy(
             }
             return finalTarget
         } catch (error: Exception) {
-            val finalDeleted = suppressAndDeleteOutputTarget(
-                context,
-                finalTarget,
-                expectedDigest = copiedFinalDigest,
-            )
+            val finalDeleted = copiedFinalDigest?.let { expectedDigest ->
+                suppressAndDeleteOutputTarget(
+                    context,
+                    finalTarget,
+                    expectedDigest = expectedDigest,
+                )
+            } ?: false
             if (!finalDeleted) {
                 Log.w(TAG, "Failed final document retained because cleanup authority was uncertain: $finalUri")
             }
@@ -1224,12 +1214,17 @@ fun copyRecordingToConfiguredDirectory(
         target?.let { cleanupTarget ->
             if (preserveVerifiedCopyOnFailure) {
                 Log.w(TAG, "Retaining verified copied recording after source changed: ${cleanupTarget.id}")
-            } else if (!suppressAndDeleteOutputTarget(
-                    context,
-                    cleanupTarget,
-                    expectedDigest = completedCopyDigest,
-                )) {
-                Log.w(TAG, "Deferred cleanup for partial copied recording ${cleanupTarget.id}")
+            } else {
+                val expectedDigest = completedCopyDigest
+                if (expectedDigest == null) {
+                    Log.w(TAG, "Retaining partial copied recording because cleanup identity is uncertain: ${cleanupTarget.id}")
+                } else if (!suppressAndDeleteOutputTarget(
+                        context,
+                        cleanupTarget,
+                        expectedDigest = expectedDigest,
+                    )) {
+                    Log.w(TAG, "Deferred cleanup for partial copied recording ${cleanupTarget.id}")
+                }
             }
         }
         null
@@ -1378,43 +1373,86 @@ internal fun recordingsHaveSameContent(
 }
 
 @Throws(IOException::class)
-internal fun verifyOutputTargetPrefix(
-    context: Context,
-    target: RecordingOutputTarget,
+internal fun verifyWavOutputStreamAndDigest(
+    input: InputStream,
+    expectedFileBytes: Long,
     expectedPrefix: ByteArray,
-) {
-    val input = when (target.storageType) {
-        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
-    } ?: throw IOException("Unable to reopen exported recording")
-    val observed = ByteArray(expectedPrefix.size)
-    input.use { source ->
-        if (!source.readFully(observed)) throw IOException("Unexpected EOF verifying recording header")
+    payloadOffsetBytes: Long,
+    payloadBytes: Long,
+    expectedPayloadSha256: ByteArray,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest {
+    require(expectedFileBytes > 0L)
+    require(payloadOffsetBytes == expectedPrefix.size.toLong())
+    require(payloadBytes >= 0L)
+    require(bufferSize > 0)
+    val paddingBytes = expectedFileBytes - payloadOffsetBytes - payloadBytes
+    require(paddingBytes in 0L..1L)
+
+    val observedPrefix = ByteArray(expectedPrefix.size)
+    if (!input.readFully(observedPrefix) || !observedPrefix.contentEquals(expectedPrefix)) {
+        throw IOException("Export header verification failed")
     }
-    if (!observed.contentEquals(expectedPrefix)) {
-        throw IOException("Export header verification failed: ${target.displayName}")
+
+    val fullDigest = MessageDigest.getInstance("SHA-256")
+    fullDigest.update(observedPrefix)
+    val payloadDigest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(bufferSize)
+    var remaining = payloadBytes
+    while (remaining > 0L) {
+        val requested = minOf(buffer.size.toLong(), remaining).toInt()
+        val count = input.read(buffer, 0, requested)
+        if (count < 0) throw IOException("Unexpected EOF verifying recording payload")
+        if (count == 0) {
+            val value = input.read()
+            if (value < 0) throw IOException("Unexpected EOF verifying recording payload")
+            val byte = value.toByte()
+            payloadDigest.update(byte)
+            fullDigest.update(byte)
+            remaining--
+            continue
+        }
+        payloadDigest.update(buffer, 0, count)
+        fullDigest.update(buffer, 0, count)
+        remaining -= count.toLong()
     }
+    if (!payloadDigest.digest().contentEquals(expectedPayloadSha256)) {
+        throw IOException("Export payload verification failed")
+    }
+    if (paddingBytes == 1L) {
+        val padding = input.read()
+        if (padding != 0) throw IOException("Invalid WAV padding byte")
+        fullDigest.update(0.toByte())
+    }
+    if (input.read() >= 0) throw IOException("Export contains unexpected trailing bytes")
+    return CopyDigest(expectedFileBytes, fullDigest.digest())
 }
 
 @Throws(IOException::class)
-internal fun verifyOutputTargetPayloadDigest(
+internal fun verifyWavOutputTargetAndDigest(
     context: Context,
     target: RecordingOutputTarget,
+    expectedFileBytes: Long,
+    expectedPrefix: ByteArray,
     payloadOffsetBytes: Long,
     payloadBytes: Long,
-    expectedSha256: ByteArray,
-) {
+    expectedPayloadSha256: ByteArray,
+): CopyDigest {
     val input = when (target.storageType) {
         RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> context.contentResolver.openInputStream(requireNotNull(target.uri))
     } ?: throw IOException("Unable to reopen exported recording")
-    val observed = input.use { sha256Range(it, payloadOffsetBytes, payloadBytes) }
-    if (observed.byteCount != payloadBytes || !observed.sha256.contentEquals(expectedSha256)) {
-        throw IOException("Export payload verification failed: ${target.displayName}")
+    return input.use { source ->
+        verifyWavOutputStreamAndDigest(
+            input = source,
+            expectedFileBytes = expectedFileBytes,
+            expectedPrefix = expectedPrefix,
+            payloadOffsetBytes = payloadOffsetBytes,
+            payloadBytes = payloadBytes,
+            expectedPayloadSha256 = expectedPayloadSha256,
+        )
     }
 }
 

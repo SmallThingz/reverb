@@ -697,6 +697,60 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun wavOutputVerification_returnsWholeDigestAndRejectsChangedOrExtraBytes() {
+        val payload = ByteArray(8_820) { index -> ((index * 31 + 5) and 0xff).toByte() }
+        val header = buildWavHeaderBytes(44_100, 1, PcmSampleFormat.PCM_16, payload.size.toLong())
+        val complete = header + payload
+        val payloadDigest = sha256(ByteArrayInputStream(payload))
+        val expectedFull = sha256(ByteArrayInputStream(complete))
+
+        val observed = verifyWavOutputStreamAndDigest(
+            input = ByteArrayInputStream(complete),
+            expectedFileBytes = complete.size.toLong(),
+            expectedPrefix = header,
+            payloadOffsetBytes = header.size.toLong(),
+            payloadBytes = payload.size.toLong(),
+            expectedPayloadSha256 = payloadDigest.sha256,
+            bufferSize = 257,
+        )
+        assertEquals(expectedFull.byteCount, observed.byteCount)
+        assertArrayEquals(expectedFull.sha256, observed.sha256)
+
+        val changedHeader = complete.copyOf().also { bytes ->
+            bytes[8] = (bytes[8].toInt() xor 0x01).toByte()
+        }
+        assertThrows(IOException::class.java) {
+            verifyWavOutputStreamAndDigest(
+                ByteArrayInputStream(changedHeader), complete.size.toLong(), header,
+                header.size.toLong(), payload.size.toLong(), payloadDigest.sha256,
+            )
+        }
+
+        val changedPayload = complete.copyOf().also { bytes ->
+            val index = header.size + 17
+            bytes[index] = (bytes[index].toInt() xor 0x01).toByte()
+        }
+        assertThrows(IOException::class.java) {
+            verifyWavOutputStreamAndDigest(
+                ByteArrayInputStream(changedPayload), complete.size.toLong(), header,
+                header.size.toLong(), payload.size.toLong(), payloadDigest.sha256,
+            )
+        }
+        assertThrows(IOException::class.java) {
+            verifyWavOutputStreamAndDigest(
+                ByteArrayInputStream(complete.copyOf(complete.size - 1)), complete.size.toLong(), header,
+                header.size.toLong(), payload.size.toLong(), payloadDigest.sha256,
+            )
+        }
+        assertThrows(IOException::class.java) {
+            verifyWavOutputStreamAndDigest(
+                ByteArrayInputStream(complete + byteArrayOf(0)), complete.size.toLong(), header,
+                header.size.toLong(), payload.size.toLong(), payloadDigest.sha256,
+            )
+        }
+    }
+
+    @Test
     fun stagedFilePublish_neverOverwritesAnExistingRecording() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "publish-").toFile()

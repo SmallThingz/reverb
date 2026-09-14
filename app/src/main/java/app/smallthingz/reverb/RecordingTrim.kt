@@ -40,6 +40,7 @@ private fun writeTrimmedRecordingCopy(
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
     var target: RecordingOutputTarget? = null
     var verifiedComplete = false
+    var cleanupDigest: CopyDigest? = null
     try {
         return withRecordingWavChannel(context, recording) { source ->
             val layout = readWavPcmLayout(source)
@@ -77,21 +78,14 @@ private fun writeTrimmedRecordingCopy(
             }
             if (writer.totalSampleBytesWritten <= 0L) throw IOException("Trim produced no audio")
             val expectedBytes = writer.totalFileBytesWritten
-            val reportedBytes = resolveOutputTargetSize(context, outputTarget)
-            if (reportedBytes > 0L && reportedBytes != expectedBytes) {
-                throw IOException("Trim size mismatch: expected=$expectedBytes actual=$reportedBytes")
-            }
-            verifyOutputTargetPrefix(
+            cleanupDigest = verifyWavOutputTargetAndDigest(
                 context = context,
                 target = outputTarget,
+                expectedFileBytes = expectedBytes,
                 expectedPrefix = writer.expectedHeaderBytes,
-            )
-            verifyOutputTargetPayloadDigest(
-                context = context,
-                target = outputTarget,
                 payloadOffsetBytes = writer.payloadOffsetBytes,
                 payloadBytes = writer.totalSampleBytesWritten,
-                expectedSha256 = writer.payloadSha256,
+                expectedPayloadSha256 = writer.payloadSha256,
             )
             verifiedComplete = true
             val finalized = finalizeOutputTarget(context, outputTarget).also { target = it }
@@ -111,7 +105,7 @@ private fun writeTrimmedRecordingCopy(
             )
         }
     } catch (error: Exception) {
-        if (!verifiedComplete) cleanupTrimTarget(context, target)
+        if (!verifiedComplete) cleanupTrimTarget(context, target, cleanupDigest)
         throw error
     }
 }
@@ -144,9 +138,17 @@ private fun copyFrameRange(
     }
 }
 
-private fun cleanupTrimTarget(context: Context, target: RecordingOutputTarget?) {
+private fun cleanupTrimTarget(
+    context: Context,
+    target: RecordingOutputTarget?,
+    expectedDigest: CopyDigest?,
+) {
     val current = target ?: return
-    if (!suppressAndDeleteOutputTarget(context, current)) {
+    if (expectedDigest == null) {
+        Log.w(TRIM_TAG, "Retaining unverified trim staging because cleanup identity is uncertain: ${current.id}")
+        return
+    }
+    if (!suppressAndDeleteOutputTarget(context, current, expectedDigest = expectedDigest)) {
         Log.w(TRIM_TAG, "Deferred cleanup for failed trim ${current.displayName}")
     }
 }
