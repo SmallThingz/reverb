@@ -935,11 +935,11 @@ internal fun RangeExportHomeContent(
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
     maxExportDurationSeconds: Float,
+    modifier: Modifier = Modifier,
     backProgress: Float = 0f,
     visualizerVisible: Boolean,
     onCancel: () -> Unit,
     onExport: (startSeconds: Float, endSeconds: Float) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val state = remember(selectedBuffer) { RangeExportEditorState(initialDurationSeconds) }
     val colors = MaterialTheme.colorScheme
@@ -1156,6 +1156,7 @@ internal fun RangeExportHomeContent(
 private fun RangeExportTimeline(
     state: RangeExportEditorState,
     morphProgress: () -> Float,
+    modifier: Modifier = Modifier,
     morphStartColor: androidx.compose.ui.graphics.Color? = null,
     chromeAlpha: () -> Float,
     interactionEnabled: Boolean,
@@ -1163,7 +1164,6 @@ private fun RangeExportTimeline(
     transitionStarted: Boolean,
     targetBoundsInRoot: Rect?,
     onTargetBoundsInRoot: (Rect) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
     val density = LocalDensity.current

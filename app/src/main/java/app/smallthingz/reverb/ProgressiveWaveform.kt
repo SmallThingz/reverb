@@ -34,8 +34,8 @@ internal fun ProgressiveWaveformCanvas(
     endFraction: Float,
     loading: Boolean,
     morphProgress: () -> Float,
-    morphStartColor: Color? = null,
     modifier: Modifier = Modifier,
+    morphStartColor: Color? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     var wobblePhase by remember { mutableFloatStateOf(0f) }
