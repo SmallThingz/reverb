@@ -818,6 +818,25 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun pendingOutputCleanup_expectedDigestMustMatchCopiedBytes() {
+        val digest = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val changed = CopyDigest(4L, byteArrayOf(1, 2, 3, 5))
+        val record = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "recordings/copied.wav",
+            byteCount = digest.byteCount,
+            sha256Hex = digest.sha256.toHexString(),
+            fileKey = "stat:1:2:100:5:77",
+        )
+
+        assertTrue(copyDigestMatches(digest, same))
+        assertFalse(copyDigestMatches(digest, changed))
+        assertTrue(pendingOutputCleanupRecordMatchesDigest(record, digest))
+        assertFalse(pendingOutputCleanupRecordMatchesDigest(record, CopyDigest(5L, digest.sha256)))
+    }
+
+    @Test
     fun pendingProviderOutputCleanup_requiresStableProviderIdentity_andLegacyV1FailsClosed() {
         val id = "content://media/external/audio/media/42"
         val hash = "ef".repeat(32)

@@ -790,7 +790,11 @@ private fun publishStagedDocumentByVerifiedCopy(
             ) {
                 throw IOException("Final output document verification failed")
             }
-            val stagingDeleted = suppressAndDeleteOutputTarget(context, target)
+            val stagingDeleted = suppressAndDeleteOutputTarget(
+                context,
+                target,
+                expectedDigest = sourceDigest,
+            )
             if (!stagingDeleted) {
                 Log.w(TAG, "Published staging document retained under cleanup journal: $sourceUri")
             }

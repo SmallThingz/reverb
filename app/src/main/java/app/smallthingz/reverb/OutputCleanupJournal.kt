@@ -117,10 +117,18 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
     }
 }
 
-internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOutputTarget): Boolean {
+internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOutputTarget): Boolean =
+    suppressAndDeleteOutputTarget(context, target, expectedDigest = null)
+
+internal fun suppressAndDeleteOutputTarget(
+    context: Context,
+    target: RecordingOutputTarget,
+    expectedDigest: CopyDigest?,
+): Boolean {
     val id = target.id
     val existing = pendingOutputCleanupRecord(context, id)
     if (existing != null) {
+        if (expectedDigest != null && !pendingOutputCleanupRecordMatchesDigest(existing, expectedDigest)) return false
         val cleaned = deletePendingOutputAsset(context, existing)
         if (cleaned) removePendingOutputCleanup(context, id)
         return cleaned
@@ -139,6 +147,7 @@ internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOu
         OutputCleanupAssetState.PRESENT -> Unit
     }
     val fingerprint = readOutputCleanupFingerprint(context, target.storageType, id) ?: return false
+    if (expectedDigest != null && !copyDigestMatches(expectedDigest, fingerprint.digest)) return false
     val record = PendingOutputCleanupRecord(
         storageType = target.storageType,
         id = id,
@@ -152,6 +161,15 @@ internal fun suppressAndDeleteOutputTarget(context: Context, target: RecordingOu
     if (cleaned) removePendingOutputCleanup(context, id)
     return cleaned
 }
+
+internal fun copyDigestMatches(expected: CopyDigest, actual: CopyDigest): Boolean =
+    expected.byteCount == actual.byteCount && expected.sha256.contentEquals(actual.sha256)
+
+internal fun pendingOutputCleanupRecordMatchesDigest(
+    record: PendingOutputCleanupRecord,
+    digest: CopyDigest,
+): Boolean = record.byteCount == digest.byteCount &&
+    record.sha256Hex.equals(digest.sha256.toHexString(), ignoreCase = true)
 
 internal fun retryPendingOutputCleanup(context: Context) {
     val rawEntries = synchronized(outputCleanupJournalLock) { pendingOutputCleanupEntriesLocked(context) }
