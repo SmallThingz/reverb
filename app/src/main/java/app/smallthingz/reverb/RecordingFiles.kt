@@ -771,11 +771,13 @@ private fun publishStagedDocumentByVerifiedCopy(
             uri = finalUri,
             staging = false,
         )
+        var copiedFinalDigest: CopyDigest? = null
         try {
             val sourceDigest = context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 openWritableParcelFileDescriptor(context, finalTarget).use { descriptor ->
                     FileOutputStream(descriptor.fileDescriptor).use { output ->
                         val digest = copyWithSha256(input, output)
+                        copiedFinalDigest = digest
                         output.fd.sync()
                         digest
                     }
@@ -800,9 +802,13 @@ private fun publishStagedDocumentByVerifiedCopy(
             }
             return finalTarget
         } catch (error: Exception) {
-            val finalDeleted = suppressAndDeleteOutputTarget(context, finalTarget)
+            val finalDeleted = suppressAndDeleteOutputTarget(
+                context,
+                finalTarget,
+                expectedDigest = copiedFinalDigest,
+            )
             if (!finalDeleted) {
-                Log.w(TAG, "Failed final document retained under cleanup journal: $finalUri")
+                Log.w(TAG, "Failed final document retained because cleanup authority was uncertain: $finalUri")
             }
             throw if (error is IOException) error else IOException("Unable to publish verified staging document", error)
         }
@@ -1103,6 +1109,8 @@ fun copyRecordingToConfiguredDirectory(
     recording: RecordingEntity,
 ): RecordingEntity? {
     var target: RecordingOutputTarget? = null
+    var completedCopyDigest: CopyDigest? = null
+    var preserveVerifiedCopyOnFailure = false
     return try {
         val resolvedTarget = createOutputTarget(
             context = context,
@@ -1129,6 +1137,7 @@ fun copyRecordingToConfiguredDirectory(
                 RecordingStorageType.FILE -> {
                     FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
                         sourceDigest = copyWithSha256(source, output)
+                        completedCopyDigest = sourceDigest
                         output.fd.sync()
                     }
                 }
@@ -1139,6 +1148,7 @@ fun copyRecordingToConfiguredDirectory(
                     openWritableParcelFileDescriptor(context, resolvedTarget).use { descriptor ->
                         FileOutputStream(descriptor.fileDescriptor).use { output ->
                             sourceDigest = copyWithSha256(source, output)
+                            completedCopyDigest = sourceDigest
                             output.fd.sync()
                         }
                     }
@@ -1179,11 +1189,11 @@ fun copyRecordingToConfiguredDirectory(
             // disappearance/provider failure into target cleanup.
             Log.w(TAG, "Unable to recheck source after verified copy ${recording.id}", it)
         }.getOrNull()
-        if (
-            sourceAfterCopy != null &&
-            (sourceAfterCopy.byteCount != sourceDigest.byteCount ||
-                !sourceAfterCopy.sha256.contentEquals(sourceDigest.sha256))
-        ) {
+        if (completedCopySourceChanged(sourceDigest, sourceAfterCopy)) {
+            // The verified staging target may now be the only surviving version of the bytes
+            // selected by the user. Keep it hidden for recovery instead of deleting it merely
+            // because the source changed while/after the copy was in flight.
+            preserveVerifiedCopyOnFailure = true
             throw IOException("Recording source changed during copy")
         }
         val finalizedTarget = finalizeOutputTarget(context, resolvedTarget)
@@ -1212,7 +1222,13 @@ fun copyRecordingToConfiguredDirectory(
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
         target?.let { cleanupTarget ->
-            if (!suppressAndDeleteOutputTarget(context, cleanupTarget)) {
+            if (preserveVerifiedCopyOnFailure) {
+                Log.w(TAG, "Retaining verified copied recording after source changed: ${cleanupTarget.id}")
+            } else if (!suppressAndDeleteOutputTarget(
+                    context,
+                    cleanupTarget,
+                    expectedDigest = completedCopyDigest,
+                )) {
                 Log.w(TAG, "Deferred cleanup for partial copied recording ${cleanupTarget.id}")
             }
         }
@@ -1224,6 +1240,11 @@ internal data class CopyDigest(
     val byteCount: Long,
     val sha256: ByteArray,
 )
+
+internal fun completedCopySourceChanged(
+    copiedDigest: CopyDigest,
+    sourceAfterCopy: CopyDigest?,
+): Boolean = sourceAfterCopy != null && !copyDigestMatches(copiedDigest, sourceAfterCopy)
 
 internal fun copyWithSha256(
     input: InputStream,

@@ -837,6 +837,17 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun completedCopy_sourceChangePreservesVerifiedBytesInsteadOfAuthorizingCleanup() {
+        val copied = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val changed = CopyDigest(4L, byteArrayOf(1, 2, 3, 5))
+
+        assertFalse(completedCopySourceChanged(copied, same))
+        assertFalse(completedCopySourceChanged(copied, null))
+        assertTrue(completedCopySourceChanged(copied, changed))
+    }
+
+    @Test
     fun pendingProviderOutputCleanup_requiresStableProviderIdentity_andLegacyV1FailsClosed() {
         val id = "content://media/external/audio/media/42"
         val hash = "ef".repeat(32)
