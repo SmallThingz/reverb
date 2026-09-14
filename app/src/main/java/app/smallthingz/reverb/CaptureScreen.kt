@@ -816,7 +816,11 @@ fun CaptureScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 18.dp)
-                .padding(bottom = 104.dp),
+                .padding(
+                    bottom = CAPTURE_CONTROL_BOTTOM_SPACER +
+                        CAPTURE_CONTROL_CLUSTER_HEIGHT +
+                        CAPTURE_SAVE_STATUS_GAP,
+                ),
         )
     }
 
@@ -911,6 +915,9 @@ private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
 private const val BUFFER_FLIP_DURATION_MILLIS = 260
 private const val BUFFER_FLIP_EDGE_PIVOT = 0.28f
 private const val BUFFER_FLIP_MIDPOINT_SCALE = 0.94f
+private val CAPTURE_CONTROL_CLUSTER_HEIGHT = 112.dp
+private val CAPTURE_CONTROL_BOTTOM_SPACER = 18.dp
+private val CAPTURE_SAVE_STATUS_GAP = 12.dp
 
 internal fun shouldCommitBufferSwipe(progress: Float): Boolean =
     progress.coerceIn(0f, 1f) >= BUFFER_SWIPE_COMMIT_PROGRESS
@@ -1247,7 +1254,7 @@ private fun MainCaptureContent(
             onClearBuffer = { onClearBuffer(renderedBuffer) },
             onOpenLibrary = onOpenLibrary,
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(CAPTURE_CONTROL_BOTTOM_SPACER))
     }
 }
 
@@ -1278,7 +1285,7 @@ private fun CaptureControlCluster(
     val actionWidth = 256.dp
     val actionHeight = 70.dp
     val clusterWidth = maxOf(selectorWidth, actionWidth)
-    val clusterHeight = 112.dp
+    val clusterHeight = CAPTURE_CONTROL_CLUSTER_HEIGHT
     val selectorFraction = selectorWidth.value / clusterWidth.value
     val actionFraction = actionWidth.value / clusterWidth.value
     val unionShape = remember(selectorFraction, actionFraction) {
