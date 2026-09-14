@@ -597,7 +597,7 @@ internal fun pendingOutputCleanupFileIntent(record: PendingOutputCleanupRecord):
         byteCount = record.byteCount,
         sha256Hex = record.sha256Hex,
         assetDeleted = false,
-        storageType = RecordingStorageType.FILE.name,
+        storageType = RecordingStorageType.FILE,
         claimToken = outputCleanupClaimToken(record),
         fileIdentity = identity,
     )

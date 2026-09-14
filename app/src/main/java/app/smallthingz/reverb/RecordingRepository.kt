@@ -317,7 +317,7 @@ object RecordingRepository {
                     }
                 }
             }
-            if (intent.storageType == RecordingStorageType.FILE.name && intent.fileIdentity != null) {
+            if (intent.storageType == RecordingStorageType.FILE && intent.fileIdentity != null) {
                 val source = File(intent.id)
                 when (pendingDeletionReplayAction(intent, fileRecordingAssetState(source))) {
                     PendingDeletionReplayAction.WAIT -> continue
@@ -379,7 +379,7 @@ object RecordingRepository {
             byteCount = digest.byteCount,
             sha256Hex = digest.sha256.toHexString(),
             assetDeleted = false,
-            storageType = RecordingStorageType.FILE.name.takeIf { isFile },
+            storageType = RecordingStorageType.FILE.takeIf { isFile },
             claimToken = UUID.randomUUID().toString().takeIf { isFile },
             fileIdentity = recording.fileIdentity.takeIf { isFile && it.isNotBlank() },
         )
@@ -794,6 +794,7 @@ internal fun recordingDirectoryIdsToRetain(
 
 private const val PENDING_DELETION_V1_PREFIX = "v1|"
 private const val PENDING_DELETION_V2_PREFIX = "v2|"
+private const val PENDING_DELETION_V3_PREFIX = "v3|"
 private const val DELETION_CLAIM_PREFIX = ".reverb-delete-"
 private const val DELETION_CLAIM_SUFFIX = ".pending"
 
@@ -802,7 +803,7 @@ internal data class PendingDeletionIntent(
     val byteCount: Long,
     val sha256Hex: String,
     val assetDeleted: Boolean,
-    val storageType: String? = null,
+    val storageType: RecordingStorageType? = null,
     val claimToken: String? = null,
     val fileIdentity: String? = null,
 )
@@ -822,12 +823,12 @@ internal fun encodePendingDeletionIntent(intent: PendingDeletionIntent): String 
     val storage = intent.storageType ?: return ""
     val token = intent.claimToken.orEmpty()
     return buildString {
-        append(PENDING_DELETION_V2_PREFIX)
+        append(PENDING_DELETION_V3_PREFIX)
         append(id).append('|')
         append(intent.byteCount).append('|')
         append(intent.sha256Hex.lowercase()).append('|')
         append(if (intent.assetDeleted) '1' else '0').append('|')
-        append(storage).append('|')
+        append(storage.storageCode.toInt()).append('|')
         append(token).append('|')
         append(
             intent.fileIdentity?.let { identity ->
@@ -841,6 +842,7 @@ internal fun decodePendingDeletionIntent(raw: String): PendingDeletionIntent? {
     return when {
         raw.startsWith(PENDING_DELETION_V1_PREFIX) -> decodePendingDeletionV1(raw)
         raw.startsWith(PENDING_DELETION_V2_PREFIX) -> decodePendingDeletionV2(raw)
+        raw.startsWith(PENDING_DELETION_V3_PREFIX) -> decodePendingDeletionV3(raw)
         else -> null
     }
 }
@@ -855,9 +857,23 @@ private fun decodePendingDeletionV1(raw: String): PendingDeletionIntent? {
 private fun decodePendingDeletionV2(raw: String): PendingDeletionIntent? {
     val parts = raw.split('|')
     if (parts.size != 8 || parts[0] != "v2") return null
+    val storage = RecordingStorageType.fromLegacyName(parts[5]) ?: return null
+    return decodePendingDeletionClaim(parts, storage)
+}
+
+private fun decodePendingDeletionV3(raw: String): PendingDeletionIntent? {
+    val parts = raw.split('|')
+    if (parts.size != 8 || parts[0] != "v3") return null
+    val storage = parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
+    return decodePendingDeletionClaim(parts, storage)
+}
+
+private fun decodePendingDeletionClaim(
+    parts: List<String>,
+    storage: RecordingStorageType,
+): PendingDeletionIntent? {
+    if (storage != RecordingStorageType.FILE) return null
     val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
-    val storage = RecordingStorageType.fromLegacyName(parts[5])?.name ?: return null
-    if (storage != RecordingStorageType.FILE.name) return null
     val token = parts[6].takeIf { it.isNotBlank() }?.let { value ->
         runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
     }
@@ -899,7 +915,9 @@ private fun decodePendingDeletionCommon(
 }
 
 private fun isEncodedPendingDeletionEntry(raw: String): Boolean =
-    raw.startsWith(PENDING_DELETION_V1_PREFIX) || raw.startsWith(PENDING_DELETION_V2_PREFIX)
+    raw.startsWith(PENDING_DELETION_V1_PREFIX) ||
+    raw.startsWith(PENDING_DELETION_V2_PREFIX) ||
+    raw.startsWith(PENDING_DELETION_V3_PREFIX)
 
 internal fun pendingDeletionMatchesDigest(
     intent: PendingDeletionIntent,
@@ -923,7 +941,7 @@ internal fun claimedFileReplayAction(observation: StoragePathObservation): Claim
     }
 
 internal fun deletionClaimFile(intent: PendingDeletionIntent): File? {
-    if (intent.storageType != RecordingStorageType.FILE.name) return null
+    if (intent.storageType != RecordingStorageType.FILE) return null
     val token = intent.claimToken ?: return null
     val source = File(intent.id)
     val parent = source.parentFile ?: return null

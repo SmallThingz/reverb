@@ -1189,19 +1189,28 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun pendingDeletionV2_roundTripsFileClaimIdentity() {
+    fun pendingDeletionV3_roundTripsByteCodedFileClaim_andReadsLegacyV2() {
         val intent = PendingDeletionIntent(
             id = "/storage/emulated/0/Music/Reverb/clip.wav",
             byteCount = 9_999L,
             sha256Hex = "cd".repeat(32),
             assetDeleted = false,
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             claimToken = "00000000-0000-0000-0000-000000000123",
             fileIdentity = "stat:1:42:100:7:55",
         )
         val encoded = encodePendingDeletionIntent(intent)
-        assertTrue(encoded.startsWith("v2|"))
+        val encodedParts = encoded.split('|')
+        assertEquals("v3", encodedParts[0])
+        assertEquals(RecordingStorageType.FILE.storageCode.toString(), encodedParts[5])
         assertEquals(intent, decodePendingDeletionIntent(encoded))
+
+        val encodedId = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(intent.id.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val encodedIdentity = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(requireNotNull(intent.fileIdentity).toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val legacyV2 = "v2|$encodedId|${intent.byteCount}|${intent.sha256Hex}|0|FILE|${intent.claimToken}|$encodedIdentity"
+        assertEquals(intent, decodePendingDeletionIntent(legacyV2))
         assertTrue(requireNotNull(deletionClaimFile(intent)).name.startsWith(".reverb-delete-"))
         val malformedToken = encoded.split('|').toMutableList().also { it[6] = "not-a-uuid" }.joinToString("|")
         assertEquals(null, decodePendingDeletionIntent(malformedToken))
@@ -1221,7 +1230,7 @@ class DurabilityInvariantTest {
                 byteCount = digest.byteCount,
                 sha256Hex = digest.sha256.toHexString(),
                 assetDeleted = false,
-                storageType = RecordingStorageType.FILE.name,
+                storageType = RecordingStorageType.FILE,
                 claimToken = "00000000-0000-0000-0000-000000000126",
                 fileIdentity = identity,
             )
@@ -1250,7 +1259,7 @@ class DurabilityInvariantTest {
                 byteCount = digest.byteCount,
                 sha256Hex = digest.sha256.toHexString(),
                 assetDeleted = false,
-                storageType = RecordingStorageType.FILE.name,
+                storageType = RecordingStorageType.FILE,
                 claimToken = "00000000-0000-0000-0000-000000000124",
                 fileIdentity = originalIdentity,
             )
@@ -1287,7 +1296,7 @@ class DurabilityInvariantTest {
                 byteCount = digest.byteCount,
                 sha256Hex = digest.sha256.toHexString(),
                 assetDeleted = false,
-                storageType = RecordingStorageType.FILE.name,
+                storageType = RecordingStorageType.FILE,
                 claimToken = "00000000-0000-0000-0000-000000000125",
                 fileIdentity = originalIdentity,
             )
@@ -1332,7 +1341,7 @@ class DurabilityInvariantTest {
         val deleted = planned.copy(assetDeleted = true)
         val filePlanned = planned.copy(
             id = "/storage/emulated/0/Music/Reverb/clip.wav",
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             claimToken = "00000000-0000-0000-0000-000000000126",
             fileIdentity = "stat:1:42:100:7:55",
         )
