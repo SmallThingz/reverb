@@ -22,6 +22,15 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun trimRequest_isRetainedOnlyForTheCurrentlyExpandedRecording() {
+        val available = setOf("a", "b")
+        assertEquals("a", retainedTrimRequestRecordingId("a", "a", available))
+        assertEquals(null, retainedTrimRequestRecordingId(null, "a", available))
+        assertEquals(null, retainedTrimRequestRecordingId("b", "a", available))
+        assertEquals(null, retainedTrimRequestRecordingId("a", "a", setOf("b")))
+    }
+
+    @Test
     fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
         val steps = recordingDatabaseMigrationSteps(1, 2)
         assertEquals(

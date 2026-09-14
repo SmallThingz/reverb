@@ -85,6 +85,14 @@ private sealed class ListItem {
     data class Recording(val recording: RecordingEntity) : ListItem()
 }
 
+internal fun retainedTrimRequestRecordingId(
+    expandedRecordingId: String?,
+    trimRequestRecordingId: String?,
+    availableRecordingIds: Set<String>,
+): String? = trimRequestRecordingId?.takeIf { id ->
+    id == expandedRecordingId && id in availableRecordingIds
+}
+
 private data class LibraryNotice(
     val message: String,
     val tone: FeedbackTone,
@@ -135,14 +143,34 @@ fun FilesScreen(
         if (notice?.canUndo != true) notice = LibraryNotice(message, tone)
     }
 
+    fun setExpandedRecording(id: String?) {
+        expandedRecordingId = id
+        if (id == null) trimRequestRecordingId = null
+        onExpandedRecordingActiveChange(id != null)
+    }
+
+    fun syncSelectionActive() {
+        onSelectionActiveChange(selectedIds.isNotEmpty())
+    }
+
+    fun toggleSelection(recording: RecordingEntity) {
+        if (selectedIds.containsKey(recording.id)) selectedIds.remove(recording.id)
+        else selectedIds[recording.id] = recording
+        syncSelectionActive()
+    }
+
     fun reconcileTransientRecordings(storedById: Map<String, RecordingEntity>) {
         contextMenuRecordingId = contextMenuRecordingId?.takeIf { it in storedById }
         renameRecording = renameRecording?.let { storedById[it.id] }
         if (renameRecording == null) showRenameDialog = false
         infoRecording = infoRecording?.let { storedById[it.id] }
         if (infoRecording == null) showInfoDialog = false
-        expandedRecordingId = expandedRecordingId?.takeIf { it in storedById }
-        trimRequestRecordingId = trimRequestRecordingId?.takeIf { it in storedById }
+        setExpandedRecording(expandedRecordingId?.takeIf { it in storedById })
+        trimRequestRecordingId = retainedTrimRequestRecordingId(
+            expandedRecordingId = expandedRecordingId,
+            trimRequestRecordingId = trimRequestRecordingId,
+            availableRecordingIds = storedById.keys,
+        )
     }
 
     fun refresh(showSpinner: Boolean = true) {
@@ -160,6 +188,7 @@ fun FilesScreen(
                     if (updated == null) selectedIds.remove(id)
                     else if (selectedIds[id] != updated) selectedIds[id] = updated
                 }
+                syncSelectionActive()
                 reconcileTransientRecordings(storedById)
                 if (deletionsCommittedInBackground) {
                     pendingDeletions.clear()
@@ -195,6 +224,7 @@ fun FilesScreen(
                 if (updated == null) selectedIds.remove(id)
                 else if (selectedIds[id] != updated) selectedIds[id] = updated
             }
+            syncSelectionActive()
             reconcileTransientRecordings(currentById)
         }
     }
@@ -203,14 +233,13 @@ fun FilesScreen(
         if (!active) {
             contextMenuRecordingId = null
             selectedIds.clear()
+            syncSelectionActive()
             showRenameDialog = false
             renameRecording = null
             showInfoDialog = false
             infoRecording = null
-            expandedRecordingId = null
-            trimRequestRecordingId = null
+            setExpandedRecording(null)
             notice = null
-            onSelectionActiveChange(false)
             return@LaunchedEffect
         }
         if (!hasLoaded) {
@@ -306,6 +335,7 @@ fun FilesScreen(
 
     fun clearSelection() {
         selectedIds.clear()
+        syncSelectionActive()
     }
 
     val visibleRecordings by remember {
@@ -322,8 +352,7 @@ fun FilesScreen(
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
         if (isDeleting || targets.isEmpty()) return
         if (targets.any { it.id == expandedRecordingId }) {
-            expandedRecordingId = null
-            trimRequestRecordingId = null
+            setExpandedRecording(null)
         }
         isDeleting = true
         deletionsCommittedInBackground = false
@@ -559,43 +588,36 @@ fun FilesScreen(
                                         onClick = {
                                             contextMenuRecordingId = null
                                             if (selectionActive) {
-                                                if (selectedIds.containsKey(recording.id)) {
-                                                    selectedIds.remove(recording.id)
-                                                } else {
-                                                    selectedIds[recording.id] = recording
-                                                }
+                                                toggleSelection(recording)
                                             } else {
-                                                expandedRecordingId = if (expandedRecordingId == recording.id) {
-                                                    trimRequestRecordingId = null
-                                                    null
-                                                } else {
-                                                    recording.id
-                                                }
+                                                setExpandedRecording(
+                                                    if (expandedRecordingId == recording.id) null else recording.id,
+                                                )
                                             }
                                         },
                                         onIconLongClick = {
                                             contextMenuRecordingId = null
-                                            expandedRecordingId = null
-                                            if (selectedIds.containsKey(recording.id)) {
-                                                selectedIds.remove(recording.id)
-                                            } else {
-                                                selectedIds[recording.id] = recording
-                                            }
+                                            setExpandedRecording(null)
+                                            toggleSelection(recording)
                                         },
                                         onLongClick = {
-                                            expandedRecordingId = null
-                                            contextMenuRecordingId = recording.id
+                                            if (selectionActive) {
+                                                toggleSelection(recording)
+                                            } else {
+                                                setExpandedRecording(null)
+                                                contextMenuRecordingId = recording.id
+                                            }
                                         },
                                         onDismissMenu = { contextMenuRecordingId = null },
                                         onRename = {
                                             contextMenuRecordingId = null
-                                            expandedRecordingId = null
+                                            setExpandedRecording(null)
                                             renameRecording = recording
                                             showRenameDialog = true
                                         },
                                         onInfo = {
                                             contextMenuRecordingId = null
-                                            expandedRecordingId = null
+                                            setExpandedRecording(null)
                                             infoRecording = recording
                                             showInfoDialog = true
                                         },
@@ -605,19 +627,17 @@ fun FilesScreen(
                                         },
                                         onTrim = {
                                             contextMenuRecordingId = null
-                                            expandedRecordingId = recording.id
+                                            setExpandedRecording(recording.id)
                                             trimRequestRecordingId = recording.id
                                         },
                                         onDelete = { deleteRecordings(listOf(recording)) },
                                         onMultiSelect = {
                                             contextMenuRecordingId = null
-                                            expandedRecordingId = null
+                                            setExpandedRecording(null)
                                             selectedIds[recording.id] = recording
+                                            syncSelectionActive()
                                         },
-                                        onCollapse = {
-                                            expandedRecordingId = null
-                                            trimRequestRecordingId = null
-                                        },
+                                        onCollapse = { setExpandedRecording(null) },
                                         onTrimRequestConsumed = {
                                             if (trimRequestRecordingId == recording.id) trimRequestRecordingId = null
                                         },
@@ -631,7 +651,7 @@ fun FilesScreen(
                                             }
                                         },
                                         onPlaybackFailed = {
-                                            expandedRecordingId = null
+                                            setExpandedRecording(null)
                                             try {
                                                 context.startActivity(buildOpenRecordingIntent(context, recording))
                                             } catch (_: ActivityNotFoundException) {
