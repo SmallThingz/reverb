@@ -233,8 +233,8 @@ object RecordingRepository {
             mutex.withLock {
                 replayPendingDeletionsLocked(context)
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
-                val tracked = dao.listAll().firstOrNull { it.id == recording.id }
-                    ?: return@withLock true
+                val tracked = dao.findById(recording.id) ?: return@withLock true
+                if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
                 if (resolveRecordingStorageType(tracked) == RecordingStorageType.FILE &&
                     !recordingFileIdentityMatches(tracked)
                 ) {
@@ -426,7 +426,10 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
-                val tracked = dao.listAll().firstOrNull { it.id == recording.id } ?: return@withLock null
+                val tracked = dao.findById(recording.id) ?: return@withLock null
+                if (!sameRecordingActionTarget(recording, tracked)) {
+                    throw IOException("Recording changed before rename")
+                }
                 if (!recordingContentIdentityMatches(context, tracked)) {
                     throw IOException("Recording changed before rename")
                 }
