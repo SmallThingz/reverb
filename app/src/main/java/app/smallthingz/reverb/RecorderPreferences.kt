@@ -113,21 +113,23 @@ enum class PcmSampleFormat(
 
 @SuppressLint("InlinedApi")
 enum class AudioSourceMode(
-    val sourceValue: Int,
+    val storageCode: Byte,
     @param:StringRes @field:StringRes val labelRes: Int,
 ) {
-    VOICE_RECOGNITION(MediaRecorder.AudioSource.VOICE_RECOGNITION, R.string.audio_source_voice_recognition),
-    VOICE_COMMUNICATION(MediaRecorder.AudioSource.VOICE_COMMUNICATION, R.string.audio_source_voice_communication),
-    VOICE_PERFORMANCE(MediaRecorder.AudioSource.VOICE_PERFORMANCE, R.string.audio_source_voice_performance),
-    CAMCORDER(MediaRecorder.AudioSource.CAMCORDER, R.string.audio_source_camcorder),
-    DEFAULT(MediaRecorder.AudioSource.DEFAULT, R.string.audio_source_default),
-    MIC(MediaRecorder.AudioSource.MIC, R.string.audio_source_mic),
-    UNPROCESSED(MediaRecorder.AudioSource.UNPROCESSED, R.string.audio_source_unprocessed),
-    VOICE_CALL(MediaRecorder.AudioSource.VOICE_CALL, R.string.audio_source_voice_call),
-    VOICE_UPLINK(MediaRecorder.AudioSource.VOICE_UPLINK, R.string.audio_source_voice_uplink),
-    VOICE_DOWNLINK(MediaRecorder.AudioSource.VOICE_DOWNLINK, R.string.audio_source_voice_downlink),
-    REMOTE_SUBMIX(MediaRecorder.AudioSource.REMOTE_SUBMIX, R.string.audio_source_remote_submix),
+    VOICE_RECOGNITION(MediaRecorder.AudioSource.VOICE_RECOGNITION.toByte(), R.string.audio_source_voice_recognition),
+    VOICE_COMMUNICATION(MediaRecorder.AudioSource.VOICE_COMMUNICATION.toByte(), R.string.audio_source_voice_communication),
+    VOICE_PERFORMANCE(MediaRecorder.AudioSource.VOICE_PERFORMANCE.toByte(), R.string.audio_source_voice_performance),
+    CAMCORDER(MediaRecorder.AudioSource.CAMCORDER.toByte(), R.string.audio_source_camcorder),
+    DEFAULT(MediaRecorder.AudioSource.DEFAULT.toByte(), R.string.audio_source_default),
+    MIC(MediaRecorder.AudioSource.MIC.toByte(), R.string.audio_source_mic),
+    UNPROCESSED(MediaRecorder.AudioSource.UNPROCESSED.toByte(), R.string.audio_source_unprocessed),
+    VOICE_CALL(MediaRecorder.AudioSource.VOICE_CALL.toByte(), R.string.audio_source_voice_call),
+    VOICE_UPLINK(MediaRecorder.AudioSource.VOICE_UPLINK.toByte(), R.string.audio_source_voice_uplink),
+    VOICE_DOWNLINK(MediaRecorder.AudioSource.VOICE_DOWNLINK.toByte(), R.string.audio_source_voice_downlink),
+    REMOTE_SUBMIX(MediaRecorder.AudioSource.REMOTE_SUBMIX.toByte(), R.string.audio_source_remote_submix),
     ;
+
+    val sourceValue: Int get() = storageCode.toInt()
 
     companion object {
         private val preferredOrder = listOf(
@@ -143,11 +145,10 @@ enum class AudioSourceMode(
             VOICE_DOWNLINK,
             REMOTE_SUBMIX,
         )
-        private val bySourceValue = entries.associateBy { it.sourceValue }
-
         fun defaultMode(): AudioSourceMode = preferredOrder.first()
 
-        fun fromSourceValue(value: Int): AudioSourceMode = bySourceValue[value] ?: defaultMode()
+        fun fromStorageCode(value: Int): AudioSourceMode =
+            entries.firstOrNull { it.storageCode.toInt() == value } ?: defaultMode()
 
         fun availableModes(): List<AudioSourceMode> = preferredOrder.filter { mode ->
             !mode.requiresPrivilegedCapturePermission &&
@@ -416,10 +417,10 @@ fun isCodecCompatibleWithFormat(
 ): Boolean = format == ExportFormat.WAV && codec == ExportCodec.PCM_16
 
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
-    return AudioSourceMode.fromSourceValue(
+    return AudioSourceMode.fromStorageCode(
         getRecorderPreferences(context).getInt(
             PrefKey.AUDIO_SOURCE,
-            AudioSourceMode.defaultMode().sourceValue,
+            AudioSourceMode.defaultMode().storageCode.toInt(),
         ),
     )
 }

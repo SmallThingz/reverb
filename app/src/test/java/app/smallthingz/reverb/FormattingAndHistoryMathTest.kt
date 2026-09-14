@@ -1261,6 +1261,10 @@ class FormattingAndHistoryMathTest {
         val ordered = AudioSourceMode.availableModes()
 
         assertEquals(AudioSourceMode.VOICE_RECOGNITION, AudioSourceMode.defaultMode())
+        AudioSourceMode.entries.forEach { mode ->
+            assertEquals(mode.storageCode.toInt(), mode.sourceValue)
+            assertEquals(mode, AudioSourceMode.fromStorageCode(mode.storageCode.toInt()))
+        }
         assertTrue(ordered.indexOf(AudioSourceMode.VOICE_RECOGNITION) < ordered.indexOf(AudioSourceMode.MIC))
         assertTrue(ordered.indexOf(AudioSourceMode.VOICE_COMMUNICATION) < ordered.indexOf(AudioSourceMode.UNPROCESSED))
         assertFalse(ordered.contains(AudioSourceMode.VOICE_CALL))
