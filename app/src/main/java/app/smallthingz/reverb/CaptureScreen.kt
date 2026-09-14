@@ -23,6 +23,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -864,6 +865,13 @@ internal fun isCaptureBlockedByOtherBuffer(
     isListening: Boolean,
     activeBuffer: ReverbService.BufferSlot?,
 ): Boolean = isListening && activeBuffer != null && activeBuffer != bufferSlot
+
+internal fun shouldShowCaptureSecondaryText(
+    hasText: Boolean,
+    active: Boolean,
+    filled: Boolean,
+    showWarning: Boolean,
+): Boolean = hasText && (active || filled || showWarning)
 
 internal fun oppositeBufferSlot(bufferSlot: ReverbService.BufferSlot): ReverbService.BufferSlot =
     when (bufferSlot) {
@@ -1735,17 +1743,25 @@ private fun AudioBlobControl(
                     maxLines = 1,
                 )
             }
-            if (secondaryText != null && (active || filled)) {
-                Spacer(Modifier.height(2.dp))
+            if (shouldShowCaptureSecondaryText(secondaryText != null, active, filled, showWarning)) {
+                Spacer(Modifier.height(if (showWarning) 6.dp else 2.dp))
                 Text(
-                    text = secondaryText,
+                    text = secondaryText.orEmpty(),
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontSize = 14.sp,
+                        fontSize = if (showWarning) 14.5.sp else 14.sp,
                         lineHeight = 18.sp,
+                        fontWeight = if (showWarning) FontWeight.SemiBold else FontWeight.Normal,
                     ),
-                    color = if (showWarning) colors.error else contentColor.copy(alpha = 0.76f),
+                    color = if (showWarning) colors.onErrorContainer else contentColor.copy(alpha = 0.76f),
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
+                    modifier = if (showWarning) {
+                        Modifier
+                            .background(colors.errorContainer, RoundedCornerShape(9.dp))
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    } else {
+                        Modifier
+                    },
                 )
             }
         }

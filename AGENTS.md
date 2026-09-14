@@ -11,6 +11,7 @@
 - Buffer selector taps navigate and activate the tapped usable buffer; horizontal swipes navigate only. Only the blob starts or stops recording.
 - The Library action is always visible and must open even when the library is empty.
 - Both buffer readouts use the configured retention mode for their primary metric.
+- Export-limit warnings remain visible and high-contrast even when capture is paused.
 - Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
 
 - Library recording playback expands the tapped recording card vertically in place; never replace it with a player dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim.
