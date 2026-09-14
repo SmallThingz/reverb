@@ -160,6 +160,118 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun shuttleSourceHeadUsesOutputHopWithoutRepeatingSlowGrains() {
+        val first = nextShuttleSourceAnchorSeconds(null, 10.0, 1f)
+        assertEquals(10.0, first!!, 0.000001)
+
+        // A 20 ms target move is below the 32 ms output hop, so replaying would mostly
+        // duplicate the previous grain. The audio thread waits instead.
+        assertEquals(null, nextShuttleSourceAnchorSeconds(first, 10.020, 1f))
+        assertEquals(10.032, nextShuttleSourceAnchorSeconds(first, 10.032, 1f)!!, 0.000001)
+
+        // Small catch-up errors use bounded hops, but large errors re-anchor instead of
+        // allowing audible position to trail a fast long-timeline gesture indefinitely.
+        assertEquals(10.064, nextShuttleSourceAnchorSeconds(first, 10.10, 2f)!!, 0.000001)
+        assertFalse(shuttleSourceRequiresReanchor(first, 10.10, 2f))
+        assertTrue(shuttleSourceRequiresReanchor(first, 11.0, 8f))
+        assertTrue(shuttleSourceRequiresReanchor(first, 9.0, -1f))
+        assertEquals(11.0, nextShuttleSourceAnchorSeconds(first, 11.0, 8f)!!, 0.000001)
+        assertEquals(9.0, nextShuttleSourceAnchorSeconds(first, 9.0, -1f)!!, 0.000001)
+        assertEquals(null, nextShuttleSourceAnchorSeconds(first, 10.0, 0f))
+    }
+
+    @Test
+    fun cachedShuttleSlicesKeepOverlapSampleAligned() {
+        fun pcm(samples: IntRange): ByteArray = ByteArray(samples.count() * 2).also { bytes ->
+            samples.forEachIndexed { index, sample ->
+                bytes[index * 2] = (sample and 0xff).toByte()
+                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+        }
+
+        val source = pcm(0..199)
+        val first = decode(sliceShuttlePcm16Mono(source, 10.0, 10.032, 10.072, 1_000))
+        val second = decode(sliceShuttlePcm16Mono(source, 10.0, 10.064, 10.104, 1_000))
+        assertEquals(40, first.size)
+        assertEquals(40, second.size)
+        assertEquals(first.takeLast(8), second.take(8))
+        assertEquals((32..71).toList(), first)
+        assertEquals((64..103).toList(), second)
+    }
+
+    @Test
+    fun shortBoundaryGrainGetsSymmetricWindow() {
+        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
+            samples.forEachIndexed { index, sample ->
+                bytes[index * 2] = (sample and 0xff).toByte()
+                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+        }
+
+        val windowed = decode(windowShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000, 1000), 3))
+        assertEquals(6, windowed.size)
+        assertEquals(0, windowed[0])
+        assertTrue(windowed[0] < windowed[1])
+        assertEquals(1000, windowed[2])
+        assertEquals(1000, windowed[3])
+        assertTrue(windowed[4] > windowed[5])
+        assertEquals(0, windowed[5])
+        assertEquals(windowed[0], windowed[5])
+        assertEquals(windowed[1], windowed[4])
+    }
+
+    @Test
+    fun sparseShuttleTailFadesToZeroWithoutChangingFrameCount() {
+        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
+            samples.forEachIndexed { index, sample ->
+                bytes[index * 2] = (sample and 0xff).toByte()
+                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+        }
+
+        val faded = decode(fadeOutShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000)))
+        assertEquals(5, faded.size)
+        assertEquals(1000, faded.first())
+        assertEquals(0, faded.last())
+        assertTrue(faded.zipWithNext().all { (left, right) -> left >= right })
+    }
+
+    @Test
+    fun fineAdjustAudioTargetIncludesPendingMotionButHonorsSnapAndBounds() {
+        val values = RangeEditValues(startSeconds = 10f, cursorSeconds = 20f, endSeconds = 30f)
+        assertEquals(20.25f, projectFineAdjustShuttleTarget(
+            values = values,
+            target = RangeEditTarget.CURSOR,
+            pendingDeltaSeconds = 0.25f,
+            durationSeconds = 40f,
+            snapped = false,
+        ), 0.0001f)
+        assertEquals(20f, projectFineAdjustShuttleTarget(
+            values = values,
+            target = RangeEditTarget.CURSOR,
+            pendingDeltaSeconds = 0.25f,
+            durationSeconds = 40f,
+            snapped = true,
+        ), 0f)
+        assertEquals(29.95f, projectFineAdjustShuttleTarget(
+            values = values,
+            target = RangeEditTarget.START,
+            pendingDeltaSeconds = 100f,
+            durationSeconds = 40f,
+            snapped = false,
+        ), 0.0001f)
+    }
+
+    @Test
     fun shuttlePcmKeepsNormalPitchAndOnlyChangesDirection() {
         fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
             samples.forEachIndexed { index, sample ->

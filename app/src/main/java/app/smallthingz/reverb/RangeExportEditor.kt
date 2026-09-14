@@ -326,9 +326,9 @@ internal fun rangeFineTuneShuttleRate(
     val magnitude = abs(pull)
     if (magnitude <= 0.002f) return 0f
     val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    // Once shuttle audio starts, keep it at least real-time. Sub-1x tape-style
-    // playback is the warbly/undersampled sound users hear during precise drags.
-    // Precision still changes cursor velocity; it no longer pitch-stretches the audio.
+    // This is source-hop aggressiveness, not an AudioTrack playback-rate multiplier.
+    // A value from 1x..8x bounds how quickly the audible source head may catch the
+    // gesture target while every emitted grain itself remains normal-pitch.
     val baseSpeed = 1f + 7f * normalized.pow(2f)
     val verticalScale = rangeFineTuneSpeedScale(verticalPull).pow(0.32f)
     return sign(pull) * (baseSpeed * verticalScale).coerceIn(1f, 8f)
@@ -338,6 +338,24 @@ internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): 
     RangeEditTarget.START -> values.startSeconds
     RangeEditTarget.CURSOR -> values.cursorSeconds
     RangeEditTarget.END -> values.endSeconds
+}
+
+internal fun projectFineAdjustShuttleTarget(
+    values: RangeEditValues,
+    target: RangeEditTarget,
+    pendingDeltaSeconds: Float,
+    durationSeconds: Float,
+    snapped: Boolean,
+): Float {
+    if (snapped || pendingDeltaSeconds == 0f) return editTargetValue(values, target)
+    val projected = adjustRangeEditTarget(
+        values = values,
+        target = target,
+        requestedSeconds = editTargetValue(values, target) + pendingDeltaSeconds,
+        durationSeconds = durationSeconds,
+        snapThresholdSeconds = 0f,
+    )
+    return editTargetValue(projected.values, target)
 }
 
 internal class RangeExportEditorState(
@@ -750,10 +768,16 @@ internal class RangeExportEditorState(
         }
     }
 
-    fun updateFineAdjustShuttle(shuttleRate: Float) {
+    fun updateFineAdjustShuttle(shuttleRate: Float, pendingDeltaSeconds: Float = 0f) {
         if (!fineAdjustShuttleActive) return
         previewController.updateShuttle(
-            atSeconds = targetValue(lastTarget).toDouble(),
+            atSeconds = projectFineAdjustShuttleTarget(
+                values = currentEditValues(),
+                target = lastTarget,
+                pendingDeltaSeconds = pendingDeltaSeconds,
+                durationSeconds = durationSeconds,
+                snapped = snappedTo != null,
+            ).toDouble(),
             rate = shuttleRate,
         )
     }
@@ -1618,9 +1642,13 @@ private fun SpringFineAdjust(
                         state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
                     }
                 }
-                // Publish the audio command after any coalesced cursor commit so the next
-                // grain is centered on the freshest timeline position, not the prior frame.
-                state.updateFineAdjustShuttle(shuttleRate)
+                // Keep Compose commits coalesced, but let audio follow the exact integrated
+                // display-rate jog target. This removes the old ~30 Hz source-position stairs
+                // without recomposing the timeline every frame.
+                state.updateFineAdjustShuttle(
+                    shuttleRate = shuttleRate,
+                    pendingDeltaSeconds = commitAccumulator.deltaSeconds,
+                )
             }
         }
     }
