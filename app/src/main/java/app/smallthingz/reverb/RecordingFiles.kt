@@ -48,10 +48,22 @@ private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
 private const val STAGING_SESSION_SEPARATOR = "__"
 private val OUTPUT_STAGING_SESSION_ID = UUID.randomUUID().toString()
 
-internal enum class StagingOutputKind(val wireName: String) {
-    EXPORT("export"), // Legacy pre-verification-marker staging.
-    EXPORT_TRACKED("export-v2"),
-    COPY("copy"),
+internal enum class StagingOutputKind(
+    val storageCode: Byte,
+    private val legacyWireName: String,
+) {
+    EXPORT(1, "export"), // Legacy pre-verification-marker staging.
+    EXPORT_TRACKED(2, "export-v2"),
+    COPY(3, "copy"),
+    ;
+
+    companion object {
+        fun fromWireValue(value: String): StagingOutputKind? {
+            val code = value.toIntOrNull()
+            if (code != null) return entries.firstOrNull { it.storageCode.toInt() == code }
+            return entries.firstOrNull { it.legacyWireName == value }
+        }
+    }
 }
 
 internal data class StagingOutputMetadata(
@@ -2013,7 +2025,7 @@ internal fun stagingOutputName(
         .encodeToString(finalDisplayName.toByteArray(Charsets.UTF_8))
     return buildString {
         append(STAGING_OUTPUT_PREFIX)
-        append(kind.wireName)
+        append(kind.storageCode.toInt())
         append(STAGING_SESSION_SEPARATOR)
         append(sessionId)
         append(STAGING_SESSION_SEPARATOR)
@@ -2030,7 +2042,7 @@ internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = 
     val stem = name.substringBeforeLast('.', name).removePrefix(STAGING_OUTPUT_PREFIX)
     val parts = stem.split(STAGING_SESSION_SEPARATOR, limit = 4)
     if (parts.size != 4) return@runCatching null
-    val kind = StagingOutputKind.entries.firstOrNull { it.wireName == parts[0] } ?: return@runCatching null
+    val kind = StagingOutputKind.fromWireValue(parts[0]) ?: return@runCatching null
     val sessionId = parts[1].takeIf { it.isNotBlank() } ?: return@runCatching null
     if (parts[2].isBlank()) return@runCatching null
     val finalDisplayName = Base64.getUrlDecoder().decode(parts[3]).toString(Charsets.UTF_8)

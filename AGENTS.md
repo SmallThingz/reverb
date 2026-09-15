@@ -25,7 +25,7 @@
 - Library editors, confirmations, errors, and permission prompts use Reverb-styled sheets instead of stock alert dialogs; About remains a custom animated top panel.
 - Settings choice identity is the typed enum/value, never its localized display label; labels are presentation-only so duplicate translations or locale changes cannot retarget a setting.
 - Recorder preference enums and buffer-slot intents persist explicit stable byte codes (stored as SharedPreferences Ints); enum names/ordinals are legacy-read compatibility only, never new persistence identity.
-- New durable enum fields in cleanup journals and chunk tombstones use explicit stable byte codes; readers retain legacy name decoding when old on-disk records can exist.
+- Durable enum state uses explicit stable byte codes wherever practical, including preferences, intents, journals, chunk metadata, and staging filenames; enum names/ordinals are legacy-read compatibility only.
 
 # Reverb durability invariants
 

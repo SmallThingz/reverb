@@ -795,6 +795,15 @@ class DurabilityInvariantTest {
         assertFalse(shouldRecoverStagingOutput(copyMetadata, currentSessionId = "session-new"))
         assertFalse(shouldRecoverStagingOutput(null, currentSessionId = "session-new"))
         assertEquals(null, parseStagingOutputMetadata("reverb-partial-malformed.wav"))
+        // New durable enum writes use compact stable byte codes, but every deployed legacy
+        // staging kind must remain parseable for crash recovery.
+        assertTrue(copyStaging.startsWith("reverb-partial-3__"))
+        assertEquals(
+            StagingOutputMetadata(StagingOutputKind.COPY, "legacy-session", "legacy.wav"),
+            parseStagingOutputMetadata(
+                "reverb-partial-copy__legacy-session__token__bGVnYWN5Lndhdg.wav",
+            ),
+        )
     }
 
     @Test

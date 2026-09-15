@@ -352,14 +352,23 @@ class RangeExportEditorMathTest {
         }
 
         val source = pcm(100, 200, 300, 400, 500, 600, 700, 800)
-        assertEquals(listOf(100, 200, 300, 400, 500, 600, 700, 800), decode(orientShuttlePcm16Mono(source, 8f)))
-        assertEquals(listOf(800, 700, 600, 500, 400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -8f)))
+        assertEquals(
+            listOf(100, 200, 300, 400, 500, 600, 700, 800),
+            decode(transformShuttlePcm16Mono(source, 1f)),
+        )
+        assertEquals(
+            listOf(800, 700, 600, 500, 400, 300, 200, 100),
+            decode(transformShuttlePcm16Mono(source, -1f)),
+        )
 
-        val twice = speedUpShuttlePcm16Mono(source, 2f)
+        val twice = transformShuttlePcm16Mono(source, 2f)
         assertEquals(4, twice.size / 2)
         assertEquals(100, decode(twice).first())
         assertEquals(800, decode(twice).last())
-        val eightTimes = speedUpShuttlePcm16Mono(source, 8f)
+        val reverseTwice = transformShuttlePcm16Mono(source, -2f)
+        assertEquals(800, decode(reverseTwice).first())
+        assertEquals(100, decode(reverseTwice).last())
+        val eightTimes = transformShuttlePcm16Mono(source, 8f)
         assertEquals(1, eightTimes.size / 2)
         assertEquals(8f, shuttleAudibleSpeed(8f), 0f)
         assertEquals(8f, shuttleAudibleSpeed(-8f), 0f)

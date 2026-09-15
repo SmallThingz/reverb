@@ -141,7 +141,12 @@ internal class RecordingPcm16MonoReader private constructor(
                     try {
                         RecordingPcm16MonoReader(
                             channel = input.channel,
-                            validateRead = { true },
+                            validateRead = {
+                                fileDescriptorIdentityMatches(
+                                    recording.fileIdentity,
+                                    resolveFileDescriptorIdentity(input.fd),
+                                )
+                            },
                             closeAction = { runCatching { input.close() } },
                             layout = readWavPcmLayout(input.channel),
                         )

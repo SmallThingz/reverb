@@ -171,37 +171,21 @@ internal fun fadeOutShuttlePcm16Mono(input: ByteArray): ByteArray {
     return output
 }
 
-internal fun orientShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteArray {
-    val frameCount = input.size / 2
-    if (frameCount <= 0 || !signedRate.isFinite()) return ByteArray(0)
-    val usableBytes = frameCount * 2
-    if (signedRate >= 0f) return input.copyOf(usableBytes)
-    val output = ByteArray(usableBytes)
-    for (outFrame in 0 until frameCount) {
-        val sourceFrame = frameCount - 1 - outFrame
-        output[outFrame * 2] = input[sourceFrame * 2]
-        output[outFrame * 2 + 1] = input[sourceFrame * 2 + 1]
-    }
-    return output
-}
-
-internal fun shuttleAudibleSpeed(signedRate: Float): Float =
-    abs(signedRate.takeIf { it.isFinite() } ?: 0f).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
-
-internal fun shuttleSourceGrainSeconds(signedRate: Float): Double =
-    SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleAudibleSpeed(signedRate).toDouble()
-
-internal fun speedUpShuttlePcm16Mono(input: ByteArray, speed: Float): ByteArray {
+internal fun transformShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteArray {
     val inputFrames = input.size / 2
-    if (inputFrames <= 0 || !speed.isFinite()) return ByteArray(0)
-    val factor = speed.coerceIn(1f, SHUTTLE_MAX_ABS_RATE)
-    if (factor <= 1.0001f || inputFrames == 1) return input.copyOf(inputFrames * 2)
-    val outputFrames = (inputFrames.toFloat() / factor).roundToInt()
+    if (inputFrames <= 0 || !signedRate.isFinite()) return ByteArray(0)
+    val speed = shuttleAudibleSpeed(signedRate)
+    val reverse = signedRate < 0f
+    if (!reverse && speed <= 1.0001f) return input
+
+    val outputFrames = (inputFrames.toFloat() / speed).roundToInt()
         .coerceIn(1, inputFrames)
     val output = ByteArray(outputFrames * 2)
 
-    fun read(frame: Int): Int {
-        val index = frame.coerceIn(0, inputFrames - 1) * 2
+    fun readOriented(frame: Int): Int {
+        val logicalFrame = frame.coerceIn(0, inputFrames - 1)
+        val sourceFrame = if (reverse) inputFrames - 1 - logicalFrame else logicalFrame
+        val index = sourceFrame * 2
         return ((input[index + 1].toInt() shl 8) or (input[index].toInt() and 0xff)).toShort().toInt()
     }
     fun write(frame: Int, value: Int) {
@@ -211,7 +195,7 @@ internal fun speedUpShuttlePcm16Mono(input: ByteArray, speed: Float): ByteArray 
     }
 
     if (outputFrames == 1) {
-        write(0, read(inputFrames / 2))
+        write(0, readOriented(inputFrames / 2))
         return output
     }
     val sourceSpan = (inputFrames - 1).toDouble()
@@ -221,13 +205,20 @@ internal fun speedUpShuttlePcm16Mono(input: ByteArray, speed: Float): ByteArray 
         val base = sourcePosition.toInt().coerceIn(0, inputFrames - 1)
         val next = minOf(base + 1, inputFrames - 1)
         val fraction = (sourcePosition - base.toDouble()).toFloat()
-        val value = (read(base) + (read(next) - read(base)) * fraction)
+        val first = readOriented(base)
+        val value = (first + (readOriented(next) - first) * fraction)
             .roundToInt()
             .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
         write(frame, value)
     }
     return output
 }
+
+internal fun shuttleAudibleSpeed(signedRate: Float): Float =
+    abs(signedRate.takeIf { it.isFinite() } ?: 0f).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
+
+internal fun shuttleSourceGrainSeconds(signedRate: Float): Double =
+    SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleAudibleSpeed(signedRate).toDouble()
 
 internal data class ShuttleCrossfadeResult(
     val output: ByteArray,
@@ -641,10 +632,6 @@ internal class TimelineAudioPreviewController : Closeable {
 
             fun write(bytes: ByteArray) {
                 if (bytes.isEmpty()) return
-                if (!startedCallbackSent) {
-                    startedCallbackSent = true
-                    if (onStarted != null) postIfCurrent(token, onStarted)
-                }
                 var offset = 0
                 while (offset < bytes.size) {
                     checkCurrent(token)
@@ -656,6 +643,13 @@ internal class TimelineAudioPreviewController : Closeable {
                     )
                     if (written <= 0) throw IOException("Audio shuttle write failed: $written")
                     offset += written
+                    // Do not pause the normal Library player until shuttle audio is actually
+                    // queued. Opening/normalizing a saved WAV can block; firing this callback
+                    // before the first successful write creates a silent handoff gap on slow I/O.
+                    if (!startedCallbackSent) {
+                        startedCallbackSent = true
+                        if (onStarted != null) postIfCurrent(token, onStarted)
+                    }
                 }
             }
 
@@ -761,8 +755,7 @@ internal class TimelineAudioPreviewController : Closeable {
                     Thread.sleep(8L)
                     continue
                 }
-                val oriented = orientShuttlePcm16Mono(grain, rate)
-                val accelerated = speedUpShuttlePcm16Mono(oriented, audibleSpeed)
+                val accelerated = transformShuttlePcm16Mono(grain, rate)
                 val acceleratedFrames = accelerated.size / 2
                 if (acceleratedFrames <= 2) {
                     finishPendingTail()
