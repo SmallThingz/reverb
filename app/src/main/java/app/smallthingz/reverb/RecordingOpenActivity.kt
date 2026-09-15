@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import java.io.File
@@ -71,7 +70,7 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
             val expectedIdentity = source.getStringExtra("recording_file_identity").orEmpty()
             val file = File(id)
             if (!fileIdentityMatches(expectedIdentity, resolveFileIdentity(file))) return null
-            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+            buildVerifiedFileProviderUri(context, file, expectedIdentity)
         }
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,

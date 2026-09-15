@@ -97,7 +97,7 @@
 
 
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".VerifiedRecordingFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">

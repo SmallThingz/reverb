@@ -244,6 +244,15 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun verifiedFileProviderIdentity_roundTripsAndRejectsMalformedPayload() {
+        val identity = "stat:17:42:1234:99:777"
+        val encoded = encodeVerifiedFileProviderIdentity(identity)
+        assertEquals(identity, decodeVerifiedFileProviderIdentity(encoded))
+        assertEquals(null, decodeVerifiedFileProviderIdentity("%%%not-base64%%%"))
+        assertEquals(null, decodeVerifiedFileProviderIdentity(""))
+    }
+
+    @Test
     fun recordingActionTarget_neverRetargetsSelectionAcrossIdentityReuse() {
         val selected = RecordingEntity(
             id = "path", displayName = "clip.wav", mimeType = "audio/wav",

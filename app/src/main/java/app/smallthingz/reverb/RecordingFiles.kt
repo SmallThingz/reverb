@@ -44,6 +44,7 @@ internal fun hasIllegalRecordingNameCharacters(name: String): Boolean =
 
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
+private const val VERIFIED_FILE_IDENTITY_QUERY = "reverb_identity"
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
 private const val STAGING_SESSION_SEPARATOR = "__"
 private val OUTPUT_STAGING_SESSION_ID = UUID.randomUUID().toString()
@@ -178,6 +179,36 @@ fun describeOutputDirectory(
         ?: treeUri.toString()
 }
 
+internal fun encodeVerifiedFileProviderIdentity(identity: String): String {
+    require(identity.isNotBlank()) { "Recording identity is required" }
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(identity.toByteArray(Charsets.UTF_8))
+}
+
+internal fun decodeVerifiedFileProviderIdentity(encoded: String): String? = runCatching {
+    String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+}.getOrNull()?.takeIf { it.isNotBlank() }
+
+internal fun verifiedFileProviderIdentity(uri: Uri): String? {
+    val encoded = uri.getQueryParameter(VERIFIED_FILE_IDENTITY_QUERY)
+        ?.takeIf { it.isNotBlank() } ?: return null
+    return decodeVerifiedFileProviderIdentity(encoded)
+}
+
+internal fun buildVerifiedFileProviderUri(
+    context: Context,
+    file: File,
+    expectedIdentity: String,
+): Uri {
+    require(expectedIdentity.isNotBlank()) { "Recording identity is required" }
+    return FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+        .buildUpon()
+        .appendQueryParameter(
+            VERIFIED_FILE_IDENTITY_QUERY,
+            encodeVerifiedFileProviderIdentity(expectedIdentity),
+        )
+        .build()
+}
+
 fun buildRecordingUri(
     context: Context,
     recording: RecordingEntity,
@@ -185,8 +216,7 @@ fun buildRecordingUri(
     return when (recording.storageType) {
         RecordingStorageType.FILE -> {
             check(recordingFileIdentityMatches(recording)) { "Recording changed on disk: ${recording.id}" }
-            val file = File(recording.id)
-            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+            buildVerifiedFileProviderUri(context, File(recording.id), recording.fileIdentity)
         }
 
         RecordingStorageType.DOCUMENT,
