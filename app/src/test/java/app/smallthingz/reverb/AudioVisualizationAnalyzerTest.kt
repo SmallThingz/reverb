@@ -44,6 +44,37 @@ class AudioVisualizationAnalyzerTest {
     }
 
     @Test
+    fun veryQuietPhoneMicLevelInput_isVisible() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val pcm = pcm16Tone(frequencyHz = 440.0, amplitude = 0.002)
+
+        val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, SAMPLE_RATE.toInt())
+
+        assertTrue(frame.activity > 0.04f)
+        assertTrue(frame.bins.maxOrNull()!! > 0.02f)
+    }
+
+    @Test
+    fun transientOutsideFinalFftWindow_stillMovesBlob() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val samples = ShortArray(7_056)
+        repeat(1_024) { index ->
+            samples[index] = (sin(2.0 * PI * 700.0 * index / SAMPLE_RATE) * 0.02 * Short.MAX_VALUE)
+                .toInt()
+                .toShort()
+        }
+        val pcm = ByteBuffer.allocate(samples.size * Short.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .apply { samples.forEach(::putShort) }
+            .array()
+
+        val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, SAMPLE_RATE.toInt())
+
+        assertTrue(frame.activity > 0.08f)
+        assertTrue(frame.bins.maxOrNull()!! > 0.015f)
+    }
+
+    @Test
     fun highSampleRateInput_stillUsesSpeechEnergy() {
         val analyzer = AudioVisualizationAnalyzer()
         val sampleRate = 192_000.0

@@ -421,7 +421,7 @@ internal class AudioBlobView(context: Context) : View(context) {
                     sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +
                         sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f
                 } else 0f
-                val radius = base + if (active) band * minSize * 0.078f + idle else 0f
+                val radius = base + if (active) band * minSize * 0.105f + idle else 0f
                 x[index] = cx + cos(angle) * radius
                 y[index] = cy + sin(angle) * radius
             }
@@ -490,7 +490,7 @@ internal class AudioBlobView(context: Context) : View(context) {
                 float liveRadius = 0.330 + activity * 0.018;
                 float baseRadius = mix(0.095, liveRadius, life);
                 float blobRadius = baseRadius + active * life *
-                    (idle + audioWave * (0.078 + activity * 0.020));
+                    (idle + audioWave * (0.105 + activity * 0.030));
                 float distanceToEdge = radius - blobRadius;
 
                 float body = smoothstep(0.012, -0.006, distanceToEdge);
