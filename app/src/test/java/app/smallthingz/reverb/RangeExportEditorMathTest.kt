@@ -8,6 +8,44 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun rememberedRangeExportStoresLengthAndPositionFromTimelineEnd() {
+        assertEquals(
+            RememberedRangeExport(selectionLengthMillis = 20_000L, endOffsetMillis = 15_000L),
+            rememberedRangeExportFromSavedRange(
+                availableSeconds = 100.0,
+                startSeconds = 65f,
+                endSeconds = 85f,
+            ),
+        )
+        assertEquals(null, rememberedRangeExportFromSavedRange(100.0, 20f, 20f))
+        assertEquals(null, rememberedRangeExportFromSavedRange(Double.NaN, 10f, 20f))
+    }
+
+    @Test
+    fun rememberedRangeExportRestoresEndRelativeAndFailsOverGracefully() {
+        val remembered = RememberedRangeExport(
+            selectionLengthMillis = 20_000L,
+            endOffsetMillis = 15_000L,
+        )
+
+        // A longer timeline preserves both the 20 second length and 15 second end offset.
+        assertEquals(RestoredRangeExport(85f, 105f), restoreRememberedRangeExport(120f, remembered))
+
+        // If the old offset leaves too little room, preserve the length and shift toward the end.
+        assertEquals(RestoredRangeExport(0f, 20f), restoreRememberedRangeExport(25f, remembered))
+
+        // If even the old export length no longer fits, select everything that still exists.
+        assertEquals(RestoredRangeExport(0f, 12f), restoreRememberedRangeExport(12f, remembered))
+
+        // Invalid memory is ignored instead of manufacturing a broken range.
+        assertEquals(
+            RestoredRangeExport(0f, 50f),
+            restoreRememberedRangeExport(50f, RememberedRangeExport(0L, 10_000L)),
+        )
+        assertEquals(RestoredRangeExport(0f, 50f), restoreRememberedRangeExport(50f, null))
+    }
+
+    @Test
     fun blobMorphUsesMeasuredRendererGeometryExactly() {
         assertEquals(0.330f, rangeBlobBaseRadiusFraction(active = true, enabled = true, activity = 0f), 0.000001f)
         assertEquals(0.348f, rangeBlobBaseRadiusFraction(active = true, enabled = true, activity = 1f), 0.000001f)

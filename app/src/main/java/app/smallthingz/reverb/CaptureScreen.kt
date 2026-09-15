@@ -152,10 +152,16 @@ fun buildCaptureNotification(context: Context, recording: RecordingEntity): Noti
         .build()
 }
 
+private data class ExportRangeMemory(
+    val bufferSlot: ReverbService.BufferSlot,
+    val availableSeconds: Double,
+)
+
 private data class ExportRange(
     val startSeconds: Float,
     val endSeconds: Float,
     val warningDurationSeconds: Float?,
+    val rememberOnSave: ExportRangeMemory? = null,
 )
 
 private data class ExportUiConfig(
@@ -628,7 +634,10 @@ fun CaptureScreen(
                             )
                             return@acquireTimelineSnapshot
                         }
-                        handleExport(context, s, snapshot.durationSeconds.toFloat()) { range ->
+                        handleExport(context, s, snapshot.durationSeconds.toFloat()) { builtRange ->
+                            val range = builtRange.copy(
+                                rememberOnSave = ExportRangeMemory(bufferSlot, snapshot.durationSeconds),
+                            )
                             if (range.warningDurationSeconds != null) {
                                 clampWarningSeconds = range.warningDurationSeconds
                                 pendingExportRange = range
@@ -734,11 +743,14 @@ fun CaptureScreen(
         )
         val submitRangeExport: (Float, Float) -> Unit = submitRange@ { startSeconds, endSeconds ->
             val snapshot = rangeSnapshot ?: return@submitRange
+            val bufferSlot = rangeSnapshotBuffer ?: return@submitRange
             val range = buildCustomExportRange(
                 availableSeconds = snapshot.durationSeconds,
                 requestedStartSeconds = startSeconds,
                 requestedEndSeconds = endSeconds,
                 exportConfig = rangeConfig,
+            ).copy(
+                rememberOnSave = ExportRangeMemory(bufferSlot, snapshot.durationSeconds),
             )
             rangeSnapshot = null
             rangeSnapshotBuffer = null
@@ -1979,11 +1991,22 @@ private fun startExport(
     setSaving(true)
     onStatus(CaptureSaveStatus.Saving(cancellable = true))
     val receiver = SaveResultReceiver(
-            context = context,
-            setSaving = setSaving,
-            onStatus = onStatus,
-            onError = onError,
-            onSaved = onSaved,
+        context = context,
+        setSaving = setSaving,
+        onStatus = onStatus,
+        onError = onError,
+        onSaved = {
+            range.rememberOnSave?.let { memory ->
+                rememberSuccessfulRangeExport(
+                    context = context,
+                    bufferSlot = memory.bufferSlot,
+                    availableSeconds = memory.availableSeconds,
+                    startSeconds = range.startSeconds,
+                    endSeconds = range.endSeconds,
+                )
+            }
+            onSaved()
+        },
     )
     try {
         if (snapshot != null) {

@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
@@ -91,6 +92,7 @@ import kotlin.math.abs
 import kotlin.math.cosh
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.sign
 import kotlin.math.tanh
 
@@ -101,6 +103,53 @@ internal data class RangeEditValues(
     val cursorSeconds: Float,
     val endSeconds: Float,
 )
+
+internal data class RememberedRangeExport(
+    val selectionLengthMillis: Long,
+    val endOffsetMillis: Long,
+)
+
+internal data class RestoredRangeExport(
+    val startSeconds: Float,
+    val endSeconds: Float,
+)
+
+internal fun restoreRememberedRangeExport(
+    availableSeconds: Float,
+    remembered: RememberedRangeExport?,
+): RestoredRangeExport {
+    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+    if (available <= 0f || remembered == null ||
+        remembered.selectionLengthMillis <= 0L || remembered.endOffsetMillis < 0L
+    ) {
+        return RestoredRangeExport(0f, available)
+    }
+    val selectionSeconds = remembered.selectionLengthMillis.toDouble() / 1_000.0
+    if (selectionSeconds >= available.toDouble()) {
+        return RestoredRangeExport(0f, available)
+    }
+    val maxEndOffsetSeconds = available.toDouble() - selectionSeconds
+    val endOffsetSeconds = (remembered.endOffsetMillis.toDouble() / 1_000.0)
+        .coerceIn(0.0, maxEndOffsetSeconds)
+    val end = available.toDouble() - endOffsetSeconds
+    val start = (end - selectionSeconds).coerceAtLeast(0.0)
+    return RestoredRangeExport(start.toFloat(), end.toFloat())
+}
+
+internal fun rememberedRangeExportFromSavedRange(
+    availableSeconds: Double,
+    startSeconds: Float,
+    endSeconds: Float,
+): RememberedRangeExport? {
+    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null
+    if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null
+    val start = startSeconds.toDouble().coerceIn(0.0, available)
+    val end = endSeconds.toDouble().coerceIn(start, available)
+    val selectionMillis = ((end - start) * 1_000.0).roundToLong()
+    if (selectionMillis <= 0L) return null
+    val endOffsetMillis = ((available - end) * 1_000.0).roundToLong().coerceAtLeast(0L)
+    return RememberedRangeExport(selectionMillis, endOffsetMillis)
+}
 
 internal data class RangeEditUpdate(
     val values: RangeEditValues,
@@ -420,6 +469,7 @@ internal fun projectFineAdjustShuttleTarget(
 
 internal class RangeExportEditorState(
     initialDurationSeconds: Float,
+    private val rememberedRangeExport: RememberedRangeExport? = null,
 ) {
     private val previewController = TimelineAudioPreviewController()
     private val snapHandler = Handler(Looper.getMainLooper())
@@ -428,12 +478,14 @@ internal class RangeExportEditorState(
         private set
     var durationSeconds by mutableFloatStateOf(initialDurationSeconds.coerceAtLeast(0.05f))
         private set
+    private val initialRestoredRange = restoreRememberedRangeExport(durationSeconds, rememberedRangeExport)
+    private var restoreRememberedRangeOnFirstSnapshot = rememberedRangeExport != null
 
-    var startSeconds by mutableFloatStateOf(0f)
+    var startSeconds by mutableFloatStateOf(initialRestoredRange.startSeconds)
         private set
-    var endSeconds by mutableFloatStateOf(durationSeconds)
+    var endSeconds by mutableFloatStateOf(initialRestoredRange.endSeconds)
         private set
-    var cursorSeconds by mutableFloatStateOf(0f)
+    var cursorSeconds by mutableFloatStateOf(initialRestoredRange.startSeconds)
         private set
     var lastTarget by mutableStateOf(RangeEditTarget.CURSOR)
         private set
@@ -488,13 +540,21 @@ internal class RangeExportEditorState(
         val endWasAtLiveEdge = kotlin.math.abs(endSeconds - previousDuration) <= 0.15f
         snapshot = value
         durationSeconds = nextDuration
-        startSeconds = startSeconds.coerceIn(0f, (nextDuration - 0.05f).coerceAtLeast(0f))
-        endSeconds = if (endWasAtLiveEdge) {
-            nextDuration
+        if (restoreRememberedRangeOnFirstSnapshot) {
+            val restored = restoreRememberedRangeExport(nextDuration, rememberedRangeExport)
+            restoreRememberedRangeOnFirstSnapshot = false
+            startSeconds = restored.startSeconds
+            endSeconds = restored.endSeconds
+            cursorSeconds = restored.startSeconds
         } else {
-            endSeconds.coerceIn((startSeconds + 0.05f).coerceAtMost(nextDuration), nextDuration)
+            startSeconds = startSeconds.coerceIn(0f, (nextDuration - 0.05f).coerceAtLeast(0f))
+            endSeconds = if (endWasAtLiveEdge) {
+                nextDuration
+            } else {
+                endSeconds.coerceIn((startSeconds + 0.05f).coerceAtMost(nextDuration), nextDuration)
+            }
+            cursorSeconds = cursorSeconds.coerceIn(0f, nextDuration)
         }
-        cursorSeconds = cursorSeconds.coerceIn(0f, nextDuration)
     }
 
     fun resetWaveformConstruction() {
@@ -941,7 +1001,13 @@ internal fun RangeExportHomeContent(
     onCancel: () -> Unit,
     onExport: (startSeconds: Float, endSeconds: Float) -> Unit,
 ) {
-    val state = remember(selectedBuffer) { RangeExportEditorState(initialDurationSeconds) }
+    val context = LocalContext.current
+    val rememberedRangeExport = remember(selectedBuffer) {
+        getRememberedRangeExport(context, selectedBuffer)
+    }
+    val state = remember(selectedBuffer, rememberedRangeExport) {
+        RangeExportEditorState(initialDurationSeconds, rememberedRangeExport)
+    }
     val colors = MaterialTheme.colorScheme
     var transitionStarted by remember(selectedBuffer) { mutableStateOf(false) }
     var interactionReady by remember(selectedBuffer) { mutableStateOf(false) }

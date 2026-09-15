@@ -243,6 +243,46 @@ fun getRecorderPreferences(context: Context): SharedPreferences {
     return context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
 }
 
+private fun rememberedRangeExportKeys(
+    bufferSlot: ReverbService.BufferSlot,
+): Pair<PrefKey, PrefKey> = when (bufferSlot) {
+    ReverbService.BufferSlot.ONE_SHOT ->
+        PrefKey.RANGE_EXPORT_ONE_SHOT_SELECTION_MILLIS to PrefKey.RANGE_EXPORT_ONE_SHOT_END_OFFSET_MILLIS
+    ReverbService.BufferSlot.LOOPING ->
+        PrefKey.RANGE_EXPORT_LOOPING_SELECTION_MILLIS to PrefKey.RANGE_EXPORT_LOOPING_END_OFFSET_MILLIS
+}
+
+internal fun getRememberedRangeExport(
+    context: Context,
+    bufferSlot: ReverbService.BufferSlot,
+): RememberedRangeExport? {
+    val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
+    val prefs = getRecorderPreferences(context)
+    val selectionMillis = runCatching { prefs.getLong(selectionKey, -1L) }.getOrDefault(-1L)
+    val endOffsetMillis = runCatching { prefs.getLong(offsetKey, -1L) }.getOrDefault(-1L)
+    if (selectionMillis <= 0L || endOffsetMillis < 0L) return null
+    return RememberedRangeExport(selectionMillis, endOffsetMillis)
+}
+
+internal fun rememberSuccessfulRangeExport(
+    context: Context,
+    bufferSlot: ReverbService.BufferSlot,
+    availableSeconds: Double,
+    startSeconds: Float,
+    endSeconds: Float,
+): Boolean {
+    val remembered = rememberedRangeExportFromSavedRange(
+        availableSeconds = availableSeconds,
+        startSeconds = startSeconds,
+        endSeconds = endSeconds,
+    ) ?: return false
+    val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
+    return getRecorderPreferences(context).edit()
+        .putLong(selectionKey, remembered.selectionLengthMillis)
+        .putLong(offsetKey, remembered.endOffsetMillis)
+        .commit()
+}
+
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
     val encoded = runCatching { prefs.getInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE) }.getOrNull()
     if (encoded != null && encoded != Int.MIN_VALUE) {
