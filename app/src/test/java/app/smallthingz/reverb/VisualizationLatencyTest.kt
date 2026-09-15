@@ -1,6 +1,9 @@
 package app.smallthingz.reverb
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,6 +69,47 @@ class VisualizationLatencyTest {
 
         assertEquals(768_000, bytes)
         assertTrue(bytes <= ReverbService.CAPTURE_SCRATCH_BYTES)
+    }
+
+
+    @Test
+    fun uiForegroundOwners_staleDisposalCannotBackgroundNewActivity() {
+        val tracker = UiForegroundOwnerTracker()
+        val oldActivity = Any()
+        val newActivity = Any()
+
+        assertTrue(tracker.update(oldActivity, true))
+        assertTrue(tracker.update(newActivity, true))
+        assertTrue(tracker.update(oldActivity, false))
+        assertEquals(1, tracker.size())
+        assertFalse(tracker.update(newActivity, false))
+    }
+
+    @Test
+    fun visualizerOwner_staleDisposalCannotClearReplacementCallback() {
+        val registry = IdentityOwnerRegistry<Any>()
+        val oldCallback = Any()
+        val newCallback = Any()
+
+        assertTrue(registry.register(oldCallback))
+        assertTrue(registry.register(newCallback))
+        assertFalse(registry.unregister(oldCallback))
+        assertSame(newCallback, registry.current())
+        assertTrue(registry.unregister(newCallback))
+        assertNull(registry.current())
+    }
+
+    @Test
+    fun visualizerOwner_activeDisposalFallsBackToStillVisibleClient() {
+        val registry = IdentityOwnerRegistry<Any>()
+        val first = Any()
+        val second = Any()
+
+        registry.register(first)
+        registry.register(second)
+        assertTrue(registry.unregister(second))
+        assertSame(first, registry.current())
+        assertEquals(1, registry.size())
     }
 
 }

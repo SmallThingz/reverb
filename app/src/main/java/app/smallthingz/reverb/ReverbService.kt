@@ -32,6 +32,7 @@ import java.io.InterruptedIOException
 import java.io.PrintWriter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
@@ -43,6 +44,60 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+
+
+internal class UiForegroundOwnerTracker {
+    private val owners = IdentityHashMap<Any, Unit>()
+
+    @Synchronized
+    fun update(owner: Any, foreground: Boolean): Boolean {
+        if (foreground) owners[owner] = Unit else owners.remove(owner)
+        return owners.isNotEmpty()
+    }
+
+    @Synchronized
+    fun clear() {
+        owners.clear()
+    }
+
+    @Synchronized
+    fun size(): Int = owners.size
+}
+
+internal class IdentityOwnerRegistry<T : Any> {
+    private val owners = ArrayList<T>()
+
+    @Volatile
+    private var active: T? = null
+
+    fun current(): T? = active
+
+    @Synchronized
+    fun register(owner: T): Boolean {
+        owners.removeAll { it === owner }
+        val changed = active !== owner
+        owners += owner
+        active = owner
+        return changed
+    }
+
+    @Synchronized
+    fun unregister(owner: T): Boolean {
+        val wasActive = active === owner
+        owners.removeAll { it === owner }
+        if (wasActive) active = owners.lastOrNull()
+        return wasActive
+    }
+
+    @Synchronized
+    fun clearAll() {
+        owners.clear()
+        active = null
+    }
+
+    @Synchronized
+    fun size(): Int = owners.size
+}
 
 @SuppressLint("ImplicitSamInstance")
 class ReverbService : Service() {
@@ -126,8 +181,7 @@ class ReverbService : Service() {
     @Volatile
     private var configuredCaptureSnapshot: RecorderConfigurationSnapshot? = null
 
-    @Volatile
-    private var visualizationCallback: VisualizationCallback? = null
+    private val visualizationCallbacks = IdentityOwnerRegistry<VisualizationCallback>()
 
     private val captureScratch = ByteArray(CAPTURE_SCRATCH_BYTES)
     private val captureBuffer = ByteBuffer.allocateDirect(CAPTURE_SCRATCH_BYTES)
@@ -148,6 +202,7 @@ class ReverbService : Service() {
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
     @Volatile private var wakeLock: PowerManager.WakeLock? = null
+    private val appUiForegroundOwners = UiForegroundOwnerTracker()
     @Volatile private var appUiForeground = false
     private var powerManager: PowerManager? = null
 
@@ -207,7 +262,7 @@ class ReverbService : Service() {
     }
 
     override fun onDestroy() {
-        visualizationCallback = null
+        visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
@@ -275,7 +330,9 @@ class ReverbService : Service() {
     }
 
     override fun onUnbind(intent: Intent): Boolean {
-        setVisualizationCallback(null)
+        appUiForegroundOwners.clear()
+        appUiForeground = false
+        clearAllVisualizationCallbacks()
         return true
     }
 
@@ -301,6 +358,8 @@ class ReverbService : Service() {
         writer.println("ReverbService")
         writer.println("  state=$state")
         writer.println("  listeningEnabled=${isListeningEnabled()}")
+        writer.println("  appUiForeground=$appUiForeground owners=${appUiForegroundOwners.size()}")
+        writer.println("  visualizerAttached=${visualizationCallbacks.current() != null} clients=${visualizationCallbacks.size()}")
         writer.println("  activeBuffer=$activeBufferSlot")
         writer.println("  sampleRate=$sampleRate")
         writer.println("  channelCount=${channelMode.channelCount}")
@@ -1761,7 +1820,7 @@ class ReverbService : Service() {
             sampleRate = sampleRate,
             frameBytes = frameBytes,
             capacityBytes = captureScratch.size,
-            visualizationActive = visualizationCallback != null,
+            visualizationActive = visualizationCallbacks.current() != null,
             appUiForeground = appUiForeground,
         )
         captureBuffer.clear()
@@ -1986,18 +2045,41 @@ class ReverbService : Service() {
         }
     }
 
-    fun setAppUiForeground(foreground: Boolean) {
-        appUiForeground = foreground
+    fun setAppUiForeground(owner: Any, foreground: Boolean) {
+        appUiForeground = appUiForegroundOwners.update(owner, foreground)
     }
 
-    fun setVisualizationCallback(callback: VisualizationCallback?) {
-        visualizationCallback = callback
-        if (callback == null) {
-            pendingVisualizationFrame.set(null)
-        }
+    fun setVisualizationCallback(callback: VisualizationCallback) {
+        if (!visualizationCallbacks.register(callback)) return
+        pendingVisualizationFrame.set(null)
         if (!::audioHandler.isInitialized) return
         audioHandler.post {
-            if (visualizationCallback === callback) {
+            if (visualizationCallbacks.current() === callback) {
+                visualizationAnalyzer.reset()
+                visualizationFaulted = false
+            }
+        }
+    }
+
+    fun clearVisualizationCallback(callback: VisualizationCallback) {
+        if (!visualizationCallbacks.unregister(callback)) return
+        pendingVisualizationFrame.set(null)
+        val fallback = visualizationCallbacks.current()
+        if (!::audioHandler.isInitialized) return
+        audioHandler.post {
+            if (visualizationCallbacks.current() === fallback) {
+                visualizationAnalyzer.reset()
+                visualizationFaulted = false
+            }
+        }
+    }
+
+    private fun clearAllVisualizationCallbacks() {
+        visualizationCallbacks.clearAll()
+        pendingVisualizationFrame.set(null)
+        if (!::audioHandler.isInitialized) return
+        audioHandler.post {
+            if (visualizationCallbacks.current() == null) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
             }
@@ -2005,7 +2087,7 @@ class ReverbService : Service() {
     }
 
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
-        val callback = visualizationCallback ?: return
+        val callback = visualizationCallbacks.current() ?: return
         if (visualizationFaulted) return
         // The capture read itself is display-rate while the visualizer is attached. Analyze every
         // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
@@ -2024,7 +2106,7 @@ class ReverbService : Service() {
             Log.w(TAG, "Audio visualization disabled until the UI reconnects", error)
             return
         }
-        if (visualizationCallback !== callback) return
+        if (visualizationCallbacks.current() !== callback) return
         pendingVisualizationFrame.set(frame)
         if (visualizationDispatchScheduled.compareAndSet(false, true)) {
             mainHandler.post(visualizationDispatcher)
@@ -2034,7 +2116,7 @@ class ReverbService : Service() {
     private val visualizationDispatcher = object : Runnable {
         override fun run() {
             val frame = pendingVisualizationFrame.getAndSet(null)
-            val callback = visualizationCallback
+            val callback = visualizationCallbacks.current()
             if (frame != null && callback != null) {
                 callback.frame(frame)
             }
@@ -2042,7 +2124,7 @@ class ReverbService : Service() {
             visualizationDispatchScheduled.set(false)
             if (
                 pendingVisualizationFrame.get() != null &&
-                visualizationCallback != null &&
+                visualizationCallbacks.current() != null &&
                 visualizationDispatchScheduled.compareAndSet(false, true)
             ) {
                 mainHandler.post(this)

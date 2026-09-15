@@ -223,6 +223,7 @@ fun CaptureScreen(
         )
     }
     val bookkeeping = remember { CaptureScreenBookkeeping() }
+    val uiForegroundOwner = remember { Any() }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
     // Sampled only when range export opens; visualization updates must not recompose CaptureScreen.
@@ -472,13 +473,13 @@ fun CaptureScreen(
         }
     }
 
-    DisposableEffect(service, lifecycleOwner, view) {
+    DisposableEffect(service, lifecycleOwner, view, uiForegroundOwner) {
         val recorderService = service
         var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         var windowFocused = view.hasWindowFocus()
 
         fun updateUiForeground() {
-            recorderService?.setAppUiForeground(resumed && windowFocused)
+            recorderService?.setAppUiForeground(uiForegroundOwner, resumed && windowFocused)
         }
 
         val observer = LifecycleEventObserver { _, event ->
@@ -507,7 +508,7 @@ fun CaptureScreen(
             if (view.viewTreeObserver.isAlive) {
                 view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
             }
-            recorderService?.setAppUiForeground(false)
+            recorderService?.setAppUiForeground(uiForegroundOwner, false)
         }
     }
 
@@ -523,7 +524,7 @@ fun CaptureScreen(
                 recorderService?.setVisualizationCallback(visualizationCallback)
                 registered = recorderService != null
             } else if (!visible && registered) {
-                recorderService?.setVisualizationCallback(null)
+                recorderService?.clearVisualizationCallback(visualizationCallback)
                 registered = false
                 oneShotBlobController.clear()
                 loopingBlobController.clear()
@@ -557,7 +558,7 @@ fun CaptureScreen(
                 view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
             }
             if (registered) {
-                recorderService?.setVisualizationCallback(null)
+                recorderService?.clearVisualizationCallback(visualizationCallback)
             }
             oneShotBlobController.clear()
             loopingBlobController.clear()

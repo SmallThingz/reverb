@@ -32,8 +32,6 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var enabledState = true
     private var saving = false
     private var renderingVisible = true
-    private var aggregatedVisible = false
-    private var windowFocused = false
     private var framePosted = false
     private var shaderTimeSeconds = 0f
     private var lastFrameNanos = 0L
@@ -169,8 +167,6 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        aggregatedVisible = isShown
-        windowFocused = hasWindowFocus()
         ensureAnimationState()
     }
 
@@ -181,18 +177,16 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     override fun onVisibilityAggregated(isVisible: Boolean) {
         super.onVisibilityAggregated(isVisible)
-        aggregatedVisible = isVisible
         ensureAnimationState()
     }
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        windowFocused = hasWindowFocus
         ensureAnimationState()
     }
 
     private fun shouldAnimate(): Boolean =
-        renderingVisible && isAttachedToWindow && aggregatedVisible && windowFocused && enabledState &&
+        renderingVisible && isAttachedToWindow && isShown && hasWindowFocus() && enabledState &&
             (hasRecentAudioSignal() || hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
 
     private fun ensureAnimationState() {
