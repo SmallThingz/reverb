@@ -213,6 +213,14 @@ class RangeExportEditorMathTest {
 
 
     @Test
+    fun shuttlePositionSanitizesInvalidInputWithoutUsingCatalogDuration() {
+        assertEquals(12.5, sanitizedShuttlePositionSeconds(12.5), 0.0)
+        assertEquals(0.0, sanitizedShuttlePositionSeconds(-4.0), 0.0)
+        assertEquals(0.0, sanitizedShuttlePositionSeconds(Double.NaN), 0.0)
+        assertEquals(0.0, sanitizedShuttlePositionSeconds(Double.POSITIVE_INFINITY), 0.0)
+    }
+
+    @Test
     fun fineTuneShuttleRateTracksDirectionAndAggression() {
         val near = rangeFineTuneShuttleRate(0.08f, 0f)
         val middle = rangeFineTuneShuttleRate(0.50f, 0f)

@@ -270,17 +270,19 @@ internal fun rememberSuccessfulRangeExport(
     availableSeconds: Double,
     startSeconds: Float,
     endSeconds: Float,
-): Boolean {
+) {
     val remembered = rememberedRangeExportFromSavedRange(
         availableSeconds = availableSeconds,
         startSeconds = startSeconds,
         endSeconds = endSeconds,
-    ) ?: return false
+    ) ?: return
     val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
-    return getRecorderPreferences(context).edit()
+    // This is UI convenience state, not audio durability state. SaveResultReceiver runs on
+    // the main thread, so commit() would put a synchronous filesystem write on export success.
+    getRecorderPreferences(context).edit()
         .putLong(selectionKey, remembered.selectionLengthMillis)
         .putLong(offsetKey, remembered.endOffsetMillis)
-        .commit()
+        .apply()
 }
 
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
@@ -319,18 +321,6 @@ fun getConfiguredThemeMode(context: Context): AppThemeMode = readByteBackedPrefe
     storageCode = AppThemeMode::storageCode,
 )
 
-fun getConfiguredRetentionSeconds(context: Context): Long =
-    retentionConfigurationForRead(context).loopingSeconds
-
-fun getConfiguredRetentionSizeBytes(context: Context): Long =
-    retentionConfigurationForRead(context).loopingSizeBytes
-
-fun getConfiguredOneShotRetentionSeconds(context: Context): Long =
-    retentionConfigurationForRead(context).oneShotSeconds
-
-fun getConfiguredOneShotRetentionSizeBytes(context: Context): Long =
-    retentionConfigurationForRead(context).oneShotSizeBytes
-
 private fun configuredSizeHasWholeFrame(
     context: Context,
     sizeBytes: Long,
@@ -359,10 +349,6 @@ fun isConfiguredLoopingBufferEnabled(context: Context): Boolean {
 
 fun isOnboardingPending(context: Context): Boolean {
     return !getRecorderPreferences(context).getBoolean(PrefKey.ONBOARDING_SHOWN, false)
-}
-
-fun markOnboardingShown(context: Context): Boolean {
-    return getRecorderPreferences(context).edit().putBoolean(PrefKey.ONBOARDING_SHOWN, true).commit()
 }
 
 @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.

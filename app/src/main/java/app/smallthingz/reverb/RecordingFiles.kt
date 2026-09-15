@@ -205,19 +205,6 @@ fun buildRecordingUri(
     }
 }
 
-fun buildOpenRecordingIntent(
-    context: Context,
-    recording: RecordingEntity,
-): Intent {
-    return Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(
-            buildRecordingUri(context, recording),
-            recording.mimeType.ifBlank { ReverbConfig.FALLBACK_MIME_TYPE_AUDIO },
-        )
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-}
-
 fun buildShareRecordingsIntent(
     context: Context,
     recordings: Collection<RecordingEntity>,
@@ -340,35 +327,6 @@ private fun inspectRecordingMedia(
             sampleRate = metadata?.sampleRate,
         ),
     )
-}
-
-fun buildPlayerCodecSummary(codecSummary: String): String {
-    val trimmed = codecSummary.trim()
-    if (trimmed.isEmpty()) return codecSummary
-    val sep = ReverbConfig.CODEC_SUMMARY_SEPARATOR
-    val parts = mutableListOf<String>()
-    var start = 0
-    while (true) {
-        val idx = trimmed.indexOf(sep, start)
-        val part = if (idx < 0) trimmed.substring(start).trim() else trimmed.substring(start, idx).trim()
-        if (part.isNotEmpty()) parts.add(part)
-        if (idx < 0) break
-        start = idx + sep.length
-    }
-    if (parts.isEmpty()) return codecSummary
-    val first = parts[0]
-    var sampleRate: String? = null
-    var bitrate: String? = null
-    for (i in 1 until parts.size) {
-        val p = parts[i]
-        if (p.contains("kHz", ignoreCase = true)) sampleRate = p
-        else if (p.contains("kbps", ignoreCase = true)) bitrate = p
-    }
-    return buildString {
-        append(first)
-        if (sampleRate != null && sampleRate != first) { append(sep); append(sampleRate) }
-        if (bitrate != null && bitrate != first) { append(sep); append(bitrate) }
-    }
 }
 
 private fun resolveRecordingCodecInfo(
@@ -1547,15 +1505,6 @@ internal fun verifyWavOutputTargetAndDigest(
         }
     }
 }
-
-fun listCurrentOutputDirectoryRecordings(
-    context: Context,
-    knownRecordings: Map<String, RecordingEntity> = emptyMap(),
-): List<RecordingEntity> = listOutputDirectoryRecordings(
-    context = context,
-    treeUri = getConfiguredExportTreeUri(context),
-    knownRecordings = knownRecordings,
-)
 
 internal fun listOutputDirectoryRecordings(
     context: Context,

@@ -435,9 +435,9 @@ internal fun rangeFineTuneShuttleRate(
     val magnitude = abs(pull)
     if (magnitude <= 0.002f) return 0f
     val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    // This is source-hop aggressiveness, not an AudioTrack playback-rate multiplier.
-    // A value from 1x..8x bounds how quickly the audible source head may catch the
-    // gesture target while every emitted grain itself remains normal-pitch.
+    // This is scrub aggressiveness, not an AudioTrack playback-rate multiplier.
+    // A value from 1x..8x controls both source-head catch-up and how much source audio
+    // each fixed-duration output grain time-compresses.
     val baseSpeed = 1f + 7f * normalized.pow(2f)
     val verticalScale = rangeFineTuneSpeedScale(verticalPull).pow(0.32f)
     return sign(pull) * (baseSpeed * verticalScale).coerceIn(1f, 8f)

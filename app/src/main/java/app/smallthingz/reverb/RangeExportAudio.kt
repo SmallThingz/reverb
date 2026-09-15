@@ -217,6 +217,9 @@ internal fun transformShuttlePcm16Mono(input: ByteArray, signedRate: Float): Byt
 internal fun shuttleAudibleSpeed(signedRate: Float): Float =
     abs(signedRate.takeIf { it.isFinite() } ?: 0f).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
 
+internal fun sanitizedShuttlePositionSeconds(positionSeconds: Double): Double =
+    positionSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
+
 internal fun shuttleSourceGrainSeconds(signedRate: Float): Double =
     SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleAudibleSpeed(signedRate).toDouble()
 
@@ -508,9 +511,10 @@ internal class TimelineAudioPreviewController : Closeable {
         rate: Float,
         onStarted: () -> Unit = {},
     ) {
-        val durationHint = recording.durationMillis.coerceAtLeast(0L).toDouble() / 1_000.0
         startShuttleInternal(
-            atSeconds = atSeconds.coerceIn(0.0, durationHint.coerceAtLeast(0.0)),
+            // Catalog duration can lag MediaPlayer/the opened WAV. The source thread owns the
+            // authoritative upper bound, avoiding a wrong first grain then an audible jump.
+            atSeconds = sanitizedShuttlePositionSeconds(atSeconds),
             rate = rate,
             sourceFactory = { RecordingShuttlePcmSource(context.applicationContext, recording) },
             onStarted = onStarted,
@@ -529,7 +533,7 @@ internal class TimelineAudioPreviewController : Closeable {
         activeShuttleToken = token
         shuttleCommand.set(
             ShuttleCommand(
-                positionSeconds = atSeconds.coerceAtLeast(0.0),
+                positionSeconds = sanitizedShuttlePositionSeconds(atSeconds),
                 rate = rate.coerceIn(-SHUTTLE_MAX_ABS_RATE, SHUTTLE_MAX_ABS_RATE),
             ),
         )
@@ -550,7 +554,7 @@ internal class TimelineAudioPreviewController : Closeable {
         if (closed || token == 0L || generation.get() != token) return
         shuttleCommand.set(
             ShuttleCommand(
-                positionSeconds = atSeconds,
+                positionSeconds = sanitizedShuttlePositionSeconds(atSeconds),
                 rate = rate.coerceIn(-SHUTTLE_MAX_ABS_RATE, SHUTTLE_MAX_ABS_RATE),
             ),
         )
