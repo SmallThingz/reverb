@@ -19,6 +19,7 @@
 - Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
 
 - Library recording playback expands the tapped recording card vertically in place; never replace it with a player dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim. Backing file/provider identity checks and descriptor opens run off the main thread; descriptor ownership stays outside Compose state.
+- Library coroutine Job handles and other non-rendered lifecycle bookkeeping stay in plain remembered holders, not Compose state; assignment/cancellation must not trigger recomposition.
 - Library playback and inline trim reuse the exact range-export spring fine-seek control: same puck, 2D pull field, nonlinear seek math, hit target, and play/pause tap semantics. Fine seek never becomes silent seek/pause: Library hands audio from MediaPlayer to the same continuous grain shuttle and resumes normal playback on release. Inline trim has independent Start/Cursor/End targets; fine seek edits/auditions the last touched one without dragging the other targets with it.
 - Long-pressing an expanded recording card to open its context menu must preserve the card expansion; opening the menu is not a collapse action.
 - Saved recording waveforms are cached in the catalog against a content revision and mirrored into the open Library state; never reuse a cache after the physical content identity, size, or duration changes.

@@ -132,11 +132,11 @@ fun FilesScreen(
     var expandedRecordingId by remember { mutableStateOf<String?>(null) }
     var trimRequestRecordingId by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<LibraryNotice?>(null) }
-    var deletionJob by remember { mutableStateOf<Job?>(null) }
-    var shareJob by remember { mutableStateOf<Job?>(null) }
+    val deletionJob = remember { arrayOfNulls<Job>(1) }
+    val shareJob = remember { arrayOfNulls<Job>(1) }
     val shareGeneration = remember { intArrayOf(0) }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
-    var deletionsCommittedInBackground by remember { mutableStateOf(false) }
+    val deletionsCommittedInBackground = remember { booleanArrayOf(false) }
     var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
@@ -207,9 +207,9 @@ fun FilesScreen(
                 }
                 syncSelectionActive()
                 reconcileTransientRecordings(previousById, storedById)
-                if (deletionsCommittedInBackground) {
+                if (deletionsCommittedInBackground[0]) {
                     pendingDeletions.clear()
-                    deletionsCommittedInBackground = false
+                    deletionsCommittedInBackground[0] = false
                     isDeleting = false
                 } else {
                     var pendingTargetInvalidated = false
@@ -225,8 +225,8 @@ fun FilesScreen(
                         }
                     }
                     if (pendingDeletions.isEmpty()) {
-                        deletionJob?.cancel()
-                        deletionJob = null
+                        deletionJob[0]?.cancel()
+                        deletionJob[0] = null
                         isDeleting = false
                         if (notice?.canUndo == true) notice = null
                         if (pendingTargetInvalidated) {
@@ -275,8 +275,8 @@ fun FilesScreen(
     LaunchedEffect(active) {
         if (!active) {
             shareGeneration[0]++
-            shareJob?.cancel()
-            shareJob = null
+            shareJob[0]?.cancel()
+            shareJob[0] = null
             contextMenuRecordingId = null
             selectedIds.clear()
             syncSelectionActive()
@@ -336,7 +336,7 @@ fun FilesScreen(
             if (generation == refreshGeneration[0]) failed = true
         }
         pendingDeletions.clear()
-        deletionsCommittedInBackground = false
+        deletionsCommittedInBackground[0] = false
         if (deletionBatchFailed(pending.size, deleted, failed)) {
             notice = LibraryNotice(
                 resources.getString(R.string.recording_delete_failed),
@@ -346,11 +346,11 @@ fun FilesScreen(
     }
 
     fun commitPendingDeletionsInBackground() {
-        if (pendingDeletions.isEmpty() || deletionsCommittedInBackground) return
-        deletionJob?.cancel()
-        deletionJob = null
+        if (pendingDeletions.isEmpty() || deletionsCommittedInBackground[0]) return
+        deletionJob[0]?.cancel()
+        deletionJob[0] = null
         val pending = pendingDeletions.values.toList()
-        deletionsCommittedInBackground = true
+        deletionsCommittedInBackground[0] = true
         isDeleting = true
         RecordingRepository.deleteInBackground(context, pending)
     }
@@ -376,7 +376,7 @@ fun FilesScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (active) {
-                deletionJob?.cancel()
+                deletionJob[0]?.cancel()
                 // Register any committed delete before asking the parent to refresh. This keeps
                 // its fast DB snapshot from racing ahead of background deletion on sheet close.
                 commitPendingDeletionsInBackground()
@@ -407,7 +407,7 @@ fun FilesScreen(
             setExpandedRecording(null)
         }
         isDeleting = true
-        deletionsCommittedInBackground = false
+        deletionsCommittedInBackground[0] = false
         targets.forEach { pendingDeletions[it.id] = it }
         onVisibleRecordingsChanged(recordings.filterNot { it.id in pendingDeletions })
         clearSelection()
@@ -416,8 +416,8 @@ fun FilesScreen(
         val message = if (count == 1) resources.getString(R.string.recording_deleted)
         else resources.getQuantityString(R.plurals.recordings_deleted, count, count)
         notice = LibraryNotice(message, FeedbackTone.INFO, canUndo = true)
-        deletionJob?.cancel()
-        deletionJob = scope.launch {
+        deletionJob[0]?.cancel()
+        deletionJob[0] = scope.launch {
             delay(4_500L)
             notice = null
             finalizeDeletions()
@@ -432,10 +432,10 @@ fun FilesScreen(
     }
 
     fun undoDelete() {
-        deletionJob?.cancel()
-        deletionJob = null
+        deletionJob[0]?.cancel()
+        deletionJob[0] = null
         pendingDeletions.clear()
-        deletionsCommittedInBackground = false
+        deletionsCommittedInBackground[0] = false
         onVisibleRecordingsChanged(recordings)
         notice = null
         isDeleting = false
@@ -450,8 +450,8 @@ fun FilesScreen(
             else R.string.share_recordings_title,
         )
         val generation = ++shareGeneration[0]
-        shareJob?.cancel()
-        shareJob = scope.launch {
+        shareJob[0]?.cancel()
+        shareJob[0] = scope.launch {
             try {
                 val shareIntent = withContext(Dispatchers.IO) {
                     buildShareRecordingsIntent(context, targets)
@@ -466,7 +466,7 @@ fun FilesScreen(
                 showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
                 refresh(showSpinner = false)
             } finally {
-                if (generation == shareGeneration[0]) shareJob = null
+                if (generation == shareGeneration[0]) shareJob[0] = null
             }
         }
     }
@@ -479,8 +479,8 @@ fun FilesScreen(
     DisposableEffect(Unit) {
         onDispose {
             shareGeneration[0]++
-            shareJob?.cancel()
-            shareJob = null
+            shareJob[0]?.cancel()
+            shareJob[0] = null
             onSelectionActiveChange(false)
             onExpandedRecordingActiveChange(false)
         }
