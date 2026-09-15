@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -48,16 +49,18 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import java.io.FileInputStream
+import java.io.Closeable
+import java.io.FileDescriptor
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
@@ -129,6 +132,39 @@ internal fun inlineTrimGestureTarget(
     }
 }
 
+private data class InlinePlayerMediaSource(
+    val descriptor: FileDescriptor,
+    val owner: Closeable,
+) : Closeable {
+    override fun close() = owner.close()
+}
+
+private fun openInlinePlayerMediaSource(
+    context: Context,
+    recording: RecordingEntity,
+): InlinePlayerMediaSource = when (resolveRecordingStorageType(recording)) {
+    RecordingStorageType.FILE -> {
+        val stream = openVerifiedFileInputStream(recording)
+            ?: throw IllegalStateException("Recording changed on disk")
+        InlinePlayerMediaSource(stream.fd, stream)
+    }
+    RecordingStorageType.DOCUMENT,
+    RecordingStorageType.MEDIASTORE,
+    -> {
+        if (!recordingContentIdentityMatches(context, recording)) {
+            throw IllegalStateException("Recording changed in provider")
+        }
+        val descriptor = context.contentResolver.openFileDescriptor(android.net.Uri.parse(recording.id), "r")
+            ?: throw IllegalStateException("Recording unavailable in provider")
+        if (!recordingContentIdentityMatches(context, recording)) {
+            runCatching { descriptor.close() }
+            throw IllegalStateException("Recording changed in provider while opening")
+        }
+        InlinePlayerMediaSource(descriptor.fileDescriptor, descriptor)
+    }
+    null -> throw IllegalArgumentException("Unknown recording storage type")
+}
+
 @Composable
 internal fun RecordingInlinePlayer(
     recording: RecordingEntity,
@@ -167,7 +203,7 @@ internal fun RecordingInlinePlayer(
     var isScrubbing by remember(recordingRevisionKey) { mutableStateOf(false) }
     var resumeAfterScrub by remember(recordingRevisionKey) { mutableStateOf(false) }
     var released by remember(recordingRevisionKey) { mutableStateOf(false) }
-    var pinnedFileInput by remember(recordingRevisionKey) { mutableStateOf<FileInputStream?>(null) }
+    val pinnedMediaSource = remember(recordingRevisionKey) { AtomicReference<InlinePlayerMediaSource?>(null) }
     var trimMode by remember(recordingRevisionKey) { mutableStateOf(false) }
     var trimStartMillis by remember(recordingRevisionKey) { mutableIntStateOf(0) }
     var trimEndMillis by remember(recordingRevisionKey) { mutableIntStateOf(duration) }
@@ -215,8 +251,7 @@ internal fun RecordingInlinePlayer(
         mediaPlayer?.runCatching { stop() }
         mediaPlayer?.release()
         mediaPlayer = null
-        runCatching { pinnedFileInput?.close() }
-        pinnedFileInput = null
+        runCatching { pinnedMediaSource.getAndSet(null)?.close() }
         prepared = false
         isPlaying = false
     }
@@ -405,40 +440,39 @@ internal fun RecordingInlinePlayer(
             releasePlayer()
             true
         }
-        try {
-            when (resolveRecordingStorageType(recording)) {
-                RecordingStorageType.FILE -> {
-                    val stream = openVerifiedFileInputStream(recording)
-                        ?: throw IllegalStateException("Recording changed on disk")
-                    pinnedFileInput = stream
-                    player.setDataSource(stream.fd)
-                }
-                RecordingStorageType.DOCUMENT,
-                RecordingStorageType.MEDIASTORE,
-                -> {
-                    if (!recordingContentIdentityMatches(appContext, recording)) {
-                        throw IllegalStateException("Recording changed in provider")
-                    }
-                    player.setDataSource(appContext, recording.id.toUri())
-                    if (!recordingContentIdentityMatches(appContext, recording)) {
-                        throw IllegalStateException("Recording changed in provider while opening")
-                    }
-                }
-                null -> throw IllegalArgumentException("Unknown recording storage type")
-            }
-            player.prepareAsync()
-            mediaPlayer = player
-        } catch (_: Exception) {
-            player.release()
-            runCatching { pinnedFileInput?.close() }
-            pinnedFileInput = null
-            released = true
-            onPlaybackFailed()
-        }
+        mediaPlayer = player
 
         onDispose {
             disposed = true
             releasePlayer()
+        }
+    }
+
+    LaunchedEffect(recordingRevisionKey, mediaPlayer) {
+        val player = mediaPlayer ?: return@LaunchedEffect
+        if (released) return@LaunchedEffect
+        // withContext has prompt cancellation when returning to Main. Keep ownership in an
+        // atomic slot before the IO block returns so a collapse at that exact boundary cannot
+        // leak the opened descriptor even when the result itself is discarded.
+        val openedRef = AtomicReference<InlinePlayerMediaSource?>(null)
+        try {
+            val opened = withContext(Dispatchers.IO) {
+                openInlinePlayerMediaSource(appContext, recording).also(openedRef::set)
+            }
+            if (released || mediaPlayer !== player) return@LaunchedEffect
+            openedRef.compareAndSet(opened, null)
+            runCatching { pinnedMediaSource.getAndSet(opened)?.close() }
+            player.setDataSource(opened.descriptor)
+            player.prepareAsync()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            if (!released && mediaPlayer === player) {
+                releasePlayer()
+                onPlaybackFailed()
+            }
+        } finally {
+            runCatching { openedRef.getAndSet(null)?.close() }
         }
     }
 

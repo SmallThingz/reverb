@@ -43,19 +43,28 @@ class RecordingOpenActivity : ComponentActivity() {
         private const val EXTRA_FILE_IDENTITY = "recording_file_identity"
 
         fun intentFor(context: Context, recording: RecordingEntity): Intent =
-            Intent(context, RecordingOpenActivity::class.java)
-                .putExtra(EXTRA_ID, recording.id)
-                .putExtra(EXTRA_STORAGE_TYPE, recording.storageType)
-                .putExtra(EXTRA_MIME_TYPE, recording.mimeType)
-                .putExtra(EXTRA_FILE_IDENTITY, recording.fileIdentity)
+            Intent(context, RecordingOpenActivity::class.java).apply {
+                putExtra(EXTRA_ID, recording.id)
+                val storage = resolveRecordingStorageType(recording)
+                if (storage != null) putExtra(EXTRA_STORAGE_TYPE, storage.storageCode)
+                else putExtra(EXTRA_STORAGE_TYPE, recording.storageType)
+                putExtra(EXTRA_MIME_TYPE, recording.mimeType)
+                putExtra(EXTRA_FILE_IDENTITY, recording.fileIdentity)
+            }
     }
 }
 
 internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? {
     val id = source.getStringExtra("recording_id")?.takeIf { it.isNotBlank() } ?: return null
-    val storage = source.getStringExtra("recording_storage_type")
-        ?.let { stored -> RecordingStorageType.fromLegacyName(stored) }
-        ?: return null
+    val encodedStorage = runCatching {
+        source.getByteExtra("recording_storage_type", Byte.MIN_VALUE)
+    }.getOrDefault(Byte.MIN_VALUE)
+    val storage = if (encodedStorage != Byte.MIN_VALUE) {
+        RecordingStorageType.fromStorageCode(encodedStorage.toInt())
+    } else {
+        runCatching { source.getStringExtra("recording_storage_type") }.getOrNull()
+            ?.let(RecordingStorageType::fromLegacyName)
+    } ?: return null
     val mimeType = source.getStringExtra("recording_mime_type")
         ?.takeIf { it.isNotBlank() }
         ?: ReverbConfig.FALLBACK_MIME_TYPE_AUDIO
