@@ -39,7 +39,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -142,11 +141,15 @@ class ReverbService : Service() {
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
     private lateinit var exportWorkExecutor: ExecutorService
-    private lateinit var durabilitySyncExecutor: ScheduledExecutorService
+    private lateinit var durabilitySyncExecutor: ExecutorService
+    private val durabilitySyncInFlight = AtomicBoolean(false)
+    @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
     @Volatile private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile private var hasBoundClients = false
+    private var powerManager: PowerManager? = null
 
     private val pendingError = AtomicReference<String?>(null)
 
@@ -160,6 +163,7 @@ class ReverbService : Service() {
             overwriteOldest = false,
         )
         createNotificationChannel()
+        powerManager = getSystemService(PowerManager::class.java)
         audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -169,7 +173,7 @@ class ReverbService : Service() {
                 isDaemon = true
             }
         }
-        durabilitySyncExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        durabilitySyncExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread({
                 Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                 runnable.run()
@@ -177,12 +181,6 @@ class ReverbService : Service() {
                 isDaemon = true
             }
         }
-        durabilitySyncExecutor.scheduleWithFixedDelay(
-            ::syncDirtyAudioPayloads,
-            ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS,
-            ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS,
-            TimeUnit.MILLISECONDS,
-        )
         audioHandler.post {
             try {
                 loadConfiguredPreferences()
@@ -244,6 +242,17 @@ class ReverbService : Service() {
     }
 
     override fun onBind(intent: Intent): IBinder {
+        noteClientBound()
+        return BackgroundRecorderBinder()
+    }
+
+    override fun onRebind(intent: Intent) {
+        noteClientBound()
+        super.onRebind(intent)
+    }
+
+    private fun noteClientBound() {
+        hasBoundClients = true
         val retryGeneration = synchronized(listeningIntentLock) {
             if (
                 shouldRetrySuspendedListeningOnForegroundBind(
@@ -264,10 +273,10 @@ class ReverbService : Service() {
         if (retryGeneration != null) {
             mainHandler.post { innerStartListening(retryGeneration) }
         }
-        return BackgroundRecorderBinder()
     }
 
     override fun onUnbind(intent: Intent): Boolean {
+        hasBoundClients = false
         setVisualizationCallback(null)
         return true
     }
@@ -835,6 +844,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
+        lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
     }
@@ -908,6 +918,7 @@ class ReverbService : Service() {
     }
 
     private fun releaseAudioRecord() {
+        lastDurabilitySyncRequestNanos = 0L
         val record = audioRecord ?: run {
             audioRecordGeneration = Long.MIN_VALUE
             return
@@ -1645,20 +1656,47 @@ class ReverbService : Service() {
         forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
     }
 
+    private fun requestDurabilitySyncIfDue(nowNanos: Long = System.nanoTime()) {
+        check(audioHandler.looper == Looper.myLooper())
+        if (state != STATE_LISTENING || audioRecord == null) return
+        val previous = lastDurabilitySyncRequestNanos
+        if (previous != 0L && nowNanos - previous < ACTIVE_PAYLOAD_SYNC_INTERVAL_NANOS) return
+        if (!durabilitySyncInFlight.compareAndSet(false, true)) return
+        lastDurabilitySyncRequestNanos = nowNanos
+        try {
+            durabilitySyncExecutor.execute {
+                try {
+                    syncDirtyAudioPayloads()
+                } finally {
+                    durabilitySyncInFlight.set(false)
+                }
+            }
+        } catch (error: RejectedExecutionException) {
+            durabilitySyncInFlight.set(false)
+            if (state == STATE_LISTENING) {
+                Log.w(TAG, "Durability sync rejected while capture is active", error)
+            }
+        }
+    }
+
     private fun syncDirtyAudioPayloads() {
         try {
             forEachAudioStore { store ->
                 store.syncActivePayloadToDisk()
             }
         } catch (error: Exception) {
-            pauseListeningAfterPersistenceFailure("periodic payload sync", error)
+            pauseListeningAfterPersistenceFailure("payload sync", error)
             return
         }
-        audioHandler.post {
-            publishQuickTileSnapshotOnAudioThread(
-                refreshTiles = true,
-                persistDurations = true,
-            )
+        if (RecordingQuickTiles.hasListeningServices()) {
+            audioHandler.post {
+                if (state == STATE_LISTENING) {
+                    publishQuickTileSnapshotOnAudioThread(
+                        refreshTiles = false,
+                        persistDurations = false,
+                    )
+                }
+            }
         }
     }
 
@@ -1721,11 +1759,21 @@ class ReverbService : Service() {
         val currentRecord = audioRecord ?: return 0
         if (audioRecordGeneration != generation) return 0
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
+        val visualizationActive = visualizationCallback != null
+        val boundClientPresent = hasBoundClients
         val requestedBytes = captureReadByteCount(
             sampleRate = sampleRate,
             frameBytes = frameBytes,
             capacityBytes = captureScratch.size,
-            visualizationActive = visualizationCallback != null,
+            visualizationActive = visualizationActive,
+            boundClientPresent = boundClientPresent,
+            // Avoid a PowerManager query on the 8 ms visualizer hot path. Screen state only
+            // matters after the app and transient tile/settings clients are fully unbound.
+            deviceInteractive = if (visualizationActive || boundClientPresent) {
+                true
+            } else {
+                powerManager?.isInteractive ?: true
+            },
         )
         captureBuffer.clear()
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
@@ -1748,6 +1796,7 @@ class ReverbService : Service() {
             captureBuffer.get(captureScratch, 0, alignedRead)
             publishVisualization(captureScratch, 0, alignedRead)
             appendCapturedAudio(captureScratch, 0, alignedRead)
+            requestDurabilitySyncIfDue()
         }
 
         if (state != STATE_LISTENING) return read
@@ -1784,6 +1833,7 @@ class ReverbService : Service() {
                 releaseAudioRecord()
                 false
             } else if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                lastDurabilitySyncRequestNanos = System.nanoTime()
                 audioHandler.post(audioReader)
                 true
             } else {
@@ -2501,8 +2551,8 @@ class ReverbService : Service() {
             return
         }
 
-        val powerManager = getSystemService(PowerManager::class.java) ?: return
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, packageName + WAKE_LOCK_TAG_SUFFIX).apply {
+        val manager = powerManager ?: getSystemService(PowerManager::class.java)?.also { powerManager = it } ?: return
+        wakeLock = manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, packageName + WAKE_LOCK_TAG_SUFFIX).apply {
             setReferenceCounted(false)
             acquire()
         }
@@ -2637,10 +2687,12 @@ class ReverbService : Service() {
         const val BACKGROUND_NOTIFICATION_CHANNEL_ID = "ReverbBackgroundRecorderChannel"
         const val FOREGROUND_NOTIFICATION_ID = 458
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
-        const val CAPTURE_SCRATCH_BYTES = 256 * 1024
-        const val ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS = 1_000L
-        const val CAPTURE_READ_TARGET_MILLIS = 40L
+        const val CAPTURE_SCRATCH_BYTES = 768 * 1024
+        const val ACTIVE_PAYLOAD_SYNC_INTERVAL_NANOS = 1_000_000_000L
         const val VISUALIZATION_CAPTURE_READ_TARGET_MILLIS = 8L
+        const val INTERACTIVE_CAPTURE_READ_TARGET_MILLIS = 40L
+        const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 250L
+        const val SCREEN_OFF_CAPTURE_READ_TARGET_MILLIS = 1_000L
         const val EMPTY_READ_RETRY_MILLIS = 20L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
@@ -2675,12 +2727,15 @@ internal fun captureReadByteCount(
     frameBytes: Int,
     capacityBytes: Int,
     visualizationActive: Boolean,
+    boundClientPresent: Boolean,
+    deviceInteractive: Boolean,
 ): Int {
     val alignedFrameBytes = frameBytes.coerceAtLeast(1)
-    val targetMillis = if (visualizationActive) {
-        ReverbService.VISUALIZATION_CAPTURE_READ_TARGET_MILLIS
-    } else {
-        ReverbService.CAPTURE_READ_TARGET_MILLIS
+    val targetMillis = when {
+        visualizationActive -> ReverbService.VISUALIZATION_CAPTURE_READ_TARGET_MILLIS
+        boundClientPresent -> ReverbService.INTERACTIVE_CAPTURE_READ_TARGET_MILLIS
+        deviceInteractive -> ReverbService.BACKGROUND_CAPTURE_READ_TARGET_MILLIS
+        else -> ReverbService.SCREEN_OFF_CAPTURE_READ_TARGET_MILLIS
     }
     val targetFrames = maxOf(1L, sampleRate.coerceAtLeast(1).toLong() * targetMillis / 1000L)
     val boundedBytes = minOf(

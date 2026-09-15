@@ -205,6 +205,9 @@ internal object RecordingQuickTiles {
         synchronized(listeningServices) { listeningServices.remove(service) }
     }
 
+    fun hasListeningServices(): Boolean =
+        synchronized(listeningServices) { listeningServices.isNotEmpty() }
+
     fun beginHandoff(
         source: ReverbService.BufferSlot,
         target: ReverbService.BufferSlot,
@@ -356,14 +359,6 @@ abstract class RecordingTileService : TileService() {
     private var actionInFlight = false
     private var actionGeneration = 0L
 
-    private val stateRefresh = object : Runnable {
-        override fun run() {
-            if (!tileListening) return
-            updateTile(readRecordingTileSnapshot(this@RecordingTileService))
-            mainHandler.postDelayed(this, STATE_REFRESH_MILLIS)
-        }
-    }
-
     override fun onTileAdded() {
         super.onTileAdded()
         updateTile(readRecordingTileSnapshot(this))
@@ -373,14 +368,12 @@ abstract class RecordingTileService : TileService() {
         super.onStartListening()
         tileListening = true
         RecordingQuickTiles.register(this)
-        mainHandler.removeCallbacks(stateRefresh)
-        mainHandler.post(stateRefresh)
+        updateTile(readRecordingTileSnapshot(this))
     }
 
     override fun onStopListening() {
         tileListening = false
         RecordingQuickTiles.unregister(this)
-        mainHandler.removeCallbacks(stateRefresh)
         super.onStopListening()
     }
 
@@ -551,7 +544,6 @@ abstract class RecordingTileService : TileService() {
     }
 
     companion object {
-        private const val STATE_REFRESH_MILLIS = 1_000L
         private const val ACTION_POLL_MILLIS = 80L
         private const val ACTION_TIMEOUT_MILLIS = 4_000L
     }
