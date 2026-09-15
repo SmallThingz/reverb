@@ -27,6 +27,7 @@ class DurabilityInvariantTest {
                 RecordingDatabaseMigrationStep.ADD_MISSING_SINCE,
                 RecordingDatabaseMigrationStep.ADD_FILE_IDENTITY,
                 RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE,
+                RecordingDatabaseMigrationStep.ADD_STORAGE_TYPE_CODE,
             ),
             steps,
         )
@@ -42,6 +43,12 @@ class DurabilityInvariantTest {
         assertTrue(sql.any { RecordingDatabase.COLUMN_FILE_IDENTITY in it })
         assertTrue(sql.any { RecordingDatabase.COLUMN_WAVEFORM_DATA in it })
         assertTrue(sql.any { RecordingDatabase.COLUMN_WAVEFORM_REVISION in it })
+        assertTrue(sql.any { RecordingDatabase.COLUMN_STORAGE_TYPE_CODE in it })
+        val storageMigration = recordingDatabaseMigrationSql(RecordingDatabaseMigrationStep.ADD_STORAGE_TYPE_CODE)
+            .joinToString("\n")
+        assertTrue("WHEN 'FILE' THEN ${RecordingStorageType.FILE.storageCode.toInt()}" in storageMigration)
+        assertTrue("WHEN 'DOCUMENT' THEN ${RecordingStorageType.DOCUMENT.storageCode.toInt()}" in storageMigration)
+        assertTrue("WHEN 'MEDIASTORE' THEN ${RecordingStorageType.MEDIASTORE.storageCode.toInt()}" in storageMigration)
     }
 
     @Test
@@ -423,7 +430,11 @@ class DurabilityInvariantTest {
             listOf(RecordingDatabaseMigrationStep.ADD_WAVEFORM_CACHE),
             recordingDatabaseMigrationSteps(3, 4),
         )
-        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(4, 5) }
+        assertEquals(
+            listOf(RecordingDatabaseMigrationStep.ADD_STORAGE_TYPE_CODE),
+            recordingDatabaseMigrationSteps(4, 5),
+        )
+        assertThrows(IllegalArgumentException::class.java) { recordingDatabaseMigrationSteps(5, 6) }
     }
 
     @Test

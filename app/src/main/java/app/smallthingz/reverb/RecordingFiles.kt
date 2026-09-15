@@ -96,7 +96,8 @@ internal enum class RecordingAssetState {
 }
 
 internal fun resolveRecordingStorageType(recording: RecordingEntity): RecordingStorageType? {
-    return RecordingStorageType.fromLegacyName(recording.storageType)
+    return recording.storageType.toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        ?: RecordingStorageType.fromLegacyName(recording.storageType)
 }
 
 data class RecordingOutputTarget(
