@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
@@ -140,6 +141,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyPhonePortraitOnly()
+        // Never hold the startup surface for this animation. If the first app frame is ready
+        // before the R finishes splitting, Android removes the splash immediately.
+        installSplashScreen()
         val configuredThemeMode = applyConfiguredPlatformTheme()
         super.onCreate(savedInstanceState)
         microphonePermissionRequested =
