@@ -1811,6 +1811,7 @@ private fun AudioBlobControl(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val attachedView = remember { arrayOfNulls<AudioBlobView>(1) }
+    val attachedController = remember { arrayOfNulls<AudioBlobController>(1) }
 
     val pressScale by animateFloatAsState(
         targetValue = if (isPressed) 0.96f else 1f,
@@ -1837,9 +1838,11 @@ private fun AudioBlobControl(
     }
     val flipCameraDistancePx = with(LocalDensity.current) { 24.dp.toPx() }
 
-    DisposableEffect(blobController) {
+    DisposableEffect(Unit) {
         onDispose {
-            attachedView[0]?.let(blobController::detach)
+            val view = attachedView[0]
+            if (view != null) attachedController[0]?.detach(view)
+            attachedController[0] = null
             attachedView[0] = null
         }
     }
@@ -1866,10 +1869,23 @@ private fun AudioBlobControl(
             factory = { context ->
                 AudioBlobView(context).also { view ->
                     attachedView[0] = view
+                    attachedController[0] = blobController
                     blobController.attach(view)
                 }
             },
             update = { view ->
+                // AndroidView reuses this same View when the displayed buffer changes. Transfer
+                // the renderer to the new buffer controller here; factory is not called again.
+                if (attachedView[0] !== view) {
+                    attachedView[0]?.let { oldView -> attachedController[0]?.detach(oldView) }
+                    attachedView[0] = view
+                    attachedController[0] = null
+                }
+                if (attachedController[0] !== blobController) {
+                    attachedController[0]?.detach(view)
+                    blobController.attach(view)
+                    attachedController[0] = blobController
+                }
                 view.updateState(
                     active = active,
                     enabled = visuallyEnabled,
