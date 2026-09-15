@@ -1,9 +1,6 @@
 package app.smallthingz.reverb
 
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -12,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -96,7 +92,29 @@ import kotlin.math.roundToLong
 import kotlin.math.sign
 import kotlin.math.tanh
 
-internal enum class RangeEditTarget { START, CURSOR, END }
+internal enum class RangeEditTarget { START, END }
+
+private const val BOUNDARY_CURSOR_END_LEAD_IN_SECONDS = 3f
+
+internal data class BoundaryCursorPreviewWindow(
+    val startSeconds: Float,
+    val endSeconds: Float,
+)
+
+internal fun boundaryCursorPreviewWindow(
+    startSeconds: Float,
+    endSeconds: Float,
+    endBoundaryActive: Boolean,
+): BoundaryCursorPreviewWindow {
+    val start = startSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+    val end = endSeconds.takeIf { it.isFinite() }?.coerceAtLeast(start) ?: start
+    val previewStart = if (endBoundaryActive) {
+        (end - BOUNDARY_CURSOR_END_LEAD_IN_SECONDS).coerceAtLeast(start)
+    } else {
+        start
+    }
+    return BoundaryCursorPreviewWindow(previewStart, end)
+}
 
 private const val RANGE_TIMELINE_MARKER_EXTRA_HEIGHT_FRACTION = 0.02f
 private const val RANGE_TIMELINE_MARKER_HEIGHT_FRACTION =
@@ -109,7 +127,6 @@ private const val RANGE_TIMELINE_CURSOR_DOT_DP = 6f
 
 internal data class RangeEditValues(
     val startSeconds: Float,
-    val cursorSeconds: Float,
     val endSeconds: Float,
 )
 
@@ -162,13 +179,7 @@ internal fun rememberedRangeExportFromSavedRange(
 
 internal data class RangeEditUpdate(
     val values: RangeEditValues,
-    val snappedTo: RangeEditTarget?,
 )
-
-internal const val RANGE_SNAP_HOLD_MILLIS = 1_250L
-internal const val RANGE_SNAP_STATIONARY_MILLIS = 90L
-internal const val RANGE_SNAP_RELEASE_MULTIPLIER = 1.35f
-internal const val RANGE_SNAP_POINTER_JITTER_FRACTION = 0.08f
 internal const val RANGE_BLOB_MORPH_HANDOFF_PROGRESS = 0.07f
 
 // These are the exact base-radius terms used by AudioBlobView's shader/fallback renderer:
@@ -239,88 +250,25 @@ internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: 
 internal fun rangeBlobMorphTranslation(progress: Float, sourceCenterPx: Float, targetCenterPx: Float): Float =
     (sourceCenterPx - targetCenterPx) * (1f - progress.coerceIn(0f, 1f))
 
-internal fun rangeSnapReleaseThreshold(snapThresholdSeconds: Float): Float =
-    snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_RELEASE_MULTIPLIER
-
-internal fun rangeSnapReleaseAtMillis(acquiredAtMillis: Long, lastPointerMoveAtMillis: Long): Long =
-    maxOf(
-        acquiredAtMillis + RANGE_SNAP_HOLD_MILLIS,
-        lastPointerMoveAtMillis + RANGE_SNAP_STATIONARY_MILLIS,
-    )
-
-internal fun rangeSnapPointerInsideReleaseZone(
-    pointerSeconds: Float,
-    anchorSeconds: Float,
-    snapThresholdSeconds: Float,
-): Boolean = abs(pointerSeconds - anchorSeconds) <= rangeSnapReleaseThreshold(snapThresholdSeconds)
-
-internal fun rangeSnapPointerMoved(
-    previousSeconds: Float,
-    currentSeconds: Float,
-    snapThresholdSeconds: Float,
-): Boolean {
-    if (!previousSeconds.isFinite()) return true
-    val jitter = maxOf(0.0001f, snapThresholdSeconds.coerceAtLeast(0f) * RANGE_SNAP_POINTER_JITTER_FRACTION)
-    return abs(currentSeconds - previousSeconds) > jitter
-}
-
-private data class RangeSnapLatch(
-    val snappedTo: RangeEditTarget,
-    val acquiredAtMillis: Long,
-)
-
 internal fun adjustRangeEditTarget(
     values: RangeEditValues,
     target: RangeEditTarget,
     requestedSeconds: Float,
     durationSeconds: Float,
-    snapThresholdSeconds: Float,
     minRangeSeconds: Float = 0.05f,
 ): RangeEditUpdate {
     val duration = durationSeconds.coerceAtLeast(minRangeSeconds)
-    val threshold = snapThresholdSeconds.coerceAtLeast(0f)
     var start = values.startSeconds.coerceIn(0f, duration)
     var end = values.endSeconds.coerceIn(start, duration)
-    var cursor = values.cursorSeconds.coerceIn(0f, duration)
-    var snappedTo: RangeEditTarget? = null
     when (target) {
-        RangeEditTarget.CURSOR -> {
-            var requested = requestedSeconds.coerceIn(0f, duration)
-            val startDistance = abs(requested - start)
-            val endDistance = abs(requested - end)
-            val movingTowardStart = startDistance < abs(cursor - start)
-            val movingTowardEnd = endDistance < abs(cursor - end)
-            if (movingTowardStart && startDistance <= threshold && startDistance <= endDistance) {
-                requested = start
-                snappedTo = RangeEditTarget.START
-            } else if (movingTowardEnd && endDistance <= threshold) {
-                requested = end
-                snappedTo = RangeEditTarget.END
-            }
-            cursor = requested
-        }
         RangeEditTarget.START -> {
-            var requested = requestedSeconds.coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
-            val cursorDistance = abs(requested - cursor)
-            val movingTowardCursor = cursorDistance < abs(start - cursor)
-            if (movingTowardCursor && cursor <= end - minRangeSeconds && cursorDistance <= threshold) {
-                requested = cursor
-                snappedTo = RangeEditTarget.CURSOR
-            }
-            start = requested.coerceAtMost((end - minRangeSeconds).coerceAtLeast(0f))
+            start = requestedSeconds.coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
         }
         RangeEditTarget.END -> {
-            var requested = requestedSeconds.coerceIn((start + minRangeSeconds).coerceAtMost(duration), duration)
-            val cursorDistance = abs(requested - cursor)
-            val movingTowardCursor = cursorDistance < abs(end - cursor)
-            if (movingTowardCursor && cursor >= start + minRangeSeconds && cursorDistance <= threshold) {
-                requested = cursor
-                snappedTo = RangeEditTarget.CURSOR
-            }
-            end = requested.coerceAtLeast((start + minRangeSeconds).coerceAtMost(duration))
+            end = requestedSeconds.coerceIn((start + minRangeSeconds).coerceAtMost(duration), duration)
         }
     }
-    return RangeEditUpdate(RangeEditValues(start, cursor, end), snappedTo)
+    return RangeEditUpdate(RangeEditValues(start, end))
 }
 
 private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
@@ -454,7 +402,6 @@ internal fun rangeFineTuneShuttleRate(
 
 internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
     RangeEditTarget.START -> values.startSeconds
-    RangeEditTarget.CURSOR -> values.cursorSeconds
     RangeEditTarget.END -> values.endSeconds
 }
 
@@ -463,15 +410,13 @@ internal fun projectFineAdjustShuttleTarget(
     target: RangeEditTarget,
     pendingDeltaSeconds: Float,
     durationSeconds: Float,
-    snapped: Boolean,
 ): Float {
-    if (snapped || pendingDeltaSeconds == 0f) return editTargetValue(values, target)
+    if (pendingDeltaSeconds == 0f) return editTargetValue(values, target)
     val projected = adjustRangeEditTarget(
         values = values,
         target = target,
         requestedSeconds = editTargetValue(values, target) + pendingDeltaSeconds,
         durationSeconds = durationSeconds,
-        snapThresholdSeconds = 0f,
     )
     return editTargetValue(projected.values, target)
 }
@@ -481,7 +426,6 @@ internal class RangeExportEditorState(
     private val rememberedRangeExport: RememberedRangeExport? = null,
 ) {
     private val previewController = TimelineAudioPreviewController()
-    private val snapHandler = Handler(Looper.getMainLooper())
 
     var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
         private set
@@ -494,11 +438,7 @@ internal class RangeExportEditorState(
         private set
     var endSeconds by mutableFloatStateOf(initialRestoredRange.endSeconds)
         private set
-    var cursorSeconds by mutableFloatStateOf(initialRestoredRange.startSeconds)
-        private set
-    var lastTarget by mutableStateOf(RangeEditTarget.CURSOR)
-        private set
-    var snappedTo by mutableStateOf<RangeEditTarget?>(null)
+    var lastTarget by mutableStateOf(RangeEditTarget.START)
         private set
     var coarseWaveform by mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS))
         private set
@@ -526,15 +466,6 @@ internal class RangeExportEditorState(
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
     private var lastAuditionAtMillis = 0L
-    private var snapInteractionTarget: RangeEditTarget? = null
-    private var snapLatch: RangeSnapLatch? = null
-    private var snapSuppressedTo: RangeEditTarget? = null
-    private var snapRawRequestedSeconds = 0f
-    private var snapThresholdSeconds = 0f
-    private var snapLastPointerSeconds = Float.NaN
-    private var snapLastPointerMoveAtMillis = 0L
-    private var snapGeneration = 0L
-    private var snapReleaseRunnable: Runnable? = null
 
     val selectionDurationSeconds: Float
         get() = (endSeconds - startSeconds).coerceAtLeast(0f)
@@ -554,7 +485,6 @@ internal class RangeExportEditorState(
             restoreRememberedRangeOnFirstSnapshot = false
             startSeconds = restored.startSeconds
             endSeconds = restored.endSeconds
-            cursorSeconds = restored.startSeconds
         } else {
             startSeconds = startSeconds.coerceIn(0f, (nextDuration - 0.05f).coerceAtLeast(0f))
             endSeconds = if (endWasAtLiveEdge) {
@@ -562,7 +492,6 @@ internal class RangeExportEditorState(
             } else {
                 endSeconds.coerceIn((startSeconds + 0.05f).coerceAtMost(nextDuration), nextDuration)
             }
-            cursorSeconds = cursorSeconds.coerceIn(0f, nextDuration)
         }
     }
 
@@ -628,199 +557,25 @@ internal class RangeExportEditorState(
         lastTarget = target
     }
 
-    fun beginSnapInteraction(target: RangeEditTarget) {
-        cancelSnapRelease()
-        snapGeneration++
-        snapInteractionTarget = target
-        snapLatch = null
-        snapSuppressedTo = null
-        snapRawRequestedSeconds = targetValue(target)
-        snapThresholdSeconds = 0f
-        snapLastPointerSeconds = snapRawRequestedSeconds
-        snapLastPointerMoveAtMillis = SystemClock.elapsedRealtime()
-        snappedTo = null
-    }
-
-    fun endSnapInteraction() {
-        cancelSnapRelease()
-        snapGeneration++
-        snapInteractionTarget = null
-        snapLatch = null
-        snapSuppressedTo = null
-        snapThresholdSeconds = 0f
-        snapLastPointerSeconds = Float.NaN
-        snappedTo = null
-    }
-
-    fun setTarget(
-        target: RangeEditTarget,
-        requestedSeconds: Float,
-        snapThresholdSeconds: Float,
-    ): Boolean {
+    fun setTarget(target: RangeEditTarget, requestedSeconds: Float) {
         lastTarget = target
-        return if (
-            snapInteractionTarget == target &&
-            snapThresholdSeconds > 0f
-        ) {
-            setTargetWithSnapLatch(target, requestedSeconds, snapThresholdSeconds)
-        } else {
-            val previousSnap = snappedTo
-            val update = adjustRangeEditTarget(
+        applyEditUpdate(
+            adjustRangeEditTarget(
                 values = currentEditValues(),
                 target = target,
                 requestedSeconds = requestedSeconds,
                 durationSeconds = durationSeconds,
-                snapThresholdSeconds = snapThresholdSeconds,
-            )
-            applyEditUpdate(update)
-            update.snappedTo != null && update.snappedTo != previousSnap
-        }
-    }
-
-    private fun setTargetWithSnapLatch(
-        target: RangeEditTarget,
-        requestedSeconds: Float,
-        thresholdSeconds: Float,
-    ): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        val threshold = thresholdSeconds.coerceAtLeast(0f)
-        val rawUpdate = adjustRangeEditTarget(
-            values = currentEditValues(),
-            target = target,
-            requestedSeconds = requestedSeconds,
-            durationSeconds = durationSeconds,
-            snapThresholdSeconds = 0f,
+            ),
         )
-        val rawSeconds = editTargetValue(rawUpdate.values, target)
-        if (rangeSnapPointerMoved(snapLastPointerSeconds, rawSeconds, threshold)) {
-            snapLastPointerMoveAtMillis = now
-        }
-        snapLastPointerSeconds = rawSeconds
-        snapRawRequestedSeconds = rawSeconds
-        snapThresholdSeconds = threshold
-
-        val suppressed = snapSuppressedTo
-        if (suppressed != null) {
-            val anchor = targetValue(suppressed)
-            if (abs(rawSeconds - anchor) <= rangeSnapReleaseThreshold(threshold)) {
-                applyEditUpdate(rawUpdate.copy(snappedTo = null))
-                return false
-            }
-            snapSuppressedTo = null
-        }
-
-        val latch = snapLatch
-        if (latch != null) {
-            val anchor = targetValue(latch.snappedTo)
-            if (abs(rawSeconds - anchor) > rangeSnapReleaseThreshold(threshold)) {
-                cancelSnapRelease()
-                snapLatch = null
-            } else {
-                val releaseAt = rangeSnapReleaseAtMillis(
-                    latch.acquiredAtMillis,
-                    snapLastPointerMoveAtMillis,
-                )
-                if (now >= releaseAt) {
-                    releaseSnapToRaw(latch.snappedTo)
-                } else {
-                    val anchored = adjustRangeEditTarget(
-                        values = currentEditValues(),
-                        target = target,
-                        requestedSeconds = anchor,
-                        durationSeconds = durationSeconds,
-                        snapThresholdSeconds = 0f,
-                    )
-                    applyEditUpdate(anchored.copy(snappedTo = latch.snappedTo))
-                    scheduleSnapRelease()
-                }
-                return false
-            }
-        }
-
-        val candidate = adjustRangeEditTarget(
-            values = currentEditValues(),
-            target = target,
-            requestedSeconds = requestedSeconds,
-            durationSeconds = durationSeconds,
-            snapThresholdSeconds = threshold,
-        )
-        val snapped = candidate.snappedTo
-        applyEditUpdate(candidate)
-        if (snapped != null) {
-            snapLatch = RangeSnapLatch(snapped, now)
-            snapLastPointerMoveAtMillis = now
-            scheduleSnapRelease()
-            return true
-        }
-        return false
     }
 
-    private fun scheduleSnapRelease() {
-        val latch = snapLatch ?: return
-        cancelSnapRelease()
-        val generation = snapGeneration
-        val releaseAt = rangeSnapReleaseAtMillis(
-            latch.acquiredAtMillis,
-            snapLastPointerMoveAtMillis,
-        )
-        val delayMillis = (releaseAt - SystemClock.elapsedRealtime()).coerceAtLeast(1L)
-        val runnable = Runnable {
-            snapReleaseRunnable = null
-            if (generation != snapGeneration || snapInteractionTarget == null) return@Runnable
-            val currentLatch = snapLatch ?: return@Runnable
-            val now = SystemClock.elapsedRealtime()
-            val nextReleaseAt = rangeSnapReleaseAtMillis(
-                currentLatch.acquiredAtMillis,
-                snapLastPointerMoveAtMillis,
-            )
-            if (now < nextReleaseAt) {
-                scheduleSnapRelease()
-                return@Runnable
-            }
-            val anchor = targetValue(currentLatch.snappedTo)
-            if (rangeSnapPointerInsideReleaseZone(
-                    snapRawRequestedSeconds,
-                    anchor,
-                    snapThresholdSeconds,
-                )
-            ) {
-                releaseSnapToRaw(currentLatch.snappedTo)
-            }
-        }
-        snapReleaseRunnable = runnable
-        snapHandler.postDelayed(runnable, delayMillis)
-    }
-
-    private fun releaseSnapToRaw(snappedTarget: RangeEditTarget) {
-        val target = snapInteractionTarget ?: return
-        cancelSnapRelease()
-        snapLatch = null
-        snapSuppressedTo = snappedTarget
-        val rawUpdate = adjustRangeEditTarget(
-            values = currentEditValues(),
-            target = target,
-            requestedSeconds = snapRawRequestedSeconds,
-            durationSeconds = durationSeconds,
-            snapThresholdSeconds = 0f,
-        )
-        applyEditUpdate(rawUpdate.copy(snappedTo = null))
-        if (target == RangeEditTarget.CURSOR && isScrubbing) auditionCursor(force = true)
-    }
-
-    private fun cancelSnapRelease() {
-        snapReleaseRunnable?.let(snapHandler::removeCallbacks)
-        snapReleaseRunnable = null
-    }
-
-    private fun currentEditValues() = RangeEditValues(startSeconds, cursorSeconds, endSeconds)
+    private fun currentEditValues() = RangeEditValues(startSeconds, endSeconds)
 
     fun targetSeconds(target: RangeEditTarget): Float = targetValue(target)
 
     private fun applyEditUpdate(update: RangeEditUpdate) {
         startSeconds = update.values.startSeconds
-        cursorSeconds = update.values.cursorSeconds
         endSeconds = update.values.endSeconds
-        snappedTo = update.snappedTo
     }
 
     fun commitTarget(target: RangeEditTarget, requestedSeconds: Float): Boolean {
@@ -828,22 +583,18 @@ internal class RangeExportEditorState(
         when (target) {
             RangeEditTarget.START -> if (requestedSeconds >= endSeconds) return false
             RangeEditTarget.END -> if (requestedSeconds <= startSeconds) return false
-            RangeEditTarget.CURSOR -> Unit
         }
         // A blur may be caused by selecting another bar. Committing the old field must not
         // steal selection back from the newly touched target.
         val selectedTarget = lastTarget
-        val update = adjustRangeEditTarget(
-            values = RangeEditValues(startSeconds, cursorSeconds, endSeconds),
-            target = target,
-            requestedSeconds = requestedSeconds,
-            durationSeconds = durationSeconds,
-            snapThresholdSeconds = 0f,
+        applyEditUpdate(
+            adjustRangeEditTarget(
+                values = currentEditValues(),
+                target = target,
+                requestedSeconds = requestedSeconds,
+                durationSeconds = durationSeconds,
+            ),
         )
-        startSeconds = update.values.startSeconds
-        cursorSeconds = update.values.cursorSeconds
-        endSeconds = update.values.endSeconds
-        snappedTo = null
         lastTarget = selectedTarget
         return true
     }
@@ -852,28 +603,27 @@ internal class RangeExportEditorState(
         selectTarget(target)
         pausePreview()
         previewController.stop()
+        auditionSelectedBoundary(force = true)
     }
 
-    fun beginCursorScrub() {
+    fun beginBoundaryScrub(target: RangeEditTarget) {
         invalidateTextEditing()
-        beginSnapInteraction(RangeEditTarget.CURSOR)
-        selectTarget(RangeEditTarget.CURSOR)
+        selectTarget(target)
         resumeAfterScrub = isPlaying
         if (isPlaying) {
             previewController.stop()
             isPlaying = false
         }
         isScrubbing = true
-        auditionCursor(force = true)
+        auditionSelectedBoundary(force = true)
     }
 
-    fun updateCursorScrub(requestedSeconds: Float, snapThresholdSeconds: Float) {
-        setTarget(RangeEditTarget.CURSOR, requestedSeconds, snapThresholdSeconds)
-        auditionCursor()
+    fun updateBoundaryScrub(target: RangeEditTarget, requestedSeconds: Float) {
+        setTarget(target, requestedSeconds)
+        auditionSelectedBoundary()
     }
 
-    fun endCursorScrub() {
-        endSnapInteraction()
+    fun endBoundaryScrub() {
         isScrubbing = false
         previewController.stop()
         if (resumeAfterScrub) {
@@ -884,10 +634,13 @@ internal class RangeExportEditorState(
 
     fun beginFineAdjust(shuttleRate: Float) {
         invalidateTextEditing()
-        beginSnapInteraction(lastTarget)
         resumeAfterScrub = isPlaying
+        if (isPlaying) {
+            previewController.stop()
+            isPlaying = false
+        }
+        isScrubbing = true
         fineAdjustShuttleActive = true
-        if (lastTarget == RangeEditTarget.CURSOR) isScrubbing = true
         snapshot?.let { readySnapshot ->
             previewController.startShuttle(
                 snapshot = readySnapshot,
@@ -905,24 +658,22 @@ internal class RangeExportEditorState(
                 target = lastTarget,
                 pendingDeltaSeconds = pendingDeltaSeconds,
                 durationSeconds = durationSeconds,
-                snapped = snappedTo != null,
             ).toDouble(),
             rate = shuttleRate,
         )
     }
 
-    fun fineAdjust(deltaSeconds: Float, snapThresholdSeconds: Float) {
+    fun fineAdjust(deltaSeconds: Float) {
         val target = lastTarget
-        setTarget(target, targetValue(target) + deltaSeconds, snapThresholdSeconds)
+        setTarget(target, targetValue(target) + deltaSeconds)
     }
 
     fun endFineAdjust() {
-        endSnapInteraction()
         if (fineAdjustShuttleActive) {
             fineAdjustShuttleActive = false
             previewController.stopShuttle()
         }
-        if (lastTarget == RangeEditTarget.CURSOR) isScrubbing = false
+        isScrubbing = false
         if (resumeAfterScrub) {
             resumeAfterScrub = false
             startPreview()
@@ -946,28 +697,26 @@ internal class RangeExportEditorState(
     }
 
     fun close() {
-        endSnapInteraction()
-        snapHandler.removeCallbacksAndMessages(null)
         previewController.close()
     }
 
     private fun startPreview() {
         val readySnapshot = snapshot ?: return
         if (durationSeconds <= 0f) return
-        if (cursorSeconds >= durationSeconds - 0.01f) cursorSeconds = 0f
         previewError = null
         isPlaying = true
         isScrubbing = false
+        val window = boundaryCursorPreviewWindow(
+            startSeconds = startSeconds,
+            endSeconds = endSeconds,
+            endBoundaryActive = lastTarget == RangeEditTarget.END,
+        )
         previewController.play(
             snapshot = readySnapshot,
-            fromSeconds = cursorSeconds.toDouble(),
-            onProgress = { seconds ->
-                cursorSeconds = seconds.toFloat().coerceIn(0f, durationSeconds)
-            },
-            onFinished = {
-                cursorSeconds = durationSeconds
-                isPlaying = false
-            },
+            fromSeconds = window.startSeconds.toDouble(),
+            untilSeconds = window.endSeconds.toDouble(),
+            onProgress = {},
+            onFinished = { isPlaying = false },
             onError = { error ->
                 isPlaying = false
                 previewError = error.message
@@ -975,13 +724,13 @@ internal class RangeExportEditorState(
         )
     }
 
-    private fun auditionCursor(force: Boolean = false) {
+    private fun auditionSelectedBoundary(force: Boolean = false) {
         if (fineAdjustShuttleActive) return
         val readySnapshot = snapshot ?: return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAuditionAtMillis < 55L) return
         lastAuditionAtMillis = now
-        previewController.audition(readySnapshot, cursorSeconds.toDouble())
+        previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())
     }
 
     private fun targetValue(target: RangeEditTarget): Float = editTargetValue(currentEditValues(), target)
@@ -1239,7 +988,6 @@ private fun RangeExportTimeline(
     targetBoundsInRoot: Rect?,
     onTargetBoundsInRoot: (Rect) -> Unit,
 ) {
-    val view = LocalView.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val timelineTop = 42.dp
@@ -1255,7 +1003,6 @@ private fun RangeExportTimeline(
         val timelineHeightPx = with(density) { timelineHeight.toPx() }
         val hitWidthPx = with(density) { hitWidth.toPx() }
         val bubbleWidthPx = with(density) { 100.dp.toPx() }
-        val snapThreshold = state.durationSeconds * with(density) { 8.dp.toPx() } / timelineWidthPx
 
         fun xFor(seconds: Float): Float =
             insetPx + timelineWidthPx * (seconds / state.durationSeconds).coerceIn(0f, 1f)
@@ -1271,16 +1018,15 @@ private fun RangeExportTimeline(
                 .height(timelineHeight)
                 .pointerInput(state.durationSeconds, timelineWidthPx, interactionEnabled) {
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitFirstDown(requireUnconsumed = true)
                         if (!interactionEnabled) return@awaitEachGesture
                         state.invalidateTextEditing()
                         focusManager.clearFocus(force = true)
-                        state.beginCursorScrub()
+                        val downSeconds = secondsFor(down.position.x + insetPx)
+                        val target = state.lastTarget
+                        state.beginBoundaryScrub(target)
                         try {
-                            state.updateCursorScrub(
-                                secondsFor(down.position.x + insetPx),
-                                snapThreshold,
-                            )
+                            state.updateBoundaryScrub(target, downSeconds)
                             var pressed = true
                             while (pressed) {
                                 val event = awaitPointerEvent()
@@ -1288,14 +1034,14 @@ private fun RangeExportTimeline(
                                 pressed = change.pressed
                                 if (pressed) {
                                     change.consume()
-                                    state.updateCursorScrub(
+                                    state.updateBoundaryScrub(
+                                        target,
                                         secondsFor(change.position.x + insetPx),
-                                        snapThreshold,
                                     )
                                 }
                             }
                         } finally {
-                            state.endCursorScrub()
+                            state.endBoundaryScrub()
                         }
                     }
                 },
@@ -1359,20 +1105,6 @@ private fun RangeExportTimeline(
                 .fillMaxSize()
                 .graphicsLayer { alpha = chromeAlpha() },
         ) {
-            // Draw the cursor first. When it snaps onto an endpoint, the endpoint's center grip
-            // stays on top while the rest of the cursor line remains directly draggable.
-        RangeTimelineBar(
-            target = RangeEditTarget.CURSOR,
-            state = state,
-            xPx = { xFor(state.cursorSeconds) },
-            topPx = timelineTopPx,
-            heightPx = timelineHeightPx,
-            hitWidthPx = hitWidthPx,
-            timelineWidthPx = timelineWidthPx,
-            snapThresholdSeconds = snapThreshold,
-            visualAlpha = 1f,
-            onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
-        )
         RangeTimelineBar(
             target = RangeEditTarget.START,
             state = state,
@@ -1381,9 +1113,7 @@ private fun RangeExportTimeline(
             heightPx = timelineHeightPx,
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
-            snapThresholdSeconds = snapThreshold,
             visualAlpha = 1f,
-            onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
         RangeTimelineBar(
             target = RangeEditTarget.END,
@@ -1393,9 +1123,7 @@ private fun RangeExportTimeline(
             heightPx = timelineHeightPx,
             hitWidthPx = hitWidthPx,
             timelineWidthPx = timelineWidthPx,
-            snapThresholdSeconds = snapThreshold,
             visualAlpha = 1f,
-            onSnap = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
         )
 
         TimelineTimeInput(
@@ -1424,23 +1152,6 @@ private fun RangeExportTimeline(
             },
             onFocus = { state.beginBoundaryEdit(RangeEditTarget.END) },
         )
-        TimelineTimeInput(
-            target = RangeEditTarget.CURSOR,
-            active = state.lastTarget == RangeEditTarget.CURSOR,
-            editorState = state,
-            visualAlpha = 1f,
-            modifier = Modifier.offset {
-                IntOffset(
-                    bubbleOffset(xFor(state.cursorSeconds), fullWidthPx, bubbleWidthPx),
-                    (timelineTopPx + timelineHeightPx + with(density) { 7.dp.toPx() }).roundToInt(),
-                )
-            },
-            onFocus = {
-                state.selectTarget(RangeEditTarget.CURSOR)
-                state.pausePreview()
-            },
-        )
-
         Text(
             text = formatRangeTimeInput(0.0),
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
@@ -1548,92 +1259,50 @@ private fun RangeTimelineBar(
     heightPx: Float,
     hitWidthPx: Float,
     timelineWidthPx: Float,
-    snapThresholdSeconds: Float,
     visualAlpha: Float,
-    onSnap: () -> Unit,
 ) {
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
-    val active = state.lastTarget == target || state.snappedTo == target
-    val colors = MaterialTheme.colorScheme
-    val lineColor = if (active) colors.tertiary else colors.onSurface
-    val tapInteraction = remember { MutableInteractionSource() }
-    var dragOrigin by remember(target) { mutableFloatStateOf(0f) }
-    var accumulatedDrag by remember(target) { mutableFloatStateOf(0f) }
+    val touchSlop = LocalViewConfiguration.current.touchSlop
+    val active = state.lastTarget == target
 
     val interactionEnabled = visualAlpha >= 0.90f
 
-    fun focusTarget() {
-        state.invalidateTextEditing()
-        focusManager.clearFocus(force = true)
-        if (target == RangeEditTarget.CURSOR) {
-            state.selectTarget(RangeEditTarget.CURSOR)
-            state.pausePreview()
-        } else {
-            state.beginBoundaryEdit(target)
-        }
-    }
-
     val dragModifier = if (interactionEnabled) {
-        Modifier
-            .pointerInput(target, interactionEnabled) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    state.invalidateTextEditing()
-                    focusManager.clearFocus(force = true)
-                    var pressed = true
-                    while (pressed) {
+        Modifier.pointerInput(target, state.durationSeconds, timelineWidthPx, touchSlop) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                state.invalidateTextEditing()
+                focusManager.clearFocus(force = true)
+                state.selectTarget(target)
+                val origin = when (target) {
+                    RangeEditTarget.START -> state.startSeconds
+                    RangeEditTarget.END -> state.endSeconds
+                }
+                var dragging = false
+                try {
+                    while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        pressed = change.pressed
+                        if (!change.pressed) break
+                        val deltaX = change.position.x - down.position.x
+                        if (!dragging && abs(deltaX) > touchSlop) {
+                            dragging = true
+                            state.beginBoundaryScrub(target)
+                        }
+                        change.consume()
+                        if (dragging) {
+                            val requested = origin + deltaX / timelineWidthPx * state.durationSeconds
+                            state.updateBoundaryScrub(target, requested)
+                        }
                     }
+                } finally {
+                    if (dragging) state.endBoundaryScrub()
+                    else state.beginBoundaryEdit(target)
                 }
             }
-            .clickable(
-                interactionSource = tapInteraction,
-                indication = null,
-                onClick = ::focusTarget,
-            )
-            .pointerInput(target, state.durationSeconds, timelineWidthPx) {
-                detectDragGestures(
-                    onDragStart = {
-                        state.invalidateTextEditing()
-                        focusManager.clearFocus(force = true)
-                        dragOrigin = when (target) {
-                            RangeEditTarget.START -> state.startSeconds
-                            RangeEditTarget.CURSOR -> state.cursorSeconds
-                            RangeEditTarget.END -> state.endSeconds
-                        }
-                        accumulatedDrag = 0f
-                        if (target == RangeEditTarget.CURSOR) {
-                            state.beginCursorScrub()
-                        } else {
-                            state.beginSnapInteraction(target)
-                            state.beginBoundaryEdit(target)
-                        }
-                    },
-                    onDragEnd = {
-                        if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
-                        else state.endSnapInteraction()
-                    },
-                    onDragCancel = {
-                        if (target == RangeEditTarget.CURSOR) state.endCursorScrub()
-                        else state.endSnapInteraction()
-                    },
-                ) { change, dragAmount ->
-                    change.consume()
-                    accumulatedDrag += dragAmount.x
-                    val requested = dragOrigin + accumulatedDrag / timelineWidthPx * state.durationSeconds
-                    val snapped = if (target == RangeEditTarget.CURSOR) {
-                        val before = state.snappedTo
-                        state.updateCursorScrub(requested, snapThresholdSeconds)
-                        state.snappedTo != null && state.snappedTo != before
-                    } else {
-                        state.setTarget(target, requested, snapThresholdSeconds)
-                    }
-                    if (snapped) onSnap()
-                }
-            }
+        }
     } else {
         Modifier
     }
@@ -1652,21 +1321,20 @@ private fun RangeTimelineBar(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (target == RangeEditTarget.CURSOR) {
+        if (active) {
             RangeTimelineCursorVisual(
-                active = active,
+                active = true,
                 visualAlpha = visualAlpha,
                 modifier = Modifier.fillMaxSize(),
             )
-            Box(Modifier.fillMaxSize().then(dragModifier))
         } else {
             RangeTimelineBoundaryVisual(
-                active = active,
+                active = false,
                 visualAlpha = visualAlpha,
                 modifier = Modifier.fillMaxSize(),
             )
-            Box(Modifier.fillMaxSize().then(dragModifier))
         }
+        Box(Modifier.fillMaxSize().then(dragModifier))
     }
 }
 
@@ -1818,7 +1486,7 @@ private fun SpringFineAdjust(
             focusManager.clearFocus(force = true)
         },
         onBeginFineAdjust = state::beginFineAdjust,
-        onFineAdjust = state::fineAdjust,
+        onFineAdjust = { deltaSeconds, _ -> state.fineAdjust(deltaSeconds) },
         onUpdateFineAdjustShuttle = state::updateFineAdjustShuttle,
         onEndFineAdjust = state::endFineAdjust,
         modifier = modifier,
@@ -1841,6 +1509,7 @@ internal fun SpringFineSeekControl(
 ) {
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
+    val view = LocalView.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }

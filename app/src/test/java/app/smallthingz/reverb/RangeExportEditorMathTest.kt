@@ -85,85 +85,46 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun cursorRemainsIndependentOfSelectedRange() {
-        val update = adjustRangeEditTarget(
-            values = RangeEditValues(startSeconds = 20f, cursorSeconds = 30f, endSeconds = 80f),
-            target = RangeEditTarget.CURSOR,
-            requestedSeconds = 5f,
+    fun rangeEditorHasOnlyBoundaryTargets_andPreservesMinimumRange() {
+        val initial = RangeEditValues(startSeconds = 20f, endSeconds = 80f)
+        val movedStart = adjustRangeEditTarget(
+            values = initial,
+            target = RangeEditTarget.START,
+            requestedSeconds = 79.99f,
             durationSeconds = 100f,
-            snapThresholdSeconds = 1f,
         )
-        assertEquals(20f, update.values.startSeconds, 0f)
-        assertEquals(5f, update.values.cursorSeconds, 0f)
-        assertEquals(80f, update.values.endSeconds, 0f)
-        assertEquals(null, update.snappedTo)
+        assertEquals(79.95f, movedStart.values.startSeconds, 0.0001f)
+        assertEquals(80f, movedStart.values.endSeconds, 0f)
+
+        val movedEnd = adjustRangeEditTarget(
+            values = initial,
+            target = RangeEditTarget.END,
+            requestedSeconds = 20.01f,
+            durationSeconds = 100f,
+        )
+        assertEquals(20f, movedEnd.values.startSeconds, 0f)
+        assertEquals(20.05f, movedEnd.values.endSeconds, 0.0001f)
+
+        val clampedStart = adjustRangeEditTarget(initial, RangeEditTarget.START, -50f, 100f)
+        val clampedEnd = adjustRangeEditTarget(initial, RangeEditTarget.END, 150f, 100f)
+        assertEquals(0f, clampedStart.values.startSeconds, 0f)
+        assertEquals(100f, clampedEnd.values.endSeconds, 0f)
     }
 
     @Test
-    fun cursorAndRangeEdgesSnapBidirectionally() {
-        val cursorToStart = adjustRangeEditTarget(
-            RangeEditValues(20f, 40f, 80f),
-            RangeEditTarget.CURSOR,
-            requestedSeconds = 20.4f,
-            durationSeconds = 100f,
-            snapThresholdSeconds = 0.5f,
+    fun boundaryCursorPreview_playsForwardFromStart_andLeadInToEnd() {
+        assertEquals(
+            BoundaryCursorPreviewWindow(10f, 30f),
+            boundaryCursorPreviewWindow(10f, 30f, endBoundaryActive = false),
         )
-        assertEquals(20f, cursorToStart.values.cursorSeconds, 0f)
-        assertEquals(RangeEditTarget.START, cursorToStart.snappedTo)
-
-        val startToCursor = adjustRangeEditTarget(
-            RangeEditValues(20f, 40f, 80f),
-            RangeEditTarget.START,
-            requestedSeconds = 39.7f,
-            durationSeconds = 100f,
-            snapThresholdSeconds = 0.5f,
+        assertEquals(
+            BoundaryCursorPreviewWindow(27f, 30f),
+            boundaryCursorPreviewWindow(10f, 30f, endBoundaryActive = true),
         )
-        assertEquals(40f, startToCursor.values.startSeconds, 0f)
-        assertEquals(RangeEditTarget.CURSOR, startToCursor.snappedTo)
-    }
-
-    @Test
-    fun snapLatchHoldsFor1250msThenAllowsStationaryReleaseInsideMagnetZone() {
-        assertEquals(1_250L, rangeSnapReleaseAtMillis(0L, 0L))
-        assertEquals(1_400L, rangeSnapReleaseAtMillis(0L, 1_310L))
-
-        assertTrue(rangeSnapPointerInsideReleaseZone(10.60f, 10f, 0.50f))
-        assertTrue(!rangeSnapPointerInsideReleaseZone(10.80f, 10f, 0.50f))
-        assertTrue(!rangeSnapPointerMoved(10f, 10.02f, 0.50f))
-        assertTrue(rangeSnapPointerMoved(10f, 10.05f, 0.50f))
-    }
-
-    @Test
-    fun snappedTargetsCanMoveAwayWithSubThresholdFineSteps() {
-        val cursorLeavesStart = adjustRangeEditTarget(
-            values = RangeEditValues(startSeconds = 0f, cursorSeconds = 0f, endSeconds = 100f),
-            target = RangeEditTarget.CURSOR,
-            requestedSeconds = 0.01f,
-            durationSeconds = 100f,
-            snapThresholdSeconds = 0.04f,
+        assertEquals(
+            BoundaryCursorPreviewWindow(28.5f, 30f),
+            boundaryCursorPreviewWindow(28.5f, 30f, endBoundaryActive = true),
         )
-        assertEquals(0.01f, cursorLeavesStart.values.cursorSeconds, 0f)
-        assertEquals(null, cursorLeavesStart.snappedTo)
-
-        val cursorKeepsLeavingStart = adjustRangeEditTarget(
-            values = cursorLeavesStart.values,
-            target = RangeEditTarget.CURSOR,
-            requestedSeconds = 0.02f,
-            durationSeconds = 100f,
-            snapThresholdSeconds = 0.04f,
-        )
-        assertEquals(0.02f, cursorKeepsLeavingStart.values.cursorSeconds, 0f)
-        assertEquals(null, cursorKeepsLeavingStart.snappedTo)
-
-        val cursorApproachesStart = adjustRangeEditTarget(
-            values = RangeEditValues(startSeconds = 0f, cursorSeconds = 0.2f, endSeconds = 100f),
-            target = RangeEditTarget.CURSOR,
-            requestedSeconds = 0.01f,
-            durationSeconds = 100f,
-            snapThresholdSeconds = 0.04f,
-        )
-        assertEquals(0f, cursorApproachesStart.values.cursorSeconds, 0f)
-        assertEquals(RangeEditTarget.START, cursorApproachesStart.snappedTo)
     }
 
     @Test
@@ -322,28 +283,25 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun fineAdjustAudioTargetIncludesPendingMotionButHonorsSnapAndBounds() {
-        val values = RangeEditValues(startSeconds = 10f, cursorSeconds = 20f, endSeconds = 30f)
-        assertEquals(20.25f, projectFineAdjustShuttleTarget(
+    fun fineAdjustAudioTargetTracksSelectedBoundaryAndHonorsBounds() {
+        val values = RangeEditValues(startSeconds = 10f, endSeconds = 30f)
+        assertEquals(10.25f, projectFineAdjustShuttleTarget(
             values = values,
-            target = RangeEditTarget.CURSOR,
+            target = RangeEditTarget.START,
             pendingDeltaSeconds = 0.25f,
             durationSeconds = 40f,
-            snapped = false,
         ), 0.0001f)
-        assertEquals(20f, projectFineAdjustShuttleTarget(
-            values = values,
-            target = RangeEditTarget.CURSOR,
-            pendingDeltaSeconds = 0.25f,
-            durationSeconds = 40f,
-            snapped = true,
-        ), 0f)
         assertEquals(29.95f, projectFineAdjustShuttleTarget(
             values = values,
             target = RangeEditTarget.START,
             pendingDeltaSeconds = 100f,
             durationSeconds = 40f,
-            snapped = false,
+        ), 0.0001f)
+        assertEquals(10.05f, projectFineAdjustShuttleTarget(
+            values = values,
+            target = RangeEditTarget.END,
+            pendingDeltaSeconds = -100f,
+            durationSeconds = 40f,
         ), 0.0001f)
     }
 

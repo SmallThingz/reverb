@@ -441,6 +441,7 @@ internal class TimelineAudioPreviewController : Closeable {
     fun play(
         snapshot: ReverbService.TimelineSnapshot,
         fromSeconds: Double,
+        untilSeconds: Double = snapshot.durationSeconds,
         onProgress: (Double) -> Unit,
         onFinished: () -> Unit,
         onError: (Throwable) -> Unit,
@@ -449,12 +450,17 @@ internal class TimelineAudioPreviewController : Closeable {
         cancelCurrent()
         val token = generation.incrementAndGet()
         val start = fromSeconds.coerceIn(0.0, snapshot.durationSeconds)
+        val end = untilSeconds.coerceIn(start, snapshot.durationSeconds)
+        if (end <= start) {
+            postIfCurrent(token, onFinished)
+            return
+        }
         enqueueLatest {
             stream(
                 token = token,
                 snapshot = snapshot,
                 startSeconds = start,
-                endSeconds = snapshot.durationSeconds,
+                endSeconds = end,
                 volume = 1f,
                 reportProgress = true,
                 onProgress = onProgress,
