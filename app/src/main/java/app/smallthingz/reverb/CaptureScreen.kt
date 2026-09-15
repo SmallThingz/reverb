@@ -185,6 +185,14 @@ internal sealed interface CaptureSaveStatus {
 internal fun markExportCancelRequested(status: CaptureSaveStatus?): CaptureSaveStatus? =
     if (status is CaptureSaveStatus.Saving) status.copy(cancellable = false) else status
 
+private class CaptureScreenBookkeeping {
+    var startupBufferChosen = false
+    var latestListeningCommandGeneration = Long.MIN_VALUE
+    var serviceConnectionGeneration = 0L
+    var customRangeRequestGeneration = 0L
+    var pendingCustomRangeBuffer: ReverbService.BufferSlot? = null
+}
+
 @Composable
 fun CaptureScreen(
     visualizerVisible: Boolean = true,
@@ -214,9 +222,7 @@ fun CaptureScreen(
             if (oneShotEnabled) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING,
         )
     }
-    var startupBufferChosen by remember { mutableStateOf(false) }
-    var latestListeningCommandGeneration by remember { mutableLongStateOf(Long.MIN_VALUE) }
-    var serviceConnectionGeneration by remember { mutableLongStateOf(0L) }
+    val bookkeeping = remember { CaptureScreenBookkeeping() }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
     // Sampled only when range export opens; visualization updates must not recompose CaptureScreen.
@@ -230,21 +236,19 @@ fun CaptureScreen(
     var rangeSnapshotBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
     var pendingExportSnapshot by remember { mutableStateOf<ReverbService.TimelineSnapshot?>(null) }
     var isPreparingRange by remember { mutableStateOf(false) }
-    var customRangeRequestGeneration by remember { mutableLongStateOf(0L) }
-    var pendingCustomRangeBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
     val screenAlive = remember { AtomicBoolean(true) }
 
     fun invalidateCustomRangePreparation() {
-        customRangeRequestGeneration++
-        pendingCustomRangeBuffer = null
+        bookkeeping.customRangeRequestGeneration++
+        bookkeeping.pendingCustomRangeBuffer = null
         rangeSnapshotBuffer = null
         isPreparingRange = false
     }
 
     fun requestRecorderState(recorder: ReverbService) {
-        val requestConnectionGeneration = serviceConnectionGeneration
+        val requestConnectionGeneration = bookkeeping.serviceConnectionGeneration
         recorder.getState(
             object : ReverbService.StateCallback {
                 override fun state(
@@ -261,12 +265,12 @@ fun CaptureScreen(
                 ) {
                     if (!shouldApplyRecorderStateSnapshot(
                             snapshotConnectionGeneration = requestConnectionGeneration,
-                            currentConnectionGeneration = serviceConnectionGeneration,
+                            currentConnectionGeneration = bookkeeping.serviceConnectionGeneration,
                             snapshotGeneration = commandGeneration,
-                            latestCommandGeneration = latestListeningCommandGeneration,
+                            latestCommandGeneration = bookkeeping.latestListeningCommandGeneration,
                         )
                     ) return
-                    latestListeningCommandGeneration = commandGeneration
+                    bookkeeping.latestListeningCommandGeneration = commandGeneration
                     val previousActiveBuffer = activeBuffer
                     isListening = listeningEnabled
                     activeBuffer = activeBufferSlot
@@ -278,13 +282,13 @@ fun CaptureScreen(
                     oneShotFull = oneShotIsFull
                     loopingEnabled = loopingIsEnabled
 
-                    if (!startupBufferChosen) {
+                    if (!bookkeeping.startupBufferChosen) {
                         selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
                             oneShotEnabled = oneShotIsEnabled,
                             oneShotFull = oneShotIsFull,
                             loopingEnabled = loopingIsEnabled,
                         )
-                        startupBufferChosen = true
+                        bookkeeping.startupBufferChosen = true
                     } else if (
                         listeningEnabled &&
                         previousActiveBuffer == ReverbService.BufferSlot.ONE_SHOT &&
@@ -311,7 +315,7 @@ fun CaptureScreen(
                         showExportClampDialog = false
                         pendingClearBuffer = null
                         invalidateCustomRangePreparation()
-                        serviceConnectionGeneration++
+                        bookkeeping.serviceConnectionGeneration++
                         service = null
                         return
                     }
@@ -327,8 +331,8 @@ fun CaptureScreen(
                     pendingClearBuffer = null
                     invalidateCustomRangePreparation()
                 }
-                serviceConnectionGeneration++
-                latestListeningCommandGeneration = Long.MIN_VALUE
+                bookkeeping.serviceConnectionGeneration++
+                bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
                 service = connectedService
                 requestRecorderState(connectedService)
             }
@@ -348,7 +352,7 @@ fun CaptureScreen(
                     saveStatus = null
                     errorMessage = resources.getString(R.string.save_failed)
                 }
-                serviceConnectionGeneration++
+                bookkeeping.serviceConnectionGeneration++
                 service = null
             }
         }
@@ -373,7 +377,7 @@ fun CaptureScreen(
     }
 
     LaunchedEffect(selectedBuffer) {
-        val pendingBuffer = pendingCustomRangeBuffer
+        val pendingBuffer = bookkeeping.pendingCustomRangeBuffer
         if (pendingBuffer != null && pendingBuffer != selectedBuffer) {
             invalidateCustomRangePreparation()
         }
@@ -438,7 +442,7 @@ fun CaptureScreen(
                         context.unbindService(connection)
                         bound = false
                     }
-                    serviceConnectionGeneration++
+                    bookkeeping.serviceConnectionGeneration++
                     service = null
                 }
 
@@ -463,7 +467,7 @@ fun CaptureScreen(
                 context.unbindService(connection)
                 bound = false
             }
-            serviceConnectionGeneration++
+            bookkeeping.serviceConnectionGeneration++
             service = null
         }
     }
@@ -599,8 +603,8 @@ fun CaptureScreen(
                         CaptureBlobTapAction.NONE -> null
                     }
                     if (result?.accepted == true) {
-                        latestListeningCommandGeneration = maxOf(
-                            latestListeningCommandGeneration,
+                        bookkeeping.latestListeningCommandGeneration = maxOf(
+                            bookkeeping.latestListeningCommandGeneration,
                             result.generation,
                         )
                         isListening = action != CaptureBlobTapAction.STOP
@@ -675,28 +679,28 @@ fun CaptureScreen(
                             ReverbService.BufferSlot.LOOPING -> loopingDurationSeconds
                         }.coerceAtLeast(0f)
                         if (secs > 0f) {
-                            val requestGeneration = customRangeRequestGeneration + 1L
-                            customRangeRequestGeneration = requestGeneration
-                            pendingCustomRangeBuffer = bufferSlot
+                            val requestGeneration = bookkeeping.customRangeRequestGeneration + 1L
+                            bookkeeping.customRangeRequestGeneration = requestGeneration
+                            bookkeeping.pendingCustomRangeBuffer = bufferSlot
                             rangeSnapshotBuffer = bufferSlot
                             isPreparingRange = true
                             s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
                                 val currentRequest = shouldApplyCustomRangeSnapshot(
                                     requestGeneration = requestGeneration,
-                                    latestRequestGeneration = customRangeRequestGeneration,
+                                    latestRequestGeneration = bookkeeping.customRangeRequestGeneration,
                                     requestedBuffer = bufferSlot,
-                                    pendingBuffer = pendingCustomRangeBuffer,
+                                    pendingBuffer = bookkeeping.pendingCustomRangeBuffer,
                                     selectedBuffer = selectedBufferState.value,
                                 )
                                 if (!currentRequest) {
                                     snapshot?.close()
-                                    if (requestGeneration == customRangeRequestGeneration) {
-                                        pendingCustomRangeBuffer = null
+                                    if (requestGeneration == bookkeeping.customRangeRequestGeneration) {
+                                        bookkeeping.pendingCustomRangeBuffer = null
                                         isPreparingRange = false
                                     }
                                     return@acquireTimelineSnapshot
                                 }
-                                pendingCustomRangeBuffer = null
+                                bookkeeping.pendingCustomRangeBuffer = null
                                 isPreparingRange = false
                                 if (!screenAlive.get() || service !== s) {
                                     snapshot?.close()
