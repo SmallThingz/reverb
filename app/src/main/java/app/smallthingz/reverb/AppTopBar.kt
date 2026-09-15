@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -42,16 +43,13 @@ internal fun AppTopBar(
             modifier = Modifier
                 .align(Alignment.Center)
                 .size(46.dp),
-            shape = buttonShape,
-            color = chrome.field,
-            border = BorderStroke(1.dp, chrome.border),
+            shape = ReverbAppIconShape,
+            color = androidx.compose.ui.graphics.Color.Transparent,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                ReverbBrandMark(
-                    contentDescription = stringResource(R.string.app_name),
-                    modifier = Modifier.size(42.dp),
-                )
-            }
+            ReverbBrandMark(
+                contentDescription = stringResource(R.string.app_name),
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
         Surface(

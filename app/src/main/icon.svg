@@ -1,17 +1,11 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reverb app icon">
-  <rect width="512" height="512" rx="112" fill="#0D1324"/>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <g stroke="#2DD4BF" opacity="0.16" transform="translate(56 0) skewX(-8)">
-      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
-      <path d="M240 306L332 358" stroke-width="26"/>
-    </g>
-    <g stroke="#2DD4BF" opacity="0.34" transform="translate(28 0) skewX(-8)">
-      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
-      <path d="M240 306L332 358" stroke-width="26"/>
-    </g>
-    <g stroke="#FFFFFF" transform="skewX(-8)">
-      <path d="M178 358V154H244C294 154 328 186 328 230C328 274 294 306 244 306H178" stroke-width="26"/>
-      <path d="M240 306L332 358" stroke-width="26"/>
-    </g>
+  <circle cx="256" cy="256" r="256" fill="#0D1324"/>
+  <g transform="translate(44.5 0)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="26">
+    <path d="M183.686 358 L212.357 154 L278.357 154 C328.357 154 357.859 186 351.676 230 C345.492 274 306.995 306 256.995 306 L190.995 306" stroke="#2DD4BF" stroke-opacity="0.16"/>
+    <path d="M252.995 306 L337.686 358" stroke="#2DD4BF" stroke-opacity="0.16"/>
+    <path d="M155.686 358 L184.357 154 L250.357 154 C300.357 154 329.859 186 323.676 230 C317.492 274 278.995 306 228.995 306 L162.995 306" stroke="#2DD4BF" stroke-opacity="0.34"/>
+    <path d="M224.995 306 L309.686 358" stroke="#2DD4BF" stroke-opacity="0.34"/>
+    <path d="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" stroke="#FFFFFF"/>
+    <path d="M196.995 306 L281.686 358" stroke="#FFFFFF"/>
   </g>
 </svg>

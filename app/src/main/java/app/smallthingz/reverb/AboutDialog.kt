@@ -142,18 +142,12 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             )
                         }
 
-                        Surface(
+                        ReverbBrandMark(
+                            contentDescription = resources.getString(R.string.app_name),
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .size(104.dp),
-                            shape = RoundedCornerShape(30.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        ) {
-                            ReverbBrandMark(
-                                contentDescription = resources.getString(R.string.app_name),
-                                modifier = Modifier.padding(12.dp),
-                            )
-                        }
+                        )
                     }
 
                     Spacer(Modifier.height(14.dp))
