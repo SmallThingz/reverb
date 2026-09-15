@@ -102,6 +102,20 @@ class AudioVisualizationAnalyzerTest {
         assertTrue(frame.bins.maxOrNull()!! > 0.015f)
     }
 
+
+    @Test
+    fun oneLowLatencyCaptureSlice_movesBlobOnFirstFrame() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val silence = ByteArray(384 * Short.SIZE_BYTES)
+        analyzer.analyze(silence, 0, silence.size, PcmSampleFormat.PCM_16, 1, SAMPLE_RATE.toInt())
+        val pcm = pcm16Tone(frequencyHz = 700.0, amplitude = 0.01, sampleCount = 384)
+
+        val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, SAMPLE_RATE.toInt())
+
+        assertTrue(frame.activity > 0.35f)
+        assertTrue(frame.bins.maxOrNull()!! > 0.12f)
+    }
+
     @Test
     fun highSampleRateInput_stillUsesSpeechEnergy() {
         val analyzer = AudioVisualizationAnalyzer()
@@ -139,11 +153,12 @@ class AudioVisualizationAnalyzerTest {
         frequencyHz: Double,
         amplitude: Double,
         sampleRate: Double = SAMPLE_RATE,
+        sampleCount: Int = SAMPLE_COUNT,
     ): ByteArray {
-        return ByteBuffer.allocate(SAMPLE_COUNT * Short.SIZE_BYTES)
+        return ByteBuffer.allocate(sampleCount * Short.SIZE_BYTES)
             .order(ByteOrder.nativeOrder())
             .apply {
-                repeat(SAMPLE_COUNT) { index ->
+                repeat(sampleCount) { index ->
                     putShort(
                         (sin(2.0 * PI * frequencyHz * index / sampleRate) * amplitude * Short.MAX_VALUE)
                             .toInt()

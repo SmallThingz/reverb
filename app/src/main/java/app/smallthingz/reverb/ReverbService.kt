@@ -20,7 +20,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
-import android.os.SystemClock
 import android.util.Log
 
 import androidx.core.app.NotificationCompat
@@ -139,7 +138,6 @@ class ReverbService : Service() {
     private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
     private val visualizationDispatchScheduled = AtomicBoolean(false)
     private var visualizationFaulted = false
-    private var lastVisualizationAnalysisNanos = 0L
 
     private lateinit var audioThread: HandlerThread
     private lateinit var audioHandler: Handler
@@ -1723,11 +1721,12 @@ class ReverbService : Service() {
         val currentRecord = audioRecord ?: return 0
         if (audioRecordGeneration != generation) return 0
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
-        val targetFrames = maxOf(1L, sampleRate.toLong() * CAPTURE_READ_TARGET_MILLIS / 1000L)
-        val requestedBytes = minOf(
-            captureScratch.size.toLong(),
-            targetFrames * frameBytes.toLong(),
-        ).toInt().let { it - it % frameBytes }
+        val requestedBytes = captureReadByteCount(
+            sampleRate = sampleRate,
+            frameBytes = frameBytes,
+            capacityBytes = captureScratch.size,
+            visualizationActive = visualizationCallback != null,
+        )
         captureBuffer.clear()
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
         if (read == AudioRecord.ERROR_DEAD_OBJECT) {
@@ -1958,7 +1957,6 @@ class ReverbService : Service() {
             if (visualizationCallback === callback) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
-                lastVisualizationAnalysisNanos = 0L
             }
         }
     }
@@ -1966,12 +1964,9 @@ class ReverbService : Service() {
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
         val callback = visualizationCallback ?: return
         if (visualizationFaulted) return
-        val nowNanos = SystemClock.elapsedRealtimeNanos()
-        if (
-            lastVisualizationAnalysisNanos != 0L &&
-            nowNanos - lastVisualizationAnalysisNanos < VISUALIZATION_ANALYSIS_INTERVAL_NANOS
-        ) return
-        lastVisualizationAnalysisNanos = nowNanos
+        // The capture read itself is display-rate while the visualizer is attached. Analyze every
+        // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
+        // short transients entirely.
         val frame = try {
             visualizationAnalyzer.analyze(
                 array = array,
@@ -2644,9 +2639,9 @@ class ReverbService : Service() {
         const val MIN_AUDIO_RECORD_BUFFER_SIZE = 16 * 1024
         const val CAPTURE_SCRATCH_BYTES = 256 * 1024
         const val ACTIVE_PAYLOAD_SYNC_INTERVAL_MILLIS = 1_000L
-        const val CAPTURE_READ_TARGET_MILLIS = 160L
+        const val CAPTURE_READ_TARGET_MILLIS = 40L
+        const val VISUALIZATION_CAPTURE_READ_TARGET_MILLIS = 8L
         const val EMPTY_READ_RETRY_MILLIS = 20L
-        const val VISUALIZATION_ANALYSIS_INTERVAL_NANOS = 90_000_000L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
         val nextExportTokenId = AtomicLong(1L)
@@ -2673,6 +2668,26 @@ class ReverbService : Service() {
         const val STATE_PAUSED = 2
     }
 
+}
+
+internal fun captureReadByteCount(
+    sampleRate: Int,
+    frameBytes: Int,
+    capacityBytes: Int,
+    visualizationActive: Boolean,
+): Int {
+    val alignedFrameBytes = frameBytes.coerceAtLeast(1)
+    val targetMillis = if (visualizationActive) {
+        ReverbService.VISUALIZATION_CAPTURE_READ_TARGET_MILLIS
+    } else {
+        ReverbService.CAPTURE_READ_TARGET_MILLIS
+    }
+    val targetFrames = maxOf(1L, sampleRate.coerceAtLeast(1).toLong() * targetMillis / 1000L)
+    val boundedBytes = minOf(
+        capacityBytes.coerceAtLeast(alignedFrameBytes).toLong(),
+        targetFrames * alignedFrameBytes.toLong(),
+    ).toInt()
+    return boundedBytes - boundedBytes % alignedFrameBytes
 }
 
 internal fun foregroundServiceTypesForWork(

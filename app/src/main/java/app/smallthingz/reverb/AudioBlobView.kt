@@ -68,7 +68,7 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     fun submitFrame(frame: ReverbService.VisualizationFrame) {
-        val wasHot = hasHotAudio()
+        val hadRecentSignal = hasRecentAudioSignal()
         targetActivity = frame.activity.coerceIn(0f, 1f)
         val source = frame.bins
         var hasSignal = targetActivity > SIGNAL_ACTIVITY_THRESHOLD
@@ -86,7 +86,10 @@ internal class AudioBlobView(context: Context) : View(context) {
             }
         }
         if (hasSignal) lastAudioSignalNanos = System.nanoTime()
-        if (!wasHot && hasHotAudio() && framePosted) {
+        if (!hadRecentSignal && hasRecentAudioSignal() && framePosted) {
+            // A quiet onset can be below the "hot" threshold while an idle 33 ms callback is
+            // pending. Pull that first response forward to the very next vsync. Subsequent audio
+            // stays at display cadence via postNextFrame(), so we do not continually re-arm it.
             choreographer.removeFrameCallback(frameCallback)
             framePosted = false
             postNextFrame(immediate = true)
@@ -213,15 +216,15 @@ internal class AudioBlobView(context: Context) : View(context) {
     private fun postNextFrame(immediate: Boolean = false) {
         if (framePosted || !shouldAnimate()) return
         framePosted = true
-        val audioHot = hasHotAudio()
+        val audioResponsive = hasHotAudio() || hasRecentAudioSignal()
         val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON
-        if (immediate || lifeMoving) {
-            // Render grow/collapse on every display vsync. The time-normalized life curve below
-            // preserves the original 30 Hz trajectory without the visible half-rate stepping.
+        if (immediate || lifeMoving || audioResponsive) {
+            // Choreographer already limits us to the display cadence. Do not add a fixed 16 ms
+            // timer on top of vsync: on high-refresh panels that halves the response rate, and on
+            // 60 Hz panels it can miss the very next frame depending on phase.
             choreographer.postFrameCallback(frameCallback)
         } else {
-            val delay = if (audioHot) renderer.activeFrameDelayMillis else renderer.idleFrameDelayMillis
-            choreographer.postFrameCallbackDelayed(frameCallback, delay)
+            choreographer.postFrameCallbackDelayed(frameCallback, renderer.idleFrameDelayMillis)
         }
     }
 
@@ -264,12 +267,12 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     private fun advance(dtSeconds: Float) {
         val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)
-        val activityRate = if (targetActivity > currentActivity) 0.34f else 0.16f
-        val activityMix = (activityRate * normalized).coerceIn(0f, 0.82f)
+        val activityRate = if (targetActivity > currentActivity) 0.72f else 0.16f
+        val activityMix = 1f - (1f - activityRate).pow(normalized)
         currentActivity += (targetActivity - currentActivity) * activityMix
         for (index in currentBands.indices) {
-            val rate = if (targetBands[index] > currentBands[index]) 0.30f else 0.13f
-            val mix = (rate * normalized).coerceIn(0f, 0.8f)
+            val rate = if (targetBands[index] > currentBands[index]) 0.68f else 0.13f
+            val mix = 1f - (1f - rate).pow(normalized)
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
         val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f
@@ -279,7 +282,6 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private interface Renderer {
-        val activeFrameDelayMillis: Long
         val idleFrameDelayMillis: Long
         fun resize(width: Int, height: Int)
         fun setPalette(primary: Int, tertiary: Int, paused: Int): Boolean
@@ -297,7 +299,6 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private class ShaderRenderer : Renderer {
-        override val activeFrameDelayMillis = 16L
         override val idleFrameDelayMillis = 33L
         private val shader = RuntimeShader(SHADER_SOURCE)
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).also { it.shader = shader }
@@ -371,7 +372,6 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private class FallbackRenderer : Renderer {
-        override val activeFrameDelayMillis = 16L
         override val idleFrameDelayMillis = 33L
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val path = Path()

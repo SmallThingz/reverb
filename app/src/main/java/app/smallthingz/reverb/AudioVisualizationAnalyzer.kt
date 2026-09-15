@@ -31,6 +31,11 @@ internal class AudioVisualizationAnalyzer {
     private val sine = FloatArray(FFT_SIZE / 2) { index ->
         sin(-2.0 * PI * index / FFT_SIZE).toFloat()
     }
+    private val spectrumStarts = IntArray(OUTPUT_BINS)
+    private val spectrumEndsExclusive = IntArray(OUTPUT_BINS)
+    private val aWeightingGains = FloatArray(OUTPUT_BINS)
+    private var spectrumLayoutSampleRate = Int.MIN_VALUE
+    private var spectrumLayoutMaxSourceBin = Int.MIN_VALUE
 
     private var smoothedActivity = 0f
     private var noiseFloor = INITIAL_NOISE_FLOOR
@@ -118,33 +123,29 @@ internal class AudioVisualizationAnalyzer {
             fractionalMaxBin
         }
         val maxSourceBin = minOf(fractionalMaxBin, speechMaxBin).coerceAtLeast(2)
+        ensureSpectrumLayout(sampleRate, maxSourceBin)
         for (outputIndex in 0 until OUTPUT_BINS) {
-            val sourceStart = 1 + outputIndex * (maxSourceBin - 1) / OUTPUT_BINS
-            val sourceEndExclusive = max(
-                sourceStart + 1,
-                1 + (outputIndex + 1) * (maxSourceBin - 1) / OUTPUT_BINS,
-            )
-            var magnitudeSum = 0f
+            val sourceStart = spectrumStarts[outputIndex]
+            val sourceEndExclusive = spectrumEndsExclusive[outputIndex]
+            var magnitudeSquaredSum = 0f
             var magnitudeCount = 0
-            for (sourceIndex in sourceStart until sourceEndExclusive.coerceAtMost(maxSourceBin + 1)) {
+            for (sourceIndex in sourceStart until sourceEndExclusive) {
                 val re = real[sourceIndex]
                 val im = imaginary[sourceIndex]
-                magnitudeSum += sqrt(re * re + im * im)
+                magnitudeSquaredSum += re * re + im * im
                 magnitudeCount++
             }
             val normalized = if (magnitudeCount > 0) {
-                (magnitudeSum / magnitudeCount) / (FFT_SIZE * 0.5f)
+                sqrt(magnitudeSquaredSum / magnitudeCount) / (FFT_SIZE * 0.5f)
             } else {
                 0f
             }
             val spectrumGate = max(MIN_SPECTRUM_GATE, noiseFloor * SPECTRUM_NOISE_MULTIPLIER)
-            val sourceCenter = (sourceStart + sourceEndExclusive.coerceAtMost(maxSourceBin + 1) - 1) * 0.5f
-            val centerFrequencyHz = if (sampleRate > 0) sourceCenter * sampleRate / FFT_SIZE else 1_000f
             val spectrum = perceivedLoudnessLevel(
                 signal = normalized,
                 reference = spectrumGate,
                 dynamicRangeDb = SPECTRUM_DYNAMIC_RANGE_DB,
-            ) * aWeightingGain(centerFrequencyHz)
+            ) * aWeightingGains[outputIndex]
             val waveformAverage = if (waveformCounts[outputIndex] > 0) {
                 waveformSums[outputIndex] / waveformCounts[outputIndex]
             } else {
@@ -156,8 +157,9 @@ internal class AudioVisualizationAnalyzer {
                 dynamicRangeDb = WAVEFORM_DYNAMIC_RANGE_DB,
             )
             val shaped = max(spectrum, waveform * (0.72f + smoothedActivity * 0.35f))
+            val oldWeight = if (shaped > smoothedBins[outputIndex]) BIN_ATTACK_OLD else BIN_RELEASE_OLD
             smoothedBins[outputIndex] =
-                smoothedBins[outputIndex] * BIN_SMOOTHING + shaped * (1f - BIN_SMOOTHING)
+                smoothedBins[outputIndex] * oldWeight + shaped * (1f - oldWeight)
         }
 
         return ReverbService.VisualizationFrame(
@@ -166,6 +168,24 @@ internal class AudioVisualizationAnalyzer {
         )
     }
 
+
+    private fun ensureSpectrumLayout(sampleRate: Int, maxSourceBin: Int) {
+        if (spectrumLayoutSampleRate == sampleRate && spectrumLayoutMaxSourceBin == maxSourceBin) return
+        spectrumLayoutSampleRate = sampleRate
+        spectrumLayoutMaxSourceBin = maxSourceBin
+        for (outputIndex in 0 until OUTPUT_BINS) {
+            val start = 1 + outputIndex * (maxSourceBin - 1) / OUTPUT_BINS
+            val end = max(
+                start + 1,
+                1 + (outputIndex + 1) * (maxSourceBin - 1) / OUTPUT_BINS,
+            ).coerceAtMost(maxSourceBin + 1)
+            spectrumStarts[outputIndex] = start
+            spectrumEndsExclusive[outputIndex] = end
+            val centerBin = (start + end - 1) * 0.5f
+            val centerFrequencyHz = if (sampleRate > 0) centerBin * sampleRate / FFT_SIZE else 1_000f
+            aWeightingGains[outputIndex] = aWeightingGain(centerFrequencyHz)
+        }
+    }
 
     internal fun perceivedLoudnessLevel(
         signal: Float,
@@ -274,9 +294,11 @@ internal class AudioVisualizationAnalyzer {
     }
 
     companion object {
-        const val OUTPUT_BINS = 16
-        private const val FFT_SIZE = 512
-        private const val FFT_BITS = 9
+        // AudioBlobView renders eight radial bands; keep the analyzer one-to-one with the
+        // renderer instead of producing sixteen bins only to max-pool adjacent pairs on main.
+        const val OUTPUT_BINS = 8
+        private const val FFT_SIZE = 256
+        private const val FFT_BITS = 8
         // Phone microphone capture can legitimately sit around 5e-4 RMS for normal room audio.
         // Reactivity is expressed in dB above that adaptive floor, matching perceived loudness
         // much better than linear PCM amplitude. Frequency deformation gets A-weighted as well.
@@ -295,8 +317,9 @@ internal class AudioVisualizationAnalyzer {
         private const val MIN_A_WEIGHT_GAIN = 0.08f
         private const val MAX_A_WEIGHT_GAIN = 1.15f
         private const val LN_10 = 2.302585092994046
-        private const val BIN_SMOOTHING = 0.62f
-        private const val ACTIVITY_ATTACK_OLD = 0.42f
+        private const val BIN_ATTACK_OLD = 0.12f
+        private const val BIN_RELEASE_OLD = 0.68f
+        private const val ACTIVITY_ATTACK_OLD = 0.08f
         private const val ACTIVITY_RELEASE_OLD = 0.84f
         private const val INITIAL_NOISE_FLOOR = 0.00055f
         private const val MIN_NOISE_FLOOR = 0.00005f

@@ -13,6 +13,7 @@
 - Brand marks keep the main stroke on the current foreground color and derive echo/accent strokes from the Material primary color; Android 12+ launcher accents use system Material You colors and Android 13+ keeps a monochrome themed-icon mask.
 - Buffer selector cards are navigation only, exactly like horizontal swipes: they change the displayed buffer and never change the active capture destination or listening state. Never wire selector navigation to `selectCaptureBuffer`, `enableListening`, or `disableListening`.
 - The blob is the capture control. Tapping a usable displayed blob starts it when idle, stops it when already recording, or switches capture from the other active buffer to it without an intermediate stop. Tapping One-shot may take capture from Looping only when One-shot is enabled and not full; disabled/full One-shot must leave Looping recording untouched.
+- While the live blob visualizer is attached, microphone reads run at a display-rate low-latency cadence and every completed read is analyzed; do not add a second coarse analysis throttle. Active blob animation schedules the next display vsync directly rather than layering a fixed timer over Choreographer.
 - The Library action is always visible and must open even when the library is empty.
 - Both buffer readouts use the configured retention mode for their primary metric.
 - Export-limit warnings appear only inside export flows; never place them on the capture blob.
