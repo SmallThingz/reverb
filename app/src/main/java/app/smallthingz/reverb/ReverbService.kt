@@ -226,12 +226,10 @@ class ReverbService : Service() {
         stopForegroundTracked()
 
         if (::exportWorkExecutor.isInitialized) {
+            // onDestroy runs on the main thread. Let already-started export work finish on its
+            // executor; verified staging makes process loss recoverable, so waiting here only
+            // adds UI/service teardown latency without strengthening durability.
             exportWorkExecutor.shutdown()
-            try {
-                exportWorkExecutor.awaitTermination(2, TimeUnit.SECONDS)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
         }
         audioThread.quitSafely()
         super.onDestroy()

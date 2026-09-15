@@ -1087,7 +1087,6 @@ internal fun RangeExportHomeContent(
                 for (update in updates) {
                     state.publishWaveformSnapshot(pass, update)
                 }
-                worker.join()
             } finally {
                 worker.cancel()
                 updates.close()

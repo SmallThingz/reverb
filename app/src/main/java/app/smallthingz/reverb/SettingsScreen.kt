@@ -55,7 +55,6 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
@@ -378,7 +377,6 @@ fun SettingsScreen(
     fun restorePreviousSettings() {
         if (!hasUnsavedChanges) return
         val prev = originalSnapshot
-        val abandonedExportTreeUri = selectedExportTreeUri
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
         loopingRetentionTimeError = null
@@ -390,10 +388,6 @@ fun SettingsScreen(
         loopingRetentionTimeSecondsValue = prev.loopingRetentionTime
         loopingRetentionSizeBytesValue = prev.loopingRetentionSizeBytes
         selectedExportTreeUri = prev.exportDirectoryUri?.let(Uri::parse)
-        if (abandonedExportTreeUri != selectedExportTreeUri) {
-            RecordingRepository.releasePendingDirectory(abandonedExportTreeUri)
-        }
-
         selectedTheme = prev.themeMode
         onThemeChanged(prev.themeMode)
         selectedFormat = prev.format ?: availableFormats.first()
@@ -615,7 +609,6 @@ fun SettingsScreen(
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }
-        RecordingRepository.releasePendingDirectory(selectedExportTreeUri)
         onThemeChanged(selectedTheme)
 
         val currentService = service
@@ -701,7 +694,6 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
         if (treeUri == null) return@rememberLauncherForActivityResult
-        RecordingRepository.retainPendingDirectory(treeUri)
         val permissionTaken = runCatching {
             context.contentResolver.takePersistableUriPermission(
                 treeUri,
@@ -709,22 +701,15 @@ fun SettingsScreen(
             )
         }.isSuccess
         if (!permissionTaken) {
-            RecordingRepository.releasePendingDirectory(treeUri)
             AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
-        val previousTreeUri = selectedExportTreeUri
         selectedExportTreeUri = treeUri
-        if (previousTreeUri != treeUri) {
-            RecordingRepository.releasePendingDirectory(previousTreeUri)
-        }
         exportPathText = describeOutputDirectory(context, treeUri)
         saveCurrentToSnapshot(currentSnapshot)
         pushUndoState()
         refreshMoveRecordingsAvailability()
     }
-
-    val currentExportTreeUri by rememberUpdatedState(selectedExportTreeUri)
 
     val connection = remember {
         object : android.content.ServiceConnection {
@@ -749,7 +734,6 @@ fun SettingsScreen(
             if (bound) {
                 context.unbindService(connection)
             }
-            RecordingRepository.releasePendingDirectory(currentExportTreeUri)
         }
     }
 
@@ -1159,9 +1143,7 @@ fun SettingsScreen(
                         if (selectedExportTreeUri != null) {
                             IconButton(
                                 onClick = {
-                                    val previousTreeUri = selectedExportTreeUri
                                     selectedExportTreeUri = null
-                                    RecordingRepository.releasePendingDirectory(previousTreeUri)
                                     refreshExportDirectoryUi()
                                     refreshMoveRecordingsAvailability()
                                     saveCurrentToSnapshot(currentSnapshot)

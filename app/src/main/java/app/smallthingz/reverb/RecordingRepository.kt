@@ -43,7 +43,6 @@ internal suspend fun <T> recoverCatalogAfterCorruption(
 object RecordingRepository {
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val pendingDirectoryIds = mutableSetOf<String>()
     private val backgroundDeleteLock = Any()
     private var backgroundDeleteJob: Job? = null
 
@@ -169,23 +168,6 @@ object RecordingRepository {
                 movable
             }
         }
-    }
-
-    fun retainPendingDirectory(uri: Uri) {
-        synchronized(pendingDirectoryIds) {
-            pendingDirectoryIds += uri.toString()
-        }
-    }
-
-    fun releasePendingDirectory(uri: Uri?) {
-        if (uri != null) {
-            synchronized(pendingDirectoryIds) {
-                pendingDirectoryIds -= uri.toString()
-            }
-        }
-        // Persisted SAF grants intentionally remain part of the recovery path. Provider scans
-        // can transiently report an empty directory, so automatic grant release could make the
-        // only surviving audio unreachable.
     }
 
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {

@@ -538,7 +538,6 @@ internal fun RecordingInlinePlayer(
                         }
                     }
                 }
-                worker.join()
             } finally {
                 worker.cancel()
                 updates.close()
