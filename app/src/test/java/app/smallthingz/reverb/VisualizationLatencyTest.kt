@@ -12,16 +12,14 @@ class VisualizationLatencyTest {
             frameBytes = 2,
             capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
             visualizationActive = true,
-            boundClientPresent = true,
-            deviceInteractive = true,
+            appUiForeground = true,
         )
         val interactiveBytes = captureReadByteCount(
             sampleRate = 48_000,
             frameBytes = 2,
             capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
             visualizationActive = false,
-            boundClientPresent = true,
-            deviceInteractive = true,
+            appUiForeground = true,
         )
 
         assertEquals(768, visibleBytes)
@@ -36,8 +34,7 @@ class VisualizationLatencyTest {
             frameBytes = 8,
             capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
             visualizationActive = true,
-            boundClientPresent = true,
-            deviceInteractive = true,
+            appUiForeground = true,
         )
 
         assertEquals(12_288, bytes)
@@ -45,38 +42,26 @@ class VisualizationLatencyTest {
         assertTrue(bytes <= ReverbService.CAPTURE_SCRATCH_BYTES)
     }
     @Test
-    fun unboundBackground_batchesCaptureWorkAggressively() {
-        val screenOnBytes = captureReadByteCount(
+    fun uiBackgroundAlwaysUsesOneSecondCaptureBatches() {
+        val bytes = captureReadByteCount(
             sampleRate = 48_000,
             frameBytes = 2,
             capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
             visualizationActive = false,
-            boundClientPresent = false,
-            deviceInteractive = true,
-        )
-        val screenOffBytes = captureReadByteCount(
-            sampleRate = 48_000,
-            frameBytes = 2,
-            capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
-            visualizationActive = false,
-            boundClientPresent = false,
-            deviceInteractive = false,
+            appUiForeground = false,
         )
 
-        assertEquals(24_000, screenOnBytes)
-        assertEquals(96_000, screenOffBytes)
-        assertEquals(4, screenOffBytes / screenOnBytes)
+        assertEquals(96_000, bytes)
     }
 
     @Test
-    fun screenOffBatchFitsLargestSupportedPcmRate() {
+    fun backgroundBatchFitsLargestSupportedPcmRate() {
         val bytes = captureReadByteCount(
             sampleRate = 96_000,
             frameBytes = 8,
             capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
             visualizationActive = false,
-            boundClientPresent = false,
-            deviceInteractive = false,
+            appUiForeground = false,
         )
 
         assertEquals(768_000, bytes)

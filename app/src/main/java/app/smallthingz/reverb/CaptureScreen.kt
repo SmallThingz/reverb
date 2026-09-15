@@ -472,6 +472,45 @@ fun CaptureScreen(
         }
     }
 
+    DisposableEffect(service, lifecycleOwner, view) {
+        val recorderService = service
+        var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        var windowFocused = view.hasWindowFocus()
+
+        fun updateUiForeground() {
+            recorderService?.setAppUiForeground(resumed && windowFocused)
+        }
+
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    resumed = true
+                    updateUiForeground()
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    resumed = false
+                    updateUiForeground()
+                }
+                else -> Unit
+            }
+        }
+        val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+            windowFocused = hasFocus
+            updateUiForeground()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        view.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
+        updateUiForeground()
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            if (view.viewTreeObserver.isAlive) {
+                view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
+            }
+            recorderService?.setAppUiForeground(false)
+        }
+    }
+
     DisposableEffect(service, lifecycleOwner, visualizationCallback, view, visualizerVisible) {
         val recorderService = service
         var registered = false

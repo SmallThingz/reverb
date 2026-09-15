@@ -148,7 +148,7 @@ class ReverbService : Service() {
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
     @Volatile private var wakeLock: PowerManager.WakeLock? = null
-    @Volatile private var hasBoundClients = false
+    @Volatile private var appUiForeground = false
     private var powerManager: PowerManager? = null
 
     private val pendingError = AtomicReference<String?>(null)
@@ -252,7 +252,6 @@ class ReverbService : Service() {
     }
 
     private fun noteClientBound() {
-        hasBoundClients = true
         val retryGeneration = synchronized(listeningIntentLock) {
             if (
                 shouldRetrySuspendedListeningOnForegroundBind(
@@ -276,7 +275,6 @@ class ReverbService : Service() {
     }
 
     override fun onUnbind(intent: Intent): Boolean {
-        hasBoundClients = false
         setVisualizationCallback(null)
         return true
     }
@@ -1759,21 +1757,12 @@ class ReverbService : Service() {
         val currentRecord = audioRecord ?: return 0
         if (audioRecordGeneration != generation) return 0
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
-        val visualizationActive = visualizationCallback != null
-        val boundClientPresent = hasBoundClients
         val requestedBytes = captureReadByteCount(
             sampleRate = sampleRate,
             frameBytes = frameBytes,
             capacityBytes = captureScratch.size,
-            visualizationActive = visualizationActive,
-            boundClientPresent = boundClientPresent,
-            // Avoid a PowerManager query on the 8 ms visualizer hot path. Screen state only
-            // matters after the app and transient tile/settings clients are fully unbound.
-            deviceInteractive = if (visualizationActive || boundClientPresent) {
-                true
-            } else {
-                powerManager?.isInteractive ?: true
-            },
+            visualizationActive = visualizationCallback != null,
+            appUiForeground = appUiForeground,
         )
         captureBuffer.clear()
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
@@ -1995,6 +1984,10 @@ class ReverbService : Service() {
                 }
             }
         }
+    }
+
+    fun setAppUiForeground(foreground: Boolean) {
+        appUiForeground = foreground
     }
 
     fun setVisualizationCallback(callback: VisualizationCallback?) {
@@ -2691,8 +2684,7 @@ class ReverbService : Service() {
         const val ACTIVE_PAYLOAD_SYNC_INTERVAL_NANOS = 1_000_000_000L
         const val VISUALIZATION_CAPTURE_READ_TARGET_MILLIS = 8L
         const val INTERACTIVE_CAPTURE_READ_TARGET_MILLIS = 40L
-        const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 250L
-        const val SCREEN_OFF_CAPTURE_READ_TARGET_MILLIS = 1_000L
+        const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 1_000L
         const val EMPTY_READ_RETRY_MILLIS = 20L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
@@ -2727,15 +2719,13 @@ internal fun captureReadByteCount(
     frameBytes: Int,
     capacityBytes: Int,
     visualizationActive: Boolean,
-    boundClientPresent: Boolean,
-    deviceInteractive: Boolean,
+    appUiForeground: Boolean,
 ): Int {
     val alignedFrameBytes = frameBytes.coerceAtLeast(1)
     val targetMillis = when {
         visualizationActive -> ReverbService.VISUALIZATION_CAPTURE_READ_TARGET_MILLIS
-        boundClientPresent -> ReverbService.INTERACTIVE_CAPTURE_READ_TARGET_MILLIS
-        deviceInteractive -> ReverbService.BACKGROUND_CAPTURE_READ_TARGET_MILLIS
-        else -> ReverbService.SCREEN_OFF_CAPTURE_READ_TARGET_MILLIS
+        appUiForeground -> ReverbService.INTERACTIVE_CAPTURE_READ_TARGET_MILLIS
+        else -> ReverbService.BACKGROUND_CAPTURE_READ_TARGET_MILLIS
     }
     val targetFrames = maxOf(1L, sampleRate.coerceAtLeast(1).toLong() * targetMillis / 1000L)
     val boundedBytes = minOf(
