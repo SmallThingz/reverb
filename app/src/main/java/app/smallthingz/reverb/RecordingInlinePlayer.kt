@@ -19,11 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,10 +60,37 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
-private const val INLINE_SEEK_JUMP_MS = 10_000
 
 internal fun canEnterInlineTrim(prepared: Boolean, durationMillis: Int): Boolean =
     prepared && durationMillis > 0
+
+internal fun adjustInlineTrimBoundary(
+    startMillis: Int,
+    endMillis: Int,
+    durationMillis: Int,
+    target: InlineFineSeekTarget,
+    deltaMillis: Int,
+): Pair<Int, Int> {
+    val duration = durationMillis.coerceAtLeast(1)
+    val start = startMillis.coerceIn(0, duration)
+    val end = endMillis.coerceIn(start, duration)
+    val minimumRange = minOf(50, duration)
+    return when (target) {
+        InlineFineSeekTarget.TRIM_END -> start to (end + deltaMillis).coerceIn(
+            (start + minimumRange).coerceAtMost(duration),
+            duration,
+        )
+        InlineFineSeekTarget.TRIM_START,
+        InlineFineSeekTarget.PLAYHEAD,
+        -> (start + deltaMillis).coerceIn(0, (end - minimumRange).coerceAtLeast(0)) to end
+    }
+}
+
+internal enum class InlineFineSeekTarget {
+    PLAYHEAD,
+    TRIM_START,
+    TRIM_END,
+}
 
 @Composable
 internal fun RecordingInlinePlayer(
@@ -109,6 +134,7 @@ internal fun RecordingInlinePlayer(
     var trimEndMillis by remember(recordingRevisionKey) { mutableIntStateOf(duration) }
     var trimSaving by remember(recordingRevisionKey) { mutableStateOf(false) }
     var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
 
     var coarseWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
     var coarseBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
@@ -169,6 +195,82 @@ internal fun RecordingInlinePlayer(
         }
     }
 
+    fun toggleFineSeekPlayback() {
+        val player = mediaPlayer ?: return
+        if (!prepared || released || trimSaving) return
+        runCatching {
+            if (player.isPlaying) {
+                player.pause()
+                isPlaying = false
+            } else {
+                val restartAt = when {
+                    trimMode && (currentPosition < trimStartMillis || currentPosition >= trimEndMillis) -> trimStartMillis
+                    !trimMode && currentPosition >= duration -> 0
+                    else -> currentPosition
+                }.coerceIn(0, duration)
+                currentPosition = restartAt
+                player.seekTo(restartAt)
+                player.start()
+                isPlaying = true
+            }
+        }
+    }
+
+    fun beginInlineFineSeek() {
+        resumeAfterScrub = isPlaying
+        if (isPlaying) {
+            runCatching { mediaPlayer?.pause() }
+            isPlaying = false
+        }
+        isScrubbing = true
+        if (trimMode) {
+            currentPosition = when (fineSeekTarget) {
+                InlineFineSeekTarget.TRIM_END -> trimEndMillis
+                InlineFineSeekTarget.TRIM_START,
+                InlineFineSeekTarget.PLAYHEAD,
+                -> trimStartMillis
+            }
+        }
+    }
+
+    fun applyInlineFineSeek(deltaSeconds: Float) {
+        if (!deltaSeconds.isFinite() || duration <= 0) return
+        val deltaMillis = (deltaSeconds * 1000f).roundToInt()
+        if (deltaMillis == 0) return
+        if (trimMode) {
+            val (adjustedStart, adjustedEnd) = adjustInlineTrimBoundary(
+                startMillis = trimStartMillis,
+                endMillis = trimEndMillis,
+                durationMillis = duration,
+                target = fineSeekTarget,
+                deltaMillis = deltaMillis,
+            )
+            trimStartMillis = adjustedStart
+            trimEndMillis = adjustedEnd
+            if (fineSeekTarget == InlineFineSeekTarget.PLAYHEAD) {
+                fineSeekTarget = InlineFineSeekTarget.TRIM_START
+            }
+            currentPosition = if (fineSeekTarget == InlineFineSeekTarget.TRIM_END) {
+                trimEndMillis
+            } else {
+                trimStartMillis
+            }
+            trimError = false
+        } else {
+            fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
+            currentPosition = (currentPosition + deltaMillis).coerceIn(0, duration)
+        }
+        seekTo(currentPosition)
+    }
+
+    fun endInlineFineSeek() {
+        if (!isScrubbing) return
+        isScrubbing = false
+        val shouldResume = resumeAfterScrub
+        resumeAfterScrub = false
+        seekTo(currentPosition, resume = shouldResume)
+    }
+
     fun enterTrimMode(): Boolean {
         if (trimSaving || !canEnterInlineTrim(prepared, duration)) return false
         if (isPlaying) {
@@ -177,6 +279,7 @@ internal fun RecordingInlinePlayer(
         }
         trimStartMillis = 0
         trimEndMillis = duration
+        fineSeekTarget = InlineFineSeekTarget.TRIM_START
         currentPosition = 0
         seekTo(0)
         trimError = false
@@ -284,6 +387,13 @@ internal fun RecordingInlinePlayer(
                 if (released) break
                 val position = runCatching { mediaPlayer?.currentPosition ?: currentPosition }
                     .getOrDefault(currentPosition)
+                if (trimMode && position >= trimEndMillis) {
+                    runCatching { mediaPlayer?.pause() }
+                    isPlaying = false
+                    currentPosition = trimEndMillis
+                    seekTo(trimEndMillis)
+                    break
+                }
                 currentPosition = position.coerceIn(0, duration.coerceAtLeast(1))
             }
         }
@@ -465,6 +575,11 @@ internal fun RecordingInlinePlayer(
                         val dragStartBoundary = trimMode &&
                             kotlin.math.abs(initialMillis - trimStartMillis) <=
                             kotlin.math.abs(initialMillis - trimEndMillis)
+                        fineSeekTarget = when {
+                            !trimMode -> InlineFineSeekTarget.PLAYHEAD
+                            dragStartBoundary -> InlineFineSeekTarget.TRIM_START
+                            else -> InlineFineSeekTarget.TRIM_END
+                        }
 
                         fun updateFromX(x: Float) {
                             val fraction = (x / size.width.toFloat()).coerceIn(0f, 1f)
@@ -594,66 +709,26 @@ internal fun RecordingInlinePlayer(
             )
         }
 
-        if (!trimMode) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TransportButton(
-                    onClick = { seekTo(currentPosition - INLINE_SEEK_JUMP_MS, resume = isPlaying) },
-                    enabled = prepared,
-                    icon = AppIcons.seekBack,
-                    contentDescription = stringResource(R.string.player_seek_back),
-                )
-                Spacer(Modifier.width(12.dp))
-                Surface(
-                    modifier = Modifier.size(58.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                ) {
-                    IconButton(
-                        onClick = {
-                            val player = mediaPlayer ?: return@IconButton
-                            if (!prepared || released) return@IconButton
-                            runCatching {
-                                if (player.isPlaying) {
-                                    player.pause()
-                                    isPlaying = false
-                                } else {
-                                    if (currentPosition >= duration) {
-                                        player.seekTo(0)
-                                        currentPosition = 0
-                                    }
-                                    player.start()
-                                    isPlaying = true
-                                }
-                            }
-                        },
-                        enabled = prepared,
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) AppIcons.pause else AppIcons.play,
-                            contentDescription = stringResource(
-                                if (isPlaying) R.string.player_pause else R.string.player_play,
-                            ),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(28.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                TransportButton(
-                    onClick = { seekTo(currentPosition + INLINE_SEEK_JUMP_MS, resume = isPlaying) },
-                    enabled = prepared,
-                    icon = AppIcons.seekForward,
-                    contentDescription = stringResource(R.string.player_seek_forward),
-                )
-            }
+        SpringFineSeekControl(
+            enabled = prepared && !trimSaving,
+            isPlaying = isPlaying,
+            durationSeconds = duration.toFloat() / 1000f,
+            interactionKey = "$recordingRevisionKey:${if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD}",
+            onTogglePlayback = ::toggleFineSeekPlayback,
+            onInteractionStart = {
+                if (!trimMode) fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
+            },
+            onBeginFineAdjust = { beginInlineFineSeek() },
+            onFineAdjust = { deltaSeconds, _ -> applyInlineFineSeek(deltaSeconds) },
+            onUpdateFineAdjustShuttle = { _, _ -> Unit },
+            onEndFineAdjust = ::endInlineFineSeek,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp)
+                .graphicsLayer { alpha = if (trimMode) trimVisualAlpha else 1f },
+        )
 
-        } else {
+        if (trimMode) {
             if (trimError) {
                 Text(
                     text = stringResource(R.string.trim_failed),
@@ -772,32 +847,4 @@ private fun Modifier.predictiveBackCollapse(progress: Float): Modifier {
             scaleY = 1f - 0.04f * p
             transformOrigin = TransformOrigin(0.5f, 0f)
         }
-}
-
-@Composable
-private fun TransportButton(
-    onClick: () -> Unit,
-    enabled: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-) {
-    val chrome = appChrome()
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
-    ) {
-        IconButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier.size(48.dp),
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-            )
-        }
-    }
 }

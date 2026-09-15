@@ -31,6 +31,26 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun inlineTrimFineSeek_movesOnlySelectedBoundary_andPreservesMinimumRange() {
+        assertEquals(
+            1_250 to 8_000,
+            adjustInlineTrimBoundary(1_000, 8_000, 10_000, InlineFineSeekTarget.TRIM_START, 250),
+        )
+        assertEquals(
+            1_000 to 7_750,
+            adjustInlineTrimBoundary(1_000, 8_000, 10_000, InlineFineSeekTarget.TRIM_END, -250),
+        )
+        assertEquals(
+            7_950 to 8_000,
+            adjustInlineTrimBoundary(7_900, 8_000, 10_000, InlineFineSeekTarget.TRIM_START, 500),
+        )
+        assertEquals(
+            1_000 to 1_050,
+            adjustInlineTrimBoundary(1_000, 1_100, 10_000, InlineFineSeekTarget.TRIM_END, -500),
+        )
+    }
+
+    @Test
     fun deletionBatch_reportsAnyPartialFailure() {
         assertFalse(deletionBatchFailed(requestedCount = 3, deletedCount = 3, hadError = false))
         assertTrue(deletionBatchFailed(requestedCount = 3, deletedCount = 2, hadError = false))

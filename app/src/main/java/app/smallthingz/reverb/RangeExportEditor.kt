@@ -1668,27 +1668,57 @@ private fun SpringFineAdjust(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val focusManager = LocalFocusManager.current
+    SpringFineSeekControl(
+        enabled = enabled && state.snapshotReady,
+        isPlaying = state.isPlaying,
+        durationSeconds = state.durationSeconds,
+        interactionKey = state.lastTarget,
+        onTogglePlayback = {
+            val accepted = state.commitActiveTextEditing()
+            focusManager.clearFocus(force = true)
+            if (accepted && state.snapshotReady) state.togglePreview()
+        },
+        onInteractionStart = {
+            state.invalidateTextEditing()
+            focusManager.clearFocus(force = true)
+        },
+        onBeginFineAdjust = state::beginFineAdjust,
+        onFineAdjust = state::fineAdjust,
+        onUpdateFineAdjustShuttle = state::updateFineAdjustShuttle,
+        onEndFineAdjust = state::endFineAdjust,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun SpringFineSeekControl(
+    enabled: Boolean,
+    isPlaying: Boolean,
+    durationSeconds: Float,
+    interactionKey: Any?,
+    onTogglePlayback: () -> Unit,
+    onInteractionStart: () -> Unit,
+    onBeginFineAdjust: (Float) -> Unit,
+    onFineAdjust: (Float, Float) -> Unit,
+    onUpdateFineAdjustShuttle: (Float, Float) -> Unit,
+    onEndFineAdjust: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
-    val focusManager = LocalFocusManager.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
     var dragging by remember { mutableStateOf(false) }
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
     val commitAccumulator = remember { FineAdjustCommitAccumulator() }
 
-    fun togglePreviewFromPuck() {
-        val accepted = state.commitActiveTextEditing()
-        focusManager.clearFocus(force = true)
-        if (accepted && state.snapshotReady) state.togglePreview()
-    }
-
     LaunchedEffect(enabled) {
         if (!enabled) {
             dragging = false
             horizontalPull = 0f
             rawVerticalPull = 0f
-            state.endFineAdjust()
+            onEndFineAdjust()
         }
     }
 
@@ -1738,7 +1768,7 @@ private fun SpringFineAdjust(
                     deltaSeconds = rangeFineTuneDeltaSeconds(
                         horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
                         verticalPull = liveY,
-                        durationSeconds = state.durationSeconds,
+                        durationSeconds = durationSeconds,
                         dtSeconds = dtSeconds,
                     ),
                     elapsedNanos = elapsedNanos,
@@ -1746,22 +1776,22 @@ private fun SpringFineAdjust(
                 if (commitAccumulator.elapsedNanos >= RANGE_FINE_TUNE_STATE_UPDATE_NANOS) {
                     val deltaSeconds = commitAccumulator.takeDelta()
                     if (deltaSeconds != 0f) {
-                        state.fineAdjust(deltaSeconds, snapThresholdSeconds = 0.04f)
+                        onFineAdjust(deltaSeconds, 0.04f)
                     }
                 }
                 // Keep Compose commits coalesced, but let audio follow the exact integrated
                 // display-rate jog target. This removes the old ~30 Hz source-position stairs
                 // without recomposing the timeline every frame.
-                state.updateFineAdjustShuttle(
-                    shuttleRate = shuttleRate,
-                    pendingDeltaSeconds = commitAccumulator.deltaSeconds,
+                onUpdateFineAdjustShuttle(
+                    shuttleRate,
+                    commitAccumulator.deltaSeconds,
                 )
             }
         }
     }
 
     val gestureModifier = if (enabled) {
-        Modifier.pointerInput(state.lastTarget, touchSlop) {
+        Modifier.pointerInput(interactionKey, touchSlop) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 val edgePadding = 10.dp.toPx()
@@ -1786,8 +1816,7 @@ private fun SpringFineAdjust(
 
                 fun startFineAdjust(pointerX: Float) {
                     if (fineAdjustStarted) return
-                    state.invalidateTextEditing()
-                    focusManager.clearFocus(force = true)
+                    onInteractionStart()
                     dragStartRawVertical = rawVerticalPull
                     horizontalPull = rangeFineTuneHorizontalTouchPull(
                         pointerX = pointerX,
@@ -1796,7 +1825,7 @@ private fun SpringFineAdjust(
                     )
                     dragging = true
                     fineAdjustStarted = true
-                    state.beginFineAdjust(
+                    onBeginFineAdjust(
                         rangeFineTuneShuttleRate(
                             horizontalPull = horizontalPull,
                             verticalPull = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull),
@@ -1842,10 +1871,10 @@ private fun SpringFineAdjust(
                     if (fineAdjustStarted) {
                         val finalDeltaSeconds = commitAccumulator.takeDelta()
                         if (finalDeltaSeconds != 0f) {
-                            state.fineAdjust(finalDeltaSeconds, snapThresholdSeconds = 0.04f)
+                            onFineAdjust(finalDeltaSeconds, 0.04f)
                         }
                         dragging = false
-                        state.endFineAdjust()
+                        onEndFineAdjust()
                     }
                 }
             }
@@ -1986,9 +2015,9 @@ private fun SpringFineAdjust(
                 .clickable(
                     interactionSource = puckInteractionSource,
                     indication = null,
-                    enabled = enabled && state.snapshotReady,
+                    enabled = enabled,
                     role = androidx.compose.ui.semantics.Role.Button,
-                    onClick = ::togglePreviewFromPuck,
+                    onClick = onTogglePlayback,
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -2000,9 +2029,9 @@ private fun SpringFineAdjust(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = if (state.isPlaying) AppIcons.pause else AppIcons.play,
+                        imageVector = if (isPlaying) AppIcons.pause else AppIcons.play,
                         contentDescription = stringResource(
-                            if (state.isPlaying) R.string.player_pause else R.string.player_play,
+                            if (isPlaying) R.string.player_pause else R.string.player_play,
                         ),
                         tint = colors.surface,
                         modifier = Modifier.size(23.dp),

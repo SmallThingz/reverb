@@ -679,7 +679,6 @@ fun FilesScreen(
                                             if (selectionActive) {
                                                 toggleSelection(recording)
                                             } else {
-                                                setExpandedRecording(null)
                                                 contextMenuRecordingId = recording.id
                                             }
                                         },
