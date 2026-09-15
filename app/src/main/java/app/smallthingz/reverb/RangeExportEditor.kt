@@ -98,6 +98,15 @@ import kotlin.math.tanh
 
 internal enum class RangeEditTarget { START, CURSOR, END }
 
+private const val RANGE_TIMELINE_MARKER_EXTRA_HEIGHT_FRACTION = 0.02f
+private const val RANGE_TIMELINE_MARKER_HEIGHT_FRACTION =
+    RANGE_WAVEFORM_SETTLED_ENVELOPE_FRACTION + RANGE_TIMELINE_MARKER_EXTRA_HEIGHT_FRACTION
+private const val RANGE_TIMELINE_LINE_WIDTH_DP = 1f
+private const val RANGE_TIMELINE_ACTIVE_LINE_WIDTH_DP = 1.4f
+private const val RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP = 8f
+private const val RANGE_TIMELINE_BOUNDARY_GRIP_HEIGHT_DP = 28f
+private const val RANGE_TIMELINE_CURSOR_DOT_DP = 6f
+
 internal data class RangeEditValues(
     val startSeconds: Float,
     val cursorSeconds: Float,
@@ -1466,17 +1475,67 @@ internal fun RangeTimelineBoundaryVisual(
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier
-                .width(if (active) 3.dp else 2.dp)
-                .fillMaxHeight()
-                .background(lineColor, RoundedCornerShape(99.dp)),
-        )
-        Surface(
-            modifier = Modifier.size(12.dp, 32.dp),
-            shape = RoundedCornerShape(8.dp),
-            color = lineColor,
-            shadowElevation = if (active) 4.dp else 1.dp,
-        ) {}
+            modifier = Modifier
+                .fillMaxHeight(RANGE_TIMELINE_MARKER_HEIGHT_FRACTION)
+                .width(RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .width(
+                        if (active) RANGE_TIMELINE_ACTIVE_LINE_WIDTH_DP.dp
+                        else RANGE_TIMELINE_LINE_WIDTH_DP.dp,
+                    )
+                    .fillMaxHeight()
+                    .background(lineColor, RoundedCornerShape(99.dp)),
+            )
+            Surface(
+                modifier = Modifier.size(
+                    RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp,
+                    RANGE_TIMELINE_BOUNDARY_GRIP_HEIGHT_DP.dp,
+                ),
+                shape = RoundedCornerShape(7.dp),
+                color = lineColor,
+                shadowElevation = if (active) 3.dp else 1.dp,
+            ) {}
+        }
+    }
+}
+
+@Composable
+internal fun RangeTimelineCursorVisual(
+    active: Boolean,
+    visualAlpha: Float = 1f,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val lineColor = if (active) colors.tertiary else colors.onSurface
+    Box(
+        modifier = modifier.graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight(RANGE_TIMELINE_MARKER_HEIGHT_FRACTION)
+                .width(10.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Box(
+                Modifier
+                    .width(
+                        if (active) RANGE_TIMELINE_ACTIVE_LINE_WIDTH_DP.dp
+                        else RANGE_TIMELINE_LINE_WIDTH_DP.dp,
+                    )
+                    .fillMaxHeight()
+                    .background(lineColor, RoundedCornerShape(99.dp)),
+            )
+            Surface(
+                modifier = Modifier.size(RANGE_TIMELINE_CURSOR_DOT_DP.dp),
+                shape = CircleShape,
+                color = lineColor,
+                shadowElevation = if (active) 4.dp else 1.dp,
+            ) {}
+        }
     }
 }
 
@@ -1594,26 +1653,12 @@ private fun RangeTimelineBar(
         contentAlignment = Alignment.Center,
     ) {
         if (target == RangeEditTarget.CURSOR) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) }
-                    .then(dragModifier),
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                Box(
-                    Modifier
-                        .width(if (active) 3.dp else 2.dp)
-                        .fillMaxHeight()
-                        .background(lineColor, RoundedCornerShape(99.dp)),
-                )
-                Surface(
-                    modifier = Modifier.size(10.dp),
-                    shape = CircleShape,
-                    color = lineColor,
-                    shadowElevation = if (active) 5.dp else 1.dp,
-                ) {}
-            }
+            RangeTimelineCursorVisual(
+                active = active,
+                visualAlpha = visualAlpha,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(Modifier.fillMaxSize().then(dragModifier))
         } else {
             RangeTimelineBoundaryVisual(
                 active = active,

@@ -23,6 +23,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
 
+private const val RANGE_WAVEFORM_MIN_AMPLITUDE_FRACTION = 0.035f
+private const val RANGE_WAVEFORM_MAX_AMPLITUDE_START_FRACTION = 0.50f
+private const val RANGE_WAVEFORM_MAX_AMPLITUDE_MORPH_REDUCTION_FRACTION = 0.06f
+internal const val RANGE_WAVEFORM_SETTLED_ENVELOPE_FRACTION =
+    2f * (
+        RANGE_WAVEFORM_MIN_AMPLITUDE_FRACTION +
+            RANGE_WAVEFORM_MAX_AMPLITUDE_START_FRACTION -
+            RANGE_WAVEFORM_MAX_AMPLITUDE_MORPH_REDUCTION_FRACTION
+        )
+
 @Composable
 internal fun ProgressiveWaveformCanvas(
     coarseWaveform: FloatArray,
@@ -350,8 +360,11 @@ private fun waveformConstructionPath(
     val morph = smoothStep(ribbonProgress)
     // At morph=0 this is a mathematically exact circle: no waveform floor and a half-height
     // radius. The floor and final 44% amplitude are introduced continuously with the morph.
-    val minimumAmplitude = height * 0.035f * morph
-    val maxAmplitude = height * (0.50f - 0.06f * morph)
+    val minimumAmplitude = height * RANGE_WAVEFORM_MIN_AMPLITUDE_FRACTION * morph
+    val maxAmplitude = height * (
+        RANGE_WAVEFORM_MAX_AMPLITUDE_START_FRACTION -
+            RANGE_WAVEFORM_MAX_AMPLITUDE_MORPH_REDUCTION_FRACTION * morph
+        )
     val phase19 = phase * 0.70f
     val phase31 = phase * 2.25f
     val phase67 = -phase * 1.62f

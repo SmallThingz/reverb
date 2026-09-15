@@ -6,7 +6,6 @@ import android.media.MediaPlayer
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -44,8 +43,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -774,30 +771,28 @@ internal fun RecordingInlinePlayer(
                 morphProgress = { waveformMorph },
                 modifier = Modifier.fillMaxSize(),
             )
-            Canvas(Modifier.fillMaxSize()) {
-                val playheadX = size.width * progressFraction
-                val cursorAlpha = if (trimMode) {
-                    0.84f * trimVisualAlpha + 0.74f * trimBackProgress
-                } else {
-                    0.74f
-                }
-                drawLine(
-                    color = chrome.ink.copy(alpha = cursorAlpha),
-                    start = Offset(playheadX, size.height * 0.12f),
-                    end = Offset(playheadX, size.height * 0.88f),
-                    strokeWidth = if (trimMode) 1.6.dp.toPx() else 1.35.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawCircle(
-                    color = chrome.ink.copy(alpha = if (trimMode) 0.95f else 1f),
-                    radius = if (trimMode) 3.4.dp.toPx() else 3.dp.toPx(),
-                    center = Offset(playheadX, size.height * 0.12f),
-                )
+            val visualWidth = 12.dp
+            val visualWidthPx = with(density) { visualWidth.toPx() }
+            val waveformWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+            val cursorAlpha = if (trimMode) {
+                0.84f * trimVisualAlpha + 0.74f * trimBackProgress
+            } else {
+                0.74f
             }
+            RangeTimelineCursorVisual(
+                active = trimMode && fineSeekTarget == InlineFineSeekTarget.PLAYHEAD,
+                visualAlpha = cursorAlpha,
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            (waveformWidthPx * progressFraction - visualWidthPx * 0.5f).roundToInt(),
+                            0,
+                        )
+                    }
+                    .width(visualWidth)
+                    .fillMaxHeight(),
+            )
             if (trimMode) {
-                val visualWidth = 12.dp
-                val visualWidthPx = with(density) { visualWidth.toPx() }
-                val waveformWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
                 RangeTimelineBoundaryVisual(
                     active = fineSeekTarget == InlineFineSeekTarget.TRIM_START,
                     visualAlpha = trimVisualAlpha,
@@ -879,7 +874,7 @@ internal fun RecordingInlinePlayer(
             onEndFineAdjust = ::endInlineFineSeek,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .height(if (trimMode) 104.dp else 120.dp)
                 .graphicsLayer { alpha = if (trimMode) trimVisualAlpha else 1f },
         )
 
@@ -895,7 +890,7 @@ internal fun RecordingInlinePlayer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 10.dp),
+                    .padding(top = 2.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
