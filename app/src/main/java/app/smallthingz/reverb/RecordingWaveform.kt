@@ -22,7 +22,7 @@ internal fun recordingWaveformRevision(recording: RecordingEntity): String {
     return buildString {
         append(RECORDING_WAVEFORM_CACHE_VERSION)
         append('|')
-        append(recording.storageType)
+        append(recording.storageType.storageCode.toInt())
         append('|')
         append(identity)
         append('|')
@@ -134,7 +134,7 @@ internal class RecordingPcm16MonoReader private constructor(
 
     companion object {
         fun open(context: Context, recording: RecordingEntity): RecordingPcm16MonoReader {
-            return when (resolveRecordingStorageType(recording)) {
+            return when (recording.storageType) {
                 RecordingStorageType.FILE -> {
                     val input = openVerifiedFileInputStream(recording)
                         ?: throw IOException("Recording changed on disk")
@@ -184,7 +184,6 @@ internal class RecordingPcm16MonoReader private constructor(
                         throw error
                     }
                 }
-                null -> throw IOException("Unknown recording storage type")
             }
         }
     }
@@ -268,7 +267,7 @@ internal fun <T> withRecordingWavChannel(
     context: Context,
     recording: RecordingEntity,
     block: (FileChannel) -> T,
-): T = when (resolveRecordingStorageType(recording)) {
+): T = when (recording.storageType) {
     RecordingStorageType.FILE -> {
         val input = openVerifiedFileInputStream(recording)
             ?: throw IOException("Recording changed on disk")
@@ -291,7 +290,6 @@ internal fun <T> withRecordingWavChannel(
         }
         result
     }
-    null -> throw IOException("Unknown recording storage type")
 }
 
 internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {

@@ -27,7 +27,7 @@ data class RecordingEntity(
     val durationMillis: Long,
     val sizeBytes: Long,
     val codecSummary: String,
-    val storageType: String,
+    val storageType: RecordingStorageType,
     val directoryId: String,
     val fileIdentity: String = "",
     val waveformData: String = "",
@@ -162,7 +162,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                     "$COLUMN_MISSING_SINCE_MILLIS IS NULL",
                 arrayOf(
                     recording.id,
-                    (resolveRecordingStorageType(recording)?.storageCode?.toInt() ?: return false).toString(),
+                    recording.storageType.storageCode.toInt().toString(),
                     recording.fileIdentity,
                     recording.sizeBytes.toString(),
                     recording.durationMillis.toString(),
@@ -536,8 +536,6 @@ internal fun recordingDatabaseMigrationSql(
 }
 
 private fun RecordingEntity.toContentValues(): ContentValues {
-    val storage = resolveRecordingStorageType(this)
-        ?: throw SQLiteException("Unknown recording storage type: $storageType")
     return ContentValues(16).apply {
         put(RecordingDatabase.COLUMN_ID, id)
         put(RecordingDatabase.COLUMN_DISPLAY_NAME, displayName)
@@ -547,7 +545,7 @@ private fun RecordingEntity.toContentValues(): ContentValues {
         put(RecordingDatabase.COLUMN_SIZE_BYTES, sizeBytes)
         put(RecordingDatabase.COLUMN_CODEC_SUMMARY, codecSummary)
         put(RecordingDatabase.COLUMN_STORAGE_TYPE, "")
-        put(RecordingDatabase.COLUMN_STORAGE_TYPE_CODE, storage.storageCode.toInt())
+        put(RecordingDatabase.COLUMN_STORAGE_TYPE_CODE, storageType.storageCode.toInt())
         put(RecordingDatabase.COLUMN_DIRECTORY_ID, directoryId)
         put(RecordingDatabase.COLUMN_FILE_IDENTITY, fileIdentity)
         put(RecordingDatabase.COLUMN_WAVEFORM_DATA, waveformData)
@@ -590,7 +588,7 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
                 durationMillis = cursor.getLong(durationMillisIndex),
                 sizeBytes = cursor.getLong(sizeBytesIndex),
                 codecSummary = cursor.getString(codecSummaryIndex),
-                storageType = storage.name,
+                storageType = storage,
                 directoryId = cursor.getString(directoryIdIndex),
                 fileIdentity = cursor.getString(fileIdentityIndex),
                 waveformData = cursor.getString(waveformDataIndex),

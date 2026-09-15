@@ -95,11 +95,6 @@ internal enum class RecordingAssetState {
     UNAVAILABLE,
 }
 
-internal fun resolveRecordingStorageType(recording: RecordingEntity): RecordingStorageType? {
-    return recording.storageType.toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
-        ?: RecordingStorageType.fromLegacyName(recording.storageType)
-}
-
 data class RecordingOutputTarget(
     val id: String,
     val displayName: String,
@@ -187,7 +182,7 @@ fun buildRecordingUri(
     context: Context,
     recording: RecordingEntity,
 ): Uri {
-    return when (resolveRecordingStorageType(recording)) {
+    return when (recording.storageType) {
         RecordingStorageType.FILE -> {
             check(recordingFileIdentityMatches(recording)) { "Recording changed on disk: ${recording.id}" }
             val file = File(recording.id)
@@ -202,7 +197,6 @@ fun buildRecordingUri(
             }
             recording.id.toUri()
         }
-        null -> throw IllegalArgumentException("Unknown recording storage type: ${recording.storageType}")
     }
 }
 
@@ -472,11 +466,10 @@ fun describeRecordingLocation(
     context: Context,
     recording: RecordingEntity,
 ): String {
-    return when (resolveRecordingStorageType(recording)) {
+    return when (recording.storageType) {
         RecordingStorageType.FILE -> describeFileRecordingLocation(context, File(recording.id))
         RecordingStorageType.DOCUMENT -> describeDocumentRecordingLocation(context, recording)
         RecordingStorageType.MEDIASTORE -> "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/${recording.displayName}"
-        null -> recording.directoryId
     }
 }
 
@@ -844,7 +837,7 @@ fun buildRecordingEntity(
         durationMillis = durationMillis,
         sizeBytes = sizeBytes,
         codecSummary = codecSummary,
-        storageType = target.storageType.name,
+        storageType = target.storageType,
         directoryId = target.directoryId,
         fileIdentity = identity,
     )
@@ -939,7 +932,7 @@ internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): 
 }
 
 internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
-    return when (val storageType = resolveRecordingStorageType(recording)) {
+    return when (val storageType = recording.storageType) {
         RecordingStorageType.FILE -> recordingFileIdentityMatches(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
@@ -948,7 +941,6 @@ internal fun recordingContentIdentityMatches(context: Context, recording: Record
             val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
             providerRecordingIdentityMatches(recording.fileIdentity, current)
         }
-        null -> false
     }
 }
 
@@ -1026,7 +1018,7 @@ internal fun fileDescriptorIdentityMatches(storedIdentity: String, descriptorIde
 }
 
 internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
-    if (resolveRecordingStorageType(recording) != RecordingStorageType.FILE) return true
+    if (recording.storageType != RecordingStorageType.FILE) return true
     return fileIdentityMatches(recording.fileIdentity, resolveFileIdentity(File(recording.id)))
 }
 
@@ -1047,7 +1039,7 @@ internal fun recordingAssetState(
     context: Context,
     recording: RecordingEntity,
 ): RecordingAssetState {
-    return when (resolveRecordingStorageType(recording)) {
+    return when (recording.storageType) {
         RecordingStorageType.FILE -> fileRecordingAssetState(File(recording.id))
 
         RecordingStorageType.DOCUMENT -> {
@@ -1072,7 +1064,6 @@ internal fun recordingAssetState(
             )
         }
 
-        null -> RecordingAssetState.UNAVAILABLE
     }
 }
 
@@ -1089,7 +1080,7 @@ internal fun deleteVerifiedRecordingAsset(
         -> return false
         RecordingAssetState.PRESENT -> Unit
     }
-    return when (resolveRecordingStorageType(recording)) {
+    return when (recording.storageType) {
         RecordingStorageType.FILE -> {
             // FILE deletion must go through RecordingRepository's journaled rename-to-claim
             // transaction. A raw path delete cannot close the check-to-delete reuse race.
@@ -1103,7 +1094,6 @@ internal fun deleteVerifiedRecordingAsset(
         RecordingStorageType.MEDIASTORE -> runCatching {
             context.contentResolver.delete(recording.id.toUri(), null, null) > 0
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
-        null -> false
     }
 }
 
@@ -1123,11 +1113,10 @@ fun renameRecordingAsset(
         sanitized = "$sanitized.$extension"
     }
     if (sanitized == recording.displayName) return recording
-    return when (resolveRecordingStorageType(recording)) {
+    return when (recording.storageType) {
         RecordingStorageType.FILE -> renameFileRecording(context, recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
         RecordingStorageType.MEDIASTORE -> renameMediaStoreRecording(context, recording, sanitized)
-        null -> null
     }
 }
 
@@ -1145,7 +1134,7 @@ fun copyRecordingToConfiguredDirectory(
             mimeType = recording.mimeType,
             startedAtMillis = recording.startedAtMillis,
         ).also { target = it }
-        val sourceSize = when (resolveRecordingStorageType(recording)) {
+        val sourceSize = when (recording.storageType) {
             RecordingStorageType.FILE -> runCatching { Files.size(File(recording.id).toPath()) }
                 .getOrNull()
                 ?.takeIf { it > 0L }
@@ -1154,7 +1143,6 @@ fun copyRecordingToConfiguredDirectory(
             RecordingStorageType.DOCUMENT,
             RecordingStorageType.MEDIASTORE,
             -> null
-            null -> null
         }
         val input = openRecordingInputStream(context, recording)
             ?: throw IOException("Unable to open source recording: ${recording.storageType}")
@@ -1237,7 +1225,7 @@ fun copyRecordingToConfiguredDirectory(
                 id = finalizedTarget.id,
                 displayName = finalizedTarget.displayName,
                 sizeBytes = verifiedTargetSize,
-                storageType = finalizedTarget.storageType.name,
+                storageType = finalizedTarget.storageType,
                 directoryId = finalizedTarget.directoryId,
                 fileIdentity = copiedIdentity,
                 missingSinceMillis = null,
@@ -1324,7 +1312,7 @@ internal fun sha256(input: InputStream, bufferSize: Int = FILE_COPY_BUFFER_BYTES
 }
 
 internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
-    when (resolveRecordingStorageType(recording)) {
+    when (recording.storageType) {
         RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
@@ -1333,11 +1321,10 @@ internal fun openRecordingInputStream(context: Context, recording: RecordingEnti
         } else {
             null
         }
-        null -> null
     }
 
 internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputStream? {
-    if (resolveRecordingStorageType(recording) != RecordingStorageType.FILE || recording.fileIdentity.isBlank()) return null
+    if (recording.storageType != RecordingStorageType.FILE || recording.fileIdentity.isBlank()) return null
     val stream = try {
         FileInputStream(File(recording.id))
     } catch (_: Exception) {
@@ -1672,7 +1659,7 @@ private fun listFileDirectoryRecordings(
                     durationMillis = strictDuration,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
-                    storageType = RecordingStorageType.FILE.name,
+                    storageType = RecordingStorageType.FILE,
                     directoryId = directory.absolutePath,
                     fileIdentity = identity,
                 )
@@ -1729,7 +1716,7 @@ private fun listDocumentTreeRecordings(
                     durationMillis = strictDuration,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
-                    storageType = RecordingStorageType.DOCUMENT.name,
+                    storageType = RecordingStorageType.DOCUMENT,
                     directoryId = treeUri.toString(),
                     fileIdentity = identity,
                 )
@@ -1879,7 +1866,7 @@ private fun listMediaStoreRecordings(
                                 bitrate = null,
                                 sampleRate = null,
                             ),
-                            storageType = RecordingStorageType.MEDIASTORE.name,
+                            storageType = RecordingStorageType.MEDIASTORE,
                             directoryId = MEDIA_STORE_DIRECTORY_ID,
                             fileIdentity = identity,
                         ),

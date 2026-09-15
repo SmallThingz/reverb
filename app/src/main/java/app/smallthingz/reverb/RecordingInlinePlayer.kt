@@ -142,7 +142,7 @@ private data class InlinePlayerMediaSource(
 private fun openInlinePlayerMediaSource(
     context: Context,
     recording: RecordingEntity,
-): InlinePlayerMediaSource = when (resolveRecordingStorageType(recording)) {
+): InlinePlayerMediaSource = when (recording.storageType) {
     RecordingStorageType.FILE -> {
         val stream = openVerifiedFileInputStream(recording)
             ?: throw IllegalStateException("Recording changed on disk")
@@ -162,7 +162,6 @@ private fun openInlinePlayerMediaSource(
         }
         InlinePlayerMediaSource(descriptor.fileDescriptor, descriptor)
     }
-    null -> throw IllegalArgumentException("Unknown recording storage type")
 }
 
 @Composable

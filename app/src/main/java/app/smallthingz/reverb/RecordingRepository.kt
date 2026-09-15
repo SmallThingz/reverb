@@ -211,7 +211,7 @@ object RecordingRepository {
                 val dao = RecordingDatabase.getInstance(context).recordingDao()
                 val tracked = dao.findById(recording.id) ?: return@withLock true
                 if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
-                if (resolveRecordingStorageType(tracked) == RecordingStorageType.FILE &&
+                if (tracked.storageType == RecordingStorageType.FILE &&
                     !recordingFileIdentityMatches(tracked)
                 ) {
                     return@withLock false
@@ -220,7 +220,7 @@ object RecordingRepository {
                 val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
                 if (!putPendingDeletionLocked(context, intent)) return@withLock false
 
-                val deleted = when (resolveRecordingStorageType(tracked)) {
+                val deleted = when (tracked.storageType) {
                     RecordingStorageType.FILE -> when (deleteClaimedFile(intent)) {
                         FileDeletionClaimResult.DELETED -> true
                         FileDeletionClaimResult.MISMATCH_PRESERVED -> {
@@ -348,7 +348,7 @@ object RecordingRepository {
         if (!recordingDeletionIdentityMatches(context, recording)) return@runCatching null
         val digest = sha256StableRecording(context, recording) ?: return@runCatching null
         if (digest.byteCount <= 0L) return@runCatching null
-        val isFile = resolveRecordingStorageType(recording) == RecordingStorageType.FILE
+        val isFile = recording.storageType == RecordingStorageType.FILE
         PendingDeletionIntent(
             id = recording.id,
             byteCount = digest.byteCount,
@@ -699,7 +699,7 @@ object RecordingRepository {
             MoveSourceCleanupAction.DELETE_SOURCE -> {
                 val intent = createPendingDeletionIntent(context, source) ?: return false
                 if (!putPendingDeletionLocked(context, intent)) return false
-                if (resolveRecordingStorageType(source) != RecordingStorageType.FILE) {
+                if (source.storageType != RecordingStorageType.FILE) {
                     if (!pendingDeletionMatchesCurrentAsset(context, source, intent)) {
                         removePendingDeletionLocked(context, source.id)
                         return false
@@ -1045,7 +1045,13 @@ internal fun sameRecordingActionTarget(
     val previousIdentity = previous.fileIdentity
     val currentIdentity = current.fileIdentity
     if (previousIdentity.isNotBlank() || currentIdentity.isNotBlank()) {
-        return previousIdentity.isNotBlank() && previousIdentity == currentIdentity
+        if (previousIdentity.isBlank() || currentIdentity.isBlank()) return false
+        return when (previous.storageType) {
+            RecordingStorageType.FILE -> previousIdentity == currentIdentity
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> providerRecordingIdentityMatches(previousIdentity, currentIdentity)
+        }
     }
     // Legacy/provider rows without a stable identity may still be displayed, but never carry a
     // selection across a material metadata change that could indicate ID reuse.
@@ -1061,7 +1067,7 @@ internal fun observedRecordingIsSameAsset(
     if (existing.id != observed.id || existing.storageType != observed.storageType) return false
     val existingIdentity = existing.fileIdentity
     val observedIdentity = observed.fileIdentity
-    return when (resolveRecordingStorageType(observed)) {
+    return when (observed.storageType) {
         RecordingStorageType.FILE -> {
             // FILE reads/destructive actions independently pin and verify the inode. A blank
             // observation can therefore preserve a known identity across a transient stat failure.
@@ -1072,9 +1078,8 @@ internal fun observedRecordingIsSameAsset(
         -> when {
             existingIdentity.isBlank() -> true // One-time identity bootstrap / legacy row.
             observedIdentity.isBlank() -> false // Existing provider identity can no longer be proven.
-            else -> existingIdentity == observedIdentity
+            else -> providerRecordingIdentityMatches(existingIdentity, observedIdentity)
         }
-        null -> false
     }
 }
 
@@ -1084,7 +1089,7 @@ internal fun mergeObservedRecording(
     nowMillis: Long,
 ): RecordingEntity {
     val sameAsset = existing?.let { observedRecordingIsSameAsset(it, observed) } ?: false
-    val observedStorageType = resolveRecordingStorageType(observed)
+    val observedStorageType = observed.storageType
     val providerIdentityUnproven = existing != null &&
         existing.id == observed.id && existing.storageType == observed.storageType &&
         (observedStorageType == RecordingStorageType.DOCUMENT ||

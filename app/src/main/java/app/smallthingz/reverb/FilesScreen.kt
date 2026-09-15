@@ -1015,7 +1015,7 @@ private fun RecordingInfoDialogContent(
         stringResource(R.string.recording_details_size) to formatShortFileSize(recording.sizeBytes),
         stringResource(R.string.recording_details_codec) to recording.codecSummary,
         stringResource(R.string.recording_details_mime) to recording.mimeType,
-        stringResource(R.string.recording_details_storage) to recording.storageType,
+        stringResource(R.string.recording_details_storage) to recording.storageType.name,
         stringResource(R.string.recording_details_location) to describeRecordingLocation(context, recording),
     )
 

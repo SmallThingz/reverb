@@ -163,14 +163,14 @@ class RecordingWaveformTest {
         val base = RecordingEntity(
             id = "id", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+            storageType = RecordingStorageType.FILE, directoryId = "dir", fileIdentity = "stat:a",
         )
         assertEquals(recordingWaveformRevision(base), recordingWaveformRevision(base.copy(displayName = "renamed.wav")))
         assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(fileIdentity = "stat:b")))
         assertTrue(recordingWaveformRevision(base) != recordingWaveformRevision(base.copy(sizeBytes = 4_001L)))
         val provider = base.copy(
             id = "content://recording/7",
-            storageType = RecordingStorageType.MEDIASTORE.name,
+            storageType = RecordingStorageType.MEDIASTORE,
             fileIdentity = "provider:MEDIASTORE:old",
         )
         assertTrue(
@@ -185,7 +185,7 @@ class RecordingWaveformTest {
         val recording = RecordingEntity(
             id = "id", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+            storageType = RecordingStorageType.FILE, directoryId = "dir", fileIdentity = "stat:a",
         )
         val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.25f })
         val revision = recordingWaveformRevision(recording)
@@ -205,14 +205,14 @@ class RecordingWaveformTest {
         val source = RecordingEntity(
             id = "old", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE.name, directoryId = "old-dir", fileIdentity = "stat:old",
+            storageType = RecordingStorageType.FILE, directoryId = "old-dir", fileIdentity = "stat:old",
         )
         val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.6f })
         val cachedSource = source.copy(
             waveformData = encoded, waveformRevision = recordingWaveformRevision(source),
         )
         val target = source.copy(
-            id = "content://media/9", storageType = RecordingStorageType.MEDIASTORE.name,
+            id = "content://media/9", storageType = RecordingStorageType.MEDIASTORE,
             directoryId = MEDIA_STORE_DIRECTORY_ID, fileIdentity = "provider:MEDIASTORE:new",
         )
 
@@ -267,7 +267,7 @@ class RecordingWaveformTest {
         val provider = RecordingEntity(
             id = "content://media/1", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "WAV",
-            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
+            storageType = RecordingStorageType.MEDIASTORE, directoryId = "dir",
         )
         assertEquals("", recordingWaveformRevision(provider))
         val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.4f })

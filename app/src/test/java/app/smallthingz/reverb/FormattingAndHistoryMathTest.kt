@@ -150,7 +150,7 @@ class FormattingAndHistoryMathTest {
             durationMillis = 1_000L,
             sizeBytes = 2_000L,
             codecSummary = "PCM 16-bit",
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             directoryId = "dir",
             createdAtMillis = 1_000L,
             lastSeenAtMillis = 1_000L,
@@ -176,7 +176,7 @@ class FormattingAndHistoryMathTest {
             durationMillis = 1_000L,
             sizeBytes = 2_000L,
             codecSummary = "PCM 16-bit",
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             directoryId = "dir",
             createdAtMillis = 10L,
             lastSeenAtMillis = 20L,
@@ -196,7 +196,7 @@ class FormattingAndHistoryMathTest {
         val base = RecordingEntity(
             id = "id", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+            storageType = RecordingStorageType.FILE, directoryId = "dir", fileIdentity = "stat:a",
         )
         val revision = recordingWaveformRevision(base)
         val encoded = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.5f })
@@ -221,7 +221,7 @@ class FormattingAndHistoryMathTest {
         val existing = RecordingEntity(
             id = "content://media/1", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
-            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "dir",
+            storageType = RecordingStorageType.MEDIASTORE, directoryId = "dir",
             fileIdentity = "provider:MEDIASTORE:x:2000:9",
             waveformData = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.4f }),
             waveformRevision = "revision", createdAtMillis = 10L, lastSeenAtMillis = 20L,
@@ -248,7 +248,7 @@ class FormattingAndHistoryMathTest {
         val selected = RecordingEntity(
             id = "path", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 10L, durationMillis = 1_000L, sizeBytes = 2_000L, codecSummary = "PCM",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:a",
+            storageType = RecordingStorageType.FILE, directoryId = "dir", fileIdentity = "stat:a",
         )
         assertTrue(
             sameRecordingActionTarget(
@@ -261,10 +261,16 @@ class FormattingAndHistoryMathTest {
 
         val provider = selected.copy(
             id = "content://media/external/audio/media/42",
-            storageType = RecordingStorageType.MEDIASTORE.name,
+            storageType = RecordingStorageType.MEDIASTORE,
             fileIdentity = "provider:MEDIASTORE:item:2000:7",
         )
         assertTrue(sameRecordingActionTarget(provider, provider.copy(displayName = "other-label.wav")))
+        assertTrue(
+            sameRecordingActionTarget(
+                provider,
+                provider.copy(fileIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:2000:7"),
+            ),
+        )
         assertFalse(
             sameRecordingActionTarget(
                 provider,
@@ -285,7 +291,7 @@ class FormattingAndHistoryMathTest {
         val existing = RecordingEntity(
             id = "path", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
-            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE,
             directoryId = "dir", fileIdentity = "stat:dev:ino:ctime", createdAtMillis = 10L,
             lastSeenAtMillis = 20L,
         )
@@ -311,7 +317,7 @@ class FormattingAndHistoryMathTest {
         val base = RecordingEntity(
             id = "path", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
-            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE,
             directoryId = "dir", fileIdentity = "stat:old", createdAtMillis = 10L, lastSeenAtMillis = 20L,
         )
         val cached = base.copy(
@@ -343,11 +349,13 @@ class FormattingAndHistoryMathTest {
         val existing = RecordingEntity(
             id = "content://recording/7", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2_000L, sizeBytes = 4_000L, codecSummary = "PCM",
-            storageType = RecordingStorageType.MEDIASTORE.name, directoryId = "media-dir",
-            fileIdentity = "provider:MEDIASTORE:old",
+            storageType = RecordingStorageType.MEDIASTORE, directoryId = "media-dir",
+            fileIdentity = "provider:MEDIASTORE:item:4000:7",
         )
-        val same = existing.copy()
-        val replaced = existing.copy(fileIdentity = "provider:MEDIASTORE:new")
+        val same = existing.copy(
+            fileIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:4000:7",
+        )
+        val replaced = existing.copy(fileIdentity = "provider:MEDIASTORE:item:4000:8")
         val identityUnavailable = existing.copy(fileIdentity = "")
 
         assertTrue(observedRecordingIsSameAsset(existing, same))
@@ -361,10 +369,10 @@ class FormattingAndHistoryMathTest {
         val existing = RecordingEntity(
             id = "same-id", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 2L, sizeBytes = 4L, codecSummary = "PCM",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", fileIdentity = "stat:file",
+            storageType = RecordingStorageType.FILE, directoryId = "dir", fileIdentity = "stat:file",
         )
         val observed = existing.copy(
-            storageType = RecordingStorageType.MEDIASTORE.name,
+            storageType = RecordingStorageType.MEDIASTORE,
             fileIdentity = "",
             createdAtMillis = 999L,
         )
@@ -387,7 +395,7 @@ class FormattingAndHistoryMathTest {
             durationMillis = 1_000L,
             sizeBytes = 2_000L,
             codecSummary = "PCM 16-bit",
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             directoryId = "dir",
             createdAtMillis = 10L,
             lastSeenAtMillis = 20L,
@@ -1615,7 +1623,7 @@ class FormattingAndHistoryMathTest {
         val existing = RecordingEntity(
             id = "id", displayName = "clip.wav", mimeType = "audio/wav",
             startedAtMillis = 500L, durationMillis = 9_000L, sizeBytes = 123_456L,
-            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE.name,
+            codecSummary = "PCM 16 · 48 kHz", storageType = RecordingStorageType.FILE,
             directoryId = "dir", createdAtMillis = 10L, lastSeenAtMillis = 20L,
         )
         val partial = existing.copy(

@@ -378,7 +378,7 @@ class DurabilityInvariantTest {
             durationMillis = 20L,
             sizeBytes = 30L,
             codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE.name,
+            storageType = RecordingStorageType.FILE,
             directoryId = "storage",
             createdAtMillis = 10L,
         )
@@ -1543,7 +1543,7 @@ class DurabilityInvariantTest {
         val base = RecordingEntity(
             id = "present", displayName = "present.wav", mimeType = "audio/wav",
             startedAtMillis = 1L, durationMillis = 1L, sizeBytes = 1L, codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE.name, directoryId = "dir", createdAtMillis = 1L,
+            storageType = RecordingStorageType.FILE, directoryId = "dir", createdAtMillis = 1L,
         )
         val missing = base.copy(id = "missing", displayName = "missing.wav", missingSinceMillis = 5L)
         val pending = base.copy(id = "pending", displayName = "pending.wav")

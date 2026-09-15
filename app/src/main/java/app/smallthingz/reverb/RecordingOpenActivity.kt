@@ -45,9 +45,7 @@ class RecordingOpenActivity : ComponentActivity() {
         fun intentFor(context: Context, recording: RecordingEntity): Intent =
             Intent(context, RecordingOpenActivity::class.java).apply {
                 putExtra(EXTRA_ID, recording.id)
-                val storage = resolveRecordingStorageType(recording)
-                if (storage != null) putExtra(EXTRA_STORAGE_TYPE, storage.storageCode)
-                else putExtra(EXTRA_STORAGE_TYPE, recording.storageType)
+                putExtra(EXTRA_STORAGE_TYPE, recording.storageType.storageCode)
                 putExtra(EXTRA_MIME_TYPE, recording.mimeType)
                 putExtra(EXTRA_FILE_IDENTITY, recording.fileIdentity)
             }
