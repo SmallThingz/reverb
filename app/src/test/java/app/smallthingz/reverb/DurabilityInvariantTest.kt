@@ -1027,12 +1027,20 @@ class DurabilityInvariantTest {
         assertEquals(record.id, pendingOutputCleanupSuppressedId(malformedDigest))
         assertEquals(record.id, pendingOutputCleanupSuppressedId(truncated))
         assertEquals(null, pendingOutputCleanupSuppressedId("v99|1|$encodedId|1234"))
+        val claimTokens = outputCleanupClaimTokens(record)
+        assertEquals(2, claimTokens.size)
+        assertFalse(claimTokens[0] == claimTokens[1])
         val firstIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
         val secondIntent = requireNotNull(pendingOutputCleanupFileIntent(record))
         assertEquals(record.id, firstIntent.id)
         assertEquals(record.fileKey, firstIntent.fileIdentity)
+        assertEquals(claimTokens.first(), firstIntent.claimToken)
         assertEquals(firstIntent.claimToken, secondIntent.claimToken)
+        val legacyIntent = requireNotNull(pendingOutputCleanupFileIntent(record, claimTokens.last()))
+        assertEquals(claimTokens.last(), legacyIntent.claimToken)
         assertTrue(requireNotNull(deletionClaimFile(firstIntent)).name.startsWith(".reverb-delete-"))
+        assertTrue(requireNotNull(deletionClaimFile(legacyIntent)).name.startsWith(".reverb-delete-"))
+        assertFalse(deletionClaimFile(firstIntent) == deletionClaimFile(legacyIntent))
     }
 
     @Test

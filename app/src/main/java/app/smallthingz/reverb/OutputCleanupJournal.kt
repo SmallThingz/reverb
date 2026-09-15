@@ -362,18 +362,14 @@ internal fun retryPendingOutputCleanup(context: Context) {
             continue
         }
         if (record.storageType == RecordingStorageType.FILE) {
-            val claim = outputCleanupClaimFile(record)
-            if (claim != null) {
-                val claimObservation = observeStoragePath(claim)
-                when (claimedFileReplayAction(claimObservation)) {
-                    ClaimedFileReplayAction.WAIT -> continue
-                    ClaimedFileReplayAction.NO_CLAIM -> Unit
-                    ClaimedFileReplayAction.REPLAY -> {
-                        if (deletePendingOutputAsset(context, record)) {
-                            removePendingOutputCleanup(context, record.id)
-                        }
-                        continue
+            when (outputCleanupClaimState(record)) {
+                OutputCleanupClaimState.WAIT -> continue
+                OutputCleanupClaimState.NONE -> Unit
+                is OutputCleanupClaimState.REPLAY -> {
+                    if (deletePendingOutputAsset(context, record)) {
+                        removePendingOutputCleanup(context, record.id)
                     }
+                    continue
                 }
             }
         }
@@ -573,15 +569,11 @@ private fun pendingProviderOutputCleanupStillMatches(
 private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean {
     val intent = pendingOutputCleanupFileIntent(record) ?: return false
     val identity = requireNotNull(intent.fileIdentity)
-    val claim = deletionClaimFile(intent)
-    val result = if (claim != null) {
-        when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.WAIT -> return false
-            ClaimedFileReplayAction.NO_CLAIM -> deleteClaimedFile(intent)
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
-        }
-    } else {
-        deleteClaimedFile(intent)
+    val claimState = outputCleanupClaimState(record)
+    val result = when (claimState) {
+        OutputCleanupClaimState.WAIT -> return false
+        OutputCleanupClaimState.NONE -> deleteClaimedFile(intent)
+        is OutputCleanupClaimState.REPLAY -> replayClaimedFileDeletion(claimState.intent, claimState.file)
     }
     return when (result) {
         FileDeletionClaimResult.RETRY -> false
@@ -601,7 +593,10 @@ private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean
     }
 }
 
-internal fun pendingOutputCleanupFileIntent(record: PendingOutputCleanupRecord): PendingDeletionIntent? {
+internal fun pendingOutputCleanupFileIntent(
+    record: PendingOutputCleanupRecord,
+    claimToken: String = outputCleanupClaimToken(record),
+): PendingDeletionIntent? {
     if (record.storageType != RecordingStorageType.FILE) return null
     val identity = record.fileKey?.takeIf { it.isNotBlank() } ?: return null
     return PendingDeletionIntent(
@@ -610,17 +605,46 @@ internal fun pendingOutputCleanupFileIntent(record: PendingOutputCleanupRecord):
         sha256Hex = record.sha256Hex,
         assetDeleted = false,
         storageType = RecordingStorageType.FILE,
-        claimToken = outputCleanupClaimToken(record),
+        claimToken = claimToken,
         fileIdentity = identity,
     )
 }
 
-private fun outputCleanupClaimFile(record: PendingOutputCleanupRecord): File? =
-    pendingOutputCleanupFileIntent(record)?.let(::deletionClaimFile)
+private sealed interface OutputCleanupClaimState {
+    data object NONE : OutputCleanupClaimState
+    data object WAIT : OutputCleanupClaimState
+    data class REPLAY(val intent: PendingDeletionIntent, val file: File) : OutputCleanupClaimState
+}
 
-private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord): String {
+private fun outputCleanupClaimState(record: PendingOutputCleanupRecord): OutputCleanupClaimState {
+    var replay: OutputCleanupClaimState.REPLAY? = null
+    for (token in outputCleanupClaimTokens(record)) {
+        val intent = pendingOutputCleanupFileIntent(record, token) ?: return OutputCleanupClaimState.WAIT
+        val claim = deletionClaimFile(intent) ?: return OutputCleanupClaimState.WAIT
+        when (claimedFileReplayAction(observeStoragePath(claim))) {
+            ClaimedFileReplayAction.NO_CLAIM -> Unit
+            ClaimedFileReplayAction.WAIT -> return OutputCleanupClaimState.WAIT
+            ClaimedFileReplayAction.REPLAY -> {
+                if (replay != null) return OutputCleanupClaimState.WAIT
+                replay = OutputCleanupClaimState.REPLAY(intent, claim)
+            }
+        }
+    }
+    return replay ?: OutputCleanupClaimState.NONE
+}
+
+internal fun outputCleanupClaimTokens(record: PendingOutputCleanupRecord): List<String> =
+    listOf(
+        outputCleanupClaimToken(record, record.storageType.storageCode.toInt().toString()),
+        outputCleanupClaimToken(record, record.storageType.name),
+    ).distinct()
+
+private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord): String =
+    outputCleanupClaimTokens(record).first()
+
+private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord, storageIdentity: String): String {
     val seed = buildString {
-        append(record.storageType.name).append('|')
+        append(storageIdentity).append('|')
         append(record.id).append('|')
         append(record.byteCount).append('|')
         append(record.sha256Hex).append('|')
