@@ -81,7 +81,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import java.text.DecimalFormat
@@ -176,6 +178,7 @@ fun SettingsScreen(
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var hasUnsavedChanges by remember { mutableStateOf(false) }
+    var settingsPersisting by remember { mutableStateOf(false) }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
@@ -415,7 +418,10 @@ fun SettingsScreen(
     }
 
     @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
-    fun persistSettings(): Boolean {
+    suspend fun persistSettings(): Boolean {
+        if (settingsPersisting) return false
+        settingsPersisting = true
+        try {
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
         loopingRetentionTimeError = null
@@ -556,7 +562,8 @@ fun SettingsScreen(
         } else {
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
-        val persisted = withRetentionPersistenceLock {
+        val persisted = withContext(Dispatchers.IO) {
+            withRetentionPersistenceLock {
             // Roll back to the state that was actually durable when this transaction started,
             // not to the UI's older edit snapshot. Another writer may have committed since
             // Settings opened.
@@ -604,6 +611,7 @@ fun SettingsScreen(
                         .commit()
                 },
             )
+            }
         }
         if (!persisted) {
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
@@ -635,6 +643,9 @@ fun SettingsScreen(
         originalSnapshot.copyFrom(currentSnapshot)
         hasUnsavedChanges = false
         return true
+        } finally {
+            settingsPersisting = false
+        }
     }
 
     fun bindUiFromPreferences() {
@@ -761,9 +772,10 @@ fun SettingsScreen(
     }
 
     fun moveExistingRecordings() {
-        if (!persistSettings()) return
-        canMove = false
+        if (settingsPersisting) return
         scope.launch {
+            if (!persistSettings()) return@launch
+            canMove = false
             val result = try {
                 RecordingRepository.moveAllToConfiguredDirectory(context)
             } catch (cancelled: CancellationException) {
@@ -853,13 +865,15 @@ fun SettingsScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            if (!hasUnsavedChanges) return@IconButton
-                            if (persistSettings()) {
-                                releaseInputFocus()
-                                onBack()
+                            if (!hasUnsavedChanges || settingsPersisting) return@IconButton
+                            scope.launch {
+                                if (persistSettings()) {
+                                    releaseInputFocus()
+                                    onBack()
+                                }
                             }
                         },
-                        enabled = hasUnsavedChanges,
+                        enabled = hasUnsavedChanges && !settingsPersisting,
                     ) {
                         Icon(
                             imageVector = AppIcons.check,
@@ -1177,7 +1191,7 @@ fun SettingsScreen(
                     }
                     TextButton(
                         onClick = { moveExistingRecordings() },
-                        enabled = canMove,
+                        enabled = canMove && !settingsPersisting,
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
                             .background(chrome.raised),
