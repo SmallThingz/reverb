@@ -776,13 +776,6 @@ internal fun moveSourceCleanupAction(
     }
 }
 
-internal fun recordingDirectoryIdsToRetain(
-    recordings: List<RecordingEntity>,
-): Set<String> = recordings.asSequence()
-    .map { it.directoryId }
-    .filter { it.isNotBlank() }
-    .toSet()
-
 private const val PENDING_DELETION_V1_PREFIX = "v1|"
 private const val PENDING_DELETION_V2_PREFIX = "v2|"
 private const val PENDING_DELETION_V3_PREFIX = "v3|"

@@ -1302,38 +1302,6 @@ internal fun sha256(input: InputStream, bufferSize: Int = FILE_COPY_BUFFER_BYTES
     return CopyDigest(total, digest.digest())
 }
 
-internal fun sha256Range(
-    input: InputStream,
-    offsetBytes: Long,
-    byteCount: Long,
-    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
-): CopyDigest {
-    require(offsetBytes >= 0L && byteCount >= 0L)
-    require(bufferSize > 0) { "Digest buffer must be positive" }
-    if (!input.skipFully(offsetBytes)) throw IOException("Unable to reach recording payload")
-    val digest = MessageDigest.getInstance("SHA-256")
-    val buffer = ByteArray(bufferSize)
-    var remaining = byteCount
-    var total = 0L
-    while (remaining > 0L) {
-        val requested = minOf(buffer.size.toLong(), remaining).toInt()
-        val count = input.read(buffer, 0, requested)
-        if (count < 0) throw IOException("Unexpected EOF verifying recording payload")
-        if (count == 0) {
-            val value = input.read()
-            if (value < 0) throw IOException("Unexpected EOF verifying recording payload")
-            digest.update(value.toByte())
-            total++
-            remaining--
-            continue
-        }
-        digest.update(buffer, 0, count)
-        total += count.toLong()
-        remaining -= count.toLong()
-    }
-    return CopyDigest(total, digest.digest())
-}
-
 internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
     when (resolveRecordingStorageType(recording)) {
         RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
@@ -1998,9 +1966,6 @@ internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = 
         .takeIf { it.isNotBlank() && isSupportedRecordingName(it) } ?: return@runCatching null
     StagingOutputMetadata(kind, sessionId, finalDisplayName)
 }.getOrNull()
-
-internal fun isStagingOutputFromSession(name: String, sessionId: String): Boolean =
-    parseStagingOutputMetadata(name)?.sessionId == sessionId
 
 internal fun shouldRecoverStagingOutput(
     metadata: StagingOutputMetadata?,

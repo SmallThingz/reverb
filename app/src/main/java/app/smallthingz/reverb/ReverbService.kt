@@ -556,9 +556,9 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         val prefs = getRecorderPreferences(this)
         if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
-            if (!prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).commit()) {
-                prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).apply()
-            }
+            // Tile fallback state is a cache, not capture intent. Never block the audio handler
+            // on a filesystem-backed SharedPreferences commit for non-authoritative UI state.
+            prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).apply()
         }
     }
 
@@ -567,9 +567,9 @@ class ReverbService : Service() {
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         val prefs = getRecorderPreferences(this)
         if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
-            if (!prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).commit()) {
-                prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).apply()
-            }
+            // apply() updates this process immediately; disk persistence can lag because the
+            // authoritative value is recomputed from the chunk store whenever the service lives.
+            prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).apply()
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = refreshTiles)
     }

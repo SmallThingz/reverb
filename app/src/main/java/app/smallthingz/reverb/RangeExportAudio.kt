@@ -53,10 +53,6 @@ internal fun shapeWaveformMagnitude(raw: Float): Float {
     return signal.pow(0.28f)
 }
 
-internal fun normalizeWaveformEnvelope(raw: FloatArray): FloatArray =
-    FloatArray(raw.size) { index -> shapeWaveformMagnitude(raw[index]) }
-
-
 internal fun shuttleSourceRequiresReanchor(
     previousAnchorSeconds: Double?,
     targetAnchorSeconds: Double,

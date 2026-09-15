@@ -113,22 +113,6 @@ internal fun adjustInlineFineSeekTarget(
     }
 }
 
-internal fun adjustInlineTrimBoundary(
-    startMillis: Int,
-    endMillis: Int,
-    durationMillis: Int,
-    target: InlineFineSeekTarget,
-    deltaMillis: Int,
-): Pair<Int, Int> {
-    val adjusted = adjustInlineFineSeekTarget(
-        values = InlineFineSeekValues(0, startMillis, endMillis),
-        durationMillis = durationMillis,
-        target = target,
-        deltaMillis = deltaMillis,
-    )
-    return adjusted.startMillis to adjusted.endMillis
-}
-
 internal fun inlineTrimGestureTarget(
     pointerMillis: Int,
     startMillis: Int,

@@ -22,31 +22,30 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun trimRequest_isRetainedOnlyForTheCurrentlyExpandedRecording() {
-        val available = setOf("a", "b")
-        assertEquals("a", retainedTrimRequestRecordingId("a", "a", available))
-        assertEquals(null, retainedTrimRequestRecordingId(null, "a", available))
-        assertEquals(null, retainedTrimRequestRecordingId("b", "a", available))
-        assertEquals(null, retainedTrimRequestRecordingId("a", "a", setOf("b")))
-    }
-
-    @Test
     fun inlineTrimFineSeek_movesOnlySelectedBoundary_andPreservesMinimumRange() {
+        fun adjusted(start: Int, end: Int, target: InlineFineSeekTarget, delta: Int) =
+            adjustInlineFineSeekTarget(
+                InlineFineSeekValues(cursorMillis = 4_000, startMillis = start, endMillis = end),
+                durationMillis = 10_000,
+                target = target,
+                deltaMillis = delta,
+            )
+
         assertEquals(
-            1_250 to 8_000,
-            adjustInlineTrimBoundary(1_000, 8_000, 10_000, InlineFineSeekTarget.TRIM_START, 250),
+            InlineFineSeekValues(4_000, 1_250, 8_000),
+            adjusted(1_000, 8_000, InlineFineSeekTarget.TRIM_START, 250),
         )
         assertEquals(
-            1_000 to 7_750,
-            adjustInlineTrimBoundary(1_000, 8_000, 10_000, InlineFineSeekTarget.TRIM_END, -250),
+            InlineFineSeekValues(4_000, 1_000, 7_750),
+            adjusted(1_000, 8_000, InlineFineSeekTarget.TRIM_END, -250),
         )
         assertEquals(
-            7_950 to 8_000,
-            adjustInlineTrimBoundary(7_900, 8_000, 10_000, InlineFineSeekTarget.TRIM_START, 500),
+            InlineFineSeekValues(4_000, 7_950, 8_000),
+            adjusted(7_900, 8_000, InlineFineSeekTarget.TRIM_START, 500),
         )
         assertEquals(
-            1_000 to 1_050,
-            adjustInlineTrimBoundary(1_000, 1_100, 10_000, InlineFineSeekTarget.TRIM_END, -500),
+            InlineFineSeekValues(4_000, 1_000, 1_050),
+            adjusted(1_000, 1_100, InlineFineSeekTarget.TRIM_END, -500),
         )
     }
 
@@ -139,26 +138,6 @@ class FormattingAndHistoryMathTest {
         val alteredDigest = sha256(ByteArrayInputStream(altered))
         assertEquals(sourceDigest.byteCount, alteredDigest.byteCount)
         assertFalse(sourceDigest.sha256.contentEquals(alteredDigest.sha256))
-    }
-
-    @Test
-    fun cataloguedUnknownStorage_keepsItsDirectoryRecoveryGrant() {
-        val unknown = RecordingEntity(
-            id = "content://provider/document/audio",
-            displayName = "clip.wav",
-            mimeType = "audio/wav",
-            startedAtMillis = 1L,
-            durationMillis = 2L,
-            sizeBytes = 3L,
-            codecSummary = "PCM",
-            storageType = "FUTURE_STORAGE",
-            directoryId = "content://provider/tree/recordings",
-        )
-        assertEquals(
-            setOf("content://provider/tree/recordings"),
-            recordingDirectoryIdsToRetain(listOf(unknown)),
-        )
-        assertEquals(null, resolveRecordingStorageType(unknown))
     }
 
     @Test

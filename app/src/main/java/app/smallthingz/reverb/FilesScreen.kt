@@ -87,14 +87,6 @@ private sealed class ListItem {
     data class Recording(val recording: RecordingEntity) : ListItem()
 }
 
-internal fun retainedTrimRequestRecordingId(
-    expandedRecordingId: String?,
-    trimRequestRecordingId: String?,
-    availableRecordingIds: Set<String>,
-): String? = trimRequestRecordingId?.takeIf { id ->
-    id == expandedRecordingId && id in availableRecordingIds
-}
-
 internal fun deletionBatchFailed(requestedCount: Int, deletedCount: Int, hadError: Boolean): Boolean =
     hadError || deletedCount < requestedCount
 

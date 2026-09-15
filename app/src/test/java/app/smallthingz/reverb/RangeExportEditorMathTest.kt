@@ -515,7 +515,8 @@ class RangeExportEditorMathTest {
 
     @Test
     fun waveformNormalizationIsBoundedAndPreservesShape() {
-        val normalized = normalizeWaveformEnvelope(floatArrayOf(0f, 0.25f, 1f, 0.25f, 0f))
+        val normalized = floatArrayOf(0f, 0.25f, 1f, 0.25f, 0f)
+            .map(::shapeWaveformMagnitude)
         assertEquals(5, normalized.size)
         assertTrue(normalized.all { it in 0f..1f })
         assertTrue(normalized[2] > normalized[1])

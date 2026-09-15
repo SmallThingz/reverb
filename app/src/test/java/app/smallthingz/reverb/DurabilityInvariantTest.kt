@@ -747,8 +747,6 @@ class DurabilityInvariantTest {
             StagingOutputMetadata(StagingOutputKind.EXPORT, "session-a", "clip name.wav"),
             exportMetadata,
         )
-        assertTrue(isStagingOutputFromSession(exportStaging, "session-a"))
-        assertFalse(isStagingOutputFromSession(exportStaging, "session-b"))
         assertTrue(isStagingOutputName(exportStaging))
         assertFalse(isSupportedRecordingName(exportStaging))
         assertFalse(shouldRecoverStagingOutput(exportMetadata, currentSessionId = "session-a"))
@@ -1467,23 +1465,6 @@ class DurabilityInvariantTest {
                 StoragePathObservation(StoragePathState.PRESENT, isRegularFile = true),
             ),
         )
-    }
-
-    @Test
-    fun sha256Range_hashesOnlyRequestedPayloadAndRejectsTruncation() {
-        val prefix = ByteArray(44) { 0x55.toByte() }
-        val payload = ByteArray(12_345) { index -> ((index * 19 + 7) and 0xff).toByte() }
-        val suffix = ByteArray(9) { 0x33.toByte() }
-        val all = prefix + payload + suffix
-
-        val ranged = sha256Range(ByteArrayInputStream(all), prefix.size.toLong(), payload.size.toLong(), 257)
-        val direct = sha256(ByteArrayInputStream(payload), 113)
-        assertEquals(payload.size.toLong(), ranged.byteCount)
-        assertArrayEquals(direct.sha256, ranged.sha256)
-
-        assertThrows(IOException::class.java) {
-            sha256Range(ByteArrayInputStream(all), prefix.size.toLong(), (payload.size + suffix.size + 1).toLong())
-        }
     }
 
     @Test
