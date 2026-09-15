@@ -22,6 +22,34 @@ class AudioVisualizationAnalyzerTest {
     }
 
     @Test
+    fun perceivedLoudness_usesLogarithmicDbScaling() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val reference = 0.001f
+
+        val fiveDb = analyzer.perceivedLoudnessLevel(reference * 1.7782794f, reference, 30f)
+        val tenDb = analyzer.perceivedLoudnessLevel(reference * 3.1622777f, reference, 30f)
+        val twentyDb = analyzer.perceivedLoudnessLevel(reference * 10f, reference, 30f)
+
+        assertEquals(1f / 6f, fiveDb, 0.01f)
+        assertEquals(1f / 3f, tenDb, 0.01f)
+        assertEquals(2f / 3f, twentyDb, 0.01f)
+        assertTrue(twentyDb < tenDb * 2.1f)
+    }
+
+    @Test
+    fun perceivedLoudness_aWeightsHumanHearingSensitivity() {
+        val analyzer = AudioVisualizationAnalyzer()
+
+        val bass100Hz = analyzer.aWeightingGain(100f)
+        val reference1Khz = analyzer.aWeightingGain(1_000f)
+        val presence4Khz = analyzer.aWeightingGain(4_000f)
+
+        assertTrue(bass100Hz < reference1Khz * 0.25f)
+        assertEquals(1f, reference1Khz, 0.08f)
+        assertTrue(presence4Khz >= reference1Khz)
+    }
+
+    @Test
     fun silence_staysFlat() {
         val analyzer = AudioVisualizationAnalyzer()
         val silence = ByteArray(2_048)

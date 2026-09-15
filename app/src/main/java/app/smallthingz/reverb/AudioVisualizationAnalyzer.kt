@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sin
@@ -96,10 +97,14 @@ internal class AudioVisualizationAnalyzer {
         val rms = sqrt(sumSquares / availableFrames).toFloat()
         updateNoiseFloor(rms)
         val activityGate = noiseFloor * ACTIVITY_NOISE_MULTIPLIER + ABSOLUTE_ACTIVITY_GATE
-        val activitySignal = (rms - activityGate).coerceAtLeast(0f)
-        val targetActivity = (activitySignal * RMS_SENSITIVITY)
-            .coerceIn(0f, 1f)
-            .pow(ACTIVITY_CURVE)
+        // Human loudness is roughly logarithmic in acoustic amplitude. Drive the blob in
+        // decibels above the adaptive room/device floor so a 10x PCM amplitude jump does not
+        // become a 10x visual jump, while quiet speech still remains visible.
+        val targetActivity = perceivedLoudnessLevel(
+            signal = rms,
+            reference = activityGate,
+            dynamicRangeDb = ACTIVITY_DYNAMIC_RANGE_DB,
+        )
         smoothedActivity = if (targetActivity > smoothedActivity) {
             smoothedActivity * ACTIVITY_ATTACK_OLD + targetActivity * (1f - ACTIVITY_ATTACK_OLD)
         } else {
@@ -133,16 +138,23 @@ internal class AudioVisualizationAnalyzer {
                 0f
             }
             val spectrumGate = max(MIN_SPECTRUM_GATE, noiseFloor * SPECTRUM_NOISE_MULTIPLIER)
-            val cleaned = ((normalized - spectrumGate) * SPECTRUM_GAIN).coerceAtLeast(0f)
-            val spectrum = cleaned.coerceAtMost(1f).pow(SPECTRUM_CURVE)
+            val sourceCenter = (sourceStart + sourceEndExclusive.coerceAtMost(maxSourceBin + 1) - 1) * 0.5f
+            val centerFrequencyHz = if (sampleRate > 0) sourceCenter * sampleRate / FFT_SIZE else 1_000f
+            val spectrum = perceivedLoudnessLevel(
+                signal = normalized,
+                reference = spectrumGate,
+                dynamicRangeDb = SPECTRUM_DYNAMIC_RANGE_DB,
+            ) * aWeightingGain(centerFrequencyHz)
             val waveformAverage = if (waveformCounts[outputIndex] > 0) {
                 waveformSums[outputIndex] / waveformCounts[outputIndex]
             } else {
                 0f
             }
-            val waveform = ((waveformAverage - noiseFloor * WAVEFORM_NOISE_MULTIPLIER) * WAVEFORM_GAIN)
-                .coerceIn(0f, 1f)
-                .pow(WAVEFORM_CURVE)
+            val waveform = perceivedLoudnessLevel(
+                signal = waveformAverage,
+                reference = noiseFloor * WAVEFORM_NOISE_MULTIPLIER + ABSOLUTE_WAVEFORM_GATE,
+                dynamicRangeDb = WAVEFORM_DYNAMIC_RANGE_DB,
+            )
             val shaped = max(spectrum, waveform * (0.72f + smoothedActivity * 0.35f))
             smoothedBins[outputIndex] =
                 smoothedBins[outputIndex] * BIN_SMOOTHING + shaped * (1f - BIN_SMOOTHING)
@@ -154,6 +166,33 @@ internal class AudioVisualizationAnalyzer {
         )
     }
 
+
+    internal fun perceivedLoudnessLevel(
+        signal: Float,
+        reference: Float,
+        dynamicRangeDb: Float = ACTIVITY_DYNAMIC_RANGE_DB,
+    ): Float {
+        if (!signal.isFinite() || !reference.isFinite() || !dynamicRangeDb.isFinite() || dynamicRangeDb <= 0f) return 0f
+        val safeReference = reference.coerceAtLeast(PERCEPTUAL_EPSILON)
+        if (signal <= safeReference) return 0f
+        val decibelsAboveFloor = (20.0 * ln((signal / safeReference).toDouble()) / LN_10).toFloat()
+        return (decibelsAboveFloor / dynamicRangeDb).coerceIn(0f, 1f)
+    }
+
+    internal fun aWeightingGain(frequencyHz: Float): Float {
+        if (!frequencyHz.isFinite() || frequencyHz <= 0f) return 0f
+        val f = frequencyHz.toDouble()
+        val f2 = f * f
+        val c20 = 20.6 * 20.6
+        val c107 = 107.7 * 107.7
+        val c738 = 737.9 * 737.9
+        val c12200 = 12_200.0 * 12_200.0
+        val numerator = c12200 * f2 * f2
+        val denominator = (f2 + c20) * kotlin.math.sqrt((f2 + c107) * (f2 + c738)) * (f2 + c12200)
+        if (denominator <= 0.0) return 0f
+        val aDb = 2.0 + 20.0 * kotlin.math.log10(numerator / denominator)
+        return 10.0.pow(aDb / 20.0).toFloat().coerceIn(MIN_A_WEIGHT_GAIN, MAX_A_WEIGHT_GAIN)
+    }
 
     private fun updateNoiseFloor(rms: Float) {
         val target = rms.coerceIn(MIN_NOISE_FLOOR, MAX_NOISE_FLOOR)
@@ -239,20 +278,23 @@ internal class AudioVisualizationAnalyzer {
         private const val FFT_SIZE = 512
         private const val FFT_BITS = 9
         // Phone microphone capture can legitimately sit around 5e-4 RMS for normal room audio.
-        // The old floor (8e-3 initial / 1.5e-3 minimum) gated that entire range to zero.
-        private const val RMS_SENSITIVITY = 180f
-        private const val ACTIVITY_CURVE = 0.72f
+        // Reactivity is expressed in dB above that adaptive floor, matching perceived loudness
+        // much better than linear PCM amplitude. Frequency deformation gets A-weighted as well.
         private const val ACTIVITY_NOISE_MULTIPLIER = 1.25f
         private const val ABSOLUTE_ACTIVITY_GATE = 0.00005f
+        private const val ACTIVITY_DYNAMIC_RANGE_DB = 30f
         private const val SPECTRUM_FRACTION = 0.42f
         private const val SPEECH_MAX_HZ = 10_000
-        private const val SPECTRUM_GAIN = 72f
-        private const val SPECTRUM_CURVE = 0.72f
+        private const val SPECTRUM_DYNAMIC_RANGE_DB = 32f
         private const val MIN_SPECTRUM_GATE = 0.000025f
         private const val SPECTRUM_NOISE_MULTIPLIER = 0.08f
-        private const val WAVEFORM_GAIN = 70f
-        private const val WAVEFORM_CURVE = 0.68f
+        private const val WAVEFORM_DYNAMIC_RANGE_DB = 28f
         private const val WAVEFORM_NOISE_MULTIPLIER = 0.85f
+        private const val ABSOLUTE_WAVEFORM_GATE = 0.000025f
+        private const val PERCEPTUAL_EPSILON = 1e-7f
+        private const val MIN_A_WEIGHT_GAIN = 0.08f
+        private const val MAX_A_WEIGHT_GAIN = 1.15f
+        private const val LN_10 = 2.302585092994046
         private const val BIN_SMOOTHING = 0.62f
         private const val ACTIVITY_ATTACK_OLD = 0.42f
         private const val ACTIVITY_RELEASE_OLD = 0.84f
