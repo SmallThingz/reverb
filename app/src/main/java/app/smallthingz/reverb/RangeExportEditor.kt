@@ -1454,6 +1454,33 @@ private fun bubbleOffset(xPx: Float, fullWidthPx: Float, bubbleWidthPx: Float): 
 }
 
 @Composable
+internal fun RangeTimelineBoundaryVisual(
+    active: Boolean,
+    visualAlpha: Float = 1f,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val lineColor = if (active) colors.tertiary else colors.onSurface
+    Box(
+        modifier = modifier.graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .width(if (active) 3.dp else 2.dp)
+                .fillMaxHeight()
+                .background(lineColor, RoundedCornerShape(99.dp)),
+        )
+        Surface(
+            modifier = Modifier.size(12.dp, 32.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = lineColor,
+            shadowElevation = if (active) 4.dp else 1.dp,
+        ) {}
+    }
+}
+
+@Composable
 private fun RangeTimelineBar(
     target: RangeEditTarget,
     state: RangeExportEditorState,
@@ -1563,21 +1590,23 @@ private fun RangeTimelineBar(
             .size(
                 width = with(density) { hitWidthPx.toDp() },
                 height = with(density) { heightPx.toDp() },
-            )
-            .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .width(if (active) 3.dp else 2.dp)
-                .fillMaxHeight()
-                .background(lineColor, RoundedCornerShape(99.dp)),
-        )
         if (target == RangeEditTarget.CURSOR) {
             Box(
-                modifier = Modifier.fillMaxSize().then(dragModifier),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) }
+                    .then(dragModifier),
                 contentAlignment = Alignment.BottomCenter,
             ) {
+                Box(
+                    Modifier
+                        .width(if (active) 3.dp else 2.dp)
+                        .fillMaxHeight()
+                        .background(lineColor, RoundedCornerShape(99.dp)),
+                )
                 Surface(
                     modifier = Modifier.size(10.dp),
                     shape = CircleShape,
@@ -1586,17 +1615,12 @@ private fun RangeTimelineBar(
                 ) {}
             }
         } else {
-            Box(
-                modifier = Modifier.fillMaxSize().then(dragModifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                Surface(
-                    modifier = Modifier.size(12.dp, 32.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    color = lineColor,
-                    shadowElevation = if (active) 4.dp else 1.dp,
-                ) {}
-            }
+            RangeTimelineBoundaryVisual(
+                active = active,
+                visualAlpha = visualAlpha,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(Modifier.fillMaxSize().then(dragModifier))
         }
     }
 }

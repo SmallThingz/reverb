@@ -11,12 +11,15 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -671,7 +675,7 @@ internal fun RecordingInlinePlayer(
             }
         }
 
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(128.dp)
@@ -771,27 +775,6 @@ internal fun RecordingInlinePlayer(
                 modifier = Modifier.fillMaxSize(),
             )
             Canvas(Modifier.fillMaxSize()) {
-                if (trimMode) {
-                    val startX = size.width * selectionStartFraction
-                    val endX = size.width * selectionEndFraction
-                    repeat(2) { handleIndex ->
-                        val x = if (handleIndex == 0) startX else endX
-                        drawLine(
-                            color = chrome.ink.copy(alpha = 0.82f * trimVisualAlpha),
-                            start = Offset(x, size.height * 0.08f),
-                            end = Offset(x, size.height * 0.92f),
-                            strokeWidth = 1.5.dp.toPx(),
-                            cap = StrokeCap.Round,
-                        )
-                        drawLine(
-                            color = chrome.ink.copy(alpha = trimVisualAlpha),
-                            start = Offset(x, size.height * 0.38f),
-                            end = Offset(x, size.height * 0.62f),
-                            strokeWidth = 7.dp.toPx(),
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                }
                 val playheadX = size.width * progressFraction
                 val cursorAlpha = if (trimMode) {
                     0.84f * trimVisualAlpha + 0.74f * trimBackProgress
@@ -809,6 +792,37 @@ internal fun RecordingInlinePlayer(
                     color = chrome.ink.copy(alpha = if (trimMode) 0.95f else 1f),
                     radius = if (trimMode) 3.4.dp.toPx() else 3.dp.toPx(),
                     center = Offset(playheadX, size.height * 0.12f),
+                )
+            }
+            if (trimMode) {
+                val visualWidth = 12.dp
+                val visualWidthPx = with(density) { visualWidth.toPx() }
+                val waveformWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+                RangeTimelineBoundaryVisual(
+                    active = fineSeekTarget == InlineFineSeekTarget.TRIM_START,
+                    visualAlpha = trimVisualAlpha,
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (waveformWidthPx * selectionStartFraction - visualWidthPx * 0.5f).roundToInt(),
+                                0,
+                            )
+                        }
+                        .width(visualWidth)
+                        .fillMaxHeight(),
+                )
+                RangeTimelineBoundaryVisual(
+                    active = fineSeekTarget == InlineFineSeekTarget.TRIM_END,
+                    visualAlpha = trimVisualAlpha,
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (waveformWidthPx * selectionEndFraction - visualWidthPx * 0.5f).roundToInt(),
+                                0,
+                            )
+                        }
+                        .width(visualWidth)
+                        .fillMaxHeight(),
                 )
             }
         }

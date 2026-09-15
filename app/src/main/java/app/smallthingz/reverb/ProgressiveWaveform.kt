@@ -179,14 +179,20 @@ internal fun ProgressiveWaveformCanvas(
             strokeWidth = 1.dp.toPx(),
         )
 
-        // The unresolved suffix remains live material. It contracts from the original blob
-        // silhouette into a ribbon while fixed audio is progressively committed from the left.
-        drawPath(path = path, brush = unresolvedBrush)
-        drawPath(
-            path = path,
-            color = unresolvedStrokeColor,
-            style = Stroke(width = 1.dp.toPx()),
-        )
+        // Only the not-yet-built suffix remains unresolved. Keeping the zero-pass under the
+        // already-built prefix made range export stay full-strength outside Start/End even after
+        // settling, unlike Library playback/trim. Once a prefix is built, its selected/dim
+        // material owns those pixels completely.
+        if (builtRight < size.width) {
+            clipRect(left = builtRight.coerceAtLeast(0f), right = size.width) {
+                drawPath(path = path, brush = unresolvedBrush)
+                drawPath(
+                    path = path,
+                    color = unresolvedStrokeColor,
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
+        }
 
         if (builtRight > 0f && finalLayerAlpha > 0.01f) {
             clipRect(left = 0f, right = builtRight) {
