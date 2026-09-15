@@ -860,7 +860,7 @@ internal fun providerRecordingIdentity(
     if (revisionToken <= 0L) return ""
     val encodedId = Base64.getUrlEncoder().withoutPadding()
         .encodeToString(id.toByteArray(Charsets.UTF_8))
-    return "provider:${storageType.name}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
+    return "provider:${storageType.storageCode.toInt()}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
 }
 
 internal fun resolveProviderRecordingIdentity(
@@ -906,16 +906,36 @@ internal fun resolveProviderRecordingIdentity(
     }.getOrDefault("")
 }
 
-internal fun providerRecordingIdentityMatches(stored: String, current: String): Boolean =
-    stored.isNotBlank() && current.isNotBlank() && stored == current
+private data class ProviderRecordingIdentity(
+    val storageType: RecordingStorageType,
+    val encodedId: String,
+    val sizeBytes: Long,
+    val revisionToken: Long,
+)
+
+private fun parseProviderRecordingIdentity(value: String): ProviderRecordingIdentity? {
+    val parts = value.split(':')
+    if (parts.size != 5 || parts[0] != "provider") return null
+    val storageType = parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        ?: RecordingStorageType.fromLegacyName(parts[1])
+        ?: return null
+    if (storageType == RecordingStorageType.FILE || parts[2].isBlank()) return null
+    val sizeBytes = parts[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
+    val revisionToken = parts[4].toLongOrNull()?.takeIf { it > 0L } ?: return null
+    return ProviderRecordingIdentity(storageType, parts[2], sizeBytes, revisionToken)
+}
+
+internal fun providerRecordingIdentityMatches(stored: String, current: String): Boolean {
+    val storedIdentity = parseProviderRecordingIdentity(stored) ?: return false
+    val currentIdentity = parseProviderRecordingIdentity(current) ?: return false
+    return storedIdentity == currentIdentity
+}
 
 internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): Boolean {
-    if (before.isNullOrBlank() || after.isNullOrBlank()) return false
-    val beforeParts = before.split(':')
-    val afterParts = after.split(':')
-    return beforeParts.size == 5 && afterParts.size == 5 &&
-        beforeParts[0] == "provider" && afterParts[0] == "provider" &&
-        beforeParts[1] == afterParts[1] && beforeParts[2] == afterParts[2]
+    val beforeIdentity = before?.let(::parseProviderRecordingIdentity) ?: return false
+    val afterIdentity = after?.let(::parseProviderRecordingIdentity) ?: return false
+    return beforeIdentity.storageType == afterIdentity.storageType &&
+        beforeIdentity.encodedId == afterIdentity.encodedId
 }
 
 internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
@@ -1689,7 +1709,7 @@ private fun listDocumentTreeRecordings(
             if (
                 identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
                 existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
-                existing.fileIdentity == identity
+                providerRecordingIdentityMatches(existing.fileIdentity, identity)
             ) {
                 existing
             } else {
@@ -1839,7 +1859,7 @@ private fun listMediaStoreRecordings(
                     if (
                         identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
                         existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
-                        existing.fileIdentity == identity
+                        providerRecordingIdentityMatches(existing.fileIdentity, identity)
                     ) {
                         add(existing)
                         continue

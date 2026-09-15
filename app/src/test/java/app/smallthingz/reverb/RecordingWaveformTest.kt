@@ -240,7 +240,7 @@ class RecordingWaveformTest {
         val first = providerRecordingIdentity(
             RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 10L,
         )
-        assertTrue(first.isNotBlank())
+        assertTrue(first.startsWith("provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:"))
         assertEquals(first, providerRecordingIdentity(
             RecordingStorageType.MEDIASTORE, "content://media/1", 4_000L, 10L,
         ))
@@ -250,7 +250,13 @@ class RecordingWaveformTest {
         assertEquals("", providerRecordingIdentity(
             RecordingStorageType.DOCUMENT, "content://docs/1", 4_000L, 0L,
         ))
+        val legacy = first.replaceFirst(
+            "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:",
+            "provider:MEDIASTORE:",
+        )
         assertTrue(providerRecordingIdentityMatches(first, first))
+        assertTrue(providerRecordingIdentityMatches(legacy, first))
+        assertTrue(providerRecordingIdentityMatches(first, legacy))
         assertFalse(providerRecordingIdentityMatches("", first))
         assertFalse(providerRecordingIdentityMatches(first, ""))
         assertFalse(providerRecordingIdentityMatches(first, "provider:MEDIASTORE:other"))

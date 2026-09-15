@@ -1146,13 +1146,13 @@ class DurabilityInvariantTest {
         assertTrue(
             sameProviderObjectAcrossMutation(
                 "provider:MEDIASTORE:item:4:7",
-                "provider:MEDIASTORE:item:4:8",
+                "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:4:8",
             ),
         )
         assertFalse(
             sameProviderObjectAcrossMutation(
                 "provider:MEDIASTORE:item:4:7",
-                "provider:MEDIASTORE:other:4:8",
+                "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:other:4:8",
             ),
         )
     }
