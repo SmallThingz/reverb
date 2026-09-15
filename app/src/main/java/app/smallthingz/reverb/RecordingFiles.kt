@@ -37,7 +37,11 @@ import java.util.concurrent.TimeUnit
 import java.util.UUID
 
 private val TAG = "RecordingFiles"
-private val ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
+private const val ILLEGAL_FILENAME_CHARS = "\\/*?\"<>|"
+
+internal fun hasIllegalRecordingNameCharacters(name: String): Boolean =
+    name.any { it in ILLEGAL_FILENAME_CHARS }
+
 private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"

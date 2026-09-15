@@ -717,6 +717,14 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun recordingNameValidation_usesStorageIllegalCharacterRules() {
+        assertFalse(hasIllegalRecordingNameCharacters("clip name"))
+        for (illegal in charArrayOf('\\', '/', '*', '?', '"', '<', '>', '|')) {
+            assertTrue(hasIllegalRecordingNameCharacters("clip${illegal}name"))
+        }
+    }
+
+    @Test
     fun stagingOutputNames_areNeverImportedAsFinishedRecordings() {
         val staging = stagingOutputName("clip.wav", "test-token")
         assertTrue(isStagingOutputName(staging))

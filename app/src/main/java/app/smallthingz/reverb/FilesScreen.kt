@@ -104,8 +104,6 @@ private data class LibraryNotice(
     val canUndo: Boolean = false,
 )
 
-private val RENAME_ILLEGAL_FILENAME_CHARS = setOf('\\', '/', '*', '?', '"', '<', '>', '|')
-
 @Composable
 fun FilesScreen(
     modifier: Modifier = Modifier,
@@ -959,7 +957,7 @@ private fun RenameRecordingDialog(
             error = resources.getString(R.string.rename_recording_invalid)
             return
         }
-        if (trimmed.any { it in RENAME_ILLEGAL_FILENAME_CHARS }) {
+        if (hasIllegalRecordingNameCharacters(trimmed)) {
             error = resources.getString(R.string.rename_recording_illegal_chars)
             return
         }
