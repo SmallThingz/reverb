@@ -340,7 +340,7 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun shuttlePcmKeepsNormalPitchAndOnlyChangesDirection() {
+    fun shuttlePcmSpeedsAudibleGrainsAndPreservesDirection() {
         fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
             samples.forEachIndexed { index, sample ->
                 bytes[index * 2] = (sample and 0xff).toByte()
@@ -351,11 +351,21 @@ class RangeExportEditorMathTest {
             (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
         }
 
-        val source = pcm(100, 200, 300, 400)
-        assertEquals(listOf(100, 200, 300, 400), decode(orientShuttlePcm16Mono(source, 1f)))
-        assertEquals(listOf(100, 200, 300, 400), decode(orientShuttlePcm16Mono(source, 8f)))
-        assertEquals(listOf(400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -1f)))
-        assertEquals(listOf(400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -8f)))
+        val source = pcm(100, 200, 300, 400, 500, 600, 700, 800)
+        assertEquals(listOf(100, 200, 300, 400, 500, 600, 700, 800), decode(orientShuttlePcm16Mono(source, 8f)))
+        assertEquals(listOf(800, 700, 600, 500, 400, 300, 200, 100), decode(orientShuttlePcm16Mono(source, -8f)))
+
+        val twice = speedUpShuttlePcm16Mono(source, 2f)
+        assertEquals(4, twice.size / 2)
+        assertEquals(100, decode(twice).first())
+        assertEquals(800, decode(twice).last())
+        val eightTimes = speedUpShuttlePcm16Mono(source, 8f)
+        assertEquals(1, eightTimes.size / 2)
+        assertEquals(8f, shuttleAudibleSpeed(8f), 0f)
+        assertEquals(8f, shuttleAudibleSpeed(-8f), 0f)
+        assertEquals(1f, shuttleAudibleSpeed(0.2f), 0f)
+        assertEquals(0.04, shuttleSourceGrainSeconds(1f), 0.000001)
+        assertEquals(0.32, shuttleSourceGrainSeconds(8f), 0.000001)
     }
 
     @Test

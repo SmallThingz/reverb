@@ -2,12 +2,16 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import androidx.core.net.toUri
+import java.io.Closeable
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.util.Base64
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 
 private const val RECORDING_WAVEFORM_CACHE_VERSION = 1
@@ -92,6 +96,167 @@ internal data class WavPcmLayout(
     val frameCount: Long get() = dataBytes / frameBytes.toLong()
     val durationSeconds: Double
         get() = if (sampleRate > 0) frameCount.toDouble() / sampleRate.toDouble() else 0.0
+}
+
+internal class RecordingPcm16MonoReader private constructor(
+    private val channel: FileChannel,
+    private val validateRead: () -> Boolean,
+    private val closeAction: () -> Unit,
+    internal val layout: WavPcmLayout,
+) : Closeable {
+    private var closed = false
+
+    val durationSeconds: Double get() = layout.durationSeconds
+
+    fun readRange(
+        startSeconds: Double,
+        endSeconds: Double,
+        targetSampleRate: Int,
+    ): ByteArray {
+        check(!closed) { "Recording PCM reader is closed" }
+        if (!validateRead()) throw IOException("Recording identity changed while reading")
+        val output = readWavPcm16MonoRange(
+            channel = channel,
+            layout = layout,
+            startSeconds = startSeconds,
+            endSeconds = endSeconds,
+            targetSampleRate = targetSampleRate,
+        )
+        if (!validateRead()) throw IOException("Recording identity changed while reading")
+        return output
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        closeAction()
+    }
+
+    companion object {
+        fun open(context: Context, recording: RecordingEntity): RecordingPcm16MonoReader {
+            return when (resolveRecordingStorageType(recording)) {
+                RecordingStorageType.FILE -> {
+                    val input = openVerifiedFileInputStream(recording)
+                        ?: throw IOException("Recording changed on disk")
+                    try {
+                        RecordingPcm16MonoReader(
+                            channel = input.channel,
+                            validateRead = { true },
+                            closeAction = { runCatching { input.close() } },
+                            layout = readWavPcmLayout(input.channel),
+                        )
+                    } catch (error: Throwable) {
+                        runCatching { input.close() }
+                        throw error
+                    }
+                }
+                RecordingStorageType.DOCUMENT,
+                RecordingStorageType.MEDIASTORE,
+                -> {
+                    if (!recordingContentIdentityMatches(context, recording)) {
+                        throw IOException("Recording changed in provider")
+                    }
+                    val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
+                        ?: throw IOException("Unable to open recording for reading")
+                    val input = FileInputStream(descriptor.fileDescriptor)
+                    try {
+                        val layout = readWavPcmLayout(input.channel)
+                        if (!recordingContentIdentityMatches(context, recording)) {
+                            throw IOException("Recording changed in provider while opening")
+                        }
+                        RecordingPcm16MonoReader(
+                            channel = input.channel,
+                            validateRead = { recordingContentIdentityMatches(context, recording) },
+                            closeAction = {
+                                runCatching { input.close() }
+                                runCatching { descriptor.close() }
+                            },
+                            layout = layout,
+                        )
+                    } catch (error: Throwable) {
+                        runCatching { input.close() }
+                        runCatching { descriptor.close() }
+                        throw error
+                    }
+                }
+                null -> throw IOException("Unknown recording storage type")
+            }
+        }
+    }
+}
+
+internal fun readWavPcm16MonoRange(
+    channel: FileChannel,
+    layout: WavPcmLayout,
+    startSeconds: Double,
+    endSeconds: Double,
+    targetSampleRate: Int,
+): ByteArray {
+    require(targetSampleRate > 0)
+    val duration = layout.durationSeconds.coerceAtLeast(0.0)
+    val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: return ByteArray(0)
+    val end = endSeconds.takeIf { it.isFinite() }?.coerceIn(start, duration) ?: return ByteArray(0)
+    if (end <= start || layout.frameCount <= 0L) return ByteArray(0)
+
+    val firstFrame = floor(start * layout.sampleRate.toDouble()).toLong()
+        .coerceIn(0L, layout.frameCount - 1L)
+    val lastNeededExclusive = (ceil(end * layout.sampleRate.toDouble()).toLong() + 1L)
+        .coerceIn(firstFrame + 1L, layout.frameCount)
+    val sourceFrames = (lastNeededExclusive - firstFrame).toInt()
+    val sourceBytes = ByteArray(sourceFrames * layout.frameBytes)
+    requireReadAt(
+        channel = channel,
+        position = layout.dataOffsetBytes + firstFrame * layout.frameBytes.toLong(),
+        bytes = sourceBytes,
+        count = sourceBytes.size,
+    )
+
+    val outputFrames = ceil((end - start) * targetSampleRate.toDouble())
+        .toInt()
+        .coerceAtLeast(1)
+    val output = ByteArray(outputFrames * 2)
+    val sourceStartPosition = start * layout.sampleRate.toDouble() - firstFrame.toDouble()
+    val sourceStep = layout.sampleRate.toDouble() / targetSampleRate.toDouble()
+
+    fun sample(frame: Int, channelIndex: Int): Float {
+        val boundedFrame = frame.coerceIn(0, sourceFrames - 1)
+        val offset = boundedFrame * layout.frameBytes +
+            channelIndex.coerceIn(0, layout.channelCount - 1) * layout.sampleFormat.bytesPerSample
+        return when (layout.sampleFormat) {
+            PcmSampleFormat.PCM_8 -> ((sourceBytes[offset].toInt() and 0xff) - 128) / 128f
+            PcmSampleFormat.PCM_16 -> {
+                val bits = (sourceBytes[offset].toInt() and 0xff) or
+                    (sourceBytes[offset + 1].toInt() shl 8)
+                bits.toShort() / 32768f
+            }
+            PcmSampleFormat.PCM_FLOAT -> {
+                val bits = (sourceBytes[offset].toInt() and 0xff) or
+                    ((sourceBytes[offset + 1].toInt() and 0xff) shl 8) or
+                    ((sourceBytes[offset + 2].toInt() and 0xff) shl 16) or
+                    (sourceBytes[offset + 3].toInt() shl 24)
+                Float.fromBits(bits).takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+            }
+        }
+    }
+
+    for (outputFrame in 0 until outputFrames) {
+        val sourcePosition = sourceStartPosition + outputFrame.toDouble() * sourceStep
+        val base = floor(sourcePosition).toInt().coerceIn(0, sourceFrames - 1)
+        val next = minOf(base + 1, sourceFrames - 1)
+        val fraction = (sourcePosition - base.toDouble()).toFloat().coerceIn(0f, 1f)
+        var mono = 0f
+        repeat(layout.channelCount) { channelIndex ->
+            val first = sample(base, channelIndex)
+            val second = sample(next, channelIndex)
+            mono += first + (second - first) * fraction
+        }
+        mono /= layout.channelCount.toFloat()
+        val encoded = (mono.coerceIn(-1f, 1f) * 32767f).roundToInt()
+            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        output[outputFrame * 2] = (encoded and 0xff).toByte()
+        output[outputFrame * 2 + 1] = ((encoded ushr 8) and 0xff).toByte()
+    }
+    return output
 }
 
 internal fun <T> withRecordingWavChannel(

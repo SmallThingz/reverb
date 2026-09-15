@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -31,10 +32,11 @@ private const val SHUTTLE_GRAIN_OUTPUT_SECONDS = 0.040
 private const val SHUTTLE_CROSSFADE_SECONDS = 0.008
 private const val SHUTTLE_SOURCE_HOP_SECONDS = SHUTTLE_GRAIN_OUTPUT_SECONDS - SHUTTLE_CROSSFADE_SECONDS
 private const val SHUTTLE_MAX_TARGET_ERROR_SECONDS = SHUTTLE_SOURCE_HOP_SECONDS * 4.0
-private const val SHUTTLE_CACHE_HALF_SPAN_SECONDS =
-    SHUTTLE_MAX_TARGET_ERROR_SECONDS + SHUTTLE_GRAIN_OUTPUT_SECONDS * 2.0
 private const val SHUTTLE_MIN_ABS_RATE = 1f
 private const val SHUTTLE_MAX_ABS_RATE = 8f
+private const val SHUTTLE_MAX_SOURCE_GRAIN_SECONDS = SHUTTLE_GRAIN_OUTPUT_SECONDS * SHUTTLE_MAX_ABS_RATE
+private const val SHUTTLE_CACHE_HALF_SPAN_SECONDS =
+    SHUTTLE_MAX_TARGET_ERROR_SECONDS + SHUTTLE_MAX_SOURCE_GRAIN_SECONDS
 
 internal const val RANGE_WAVEFORM_COARSE_BUCKETS = 96
 internal const val RANGE_WAVEFORM_DETAIL_BUCKETS = 512
@@ -87,7 +89,8 @@ internal fun nextShuttleSourceAnchorSeconds(
     // the caller fades out/in across that discontinuity instead of letting latency grow unbounded.
     if (shuttleSourceRequiresReanchor(previous, targetAnchorSeconds, signedRate)) return targetAnchorSeconds
     // Otherwise converge in bounded source hops. Pull magnitude controls how many source
-    // seconds are traversed per output hop, while every grain itself remains normal-pitch.
+    // seconds are traversed per output hop. The audible grain is independently time-compressed
+    // by the same magnitude below, giving the scrub an actual fast-forward/rewind character.
     val maxAdvance = SHUTTLE_SOURCE_HOP_SECONDS *
         magnitude.coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE).toDouble()
     val advance = minOf(distanceTowardTarget, maxAdvance)
@@ -178,6 +181,50 @@ internal fun orientShuttlePcm16Mono(input: ByteArray, signedRate: Float): ByteAr
         val sourceFrame = frameCount - 1 - outFrame
         output[outFrame * 2] = input[sourceFrame * 2]
         output[outFrame * 2 + 1] = input[sourceFrame * 2 + 1]
+    }
+    return output
+}
+
+internal fun shuttleAudibleSpeed(signedRate: Float): Float =
+    abs(signedRate.takeIf { it.isFinite() } ?: 0f).coerceIn(SHUTTLE_MIN_ABS_RATE, SHUTTLE_MAX_ABS_RATE)
+
+internal fun shuttleSourceGrainSeconds(signedRate: Float): Double =
+    SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleAudibleSpeed(signedRate).toDouble()
+
+internal fun speedUpShuttlePcm16Mono(input: ByteArray, speed: Float): ByteArray {
+    val inputFrames = input.size / 2
+    if (inputFrames <= 0 || !speed.isFinite()) return ByteArray(0)
+    val factor = speed.coerceIn(1f, SHUTTLE_MAX_ABS_RATE)
+    if (factor <= 1.0001f || inputFrames == 1) return input.copyOf(inputFrames * 2)
+    val outputFrames = (inputFrames.toFloat() / factor).roundToInt()
+        .coerceIn(1, inputFrames)
+    val output = ByteArray(outputFrames * 2)
+
+    fun read(frame: Int): Int {
+        val index = frame.coerceIn(0, inputFrames - 1) * 2
+        return ((input[index + 1].toInt() shl 8) or (input[index].toInt() and 0xff)).toShort().toInt()
+    }
+    fun write(frame: Int, value: Int) {
+        val index = frame * 2
+        output[index] = (value and 0xff).toByte()
+        output[index + 1] = ((value ushr 8) and 0xff).toByte()
+    }
+
+    if (outputFrames == 1) {
+        write(0, read(inputFrames / 2))
+        return output
+    }
+    val sourceSpan = (inputFrames - 1).toDouble()
+    val outputSpan = (outputFrames - 1).toDouble()
+    for (frame in 0 until outputFrames) {
+        val sourcePosition = frame.toDouble() * sourceSpan / outputSpan
+        val base = sourcePosition.toInt().coerceIn(0, inputFrames - 1)
+        val next = minOf(base + 1, inputFrames - 1)
+        val fraction = (sourcePosition - base.toDouble()).toFloat()
+        val value = (read(base) + (read(next) - read(base)) * fraction)
+            .roundToInt()
+            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        write(frame, value)
     }
     return output
 }
@@ -333,6 +380,55 @@ internal class TimelineAudioPreviewController : Closeable {
     private val trackLock = Any()
     private val releasedTracks = WeakHashMap<AudioTrack, Boolean>()
 
+    private interface ShuttlePcmSource : Closeable {
+        val durationSeconds: Double
+        fun readPcm16Mono(startSeconds: Double, endSeconds: Double): ByteArray?
+    }
+
+    private class TimelineShuttlePcmSource(
+        private val snapshot: ReverbService.TimelineSnapshot,
+    ) : ShuttlePcmSource {
+        override val durationSeconds: Double get() = snapshot.durationSeconds
+
+        override fun readPcm16Mono(startSeconds: Double, endSeconds: Double): ByteArray? {
+            val lease = snapshot.acquireRange(startSeconds, endSeconds) ?: return null
+            val expectedBytes = ((endSeconds - startSeconds).coerceAtLeast(0.0) *
+                SHUTTLE_SAMPLE_RATE.toDouble() * 2.0)
+                .roundToInt()
+                .coerceAtLeast(0)
+            val raw = ByteArrayOutputStream(expectedBytes)
+            try {
+                lease.readNormalized(
+                    targetSampleRate = SHUTTLE_SAMPLE_RATE,
+                    targetChannelCount = 1,
+                    targetSampleFormat = PcmSampleFormat.PCM_16,
+                ) { array, offset, count ->
+                    raw.write(array, offset, count)
+                    count
+                }
+            } finally {
+                lease.close()
+            }
+            return raw.toByteArray().takeIf { it.isNotEmpty() }
+        }
+
+        override fun close() = Unit
+    }
+
+    private class RecordingShuttlePcmSource(
+        context: Context,
+        recording: RecordingEntity,
+    ) : ShuttlePcmSource {
+        private val reader = RecordingPcm16MonoReader.open(context, recording)
+        override val durationSeconds: Double get() = reader.durationSeconds
+
+        override fun readPcm16Mono(startSeconds: Double, endSeconds: Double): ByteArray? =
+            reader.readRange(startSeconds, endSeconds, SHUTTLE_SAMPLE_RATE)
+                .takeIf { it.isNotEmpty() }
+
+        override fun close() = reader.close()
+    }
+
     private data class ShuttleCommand(val positionSeconds: Double, val rate: Float)
 
     private data class ShuttlePcmWindow(
@@ -406,17 +502,56 @@ internal class TimelineAudioPreviewController : Closeable {
         atSeconds: Double,
         rate: Float,
     ) {
+        startShuttleInternal(
+            atSeconds = atSeconds.coerceIn(0.0, snapshot.durationSeconds),
+            rate = rate,
+            sourceFactory = { TimelineShuttlePcmSource(snapshot) },
+            onStarted = null,
+        )
+    }
+
+    fun startRecordingShuttle(
+        context: Context,
+        recording: RecordingEntity,
+        atSeconds: Double,
+        rate: Float,
+        onStarted: () -> Unit = {},
+    ) {
+        val durationHint = recording.durationMillis.coerceAtLeast(0L).toDouble() / 1_000.0
+        startShuttleInternal(
+            atSeconds = atSeconds.coerceIn(0.0, durationHint.coerceAtLeast(0.0)),
+            rate = rate,
+            sourceFactory = { RecordingShuttlePcmSource(context.applicationContext, recording) },
+            onStarted = onStarted,
+        )
+    }
+
+    private fun startShuttleInternal(
+        atSeconds: Double,
+        rate: Float,
+        sourceFactory: () -> ShuttlePcmSource,
+        onStarted: (() -> Unit)?,
+    ) {
         if (closed) return
         cancelCurrent()
         val token = generation.incrementAndGet()
         activeShuttleToken = token
         shuttleCommand.set(
             ShuttleCommand(
-                positionSeconds = atSeconds.coerceIn(0.0, snapshot.durationSeconds),
+                positionSeconds = atSeconds.coerceAtLeast(0.0),
                 rate = rate.coerceIn(-SHUTTLE_MAX_ABS_RATE, SHUTTLE_MAX_ABS_RATE),
             ),
         )
-        enqueueLatest { shuttle(token, snapshot) }
+        enqueueLatest {
+            if (!isCurrent(token)) return@enqueueLatest
+            val source = try {
+                sourceFactory()
+            } catch (_: Exception) {
+                if (activeShuttleToken == token) activeShuttleToken = 0L
+                return@enqueueLatest
+            }
+            shuttle(token, source, onStarted)
+        }
     }
 
     fun updateShuttle(atSeconds: Double, rate: Float) {
@@ -472,7 +607,11 @@ internal class TimelineAudioPreviewController : Closeable {
         }
     }
 
-    private fun shuttle(token: Long, snapshot: ReverbService.TimelineSnapshot) {
+    private fun shuttle(
+        token: Long,
+        source: ShuttlePcmSource,
+        onStarted: (() -> Unit)?,
+    ) {
         var track: AudioTrack? = null
         try {
             checkCurrent(token)
@@ -498,8 +637,14 @@ internal class TimelineAudioPreviewController : Closeable {
             var previousAnchorSeconds: Double? = null
             var previousDirection = 0
             var sourceWindow: ShuttlePcmWindow? = null
+            var startedCallbackSent = false
 
             fun write(bytes: ByteArray) {
+                if (bytes.isEmpty()) return
+                if (!startedCallbackSent) {
+                    startedCallbackSent = true
+                    if (onStarted != null) postIfCurrent(token, onStarted)
+                }
                 var offset = 0
                 while (offset < bytes.size) {
                     checkCurrent(token)
@@ -531,31 +676,15 @@ internal class TimelineAudioPreviewController : Closeable {
                     val cacheStart = (anchorSeconds - SHUTTLE_CACHE_HALF_SPAN_SECONDS)
                         .coerceAtLeast(0.0)
                     val cacheEnd = (anchorSeconds + SHUTTLE_CACHE_HALF_SPAN_SECONDS)
-                        .coerceAtMost(snapshot.durationSeconds)
-                    val lease = snapshot.acquireRange(cacheStart, cacheEnd) ?: return null
-                    val expectedBytes = ((cacheEnd - cacheStart) * SHUTTLE_SAMPLE_RATE.toDouble() * 2.0)
-                        .roundToInt()
-                        .coerceAtLeast(0)
-                    val raw = ByteArrayOutputStream(expectedBytes)
-                    try {
-                        lease.readNormalized(
-                            targetSampleRate = SHUTTLE_SAMPLE_RATE,
-                            targetChannelCount = 1,
-                            targetSampleFormat = PcmSampleFormat.PCM_16,
-                        ) { array, offset, count ->
-                            checkCurrent(token)
-                            raw.write(array, offset, count)
-                            count
-                        }
-                    } finally {
-                        lease.close()
-                    }
-                    val pcm = raw.toByteArray()
+                        .coerceAtMost(source.durationSeconds)
+                    checkCurrent(token)
+                    val pcm = source.readPcm16Mono(cacheStart, cacheEnd) ?: return null
+                    checkCurrent(token)
                     val actualDuration = pcm.size.toDouble() /
                         (SHUTTLE_SAMPLE_RATE.toDouble() * 2.0)
                     window = ShuttlePcmWindow(
                         startSeconds = cacheStart,
-                        endSeconds = (cacheStart + actualDuration).coerceAtMost(snapshot.durationSeconds),
+                        endSeconds = (cacheStart + actualDuration).coerceAtMost(source.durationSeconds),
                         pcm = pcm,
                     )
                     sourceWindow = window
@@ -583,7 +712,7 @@ internal class TimelineAudioPreviewController : Closeable {
                 }
 
                 val direction = if (rate >= 0f) 1 else -1
-                val target = command.positionSeconds.coerceIn(0.0, snapshot.durationSeconds)
+                val target = command.positionSeconds.coerceIn(0.0, source.durationSeconds)
                 if (previousDirection != 0 && previousDirection != direction) {
                     // Crossing direction at arbitrary waveform phase sounds like chorus when the
                     // two unrelated tails are mixed. End the old grain cleanly and restart from
@@ -609,10 +738,11 @@ internal class TimelineAudioPreviewController : Closeable {
                     continue
                 }
 
-                val sourceDuration = SHUTTLE_GRAIN_OUTPUT_SECONDS
+                val audibleSpeed = shuttleAudibleSpeed(rate)
+                val sourceDuration = shuttleSourceGrainSeconds(rate)
                 val start = if (rate >= 0f) anchor else (anchor - sourceDuration).coerceAtLeast(0.0)
                 val end = if (rate >= 0f) {
-                    (anchor + sourceDuration).coerceAtMost(snapshot.durationSeconds)
+                    (anchor + sourceDuration).coerceAtMost(source.durationSeconds)
                 } else {
                     anchor
                 }
@@ -632,17 +762,26 @@ internal class TimelineAudioPreviewController : Closeable {
                     continue
                 }
                 val oriented = orientShuttlePcm16Mono(grain, rate)
-                val orientedFrames = oriented.size / 2
-                if (orientedFrames <= overlapFrames) {
-                    // A range shorter than the overlap exists only at a timeline boundary.
-                    // It cannot participate in OLA safely, so audition it as one symmetric
-                    // window rather than exposing an arbitrary raw PCM onset.
+                val accelerated = speedUpShuttlePcm16Mono(oriented, audibleSpeed)
+                val acceleratedFrames = accelerated.size / 2
+                if (acceleratedFrames <= 2) {
                     finishPendingTail()
-                    write(windowShuttlePcm16Mono(oriented, orientedFrames / 2))
+                    write(windowShuttlePcm16Mono(accelerated, acceleratedFrames / 2))
                     previousAnchorSeconds = anchor
                     continue
                 }
-                val blended = crossfadeShuttlePcm16Mono(previousTail, oriented, overlapFrames)
+                // Keep the output overlap bounded when a boundary truncates a sped-up grain.
+                // Full grains still use the canonical 8 ms overlap; tiny edge grains reserve
+                // at most one quarter of their frames so they cannot disappear into the tail.
+                val grainOverlapFrames = minOf(
+                    overlapFrames,
+                    (acceleratedFrames / 4).coerceAtLeast(1),
+                )
+                val blended = crossfadeShuttlePcm16Mono(
+                    previousTail,
+                    accelerated,
+                    grainOverlapFrames,
+                )
                 previousTail = blended.tail
                 previousAnchorSeconds = anchor
                 write(blended.output)
@@ -659,6 +798,7 @@ internal class TimelineAudioPreviewController : Closeable {
                 }
                 releaseTrackOnce(track)
             }
+            runCatching { source.close() }
         }
     }
 

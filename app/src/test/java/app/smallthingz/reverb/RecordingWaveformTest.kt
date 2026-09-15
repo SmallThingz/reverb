@@ -32,6 +32,28 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun savedRecordingPcmRangeNormalizesToMonoPcm16AtRequestedRate() {
+        val samples = ShortArray(8_000) { index -> ((index % 1_000) * 20 - 10_000).toShort() }
+        val file = writePcm16Wav(sampleRate = 8_000, samples = samples)
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                val pcm = readWavPcm16MonoRange(
+                    channel = channel,
+                    layout = layout,
+                    startSeconds = 0.25,
+                    endSeconds = 0.50,
+                    targetSampleRate = 16_000,
+                )
+                assertEquals(4_000, pcm.size / 2)
+                assertTrue(pcm.any { it.toInt() != 0 })
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun savedRecordingWaveformUsesRangeExportShapeAndFindsLouderRegion() {
         val samples = ShortArray(12_000) { index ->
             if (index < 6_000) 500 else 28_000

@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,54 @@ private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
 internal fun canEnterInlineTrim(prepared: Boolean, durationMillis: Int): Boolean =
     prepared && durationMillis > 0
 
+internal enum class InlineFineSeekTarget {
+    PLAYHEAD,
+    TRIM_START,
+    TRIM_END,
+}
+
+internal data class InlineFineSeekValues(
+    val cursorMillis: Int,
+    val startMillis: Int,
+    val endMillis: Int,
+)
+
+internal fun adjustInlineFineSeekTarget(
+    values: InlineFineSeekValues,
+    durationMillis: Int,
+    target: InlineFineSeekTarget,
+    deltaMillis: Int,
+): InlineFineSeekValues {
+    val duration = durationMillis.coerceAtLeast(1)
+    val start = values.startMillis.coerceIn(0, duration)
+    val end = values.endMillis.coerceIn(start, duration)
+    val cursor = values.cursorMillis.coerceIn(0, duration)
+    val minimumRange = minOf(50, duration)
+    return when (target) {
+        InlineFineSeekTarget.PLAYHEAD -> InlineFineSeekValues(
+            cursorMillis = (cursor + deltaMillis).coerceIn(0, duration),
+            startMillis = start,
+            endMillis = end,
+        )
+        InlineFineSeekTarget.TRIM_START -> InlineFineSeekValues(
+            cursorMillis = cursor,
+            startMillis = (start + deltaMillis).coerceIn(
+                0,
+                (end - minimumRange).coerceAtLeast(0),
+            ),
+            endMillis = end,
+        )
+        InlineFineSeekTarget.TRIM_END -> InlineFineSeekValues(
+            cursorMillis = cursor,
+            startMillis = start,
+            endMillis = (end + deltaMillis).coerceIn(
+                (start + minimumRange).coerceAtMost(duration),
+                duration,
+            ),
+        )
+    }
+}
+
 internal fun adjustInlineTrimBoundary(
     startMillis: Int,
     endMillis: Int,
@@ -71,25 +120,29 @@ internal fun adjustInlineTrimBoundary(
     target: InlineFineSeekTarget,
     deltaMillis: Int,
 ): Pair<Int, Int> {
-    val duration = durationMillis.coerceAtLeast(1)
-    val start = startMillis.coerceIn(0, duration)
-    val end = endMillis.coerceIn(start, duration)
-    val minimumRange = minOf(50, duration)
-    return when (target) {
-        InlineFineSeekTarget.TRIM_END -> start to (end + deltaMillis).coerceIn(
-            (start + minimumRange).coerceAtMost(duration),
-            duration,
-        )
-        InlineFineSeekTarget.TRIM_START,
-        InlineFineSeekTarget.PLAYHEAD,
-        -> (start + deltaMillis).coerceIn(0, (end - minimumRange).coerceAtLeast(0)) to end
-    }
+    val adjusted = adjustInlineFineSeekTarget(
+        values = InlineFineSeekValues(0, startMillis, endMillis),
+        durationMillis = durationMillis,
+        target = target,
+        deltaMillis = deltaMillis,
+    )
+    return adjusted.startMillis to adjusted.endMillis
 }
 
-internal enum class InlineFineSeekTarget {
-    PLAYHEAD,
-    TRIM_START,
-    TRIM_END,
+internal fun inlineTrimGestureTarget(
+    pointerMillis: Int,
+    startMillis: Int,
+    endMillis: Int,
+    handleThresholdMillis: Int,
+): InlineFineSeekTarget {
+    val threshold = handleThresholdMillis.coerceAtLeast(0)
+    val startDistance = kotlin.math.abs(pointerMillis - startMillis)
+    val endDistance = kotlin.math.abs(pointerMillis - endMillis)
+    return when {
+        startDistance <= threshold && startDistance <= endDistance -> InlineFineSeekTarget.TRIM_START
+        endDistance <= threshold -> InlineFineSeekTarget.TRIM_END
+        else -> InlineFineSeekTarget.PLAYHEAD
+    }
 }
 
 @Composable
@@ -105,6 +158,7 @@ internal fun RecordingInlinePlayer(
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
+    val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
@@ -117,6 +171,7 @@ internal fun RecordingInlinePlayer(
     ) {
         "${recording.id}|${recording.fileIdentity}|${recording.sizeBytes}|${recording.durationMillis}|${recording.lastSeenAtMillis}"
     }
+    val fineSeekPreviewController = remember(recordingRevisionKey) { TimelineAudioPreviewController() }
 
     var mediaPlayer by remember(recordingRevisionKey) { mutableStateOf<MediaPlayer?>(null) }
     var prepared by remember(recordingRevisionKey) { mutableStateOf(false) }
@@ -135,6 +190,7 @@ internal fun RecordingInlinePlayer(
     var trimSaving by remember(recordingRevisionKey) { mutableStateOf(false) }
     var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
     var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
+    var fineSeekShuttleActive by remember(recordingRevisionKey) { mutableStateOf(false) }
 
     var coarseWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
     var coarseBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
@@ -216,58 +272,87 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    fun beginInlineFineSeek() {
+    fun currentInlineFineSeekValues(): InlineFineSeekValues = InlineFineSeekValues(
+        cursorMillis = currentPosition,
+        startMillis = trimStartMillis,
+        endMillis = trimEndMillis,
+    )
+
+    fun fineSeekTargetMillis(values: InlineFineSeekValues = currentInlineFineSeekValues()): Int =
+        when (if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD) {
+            InlineFineSeekTarget.PLAYHEAD -> values.cursorMillis
+            InlineFineSeekTarget.TRIM_START -> values.startMillis
+            InlineFineSeekTarget.TRIM_END -> values.endMillis
+        }
+
+    fun beginInlineFineSeek(shuttleRate: Float) {
+        if (!prepared || released || trimSaving || fineSeekShuttleActive) return
         resumeAfterScrub = isPlaying
-        if (isPlaying) {
-            runCatching { mediaPlayer?.pause() }
-            isPlaying = false
-        }
+        // MediaPlayer cannot reverse and repeated seekTo() calls produce silence/stutter.
+        // Keep it sounding until the first AudioTrack grain is ready, then hand off. This avoids
+        // a silent source-open gap while keeping logical playback state unchanged for release.
         isScrubbing = true
-        if (trimMode) {
-            currentPosition = when (fineSeekTarget) {
-                InlineFineSeekTarget.TRIM_END -> trimEndMillis
-                InlineFineSeekTarget.TRIM_START,
-                InlineFineSeekTarget.PLAYHEAD,
-                -> trimStartMillis
-            }
-        }
+        fineSeekShuttleActive = true
+        fineSeekPreviewController.startRecordingShuttle(
+            context = appContext,
+            recording = recording,
+            atSeconds = fineSeekTargetMillis().toDouble() / 1_000.0,
+            rate = shuttleRate,
+            onStarted = {
+                if (fineSeekShuttleActive && resumeAfterScrub) {
+                    runCatching { mediaPlayer?.pause() }
+                }
+            },
+        )
     }
 
     fun applyInlineFineSeek(deltaSeconds: Float) {
         if (!deltaSeconds.isFinite() || duration <= 0) return
         val deltaMillis = (deltaSeconds * 1000f).roundToInt()
         if (deltaMillis == 0) return
-        if (trimMode) {
-            val (adjustedStart, adjustedEnd) = adjustInlineTrimBoundary(
-                startMillis = trimStartMillis,
-                endMillis = trimEndMillis,
-                durationMillis = duration,
-                target = fineSeekTarget,
-                deltaMillis = deltaMillis,
-            )
-            trimStartMillis = adjustedStart
-            trimEndMillis = adjustedEnd
-            if (fineSeekTarget == InlineFineSeekTarget.PLAYHEAD) {
-                fineSeekTarget = InlineFineSeekTarget.TRIM_START
-            }
-            currentPosition = if (fineSeekTarget == InlineFineSeekTarget.TRIM_END) {
-                trimEndMillis
-            } else {
-                trimStartMillis
-            }
-            trimError = false
+        val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
+        val adjusted = adjustInlineFineSeekTarget(
+            values = currentInlineFineSeekValues(),
+            durationMillis = duration,
+            target = target,
+            deltaMillis = deltaMillis,
+        )
+        currentPosition = adjusted.cursorMillis
+        trimStartMillis = adjusted.startMillis
+        trimEndMillis = adjusted.endMillis
+        if (trimMode && target != InlineFineSeekTarget.PLAYHEAD) trimError = false
+    }
+
+    fun updateInlineFineSeekShuttle(shuttleRate: Float, pendingDeltaSeconds: Float) {
+        if (!fineSeekShuttleActive || duration <= 0) return
+        val pendingMillis = if (pendingDeltaSeconds.isFinite()) {
+            (pendingDeltaSeconds * 1_000f).roundToInt()
         } else {
-            fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
-            currentPosition = (currentPosition + deltaMillis).coerceIn(0, duration)
+            0
         }
-        seekTo(currentPosition)
+        val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
+        val projected = adjustInlineFineSeekTarget(
+            values = currentInlineFineSeekValues(),
+            durationMillis = duration,
+            target = target,
+            deltaMillis = pendingMillis,
+        )
+        fineSeekPreviewController.updateShuttle(
+            atSeconds = fineSeekTargetMillis(projected).toDouble() / 1_000.0,
+            rate = shuttleRate,
+        )
     }
 
     fun endInlineFineSeek() {
-        if (!isScrubbing) return
+        if (!isScrubbing && !fineSeekShuttleActive) return
+        fineSeekPreviewController.stopShuttle()
+        fineSeekShuttleActive = false
         isScrubbing = false
         val shouldResume = resumeAfterScrub
         resumeAfterScrub = false
+        if (shouldResume && trimMode && currentPosition !in trimStartMillis..trimEndMillis) {
+            currentPosition = currentPosition.coerceIn(trimStartMillis, trimEndMillis)
+        }
         seekTo(currentPosition, resume = shouldResume)
     }
 
@@ -279,7 +364,7 @@ internal fun RecordingInlinePlayer(
         }
         trimStartMillis = 0
         trimEndMillis = duration
-        fineSeekTarget = InlineFineSeekTarget.TRIM_START
+        fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
         currentPosition = 0
         seekTo(0)
         trimError = false
@@ -291,6 +376,10 @@ internal fun RecordingInlinePlayer(
         if (trimRequested && enterTrimMode()) {
             onTrimRequestConsumed()
         }
+    }
+
+    DisposableEffect(fineSeekPreviewController) {
+        onDispose { fineSeekPreviewController.close() }
     }
 
     DisposableEffect(recordingRevisionKey) {
@@ -371,9 +460,17 @@ internal fun RecordingInlinePlayer(
 
     DisposableEffect(lifecycleOwner, recordingRevisionKey) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE && isPlaying) {
-                runCatching { mediaPlayer?.pause() }
-                isPlaying = false
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                if (fineSeekShuttleActive) {
+                    fineSeekPreviewController.stopShuttle()
+                    fineSeekShuttleActive = false
+                    isScrubbing = false
+                    resumeAfterScrub = false
+                }
+                if (isPlaying) {
+                    runCatching { mediaPlayer?.pause() }
+                    isPlaying = false
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -563,7 +660,7 @@ internal fun RecordingInlinePlayer(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (!prepared || trimSaving || size.width <= 0) return@awaitEachGesture
                         down.consume()
-                        resumeAfterScrub = !trimMode && isPlaying
+                        resumeAfterScrub = isPlaying
                         if (isPlaying) {
                             runCatching { mediaPlayer?.pause() }
                             isPlaying = false
@@ -572,37 +669,50 @@ internal fun RecordingInlinePlayer(
                         val initialMillis = (
                             duration.toFloat() * (down.position.x / size.width.toFloat()).coerceIn(0f, 1f)
                         ).toInt()
-                        val dragStartBoundary = trimMode &&
-                            kotlin.math.abs(initialMillis - trimStartMillis) <=
-                            kotlin.math.abs(initialMillis - trimEndMillis)
-                        fineSeekTarget = when {
-                            !trimMode -> InlineFineSeekTarget.PLAYHEAD
-                            dragStartBoundary -> InlineFineSeekTarget.TRIM_START
-                            else -> InlineFineSeekTarget.TRIM_END
+                        val handleThresholdMillis = if (trimMode) {
+                            val handleRadiusPx = with(density) { 24.dp.toPx() }
+                            (duration.toFloat() * handleRadiusPx / size.width.toFloat())
+                                .roundToInt()
+                                .coerceAtLeast(1)
+                        } else {
+                            0
                         }
+                        fineSeekTarget = if (trimMode) {
+                            inlineTrimGestureTarget(
+                                pointerMillis = initialMillis,
+                                startMillis = trimStartMillis,
+                                endMillis = trimEndMillis,
+                                handleThresholdMillis = handleThresholdMillis,
+                            )
+                        } else {
+                            InlineFineSeekTarget.PLAYHEAD
+                        }
+                        val dragTarget = fineSeekTarget
 
                         fun updateFromX(x: Float) {
                             val fraction = (x / size.width.toFloat()).coerceIn(0f, 1f)
                             val millis = (duration.toFloat() * fraction).toInt().coerceIn(0, duration)
-                            if (trimMode) {
-                                val minimumRange = minOf(50, duration.coerceAtLeast(1))
-                                if (dragStartBoundary) {
+                            if (!trimMode || dragTarget == InlineFineSeekTarget.PLAYHEAD) {
+                                currentPosition = millis
+                                return
+                            }
+                            val minimumRange = minOf(50, duration.coerceAtLeast(1))
+                            when (dragTarget) {
+                                InlineFineSeekTarget.TRIM_START -> {
                                     trimStartMillis = millis.coerceIn(
                                         0,
                                         (trimEndMillis - minimumRange).coerceAtLeast(0),
                                     )
-                                    currentPosition = trimStartMillis
-                                } else {
+                                }
+                                InlineFineSeekTarget.TRIM_END -> {
                                     trimEndMillis = millis.coerceIn(
                                         (trimStartMillis + minimumRange).coerceAtMost(duration),
                                         duration,
                                     )
-                                    currentPosition = trimEndMillis
                                 }
-                                trimError = false
-                            } else {
-                                currentPosition = millis
+                                InlineFineSeekTarget.PLAYHEAD -> Unit
                             }
+                            trimError = false
                         }
                         updateFromX(down.position.x)
                         try {
@@ -620,6 +730,9 @@ internal fun RecordingInlinePlayer(
                             isScrubbing = false
                             val shouldResume = resumeAfterScrub
                             resumeAfterScrub = false
+                            if (shouldResume && trimMode && currentPosition !in trimStartMillis..trimEndMillis) {
+                                currentPosition = currentPosition.coerceIn(trimStartMillis, trimEndMillis)
+                            }
                             seekTo(currentPosition, resume = shouldResume)
                         }
                     }
@@ -659,26 +772,23 @@ internal fun RecordingInlinePlayer(
                     }
                 }
                 val playheadX = size.width * progressFraction
+                val cursorAlpha = if (trimMode) {
+                    0.84f * trimVisualAlpha + 0.74f * trimBackProgress
+                } else {
+                    0.74f
+                }
                 drawLine(
-                    color = chrome.ink.copy(
-                        alpha = if (trimMode) {
-                            0.42f + (0.74f - 0.42f) * trimBackProgress
-                        } else {
-                            0.74f
-                        },
-                    ),
+                    color = chrome.ink.copy(alpha = cursorAlpha),
                     start = Offset(playheadX, size.height * 0.12f),
                     end = Offset(playheadX, size.height * 0.88f),
-                    strokeWidth = 1.35.dp.toPx(),
+                    strokeWidth = if (trimMode) 1.6.dp.toPx() else 1.35.dp.toPx(),
                     cap = StrokeCap.Round,
                 )
-                if (!trimMode || trimBackProgress > 0f) {
-                    drawCircle(
-                        color = chrome.ink.copy(alpha = if (trimMode) trimBackProgress else 1f),
-                        radius = 3.dp.toPx(),
-                        center = Offset(playheadX, size.height * 0.12f),
-                    )
-                }
+                drawCircle(
+                    color = chrome.ink.copy(alpha = if (trimMode) 0.95f else 1f),
+                    radius = if (trimMode) 3.4.dp.toPx() else 3.dp.toPx(),
+                    center = Offset(playheadX, size.height * 0.12f),
+                )
             }
         }
 
@@ -689,24 +799,34 @@ internal fun RecordingInlinePlayer(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = if (trimMode) {
-                    formatRangeTimeInput(trimStartMillis / 1000.0)
-                } else {
-                    formatPlaybackTime(currentPosition)
-                },
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = chrome.ink,
-            )
-            Text(
-                text = if (trimMode) {
-                    formatRangeTimeInput(trimEndMillis / 1000.0)
-                } else {
-                    formatPlaybackTime(duration)
-                },
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = if (trimMode) chrome.ink else chrome.muted,
-            )
+            if (trimMode) {
+                Text(
+                    text = formatRangeTimeInput(trimStartMillis / 1000.0),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = chrome.ink,
+                )
+                Text(
+                    text = formatRangeTimeInput(currentPosition / 1000.0),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = formatRangeTimeInput(trimEndMillis / 1000.0),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = chrome.ink,
+                )
+            } else {
+                Text(
+                    text = formatPlaybackTime(currentPosition),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = chrome.ink,
+                )
+                Text(
+                    text = formatPlaybackTime(duration),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = chrome.muted,
+                )
+            }
         }
 
         SpringFineSeekControl(
@@ -718,9 +838,9 @@ internal fun RecordingInlinePlayer(
             onInteractionStart = {
                 if (!trimMode) fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
             },
-            onBeginFineAdjust = { beginInlineFineSeek() },
+            onBeginFineAdjust = ::beginInlineFineSeek,
             onFineAdjust = { deltaSeconds, _ -> applyInlineFineSeek(deltaSeconds) },
-            onUpdateFineAdjustShuttle = { _, _ -> Unit },
+            onUpdateFineAdjustShuttle = ::updateInlineFineSeekShuttle,
             onEndFineAdjust = ::endInlineFineSeek,
             modifier = Modifier
                 .fillMaxWidth()

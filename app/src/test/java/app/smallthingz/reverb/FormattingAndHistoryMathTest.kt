@@ -51,6 +51,26 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun inlineTrimCursorIsIndependentAndPointerUsesHandlesOnlyNearEdges() {
+        val initial = InlineFineSeekValues(cursorMillis = 4_000, startMillis = 1_000, endMillis = 8_000)
+        assertEquals(
+            InlineFineSeekValues(cursorMillis = 4_250, startMillis = 1_000, endMillis = 8_000),
+            adjustInlineFineSeekTarget(initial, 10_000, InlineFineSeekTarget.PLAYHEAD, 250),
+        )
+        assertEquals(
+            InlineFineSeekValues(cursorMillis = 4_000, startMillis = 1_250, endMillis = 8_000),
+            adjustInlineFineSeekTarget(initial, 10_000, InlineFineSeekTarget.TRIM_START, 250),
+        )
+        assertEquals(
+            InlineFineSeekValues(cursorMillis = 4_000, startMillis = 1_000, endMillis = 7_750),
+            adjustInlineFineSeekTarget(initial, 10_000, InlineFineSeekTarget.TRIM_END, -250),
+        )
+        assertEquals(InlineFineSeekTarget.TRIM_START, inlineTrimGestureTarget(1_020, 1_000, 8_000, 100))
+        assertEquals(InlineFineSeekTarget.TRIM_END, inlineTrimGestureTarget(7_950, 1_000, 8_000, 100))
+        assertEquals(InlineFineSeekTarget.PLAYHEAD, inlineTrimGestureTarget(4_000, 1_000, 8_000, 100))
+    }
+
+    @Test
     fun deletionBatch_reportsAnyPartialFailure() {
         assertFalse(deletionBatchFailed(requestedCount = 3, deletedCount = 3, hadError = false))
         assertTrue(deletionBatchFailed(requestedCount = 3, deletedCount = 2, hadError = false))
