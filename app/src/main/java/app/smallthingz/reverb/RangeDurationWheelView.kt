@@ -60,7 +60,8 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = density
-        strokeCap = Paint.Cap.ROUND
+        strokeCap = Paint.Cap.BUTT
+        strokeJoin = Paint.Join.MITER
     }
     private val valueBaseline = -(valuePaint.ascent() + valuePaint.descent()) * 0.5f
     private val profileBaseline = -(profilePaint.ascent() + profilePaint.descent()) * 0.5f
@@ -208,12 +209,19 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
+        // The dial grid is shared geometry, not a border drawn independently around every value.
+        // Each separator exists once at the half-step between adjacent faces; the vertical rails
+        // join those exact projected endpoints so there are no doubled or misaligned strokes.
+        drawWheelGrid(canvas, hourWheel, hourCenter, timeColumnWidth * 0.38f)
+        drawWheelGrid(canvas, minuteWheel, minuteCenter, timeColumnWidth * 0.38f)
+        drawWheelGrid(canvas, secondWheel, secondCenter, timeColumnWidth * 0.38f)
+        drawWheelGrid(canvas, profileWheel, profileCenter, profileWidth * 0.34f)
+
         linePaint.color = borderColor
-        drawSelection(canvas, hourCenter, timeColumnWidth * 0.38f)
-        drawSelection(canvas, minuteCenter, timeColumnWidth * 0.38f)
-        drawSelection(canvas, secondCenter, timeColumnWidth * 0.38f)
-        drawSelection(canvas, profileCenter, profileWidth * 0.40f)
+        linePaint.alpha = (DIVIDER_ALPHA * 255f).toInt()
         canvas.drawLine(dividerX, 0f, dividerX, height.toFloat(), linePaint)
+        linePaint.alpha = 255
 
         val selectedHour = currentHour()
         val selectedMinute = currentMinute()
@@ -223,11 +231,11 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         colonPaint.color = if (
             errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0
         ) errorColor else mutedColor
-        canvas.drawText(":", firstColon, height * 0.5f + colonBaseline, colonPaint)
+        canvas.drawText(":", firstColon, dialCenterY() + colonBaseline, colonPaint)
         colonPaint.color = if (
             errorMask and (RANGE_DURATION_WHEEL_ERROR_HOUR or RANGE_DURATION_WHEEL_ERROR_MINUTE) != 0
         ) errorColor else mutedColor
-        canvas.drawText(":", secondColon, height * 0.5f + colonBaseline, colonPaint)
+        canvas.drawText(":", secondColon, dialCenterY() + colonBaseline, colonPaint)
 
         drawNumberWheel(
             canvas, hourWheel, hourCenter, NumberKind.HOUR, selectedHour, selectedMinute, errorMask,
@@ -551,7 +559,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         paint.alpha = (opacity * 255f).toInt().coerceIn(0, 255)
 
         canvas.save()
-        canvas.translate(centerX, height * 0.5f + y)
+        canvas.translate(centerX, dialCenterY() + y)
         val scale = projectionScale * (1f - min(absolute, 1.5f) * 0.05f)
         canvas.scale(scale, scale * cosine)
         drawText()
@@ -576,12 +584,61 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         )
     }
 
-    private fun drawSelection(canvas: Canvas, centerX: Float, halfWidth: Float) {
-        val top = height * 0.5f - rowPx * 0.5f
-        val bottom = height * 0.5f + rowPx * 0.5f
-        canvas.drawLine(centerX - halfWidth, top, centerX + halfWidth, top, linePaint)
-        canvas.drawLine(centerX - halfWidth, bottom, centerX + halfWidth, bottom, linePaint)
+    private fun drawWheelGrid(
+        canvas: Canvas,
+        wheel: Wheel,
+        centerX: Float,
+        baseHalfWidth: Float,
+    ) {
+        val base = floor(wheel.position).toLong()
+        var previousVisible = false
+        var previousLeft = 0f
+        var previousRight = 0f
+        var previousY = 0f
+        var previousAlpha = 0f
+
+        // Eight half-step boundaries cover the same seven pooled faces as the value renderer.
+        for (offset in -4..3) {
+            val logicalBoundary = base + offset + 0.5
+            val relative = (logicalBoundary - wheel.position).toFloat()
+            val absolute = abs(relative)
+            if (absolute >= GRID_VISIBLE_LIMIT) continue
+
+            val radians = relative * ANGLE_STEP_DEGREES * PI.toFloat() / 180f
+            val cosine = cos(radians)
+            if (cosine <= 0f) continue
+            val sine = sin(radians)
+            val y = dialCenterY() + sine * radiusPx
+            val z = cosine * radiusPx - radiusPx
+            val projectionScale = perspectivePx / (perspectivePx - z)
+            val widthScale = projectionScale *
+                (1f - min(absolute, GRID_WIDTH_FALLOFF_LIMIT) * GRID_WIDTH_FALLOFF)
+            val halfWidth = baseHalfWidth * widthScale
+            val left = centerX - halfWidth
+            val right = centerX + halfWidth
+            val edgeFade = ((GRID_VISIBLE_LIMIT - absolute) / GRID_EDGE_FADE_SPAN)
+                .coerceIn(0f, 1f)
+            val alpha = GRID_FRONT_ALPHA * cosine * (0.35f + edgeFade * 0.65f)
+
+            linePaint.color = borderColor
+            linePaint.alpha = (alpha * 255f).toInt().coerceIn(0, 255)
+            canvas.drawLine(left, y, right, y, linePaint)
+
+            if (previousVisible) {
+                linePaint.alpha = (min(previousAlpha, alpha) * 255f).toInt().coerceIn(0, 255)
+                canvas.drawLine(previousLeft, previousY, left, y, linePaint)
+                canvas.drawLine(previousRight, previousY, right, y, linePaint)
+            }
+            previousVisible = true
+            previousLeft = left
+            previousRight = right
+            previousY = y
+            previousAlpha = alpha
+        }
+        linePaint.alpha = 255
     }
+
+    private fun dialCenterY(): Float = height * 0.5f + DIAL_CENTER_Y_OFFSET_DP * density
 
     private fun wheelIndexAt(x: Float): Int {
         if (x >= profileStart) return PROFILE_WHEEL
@@ -645,6 +702,13 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         const val VISIBLE_LIMIT = 2.34f
         const val EDGE_FADE_SPAN = 0.42f
         const val MIN_FACE_ALPHA = 0.18f
+        const val DIAL_CENTER_Y_OFFSET_DP = -0.75f
+        const val GRID_VISIBLE_LIMIT = 2.12f
+        const val GRID_EDGE_FADE_SPAN = 0.75f
+        const val GRID_FRONT_ALPHA = 0.36f
+        const val GRID_WIDTH_FALLOFF = 0.035f
+        const val GRID_WIDTH_FALLOFF_LIMIT = 1.8f
+        const val DIVIDER_ALPHA = 0.60f
         const val SNAP_DURATION_MS = 150f
         val PROFILE_LABELS = arrayOf("1x", "5x", "15x")
     }
