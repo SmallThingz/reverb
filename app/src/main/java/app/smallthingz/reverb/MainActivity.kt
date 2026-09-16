@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
             microphonePermissionGranted = granted || hasMicrophonePermission()
             permissionsGranted = hasRequiredPermissions()
             showPermissionDenied = !microphonePermissionGranted && !showOnboarding
-            if (granted && !showOnboarding) beginPermissionFlow()
+            if (microphonePermissionGranted && !showOnboarding) beginPermissionFlow()
         }
 
     private val storagePermissionLauncher =
@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
             storagePermissionGranted = granted || hasLegacyStoragePermission()
             permissionsGranted = hasRequiredPermissions()
             showPermissionDenied = !storagePermissionGranted && !showOnboarding
-            if (granted && !showOnboarding) beginPermissionFlow()
+            if (storagePermissionGranted && !showOnboarding) beginPermissionFlow()
         }
 
     private val recoveryPermissionLauncher =
