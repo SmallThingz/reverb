@@ -1,10 +1,13 @@
 package app.smallthingz.reverb
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,17 +35,118 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToLong
 
-private val IncidentTimeFormatter: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("EEE, d MMM yyyy · h:mm:ss a", Locale.getDefault())
+private val IncidentDateFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
+private val IncidentClockFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("h:mm:ss a", Locale.getDefault())
 
 internal fun formatRecordingIncidentTime(timestampMillis: Long): String =
-    IncidentTimeFormatter.format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
+    IncidentDateFormatter.format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
+
+internal fun recordingIncidentDowntimeMillis(incident: RecordingIncident): Long? =
+    incident.resumedAtMillis.takeIf { it > 0L }?.let { resumed ->
+        (resumed - incident.occurredAtMillis).coerceAtLeast(0L)
+    }
+
+internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
+    EXIT_REASON_ANOMALY -> "Anomaly"
+    ApplicationExitInfo.REASON_ANR -> "ANR"
+    ApplicationExitInfo.REASON_CRASH -> "Crash"
+    ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native crash"
+    ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "Dependency died"
+    ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "Resource limit"
+    ApplicationExitInfo.REASON_FREEZER -> "Freezer"
+    ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "Initialization failure"
+    ApplicationExitInfo.REASON_LOW_MEMORY -> "Low memory"
+    EXIT_REASON_MEMORY_LIMITER -> "Memory limiter"
+    ApplicationExitInfo.REASON_SIGNALED -> "Signaled"
+    else -> "Reason $reason"
+}
+
+private fun formatIncidentWindow(incident: RecordingIncident): String {
+    val startAt = Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault())
+    val start = IncidentClockFormatter.format(startAt)
+    val end = when {
+        incident.resumedAtMillis > 0L -> {
+            val resumedAt = Instant.ofEpochMilli(incident.resumedAtMillis).atZone(ZoneId.systemDefault())
+            if (resumedAt.toLocalDate() == startAt.toLocalDate()) {
+                IncidentClockFormatter.format(resumedAt)
+            } else {
+                "${IncidentDateFormatter.format(resumedAt)} ${IncidentClockFormatter.format(resumedAt)}"
+            }
+        }
+        incident.recoveryPending -> "…"
+        else -> "?"
+    }
+    val downtime = recordingIncidentDowntimeMillis(incident)?.let { duration ->
+        val seconds = ((duration + 999L) / 1000L).coerceAtLeast(1L)
+        " · ${formatDurationInput(seconds)} offline"
+    }.orEmpty()
+    return "$start → $end$downtime"
+}
+
+private fun formatIncidentMemory(kb: Long): String {
+    if (kb < 0L) return ""
+    if (kb < 1024L) return "$kb KiB"
+    val mib = kb / 1024.0
+    return if (mib >= 100.0) "${mib.roundToLong()} MiB" else String.format(Locale.getDefault(), "%.1f MiB", mib)
+}
+
+private fun incidentImportanceLabel(importance: Int): String? = when (importance) {
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "Foreground"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "Foreground service"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "Visible"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> "Perceptible"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE -> "Service"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_TOP_SLEEPING -> "Sleeping"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_CANT_SAVE_STATE -> "Unsavable"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> "Cached"
+    500 -> "Empty"
+    ActivityManager.RunningAppProcessInfo.IMPORTANCE_GONE -> "Gone"
+    else -> importance.takeIf { it != Int.MIN_VALUE }?.let { "Importance $it" }
+}
+
+private fun signalLabel(signal: Int): String = when (signal) {
+    1 -> "SIGHUP (1)"
+    2 -> "SIGINT (2)"
+    3 -> "SIGQUIT (3)"
+    6 -> "SIGABRT (6)"
+    9 -> "SIGKILL (9)"
+    11 -> "SIGSEGV (11)"
+    15 -> "SIGTERM (15)"
+    else -> "signal $signal"
+}
+
+private fun incidentCauseLine(incident: RecordingIncident): String = buildList {
+    if (incident.exitReason != 0) add(recordingExitReasonLabel(incident.exitReason))
+    if (incident.exitStatus != Int.MIN_VALUE) {
+        add(if (incident.exitReason == ApplicationExitInfo.REASON_SIGNALED) signalLabel(incident.exitStatus) else "status ${incident.exitStatus}")
+    }
+    if (incident.pid > 0) add("PID ${incident.pid}")
+}.joinToString(" · ")
+
+private fun incidentRuntimeLine(incident: RecordingIncident): String = buildList {
+    incidentImportanceLabel(incident.importance)?.let(::add)
+    if (incident.rssKb >= 0L) add("RSS ${formatIncidentMemory(incident.rssKb)}")
+    if (incident.pssKb > 0L) add("PSS ${formatIncidentMemory(incident.pssKb)}")
+}.joinToString(" · ")
+
+private fun incidentAgeLine(incident: RecordingIncident): String = buildList {
+    if (incident.processStartedAtMillis > 0L && incident.occurredAtMillis >= incident.processStartedAtMillis) {
+        add("process ${formatDurationInput((incident.occurredAtMillis - incident.processStartedAtMillis) / 1000L)}")
+    }
+    if (incident.captureArmedAtMillis > 0L && incident.occurredAtMillis >= incident.captureArmedAtMillis) {
+        add("capture ${formatDurationInput((incident.occurredAtMillis - incident.captureArmedAtMillis) / 1000L)}")
+    }
+}.joinToString(" · ")
 
 @Composable
 internal fun IncidentsScreen(
     incidents: List<RecordingIncident>,
     onBack: () -> Unit,
+    onAcknowledge: (RecordingIncident) -> Unit,
     modifier: Modifier = Modifier,
     backProgress: Float = 0f,
     backDirection: Float = 1f,
@@ -49,32 +154,19 @@ internal fun IncidentsScreen(
     val noiseBrush = rememberAppNoiseBrush()
     val progress = backProgress.coerceIn(0f, 1f)
     Surface(
-        modifier = modifier
-            .graphicsLayer {
-                translationX = backDirection * size.width * 0.08f * progress
-                alpha = 1f - progress * 0.18f
-            },
+        modifier = modifier.graphicsLayer {
+            translationX = backDirection * size.width * 0.08f * progress
+            alpha = 1f - progress * 0.18f
+        },
         color = MaterialTheme.colorScheme.surface,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .appNoise(noiseBrush),
-        ) {
+        Column(Modifier.fillMaxSize().appNoise(noiseBrush)) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .height(AppTopBarContentHeight)
-                    .padding(horizontal = 14.dp),
+                modifier = Modifier.fillMaxWidth().statusBarsPadding().height(AppTopBarContentHeight).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack, modifier = Modifier.size(46.dp)) {
-                    Icon(
-                        imageVector = AppIcons.back,
-                        contentDescription = stringResource(R.string.back),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Icon(AppIcons.back, contentDescription = stringResource(R.string.back), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(
                     text = stringResource(R.string.incidents_title),
@@ -85,29 +177,12 @@ internal fun IncidentsScreen(
             }
 
             if (incidents.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(28.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.incidents,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(34.dp),
-                        )
+                Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(AppIcons.incidents, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(34.dp))
+                        Text(stringResource(R.string.incidents_empty), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = stringResource(R.string.incidents_empty),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            text = stringResource(R.string.incidents_empty_detail),
+                            stringResource(R.string.incidents_empty_detail),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -116,55 +191,66 @@ internal fun IncidentsScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 18.dp,
-                        end = 18.dp,
-                        top = 12.dp,
-                        bottom = 28.dp,
-                    ),
+                    contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 28.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(
                         items = incidents.asReversed(),
                         key = { incident -> "${incident.kind.storageCode}:${incident.occurredAtMillis}" },
                     ) { incident ->
-                        val timestamp = remember(incident.occurredAtMillis) {
-                            formatRecordingIncidentTime(incident.occurredAtMillis)
-                        }
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.54f),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            ) {
-                                Icon(
-                                    imageVector = AppIcons.incidents,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(24.dp),
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = timestamp,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Spacer(Modifier.height(3.dp))
-                                    Text(
-                                        text = stringResource(R.string.incident_unexpected_shutdown),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
+                        IncidentCard(incident = incident, onAcknowledge = { onAcknowledge(incident) })
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IncidentCard(
+    incident: RecordingIncident,
+    onAcknowledge: () -> Unit,
+) {
+    val unacknowledged = !incident.acknowledged
+    val date = remember(incident.occurredAtMillis) { formatRecordingIncidentTime(incident.occurredAtMillis) }
+    val window = remember(incident.occurredAtMillis, incident.resumedAtMillis) { formatIncidentWindow(incident) }
+    val cause = remember(incident) { incidentCauseLine(incident) }
+    val runtime = remember(incident) { incidentRuntimeLine(incident) }
+    val age = remember(incident) { incidentAgeLine(incident) }
+    val description = incident.description?.takeIf { it.isNotBlank() }
+    val hasDetails = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
+    val border = if (unacknowledged) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
+    val fill = if (unacknowledged) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerHigh
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = fill,
+        border = BorderStroke(1.dp, border),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(date, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text(window, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (unacknowledged) {
+                    IconButton(onClick = onAcknowledge, modifier = Modifier.size(38.dp)) {
+                        Icon(
+                            imageVector = AppIcons.check,
+                            contentDescription = stringResource(R.string.incident_dismiss_alert),
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+            if (hasDetails) {
+                HorizontalDivider(color = border.copy(alpha = 0.55f))
+                if (cause.isNotEmpty()) Text(cause, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                if (runtime.isNotEmpty()) Text(runtime, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (age.isNotEmpty()) Text(age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (description != null) Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

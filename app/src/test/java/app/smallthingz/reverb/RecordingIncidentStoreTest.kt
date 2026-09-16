@@ -9,6 +9,7 @@ class RecordingIncidentStoreTest {
     @Test
     fun onlyUnplannedProcessExitsCountAsRecordingIncidents() {
         listOf(
+            EXIT_REASON_ANOMALY,
             ApplicationExitInfo.REASON_ANR,
             ApplicationExitInfo.REASON_CRASH,
             ApplicationExitInfo.REASON_CRASH_NATIVE,
@@ -17,6 +18,7 @@ class RecordingIncidentStoreTest {
             ApplicationExitInfo.REASON_FREEZER,
             ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
             ApplicationExitInfo.REASON_LOW_MEMORY,
+            EXIT_REASON_MEMORY_LIMITER,
             ApplicationExitInfo.REASON_SIGNALED,
         ).forEach { reason ->
             assertTrue("reason=$reason", isSpuriousRecordingProcessExitReason(reason))
@@ -44,5 +46,20 @@ class RecordingIncidentStoreTest {
                 RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
         )
         assertTrue(RecordingIncidentKind.fromStorageCode(0x7f) == null)
+    }
+
+    @Test
+    fun downtimeAndAcknowledgementStayIndependentFromHistoryRetention() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 1_000L,
+            resumedAtMillis = 6_250L,
+            acknowledgedAtMillis = 7_000L,
+            exitReason = ApplicationExitInfo.REASON_SIGNALED,
+        )
+        assertTrue(incident.acknowledged)
+        assertFalse(incident.recoveryPending)
+        assertTrue(recordingIncidentDowntimeMillis(incident) == 5_250L)
+        assertTrue(recordingExitReasonLabel(incident.exitReason) == "Signaled")
+        assertTrue(recordingIncidentDowntimeMillis(incident.copy(resumedAtMillis = 0L)) == null)
     }
 }

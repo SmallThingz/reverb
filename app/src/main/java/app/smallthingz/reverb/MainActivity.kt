@@ -858,10 +858,23 @@ private fun MainScreen(
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
     var recordingIncidents by remember { mutableStateOf<List<RecordingIncident>>(emptyList()) }
+    val hasIncidentAlert = recordingIncidents.any { !it.acknowledged }
 
     suspend fun loadIncidents() {
         recordingIncidents = withContext(Dispatchers.IO) {
             RecordingIncidentStore.readIncidents(context)
+        }
+    }
+
+    fun acknowledgeIncident(incident: RecordingIncident) {
+        scope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                runCatching { RecordingIncidentStore.acknowledgeIncident(context, incident) }
+            }
+            updated.onSuccess { recordingIncidents = it }
+                .onFailure {
+                    AppFeedbackCenter.post(context.getString(R.string.incident_dismiss_failed), FeedbackTone.ERROR)
+                }
         }
     }
 
@@ -995,7 +1008,7 @@ private fun MainScreen(
                         settingsBufferTargetCode = -1
                         showSettings = true
                     },
-                    hasIncidents = recordingIncidents.isNotEmpty(),
+                    hasIncidents = hasIncidentAlert,
                 )
             },
         ) { innerPadding ->
@@ -1121,7 +1134,7 @@ private fun MainScreen(
                             settingsBufferTargetCode = -1
                             showSettings = true
                         },
-                        hasIncidents = recordingIncidents.isNotEmpty(),
+                        hasIncidents = hasIncidentAlert,
                         onDismissLibrary = ::closeLibrary,
                     )
                 }
@@ -1146,7 +1159,7 @@ private fun MainScreen(
                         settingsBufferTargetCode = -1
                         showSettings = true
                     },
-                    hasIncidents = recordingIncidents.isNotEmpty(),
+                    hasIncidents = hasIncidentAlert,
                 )
             }
         }
@@ -1155,6 +1168,7 @@ private fun MainScreen(
             IncidentsScreen(
                 incidents = recordingIncidents,
                 onBack = { showIncidents = false },
+                onAcknowledge = ::acknowledgeIncident,
                 backProgress = incidentsBackMotion.progress.value,
                 backDirection = predictiveBackHorizontalDirection(incidentsBackMotion.swipeEdge),
                 modifier = Modifier
