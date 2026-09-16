@@ -559,7 +559,7 @@ fun SettingsScreen(
             val rollbackSampleRate = getConfiguredSampleRate(context)
             val rollbackWakeLock = isWakeLockEnabled(context)
             val rollbackTheme = getConfiguredThemeMode(context)
-            val rollbackOneShotFull = preferences.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+            val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
             val rollbackExportDirectoryUri = getConfiguredExportTreeUri(context)?.toString()
 
             persistRetentionTransaction(
@@ -604,7 +604,7 @@ fun SettingsScreen(
         val currentService = service
         if (currentService != null) {
             currentService.applyUpdatedPreferences()
-        } else if (getRecorderPreferences(context).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
+        } else if (getRecorderPreferences(context).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
             runCatching {
                 context.startService(
                     Intent(context, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),

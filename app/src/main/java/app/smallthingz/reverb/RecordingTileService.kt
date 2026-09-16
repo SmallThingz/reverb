@@ -150,13 +150,13 @@ internal object RecordingQuickTileStateCache {
             listening = false,
             activeBuffer = readCaptureBufferSlotPreference(prefs),
             oneShotEnabled = isConfiguredOneShotBufferEnabled(context),
-            oneShotFull = prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
+            oneShotFull = prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
             loopingEnabled = isConfiguredLoopingBufferEnabled(context),
             oneShotSeconds = cachedTileDurationSeconds(
-                prefs.getLong(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS, 0L),
+                prefs.safeLong(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS, 0L),
             ),
             loopingSeconds = cachedTileDurationSeconds(
-                prefs.getLong(PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L),
+                prefs.safeLong(PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L),
             ),
         )
     }

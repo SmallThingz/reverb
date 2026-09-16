@@ -126,7 +126,7 @@ internal fun requiresLegacyPublicStoragePermission(sdkInt: Int = Build.VERSION.S
     sdkInt < Build.VERSION_CODES.Q
 
 fun getConfiguredExportTreeUri(context: Context): Uri? {
-    val raw = getRecorderPreferences(context).getString(PrefKey.EXPORT_DIRECTORY_URI, null) ?: return null
+    val raw = getRecorderPreferences(context).safeString(PrefKey.EXPORT_DIRECTORY_URI) ?: return null
     return raw.takeIf { it.isNotBlank() }?.toUri()
 }
 
@@ -1589,10 +1589,61 @@ private fun recoverStagedFileOutputs(
     return changed
 }
 
+private data class DocumentTreeEntry(
+    val uri: Uri,
+    val name: String?,
+    val mimeType: String?,
+    val sizeBytes: Long,
+    val modifiedMillis: Long,
+    val isFile: Boolean,
+)
+
+private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<DocumentTreeEntry> {
+    val treeDocumentId = try {
+        DocumentsContract.getTreeDocumentId(treeUri)
+    } catch (error: RuntimeException) {
+        throw IOException("Unable to resolve document tree $treeUri", error)
+    }
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)
+    val projection = arrayOf(
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE,
+        DocumentsContract.Document.COLUMN_SIZE,
+        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+    )
+    val cursor = context.contentResolver.query(childrenUri, projection, null, null, null)
+        ?: throw IOException("Document tree query returned no cursor: $treeUri")
+    return cursor.use { rows ->
+        val idIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        val nameIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+        val mimeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+        val sizeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+        val modifiedIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+        buildList {
+            while (rows.moveToNext()) {
+                val documentId = rows.getString(idIndex)
+                    ?: throw IOException("Document tree row has no document id: $treeUri")
+                val mimeType = if (rows.isNull(mimeIndex)) null else rows.getString(mimeIndex)
+                add(
+                    DocumentTreeEntry(
+                        uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId),
+                        name = if (rows.isNull(nameIndex)) null else rows.getString(nameIndex),
+                        mimeType = mimeType,
+                        sizeBytes = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex).coerceAtLeast(0L),
+                        modifiedMillis = if (rows.isNull(modifiedIndex)) 0L else rows.getLong(modifiedIndex).coerceAtLeast(0L),
+                        isFile = mimeType != null && mimeType != DocumentsContract.Document.MIME_TYPE_DIR,
+                    ),
+                )
+            }
+        }
+    }
+}
+
 private fun recoverStagedDocumentOutputs(
     context: Context,
     treeUri: Uri,
-    files: Array<DocumentFile>,
+    files: List<DocumentTreeEntry>,
     suppressedIds: Set<String>,
 ): Boolean {
     var changed = false
@@ -1613,18 +1664,13 @@ private fun recoverStagedDocumentOutputs(
         }.onFailure { Log.w(TAG, "Unable to inspect staging document ${file.uri}", it) }
             .getOrDefault(0L)
         if (duration <= 0L) return@forEach
-        // Do not auto-delete an old-session staging object merely because a published
-        // document currently has the same bytes. That final object can be replaced between
-        // comparison and deletion. Publish the staging object under a unique visible name;
-        // only an identity-bound cleanup journal may delete an exact staged object.
-        val modified = file.lastModified().coerceAtLeast(0L)
         val target = RecordingOutputTarget(
             id = file.uri.toString(),
             displayName = metadata.finalDisplayName,
-            mimeType = file.type ?: guessMimeType(metadata.finalDisplayName),
+            mimeType = file.mimeType ?: guessMimeType(metadata.finalDisplayName),
             storageType = RecordingStorageType.DOCUMENT,
             directoryId = treeUri.toString(),
-            startedAtMillis = resolveRecordingStartTimeMillis(metadata.finalDisplayName, modified),
+            startedAtMillis = resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.modifiedMillis),
             uri = file.uri,
             staging = true,
         )
@@ -1702,22 +1748,20 @@ private fun listDocumentTreeRecordings(
     treeUri: Uri,
     knownRecordings: Map<String, RecordingEntity>,
     suppressedIds: Set<String>,
-): List<RecordingEntity> = runCatching {
-    val tree = DocumentFile.fromTreeUri(context, treeUri)
-        ?: throw IOException("Unable to access output directory $treeUri")
-    var files = tree.listFiles()
+): List<RecordingEntity> {
+    var files = queryDocumentTreeEntries(context, treeUri)
     if (recoverStagedDocumentOutputs(context, treeUri, files, suppressedIds)) {
-        files = tree.listFiles()
+        files = queryDocumentTreeEntries(context, treeUri)
     }
-    files.asSequence()
+    return files.asSequence()
         .filter { it.isFile }
         .filter { file -> file.uri.toString() !in suppressedIds }
         .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
         .mapNotNull { file ->
             val uri = file.uri
             val name = file.name ?: return@mapNotNull null
-            val size = file.length().coerceAtLeast(0L)
-            val modifiedMillis = file.lastModified().coerceAtLeast(0L)
+            val size = file.sizeBytes
+            val modifiedMillis = file.modifiedMillis
             val identity = providerRecordingIdentity(
                 RecordingStorageType.DOCUMENT, uri.toString(), size, modifiedMillis,
             )
@@ -1740,8 +1784,8 @@ private fun listDocumentTreeRecordings(
                 RecordingEntity(
                     id = uri.toString(),
                     displayName = name,
-                    mimeType = file.type ?: guessMimeType(name),
-                    startedAtMillis = resolveRecordingStartTimeMillis(name, file.lastModified()),
+                    mimeType = file.mimeType ?: guessMimeType(name),
+                    startedAtMillis = resolveRecordingStartTimeMillis(name, modifiedMillis),
                     durationMillis = strictDuration,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
@@ -1752,7 +1796,7 @@ private fun listDocumentTreeRecordings(
             }
         }
         .toList()
-}.onFailure { Log.w(TAG, "Unable to list recording directory $treeUri", it) }.getOrDefault(emptyList())
+}
 
 private fun listMediaStoreRecordings(
     context: Context,
@@ -1773,14 +1817,14 @@ private fun listMediaStoreRecordings(
         if (useGeneration) add(MediaStore.MediaColumns.GENERATION_MODIFIED)
         add(MediaStore.MediaColumns.IS_PENDING)
     }.toTypedArray()
-    return runCatching {
-        resolver.query(
+    val cursor = resolver.query(
             collection,
             projection,
             "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
             arrayOf(MEDIA_STORE_RELATIVE_PATH),
             "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
-        )?.use { cursor ->
+        ) ?: throw IOException("MediaStore recording query returned no cursor")
+    return cursor.use { cursor ->
             val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
@@ -1902,8 +1946,7 @@ private fun listMediaStoreRecordings(
                     )
                 }
             }
-        } ?: emptyList()
-    }.onFailure { Log.w(TAG, "Unable to list MediaStore recordings", it) }.getOrDefault(emptyList())
+        }
 }
 
 

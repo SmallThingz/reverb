@@ -294,9 +294,7 @@ internal fun verifiedExportStagingFingerprint(
 }
 
 private fun verifiedExportStagingEntriesLocked(context: Context): Set<String> =
-    getRecorderPreferences(context).getStringSet(PrefKey.VERIFIED_EXPORT_STAGING, emptySet())
-        ?.toSet()
-        .orEmpty()
+    getRecorderPreferences(context).requireDurableStringSet(PrefKey.VERIFIED_EXPORT_STAGING)
 
 internal fun suppressAndDeleteOutputTarget(
     context: Context,
@@ -419,9 +417,7 @@ internal fun retryPendingOutputCleanup(context: Context) {
 }
 
 private fun pendingOutputCleanupEntriesLocked(context: Context): Set<String> =
-    getRecorderPreferences(context).getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, emptySet())
-        ?.toSet()
-        .orEmpty()
+    getRecorderPreferences(context).requireDurableStringSet(PrefKey.PENDING_OUTPUT_CLEANUP)
 
 private fun pendingOutputCleanupRecord(context: Context, id: String): PendingOutputCleanupRecord? =
     synchronized(outputCleanupJournalLock) {

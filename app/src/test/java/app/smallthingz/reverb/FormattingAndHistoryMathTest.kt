@@ -11,6 +11,27 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun safePreferenceRead_fallsBackOnStoredTypeMismatch() {
+        assertEquals(48_000, safePreferenceRead(48_000) { throw ClassCastException("wrong type") })
+        assertEquals(96_000, safePreferenceRead(48_000) { 96_000 })
+        assertFalse(safePreferenceRead(false) { throw ClassCastException("wrong type") })
+    }
+
+    @Test
+    fun durablePreferenceRead_neverTreatsWrongTypeAsAbsent() {
+        assertEquals(emptySet<String>(), requireDurablePreference(false, emptySet(), "journal") { setOf("x") })
+        assertEquals(setOf("x"), requireDurablePreference(true, emptySet(), "journal") { setOf("x") })
+        try {
+            requireDurablePreference(true, emptySet<String>(), "journal") {
+                throw ClassCastException("wrong type")
+            }
+            throw AssertionError("Expected unreadable durable preference to fail closed")
+        } catch (_: IllegalStateException) {
+            // Expected.
+        }
+    }
+
+    @Test
     fun libraryDismissEdge_isExactlyThirteenPercentOnEachSide() {
         assertTrue(isLibraryDismissEdge(0f, 100f))
         assertTrue(isLibraryDismissEdge(13f, 100f))

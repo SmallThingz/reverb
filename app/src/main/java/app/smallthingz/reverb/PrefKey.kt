@@ -40,6 +40,48 @@ fun SharedPreferences.getLong(key: PrefKey, default: Long): Long = getLong(key.n
 fun SharedPreferences.getBoolean(key: PrefKey, default: Boolean): Boolean = getBoolean(key.name, default)
 fun SharedPreferences.getStringSet(key: PrefKey, default: Set<String>?): Set<String>? = getStringSet(key.name, default)
 fun SharedPreferences.contains(key: PrefKey): Boolean = contains(key.name)
+
+internal inline fun <T> safePreferenceRead(default: T, read: () -> T): T =
+    try {
+        read()
+    } catch (_: ClassCastException) {
+        default
+    }
+
+internal inline fun <T> requireDurablePreference(
+    present: Boolean,
+    absent: T,
+    label: String,
+    read: () -> T,
+): T {
+    if (!present) return absent
+    return try {
+        read()
+    } catch (error: ClassCastException) {
+        throw IllegalStateException("Unreadable durable preference $label", error)
+    }
+}
+
+internal fun SharedPreferences.safeString(key: PrefKey, default: String? = null): String? =
+    safePreferenceRead(default) { getString(key, default) }
+
+internal fun SharedPreferences.safeInt(key: PrefKey, default: Int): Int =
+    safePreferenceRead(default) { getInt(key, default) }
+
+internal fun SharedPreferences.safeLong(key: PrefKey, default: Long): Long =
+    safePreferenceRead(default) { getLong(key, default) }
+
+internal fun SharedPreferences.safeBoolean(key: PrefKey, default: Boolean): Boolean =
+    safePreferenceRead(default) { getBoolean(key, default) }
+
+internal fun SharedPreferences.requireDurableStringSet(key: PrefKey): Set<String> =
+    requireDurablePreference(
+        present = contains(key),
+        absent = emptySet(),
+        label = key.name,
+    ) {
+        getStringSet(key, emptySet())?.toSet() ?: emptySet()
+    }
 fun SharedPreferences.Editor.putString(key: PrefKey, value: String): SharedPreferences.Editor =
     putString(key.name, value)
 fun SharedPreferences.Editor.putInt(key: PrefKey, value: Int): SharedPreferences.Editor = putInt(key.name, value)

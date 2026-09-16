@@ -335,9 +335,7 @@ object RecordingRepository {
     }
 
     private fun pendingDeletionEntries(context: Context): Set<String> =
-        getRecorderPreferences(context).getStringSet(PrefKey.PENDING_RECORDING_DELETIONS, emptySet())
-            ?.toSet()
-            .orEmpty()
+        getRecorderPreferences(context).requireDurableStringSet(PrefKey.PENDING_RECORDING_DELETIONS)
 
     private fun pendingDeletionIds(context: Context): Set<String> =
         pendingDeletionEntries(context).mapNotNullTo(mutableSetOf()) { raw ->
@@ -641,7 +639,15 @@ object RecordingRepository {
         val existing = dao.listByDirectory(directoryId)
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
-        val imported = scan(existingById)
+        val imported = try {
+            scan(existingById)
+        } catch (error: Exception) {
+            // A failed directory enumeration is not evidence that every known recording
+            // disappeared. Leave this directory's catalog state untouched and continue
+            // reconciling other recoverable locations.
+            Log.w("RecordingRepository", "Unable to enumerate recording directory $directoryId", error)
+            return
+        }
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
         val importedUpdates = ArrayList<RecordingEntity>()

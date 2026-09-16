@@ -509,7 +509,7 @@ class ReverbService : Service() {
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         val generation = synchronized(listeningIntentLock) {
-            val previousEnabled = prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
@@ -580,7 +580,7 @@ class ReverbService : Service() {
     }
 
     private fun isListeningEnabled(): Boolean {
-        return getRecorderPreferences(this).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+        return getRecorderPreferences(this).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
     }
 
     private fun persistedCaptureBufferSlot(): BufferSlot? =
@@ -646,7 +646,7 @@ class ReverbService : Service() {
     private fun clearOneShotFullQuickTileCacheOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
         val prefs = getRecorderPreferences(this)
-        if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
+        if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
             // Tile fallback state is a cache, not capture intent. Never block the audio handler
             // on a filesystem-backed SharedPreferences commit for non-authoritative UI state.
             prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) }
@@ -657,7 +657,7 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         val prefs = getRecorderPreferences(this)
-        if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
+        if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
             // apply() updates this process immediately; disk persistence can lag because the
             // authoritative value is recomputed from the chunk store whenever the service lives.
             prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full) }

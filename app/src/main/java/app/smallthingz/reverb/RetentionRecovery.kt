@@ -88,19 +88,17 @@ internal fun readRetentionPreferenceValues(prefs: SharedPreferences): RetentionP
 
 private fun safePreferenceInt(prefs: SharedPreferences, key: PrefKey): Int? {
     if (!prefs.contains(key)) return null
-    return runCatching { prefs.getInt(key, Int.MIN_VALUE) }.getOrNull()
+    return prefs.safeInt(key, Int.MIN_VALUE).takeUnless { it == Int.MIN_VALUE }
 }
 
 private fun safePreferenceLong(prefs: SharedPreferences, key: PrefKey): Long? {
     if (!prefs.contains(key)) return null
-    return runCatching { prefs.getLong(key, Long.MIN_VALUE) }
-        .getOrNull()
-        ?.takeIf { it >= 0L }
+    return prefs.safeLong(key, Long.MIN_VALUE).takeIf { it >= 0L }
 }
 
 private fun safePreferenceString(prefs: SharedPreferences, key: PrefKey): String? {
     if (!prefs.contains(key)) return null
-    return runCatching { prefs.getString(key, null) }.getOrNull()
+    return prefs.safeString(key)
 }
 
 internal fun retentionConfigurationFromPreferences(

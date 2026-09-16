@@ -228,10 +228,10 @@ private inline fun <T> readByteBackedPreference(
     crossinline fromLegacyPrefValue: (String?) -> T,
     crossinline storageCode: (T) -> Byte,
 ): T {
-    val encoded = runCatching { prefs.getInt(key, Int.MIN_VALUE) }.getOrNull()
-    if (encoded != null && encoded != Int.MIN_VALUE) return fromStorageCode(encoded) ?: default
+    val encoded = prefs.safeInt(key, Int.MIN_VALUE)
+    if (encoded != Int.MIN_VALUE) return fromStorageCode(encoded) ?: default
 
-    val legacy = runCatching { prefs.getString(key, null) }.getOrNull() ?: return default
+    val legacy = prefs.safeString(key) ?: return default
     val decoded = fromLegacyPrefValue(legacy)
     // SharedPreferences stores integral values as Ints. Keep enum payloads byte-sized and
     // migrate legacy strings in memory immediately; apply() persists the same semantics async.
@@ -258,8 +258,8 @@ internal fun getRememberedRangeExport(
 ): RememberedRangeExport? {
     val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
     val prefs = getRecorderPreferences(context)
-    val selectionMillis = runCatching { prefs.getLong(selectionKey, -1L) }.getOrDefault(-1L)
-    val endOffsetMillis = runCatching { prefs.getLong(offsetKey, -1L) }.getOrDefault(-1L)
+    val selectionMillis = prefs.safeLong(selectionKey, -1L)
+    val endOffsetMillis = prefs.safeLong(offsetKey, -1L)
     if (selectionMillis <= 0L || endOffsetMillis < 0L) return null
     return RememberedRangeExport(selectionMillis, endOffsetMillis)
 }
@@ -286,11 +286,11 @@ internal fun rememberSuccessfulRangeExport(
 }
 
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
-    val encoded = runCatching { prefs.getInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE) }.getOrNull()
-    if (encoded != null && encoded != Int.MIN_VALUE) {
+    val encoded = prefs.safeInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE)
+    if (encoded != Int.MIN_VALUE) {
         return ReverbService.BufferSlot.fromStorageCode(encoded)
     }
-    val legacy = runCatching { prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null) }.getOrNull() ?: return null
+    val legacy = prefs.safeString(PrefKey.CAPTURE_BUFFER_SLOT) ?: return null
     val slot = ReverbService.BufferSlot.fromLegacyName(legacy) ?: return null
     prefs.edit { putInt(PrefKey.CAPTURE_BUFFER_SLOT, slot.storageCode.toInt()) }
     return slot
@@ -300,7 +300,7 @@ fun getConfiguredRetentionMode(context: Context): RetentionMode =
     retentionConfigurationForRead(context).mode
 
 fun isWakeLockEnabled(context: Context): Boolean {
-    return getRecorderPreferences(context).getBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
+    return getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
 }
 
 fun isDebuggableBuild(context: Context): Boolean {
@@ -348,7 +348,7 @@ fun isConfiguredLoopingBufferEnabled(context: Context): Boolean {
 }
 
 fun isOnboardingPending(context: Context): Boolean {
-    return !getRecorderPreferences(context).getBoolean(PrefKey.ONBOARDING_SHOWN, false)
+    return !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
 }
 
 @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
@@ -454,7 +454,7 @@ fun isCodecCompatibleWithFormat(
 
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
     return AudioSourceMode.fromStorageCode(
-        getRecorderPreferences(context).getInt(
+        getRecorderPreferences(context).safeInt(
             PrefKey.AUDIO_SOURCE,
             AudioSourceMode.defaultMode().storageCode.toInt(),
         ),
@@ -482,7 +482,7 @@ fun getConfiguredChannelMode(context: Context): ChannelMode = readByteBackedPref
 fun getConfiguredSampleRate(context: Context): Int {
     val prefs = getRecorderPreferences(context)
     if (prefs.contains(PrefKey.SAMPLE_RATE)) {
-        val requested = prefs.getInt(PrefKey.SAMPLE_RATE, 0)
+        val requested = prefs.safeInt(PrefKey.SAMPLE_RATE, 0)
         if (requested in STANDARD_SAMPLE_RATES) return requested
     }
     return PREFERRED_DEFAULT_SAMPLE_RATE
