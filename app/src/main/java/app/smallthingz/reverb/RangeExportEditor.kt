@@ -2052,24 +2052,38 @@ private fun RangeExportControls(
                 modifier = Modifier.weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
+                val bufferPillContent = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.58f)
                 Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = chrome.raised,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f),
                 ) {
-                    Text(
-                        text = stringResource(
-                            when (selectedBuffer) {
-                                ReverbService.BufferSlot.ONE_SHOT -> R.string.buffer_one_shot
-                                ReverbService.BufferSlot.LOOPING -> R.string.buffer_loop
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = when (selectedBuffer) {
+                                ReverbService.BufferSlot.ONE_SHOT -> AppIcons.oneShot
+                                ReverbService.BufferSlot.LOOPING -> AppIcons.looping
                             },
-                        ),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = chrome.ink,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
+                            contentDescription = null,
+                            tint = bufferPillContent,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = stringResource(
+                                when (selectedBuffer) {
+                                    ReverbService.BufferSlot.ONE_SHOT -> R.string.buffer_one_shot
+                                    ReverbService.BufferSlot.LOOPING -> R.string.buffer_loop
+                                },
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = bufferPillContent,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
             Surface(
