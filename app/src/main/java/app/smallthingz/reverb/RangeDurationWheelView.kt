@@ -498,18 +498,12 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         hours: Int,
         minutes: Int,
         seconds: Int,
-    ): Int = when {
-        hours > maximumParts.hours ->
-            RANGE_DURATION_WHEEL_ERROR_HOUR or
-                RANGE_DURATION_WHEEL_ERROR_MINUTE or
-                RANGE_DURATION_WHEEL_ERROR_SECOND
-        hours < maximumParts.hours -> 0
-        minutes > maximumParts.minutes ->
-            RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
-        minutes < maximumParts.minutes -> 0
-        seconds > maximumParts.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
-        else -> 0
-    }
+    ): Int = rangeDurationWheelErrorMask(
+        hours = hours,
+        minutes = minutes,
+        seconds = seconds,
+        maximumWholeSeconds = maximumWholeSeconds,
+    )
 
     private fun timeValueIsOverLimit(
         kind: NumberKind,
