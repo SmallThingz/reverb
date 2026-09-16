@@ -862,9 +862,14 @@ private fun MainScreen(
     val hasIncidentAlert = recordingIncidents.any { !it.acknowledged }
 
     suspend fun loadIncidents() {
-        recordingIncidents = withContext(Dispatchers.IO) {
-            RecordingIncidentStore.readIncidents(context)
+        val loaded = try {
+            withContext(Dispatchers.IO) { RecordingIncidentStore.readIncidents(context) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
         }
+        recordingIncidents = loaded
     }
 
     fun toggleIncidentAcknowledged(incident: RecordingIncident) {
