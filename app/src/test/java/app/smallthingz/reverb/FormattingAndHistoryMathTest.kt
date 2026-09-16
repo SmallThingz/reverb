@@ -1881,6 +1881,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun fullExportSnapshot_rejectsStaleOwnerGeneration() {
+        assertTrue(timelineSnapshotRequestIsCurrent(7L, 7L))
+        assertFalse(timelineSnapshotRequestIsCurrent(6L, 7L))
+        assertFalse(timelineSnapshotRequestIsCurrent(8L, 7L))
+    }
+
+    @Test
     fun customRangeSnapshot_rejectsStaleGenerationAndWrongTab() {
         val oneShot = ReverbService.BufferSlot.ONE_SHOT
         val looping = ReverbService.BufferSlot.LOOPING

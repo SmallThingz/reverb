@@ -216,7 +216,7 @@ private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
     var serviceConnectionGeneration = 0L
-    var customRangeRequestGeneration = 0L
+    var timelineSnapshotRequestGeneration = 0L
     var pendingCustomRangeBuffer: ReverbService.BufferSlot? = null
     var activeSaveReceiver: SaveResultReceiver? = null
 }
@@ -271,8 +271,8 @@ fun CaptureScreen(
     var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
     val screenAlive = remember { AtomicBoolean(true) }
 
-    fun invalidateCustomRangePreparation() {
-        bookkeeping.customRangeRequestGeneration++
+    fun invalidateTimelineSnapshotPreparation() {
+        bookkeeping.timelineSnapshotRequestGeneration++
         bookkeeping.pendingCustomRangeBuffer = null
         rangeSnapshotBuffer = null
         isPreparingRange = false
@@ -375,7 +375,7 @@ fun CaptureScreen(
     LaunchedEffect(selectedBuffer) {
         val pendingBuffer = bookkeeping.pendingCustomRangeBuffer
         if (pendingBuffer != null && pendingBuffer != selectedBuffer) {
-            invalidateCustomRangePreparation()
+            invalidateTimelineSnapshotPreparation()
         }
     }
 
@@ -417,7 +417,7 @@ fun CaptureScreen(
             pendingExportRange = null
             showExportClampDialog = false
             pendingClearBuffer = null
-            invalidateCustomRangePreparation()
+            invalidateTimelineSnapshotPreparation()
             if (markSavingAsCancelRequested && isSaving) {
                 // Service teardown does not cancel already-started export work. Keep the
                 // saving card until its terminal receiver callback, but disable cancellation
@@ -720,8 +720,18 @@ fun CaptureScreen(
             { bufferSlot: ReverbService.BufferSlot ->
                 val s = service
                 if (s != null && serviceStateHydrated && !isSaving && !isPreparingRange) {
+                    val requestGeneration = bookkeeping.timelineSnapshotRequestGeneration + 1L
+                    bookkeeping.timelineSnapshotRequestGeneration = requestGeneration
                     isPreparingRange = true
                     s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
+                        if (!timelineSnapshotRequestIsCurrent(
+                                requestGeneration,
+                                bookkeeping.timelineSnapshotRequestGeneration,
+                            )
+                        ) {
+                            snapshot?.close()
+                            return@acquireTimelineSnapshot
+                        }
                         isPreparingRange = false
                         if (!screenAlive.get() || service !== s) {
                             snapshot?.close()
@@ -781,22 +791,22 @@ fun CaptureScreen(
                             ReverbService.BufferSlot.LOOPING -> loopingDurationSeconds
                         }.coerceAtLeast(0f)
                         if (secs > 0f) {
-                            val requestGeneration = bookkeeping.customRangeRequestGeneration + 1L
-                            bookkeeping.customRangeRequestGeneration = requestGeneration
+                            val requestGeneration = bookkeeping.timelineSnapshotRequestGeneration + 1L
+                            bookkeeping.timelineSnapshotRequestGeneration = requestGeneration
                             bookkeeping.pendingCustomRangeBuffer = bufferSlot
                             rangeSnapshotBuffer = bufferSlot
                             isPreparingRange = true
                             s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
                                 val currentRequest = shouldApplyCustomRangeSnapshot(
                                     requestGeneration = requestGeneration,
-                                    latestRequestGeneration = bookkeeping.customRangeRequestGeneration,
+                                    latestRequestGeneration = bookkeeping.timelineSnapshotRequestGeneration,
                                     requestedBuffer = bufferSlot,
                                     pendingBuffer = bookkeeping.pendingCustomRangeBuffer,
                                     selectedBuffer = selectedBufferState.value,
                                 )
                                 if (!currentRequest) {
                                     snapshot?.close()
-                                    if (requestGeneration == bookkeeping.customRangeRequestGeneration) {
+                                    if (requestGeneration == bookkeeping.timelineSnapshotRequestGeneration) {
                                         bookkeeping.pendingCustomRangeBuffer = null
                                         isPreparingRange = false
                                     }
@@ -841,7 +851,7 @@ fun CaptureScreen(
             rangeSnapshot?.close()
             rangeSnapshot = null
             rangeSnapshotBuffer = null
-            invalidateCustomRangePreparation()
+            invalidateTimelineSnapshotPreparation()
         }
         val rangeBackMotion = rememberPredictiveBackMotion(
             enabled = rangeSnapshotBuffer != null && visualizerVisible,
@@ -860,7 +870,7 @@ fun CaptureScreen(
             )
             rangeSnapshot = null
             rangeSnapshotBuffer = null
-            invalidateCustomRangePreparation()
+            invalidateTimelineSnapshotPreparation()
             if (range.warningDurationSeconds != null) {
                 clampWarningSeconds = range.warningDurationSeconds
                 pendingExportRange = range
@@ -959,6 +969,11 @@ internal fun shouldApplyRecorderStateSnapshot(
     latestCommandGeneration: Long,
 ): Boolean = snapshotConnectionGeneration == currentConnectionGeneration &&
     snapshotGeneration >= latestCommandGeneration
+
+internal fun timelineSnapshotRequestIsCurrent(
+    requestGeneration: Long,
+    latestRequestGeneration: Long,
+): Boolean = requestGeneration == latestRequestGeneration
 
 internal fun shouldApplyCustomRangeSnapshot(
     requestGeneration: Long,
