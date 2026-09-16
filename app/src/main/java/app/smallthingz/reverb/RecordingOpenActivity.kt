@@ -51,6 +51,9 @@ class RecordingOpenActivity : ComponentActivity() {
     }
 }
 
+internal fun verifiedOpenProviderIdentityMatches(expected: String, current: String): Boolean =
+    expected.isBlank() || providerRecordingIdentityMatches(expected, current)
+
 internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? {
     val id = source.getStringExtra("recording_id")?.takeIf { it.isNotBlank() } ?: return null
     val encodedStorage = runCatching {
@@ -78,7 +81,7 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
             val expectedIdentity = source.getStringExtra("recording_file_identity").orEmpty()
             if (expectedIdentity.isNotBlank()) {
                 val currentIdentity = resolveProviderRecordingIdentity(context, storage, candidate)
-                if (currentIdentity.isBlank() || currentIdentity != expectedIdentity) return null
+                if (!verifiedOpenProviderIdentityMatches(expectedIdentity, currentIdentity)) return null
             }
             val readable = runCatching {
                 context.contentResolver.openFileDescriptor(candidate, "r")?.use { true } ?: false

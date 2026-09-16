@@ -276,6 +276,11 @@ fun FilesScreen(
 
     LaunchedEffect(active) {
         if (!active) {
+            // The Library stays composed behind the home screen. Invalidate any storage refresh
+            // launched by the previous visible session so it cannot mutate retained UI state
+            // after close or leave a spinner owned by an obsolete generation stuck on reopen.
+            refreshGeneration[0]++
+            isRefreshing = false
             shareGeneration[0]++
             shareJob[0]?.cancel()
             shareJob[0] = null

@@ -132,6 +132,10 @@ internal object RecordingQuickTileStateCache {
         liveSnapshot = snapshot
     }
 
+    fun invalidateRuntimeSnapshot() {
+        liveSnapshot = null
+    }
+
     fun markServiceStopped(context: Context): RecordingTileSnapshot {
         val stopped = read(context).copy(listening = false)
         liveSnapshot = stopped

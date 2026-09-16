@@ -610,12 +610,18 @@ fun SettingsScreen(
                     Intent(context, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
                 )
             }.onFailure { error ->
+                // Durable settings changed but no recorder accepted the reload. Drop the stale
+                // process-global tile snapshot so SystemUI reflects the committed preferences
+                // while runtime capture correctly fails closed.
+                RecordingQuickTileStateCache.invalidateRuntimeSnapshot()
+                RecordingQuickTiles.requestRefresh(context)
                 AppFeedbackCenter.post(
                     resources.getString(R.string.settings_apply_failed),
                     FeedbackTone.ERROR,
                 )
             }
         } else {
+            RecordingQuickTileStateCache.invalidateRuntimeSnapshot()
             RecordingQuickTiles.requestRefresh(context)
         }
         // Re-render from the precise backing values after commit. This keeps the large
