@@ -104,6 +104,8 @@ internal fun shouldComposeMainPanel(
 
 class MainActivity : ComponentActivity() {
     private var permissionsGranted by mutableStateOf(false)
+    private var microphonePermissionGranted by mutableStateOf(false)
+    private var storagePermissionGranted by mutableStateOf(false)
     private var notificationPermissionGranted by mutableStateOf(false)
     private var mediaRecoveryAllowed by mutableStateOf(false)
     private var batteryOptimizationAllowed by mutableStateOf(false)
@@ -113,15 +115,17 @@ class MainActivity : ComponentActivity() {
 
     private val microphonePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            microphonePermissionGranted = granted || hasMicrophonePermission()
             permissionsGranted = hasRequiredPermissions()
-            showPermissionDenied = !granted && !showOnboarding
+            showPermissionDenied = !microphonePermissionGranted && !showOnboarding
             if (granted && !showOnboarding) beginPermissionFlow()
         }
 
     private val storagePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            storagePermissionGranted = granted || hasLegacyStoragePermission()
             permissionsGranted = hasRequiredPermissions()
-            showPermissionDenied = !granted && !showOnboarding
+            showPermissionDenied = !storagePermissionGranted && !showOnboarding
             if (granted && !showOnboarding) beginPermissionFlow()
         }
 
@@ -158,7 +162,9 @@ class MainActivity : ComponentActivity() {
             savedInstanceState?.getBoolean(STATE_RECOVERY_PERMISSION_REQUESTED) ?: false
         notificationPermissionRequested =
             savedInstanceState?.getBoolean(STATE_NOTIFICATION_PERMISSION_REQUESTED) ?: false
-        permissionsGranted = hasRequiredPermissions()
+        microphonePermissionGranted = hasMicrophonePermission()
+        storagePermissionGranted = hasLegacyStoragePermission()
+        permissionsGranted = microphonePermissionGranted && storagePermissionGranted
         showOnboarding = isOnboardingPending(this)
         if (showOnboarding) {
             notificationPermissionGranted = hasNotificationPermission()
@@ -171,8 +177,8 @@ class MainActivity : ComponentActivity() {
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
                 if (showOnboarding) {
                     OnboardingScreen(
-                        microphoneAllowed = hasMicrophonePermission(),
-                        storageAllowed = hasLegacyStoragePermission(),
+                        microphoneAllowed = microphonePermissionGranted,
+                        storageAllowed = storagePermissionGranted,
                         storagePermissionRequired = requiresLegacyStoragePermission(),
                         recoveryAllowed = mediaRecoveryAllowed,
                         recoveryPermissionRequired = mediaRecoveryPermission() != null,
@@ -262,7 +268,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        permissionsGranted = hasRequiredPermissions()
+        microphonePermissionGranted = hasMicrophonePermission()
+        storagePermissionGranted = hasLegacyStoragePermission()
+        permissionsGranted = microphonePermissionGranted && storagePermissionGranted
         if (showOnboarding) {
             notificationPermissionGranted = hasNotificationPermission()
             mediaRecoveryAllowed = hasMediaRecoveryPermission()
