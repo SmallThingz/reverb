@@ -51,6 +51,8 @@ internal fun recordingIncidentDowntimeMillis(incident: RecordingIncident): Long?
     }
 
 internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
+    ApplicationExitInfo.REASON_UNKNOWN -> "Unknown process exit"
+    ApplicationExitInfo.REASON_EXIT_SELF -> "Process exited"
     EXIT_REASON_ANOMALY -> "Anomaly"
     ApplicationExitInfo.REASON_ANR -> "ANR"
     ApplicationExitInfo.REASON_CRASH -> "Crash"
@@ -62,7 +64,13 @@ internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
     ApplicationExitInfo.REASON_LOW_MEMORY -> "Low memory"
     EXIT_REASON_MEMORY_LIMITER -> "Memory limiter"
     ApplicationExitInfo.REASON_SIGNALED -> "Signaled"
-    else -> "Reason $reason"
+    ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "Permission change"
+    ApplicationExitInfo.REASON_USER_REQUESTED -> "User requested stop"
+    ApplicationExitInfo.REASON_USER_STOPPED -> "User stopped"
+    ApplicationExitInfo.REASON_OTHER -> "System stop"
+    ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "Package state change"
+    ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "Package updated"
+    else -> "Process exit $reason"
 }
 
 private fun formatIncidentWindow(incident: RecordingIncident): String {

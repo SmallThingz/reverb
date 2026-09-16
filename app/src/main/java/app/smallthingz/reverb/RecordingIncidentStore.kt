@@ -62,44 +62,13 @@ private data class PendingRecordingSession(
     val resumedAtMillis: Long = 0L,
 )
 
-internal fun isSpuriousRecordingProcessExitReason(reason: Int): Boolean = when (reason) {
-    EXIT_REASON_ANOMALY,
-    ApplicationExitInfo.REASON_ANR,
-    ApplicationExitInfo.REASON_CRASH,
-    ApplicationExitInfo.REASON_CRASH_NATIVE,
-    ApplicationExitInfo.REASON_DEPENDENCY_DIED,
-    ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
-    ApplicationExitInfo.REASON_FREEZER,
-    ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
-    ApplicationExitInfo.REASON_LOW_MEMORY,
-    EXIT_REASON_MEMORY_LIMITER,
-    ApplicationExitInfo.REASON_SIGNALED,
-    -> true
-
-    ApplicationExitInfo.REASON_EXIT_SELF,
-    ApplicationExitInfo.REASON_OTHER,
-    ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE,
-    ApplicationExitInfo.REASON_PACKAGE_UPDATED,
-    ApplicationExitInfo.REASON_PERMISSION_CHANGE,
-    ApplicationExitInfo.REASON_UNKNOWN,
-    ApplicationExitInfo.REASON_USER_REQUESTED,
-    ApplicationExitInfo.REASON_USER_STOPPED,
-    -> false
-
-    else -> false
-}
-
 internal enum class RecordingExitDisposition {
     INCIDENT,
-    EXPECTED,
     PENDING,
 }
 
-internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition = when {
-    reason == null -> RecordingExitDisposition.PENDING
-    isSpuriousRecordingProcessExitReason(reason) -> RecordingExitDisposition.INCIDENT
-    else -> RecordingExitDisposition.EXPECTED
-}
+internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition =
+    if (reason == null) RecordingExitDisposition.PENDING else RecordingExitDisposition.INCIDENT
 
 
 internal fun completeRecordingIncidentDowntimes(
@@ -161,19 +130,27 @@ internal object RecordingIncidentStore {
         }
 
         val currentElapsed = SystemClock.elapsedRealtime()
-        val currentPackageUpdate = packageLastUpdateTime(appContext)
-        if (
-            marker.armedElapsedRealtimeMillis > currentElapsed ||
-            (marker.packageLastUpdateTimeMillis > 0L &&
-                currentPackageUpdate > 0L &&
-                marker.packageLastUpdateTimeMillis != currentPackageUpdate)
-        ) {
+        if (marker.armedElapsedRealtimeMillis > currentElapsed) {
+            // elapsedRealtime resets only across a device restart. Capture was durably armed,
+            // so a reboot is itself an interruption even though ApplicationExitInfo may be gone.
+            appendIncident(
+                appContext,
+                incidentFromDeviceRestart(
+                    marker = marker,
+                    currentWallClockMillis = System.currentTimeMillis(),
+                    currentElapsedRealtimeMillis = currentElapsed,
+                ),
+            )
             markerFile.delete()
             return
         }
 
         if (markerBelongsToCurrentProcess(marker)) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            appendIncident(
+                appContext,
+                incidentWithoutExitEvidence(marker, System.currentTimeMillis()),
+            )
             markerFile.delete()
             return
         }
@@ -217,8 +194,8 @@ internal object RecordingIncidentStore {
         runCatching {
             writeSession(file, existing.copy(armed = false))
         }.onFailure {
-            // Best-effort fallback. Recovery also requires a matching durable listening intent
-            // and an Android-classified unplanned process exit before it can create an incident.
+            // Best-effort fallback. A known stop should disarm durably; if that write fails,
+            // deleting the marker is safer than falsely reporting a later process death.
             file.delete()
         }
     }
@@ -288,7 +265,6 @@ internal object RecordingIncidentStore {
             val exit = historicalExit(context, marker)
             when (recordingExitDisposition(exit?.reason)) {
                 RecordingExitDisposition.PENDING -> remaining += pendingSession
-                RecordingExitDisposition.EXPECTED -> resolvedAny = true
                 RecordingExitDisposition.INCIDENT -> {
                     appendIncident(
                         context,
@@ -341,18 +317,52 @@ internal object RecordingIncidentStore {
         left.processStartElapsedRealtimeMillis == right.processStartElapsedRealtimeMillis &&
         left.armedAtMillis == right.armedAtMillis
 
+    private fun incidentFromDeviceRestart(
+        marker: ActiveRecordingSessionMarker,
+        currentWallClockMillis: Long,
+        currentElapsedRealtimeMillis: Long,
+    ): RecordingIncident {
+        val estimatedBootMillis =
+            (currentWallClockMillis - currentElapsedRealtimeMillis).coerceAtLeast(marker.armedAtMillis)
+        return incidentWithoutExitEvidence(
+            marker = marker,
+            occurredAtMillis = estimatedBootMillis,
+            description = "Device restarted while capture was running",
+        )
+    }
+
+    private fun incidentWithoutExitEvidence(
+        marker: ActiveRecordingSessionMarker,
+        occurredAtMillis: Long,
+        description: String = "Recording process ended while capture was running",
+    ): RecordingIncident = RecordingIncident(
+        occurredAtMillis = occurredAtMillis.coerceAtLeast(marker.armedAtMillis),
+        resumedAtMillis = 0L,
+        kind = RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
+        exitReason = ApplicationExitInfo.REASON_UNKNOWN,
+        pid = marker.pid,
+        processStartedAtMillis = processStartedAtWallClockMillis(marker),
+        captureArmedAtMillis = marker.armedAtMillis,
+        description = description,
+    )
+
+    private fun processStartedAtWallClockMillis(marker: ActiveRecordingSessionMarker): Long {
+        val elapsedBeforeArmed =
+            marker.armedElapsedRealtimeMillis - marker.processStartElapsedRealtimeMillis
+        return if (elapsedBeforeArmed >= 0L && elapsedBeforeArmed <= marker.armedAtMillis) {
+            marker.armedAtMillis - elapsedBeforeArmed
+        } else {
+            -1L
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.R)
     private fun incidentFromExit(
         marker: ActiveRecordingSessionMarker,
         exit: ApplicationExitInfo,
         resumedAtMillis: Long,
     ): RecordingIncident {
-        val elapsedBeforeArmed = marker.armedElapsedRealtimeMillis - marker.processStartElapsedRealtimeMillis
-        val processStartedAtMillis = if (elapsedBeforeArmed >= 0L && elapsedBeforeArmed <= marker.armedAtMillis) {
-            marker.armedAtMillis - elapsedBeforeArmed
-        } else {
-            -1L
-        }
+        val processStartedAtMillis = processStartedAtWallClockMillis(marker)
         val description = exit.description
             ?.trim()
             ?.takeIf { it.isNotEmpty() }

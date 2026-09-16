@@ -7,56 +7,47 @@ import org.junit.Test
 
 class RecordingIncidentStoreTest {
     @Test
-    fun onlyUnplannedProcessExitsCountAsRecordingIncidents() {
+    fun everyObservedProcessExitInterruptsAnArmedCapture() {
         listOf(
-            EXIT_REASON_ANOMALY,
-            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_UNKNOWN,
+            ApplicationExitInfo.REASON_EXIT_SELF,
+            ApplicationExitInfo.REASON_SIGNALED,
+            ApplicationExitInfo.REASON_LOW_MEMORY,
             ApplicationExitInfo.REASON_CRASH,
             ApplicationExitInfo.REASON_CRASH_NATIVE,
-            ApplicationExitInfo.REASON_DEPENDENCY_DIED,
-            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
-            ApplicationExitInfo.REASON_FREEZER,
+            ApplicationExitInfo.REASON_ANR,
             ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
-            ApplicationExitInfo.REASON_LOW_MEMORY,
-            EXIT_REASON_MEMORY_LIMITER,
-            ApplicationExitInfo.REASON_SIGNALED,
-        ).forEach { reason ->
-            assertTrue("reason=$reason", isSpuriousRecordingProcessExitReason(reason))
-        }
-
-        listOf(
-            ApplicationExitInfo.REASON_EXIT_SELF,
-            ApplicationExitInfo.REASON_OTHER,
-            ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE,
-            ApplicationExitInfo.REASON_PACKAGE_UPDATED,
             ApplicationExitInfo.REASON_PERMISSION_CHANGE,
-            ApplicationExitInfo.REASON_UNKNOWN,
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
             ApplicationExitInfo.REASON_USER_REQUESTED,
             ApplicationExitInfo.REASON_USER_STOPPED,
+            ApplicationExitInfo.REASON_DEPENDENCY_DIED,
+            ApplicationExitInfo.REASON_OTHER,
+            ApplicationExitInfo.REASON_FREEZER,
+            ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE,
+            ApplicationExitInfo.REASON_PACKAGE_UPDATED,
+            EXIT_REASON_MEMORY_LIMITER,
+            EXIT_REASON_ANOMALY,
+            999,
         ).forEach { reason ->
-            assertFalse("reason=$reason", isSpuriousRecordingProcessExitReason(reason))
+            assertTrue(
+                "reason=$reason",
+                recordingExitDisposition(reason) == RecordingExitDisposition.INCIDENT,
+            )
         }
     }
 
     @Test
-    fun exitDispositionRetainsMissingEvidenceAndSeparatesKnownOutcomes() {
+    fun missingExitEvidenceStaysPendingInsteadOfPretendingTheStopWasExpected() {
         assertTrue(recordingExitDisposition(null) == RecordingExitDisposition.PENDING)
-        assertTrue(
-            recordingExitDisposition(ApplicationExitInfo.REASON_CRASH) ==
-                RecordingExitDisposition.INCIDENT,
-        )
-        assertTrue(
-            recordingExitDisposition(ApplicationExitInfo.REASON_SIGNALED) ==
-                RecordingExitDisposition.INCIDENT,
-        )
-        assertTrue(
-            recordingExitDisposition(ApplicationExitInfo.REASON_PACKAGE_UPDATED) ==
-                RecordingExitDisposition.EXPECTED,
-        )
-        assertTrue(
-            recordingExitDisposition(ApplicationExitInfo.REASON_OTHER) ==
-                RecordingExitDisposition.EXPECTED,
-        )
+    }
+
+    @Test
+    fun externalStopReasonsHaveUsefulIncidentLabels() {
+        assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_PACKAGE_UPDATED) == "Package updated")
+        assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_USER_REQUESTED) == "User requested stop")
+        assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_PERMISSION_CHANGE) == "Permission change")
+        assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_OTHER) == "System stop")
     }
 
     @Test
