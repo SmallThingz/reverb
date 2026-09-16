@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
-import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 
 internal const val RANGE_DURATION_WHEEL_MAX_HOURS: Int = Int.MAX_VALUE / 3_600
 
@@ -32,20 +33,62 @@ internal fun rangeDurationWheelProfileStep(profileIndex: Int): Int = when (profi
     else -> 1
 }
 
-internal fun nearestRangeDurationWheelSteppedValue(value: Int, step: Int): Int {
-    require(step > 0 && 60 % step == 0)
-    val safe = ((value % 60) + 60) % 60
-    var best = 0
-    var bestDistance = Int.MAX_VALUE
-    var candidate = 0
-    while (candidate < 60) {
-        val direct = abs(candidate - safe)
-        val distance = minOf(direct, 60 - direct)
-        if (distance < bestDistance) {
-            best = candidate
-            bestDistance = distance
-        }
-        candidate += step
+internal const val RANGE_DURATION_WHEEL_ERROR_HOUR = 1
+internal const val RANGE_DURATION_WHEEL_ERROR_MINUTE = 1 shl 1
+internal const val RANGE_DURATION_WHEEL_ERROR_SECOND = 1 shl 2
+
+internal fun rangeDurationWheelErrorMask(
+    hours: Int,
+    minutes: Int,
+    seconds: Int,
+    maximumWholeSeconds: Int,
+): Int {
+    val maximum = splitRangeDurationWheelSeconds(maximumWholeSeconds)
+    return when {
+        hours > maximum.hours ->
+            RANGE_DURATION_WHEEL_ERROR_HOUR or
+                RANGE_DURATION_WHEEL_ERROR_MINUTE or
+                RANGE_DURATION_WHEEL_ERROR_SECOND
+        hours < maximum.hours -> 0
+        minutes > maximum.minutes ->
+            RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
+        minutes < maximum.minutes -> 0
+        seconds > maximum.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
+        else -> 0
     }
-    return best
+}
+
+internal fun rangeDurationWheelWholeLimitSeconds(exactSeconds: Double): Int {
+    if (!exactSeconds.isFinite() || exactSeconds <= 0.0) return 0
+    return floor(exactSeconds)
+        .coerceAtMost(Int.MAX_VALUE.toDouble())
+        .toInt()
+}
+
+internal fun rangeDurationWheelDisplaySeconds(actualSeconds: Double, exactLimitSeconds: Double): Int {
+    if (!actualSeconds.isFinite() || actualSeconds <= 0.0) return 0
+    val rounded = if (actualSeconds > exactLimitSeconds) ceil(actualSeconds) else floor(actualSeconds)
+    return rounded.coerceAtMost(Int.MAX_VALUE.toDouble()).toInt()
+}
+
+internal fun rangeDurationWheelValues(
+    step: Int,
+    maxInclusive: Int,
+    currentValue: Int,
+    includeMaximumBoundary: Boolean = true,
+): IntArray {
+    require(step > 0)
+    val max = maxInclusive.coerceAtLeast(0)
+    val current = currentValue.coerceAtLeast(0)
+    val values = ArrayList<Int>(max / step + 3)
+    var value = 0
+    while (value <= max) {
+        values += value
+        if (value > Int.MAX_VALUE - step) break
+        value += step
+    }
+    if (includeMaximumBoundary && values.lastOrNull() != max) values += max
+    if (current !in values) values += current
+    values.sort()
+    return values.distinct().toIntArray()
 }

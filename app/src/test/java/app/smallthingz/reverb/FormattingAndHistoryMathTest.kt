@@ -1475,6 +1475,25 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun exactWavExportDurationLimit_matchesPayloadBudgetAndFlooredWholeSeconds() {
+        val exact = exportDurationLimitExactSeconds(
+            format = ExportFormat.WAV,
+            codec = ExportCodec.PCM_16,
+            sampleRate = 48_000,
+            channelCount = 2,
+            sampleFormat = PcmSampleFormat.PCM_16,
+        )
+        val payload = exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_16)
+        assertEquals(payload.toDouble() / (48_000.0 * 2.0 * 2.0), exact, 0.0)
+        assertEquals(
+            exportDurationLimitSeconds(
+                ExportFormat.WAV, ExportCodec.PCM_16, 48_000, 2, PcmSampleFormat.PCM_16,
+            ),
+            kotlin.math.floor(exact).toLong(),
+        )
+    }
+
+    @Test
     fun wavExportDurationLimit_doesNotOverflow() {
         val limit = exportDurationLimitSeconds(
             format = ExportFormat.WAV,

@@ -38,6 +38,9 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     private val secondWheel = Wheel(0.0, 60)
     private val profileWheel = Wheel(0.0, PROFILE_LABELS.size)
     private val wheels = arrayOf(hourWheel, minuteWheel, secondWheel, profileWheel)
+    private var hourValues = intArrayOf(0)
+    private var minuteValues = rangeDurationWheelValues(step = 1, maxInclusive = 59, currentValue = 0)
+    private var secondValues = rangeDurationWheelValues(step = 1, maxInclusive = 59, currentValue = 0)
 
     private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
@@ -67,6 +70,12 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     @ColorInt private var inkColor = Color.WHITE
     @ColorInt private var mutedColor = Color.GRAY
     @ColorInt private var borderColor = Color.DKGRAY
+    @ColorInt private var errorColor = Color.RED
+
+    private var maximumDurationSecondsExact = 0.0
+    private var maximumWholeSeconds = 0
+    private var maximumParts = RangeDurationWheelTimeParts(0, 0, 0)
+    private var currentDurationSecondsExact = 0.0
 
     private var timeRight = 1f
     private var timeColumnWidth = 1f
@@ -130,43 +139,44 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         updateContentDescription()
     }
 
-    fun setPalette(@ColorInt ink: Int, @ColorInt muted: Int, @ColorInt border: Int) {
-        if (inkColor == ink && mutedColor == muted && borderColor == border) return
+    fun setPalette(
+        @ColorInt ink: Int,
+        @ColorInt muted: Int,
+        @ColorInt border: Int,
+        @ColorInt error: Int,
+    ) {
+        if (
+            inkColor == ink && mutedColor == muted && borderColor == border && errorColor == error
+        ) return
         inkColor = ink
         mutedColor = muted
         borderColor = border
+        errorColor = error
         invalidate()
     }
 
-    fun setMaximumDurationSeconds(seconds: Int) {
-        val maxHours = (seconds.coerceAtLeast(0) / 3_600)
-            .coerceAtMost(RANGE_DURATION_WHEEL_MAX_HOURS)
-        val nextCount = maxHours + 1
-        if (hourWheel.count == nextCount) return
-        hourWheel.count = nextCount
-        if (hourWheel.position > maxHours.toDouble()) {
-            hourWheel.position = maxHours.toDouble()
-        }
+    fun setMaximumDurationSeconds(seconds: Double) {
+        val safe = seconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
+        if (maximumDurationSecondsExact == safe) return
+        val current = currentDisplayParts()
+        maximumDurationSecondsExact = safe
+        maximumWholeSeconds = rangeDurationWheelWholeLimitSeconds(safe)
+        maximumParts = splitRangeDurationWheelSeconds(maximumWholeSeconds)
+        rebuildTimeWheels(current.hours, current.minutes, current.seconds)
+        updateContentDescription()
         invalidate()
     }
 
-    fun setDurationSeconds(seconds: Int) {
-        val safe = seconds.coerceAtLeast(0)
-        if (safe == lastCommittedSeconds || isGestureActive()) return
+    fun setDurationSeconds(seconds: Double) {
+        val safe = seconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
+        if (isGestureActive()) return
+        if (currentDurationSecondsExact == safe) return
         stopAnimation()
-        val parts = splitRangeDurationWheelSeconds(safe)
-        val step = rangeDurationWheelProfileStep(profileIndex)
-        if (parts.minutes % step != 0 || parts.seconds % step != 0) {
-            profileIndex = 0
-            profileWheel.position = 0.0
-            minuteWheel.count = 60
-            secondWheel.count = 60
-        }
-        val activeStep = rangeDurationWheelProfileStep(profileIndex)
-        hourWheel.position = parts.hours.toDouble()
-        minuteWheel.position = (parts.minutes / activeStep).toDouble()
-        secondWheel.position = (parts.seconds / activeStep).toDouble()
-        lastCommittedSeconds = safe
+        currentDurationSecondsExact = safe
+        val displaySeconds = rangeDurationWheelDisplaySeconds(safe, maximumDurationSecondsExact)
+        val parts = splitRangeDurationWheelSeconds(displaySeconds)
+        rebuildTimeWheels(parts.hours, parts.minutes, parts.seconds)
+        lastCommittedSeconds = displaySeconds
         updateContentDescription()
         invalidate()
     }
@@ -205,9 +215,15 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         drawSelection(canvas, profileCenter, profileWidth * 0.40f)
         canvas.drawLine(dividerX, 0f, dividerX, height.toFloat(), linePaint)
 
-        colonPaint.color = mutedColor
+        val errorMask = currentErrorMask()
         colonPaint.alpha = 255
+        colonPaint.color = if (
+            errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0
+        ) errorColor else mutedColor
         canvas.drawText(":", firstColon, height * 0.5f + colonBaseline, colonPaint)
+        colonPaint.color = if (
+            errorMask and (RANGE_DURATION_WHEEL_ERROR_HOUR or RANGE_DURATION_WHEEL_ERROR_MINUTE) != 0
+        ) errorColor else mutedColor
         canvas.drawText(":", secondColon, height * 0.5f + colonBaseline, colonPaint)
 
         drawNumberWheel(canvas, hourWheel, hourCenter, NumberKind.HOUR)
@@ -330,8 +346,12 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     }
 
     private fun finishInteraction(index: Int) {
-        if (index == PROFILE_WHEEL) applyProfileSelection()
-        rebase(wheels[index])
+        if (index == PROFILE_WHEEL) {
+            applyProfileSelection()
+        } else {
+            val selected = currentDisplayParts()
+            rebuildTimeWheels(selected.hours, selected.minutes, selected.seconds)
+        }
         publishDurationIfChanged()
         updateContentDescription()
         invalidate()
@@ -339,6 +359,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
 
     private fun publishDurationIfChanged() {
         val seconds = currentTotalSeconds()
+        currentDurationSecondsExact = seconds.toDouble()
         if (seconds == lastCommittedSeconds) return
         lastCommittedSeconds = seconds
         onDurationChanged?.invoke(seconds)
@@ -346,44 +367,69 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
 
     private fun applyProfileSelection() {
         val newProfile = normalizedIndex(profileWheel)
-        if (newProfile == profileIndex) {
-            profileWheel.position = newProfile.toDouble()
-            return
-        }
-        val oldMinute = currentMinute()
-        val oldSecond = currentSecond()
+        val selected = currentDisplayParts()
         profileIndex = newProfile
         profileWheel.position = newProfile.toDouble()
-        val step = rangeDurationWheelProfileStep(profileIndex)
-        minuteWheel.count = 60 / step
-        secondWheel.count = 60 / step
-        minuteWheel.position =
-            (nearestRangeDurationWheelSteppedValue(oldMinute, step) / step).toDouble()
-        secondWheel.position =
-            (nearestRangeDurationWheelSteppedValue(oldSecond, step) / step).toDouble()
+        rebuildTimeWheels(selected.hours, selected.minutes, selected.seconds)
     }
 
-    private fun currentTotalSeconds(): Int = composeRangeDurationWheelSeconds(
-        hours = normalizedIndex(hourWheel),
+    private fun rebuildTimeWheels(hours: Int, minutes: Int, seconds: Int) {
+        val step = rangeDurationWheelProfileStep(profileIndex)
+        hourValues = rangeDurationWheelValues(
+            step = 1,
+            maxInclusive = maximumParts.hours,
+            currentValue = hours,
+        )
+        val minuteConstrained = hours == maximumParts.hours
+        val minuteMax = if (minuteConstrained) maximumParts.minutes else 59
+        minuteValues = rangeDurationWheelValues(
+            step = step,
+            maxInclusive = minuteMax,
+            currentValue = minutes.coerceIn(0, 59),
+            includeMaximumBoundary = minuteConstrained,
+        )
+        val secondConstrained = hours == maximumParts.hours && minutes == maximumParts.minutes
+        val secondMax = if (secondConstrained) maximumParts.seconds else 59
+        secondValues = rangeDurationWheelValues(
+            step = step,
+            maxInclusive = secondMax,
+            currentValue = seconds.coerceIn(0, 59),
+            includeMaximumBoundary = secondConstrained,
+        )
+        setWheelValue(hourWheel, hourValues, hours)
+        setWheelValue(minuteWheel, minuteValues, minutes.coerceIn(0, 59))
+        setWheelValue(secondWheel, secondValues, seconds.coerceIn(0, 59))
+    }
+
+    private fun setWheelValue(wheel: Wheel, values: IntArray, value: Int) {
+        wheel.count = values.size.coerceAtLeast(1)
+        val index = values.indexOf(value).takeIf { it >= 0 } ?: 0
+        wheel.position = index.toDouble()
+    }
+
+    private fun currentDisplayParts(): RangeDurationWheelTimeParts = RangeDurationWheelTimeParts(
+        hours = currentHour(),
         minutes = currentMinute(),
         seconds = currentSecond(),
     )
 
-    private fun currentMinute(): Int =
-        normalizedIndex(minuteWheel) * rangeDurationWheelProfileStep(profileIndex)
+    private fun currentTotalSeconds(): Int = composeRangeDurationWheelSeconds(
+        hours = currentHour(),
+        minutes = currentMinute(),
+        seconds = currentSecond(),
+    )
 
-    private fun currentSecond(): Int =
-        normalizedIndex(secondWheel) * rangeDurationWheelProfileStep(profileIndex)
+    private fun currentHour(): Int = hourValues[normalizedIndex(hourWheel)]
+
+    private fun currentMinute(): Int = minuteValues[normalizedIndex(minuteWheel)]
+
+    private fun currentSecond(): Int = secondValues[normalizedIndex(secondWheel)]
 
     private fun normalizedIndex(wheel: Wheel): Int {
         val rounded = round(wheel.position).toLong()
-        val count = wheel.count.toLong()
+        val count = wheel.count.toLong().coerceAtLeast(1L)
         val modulo = rounded % count
         return (if (modulo < 0L) modulo + count else modulo).toInt()
-    }
-
-    private fun rebase(wheel: Wheel) {
-        wheel.position = normalizedIndex(wheel).toDouble()
     }
 
     private fun drawNumberWheel(
@@ -392,19 +438,61 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         centerX: Float,
         kind: NumberKind,
     ) {
+        val values = when (kind) {
+            NumberKind.HOUR -> hourValues
+            NumberKind.MINUTE -> minuteValues
+            NumberKind.SECOND -> secondValues
+        }
         val base = floor(wheel.position).toLong()
         for (offset in -3..3) {
             val logical = base + offset
             val relative = logical - wheel.position
             if (abs(relative) >= VISIBLE_LIMIT) continue
-            val value = when (kind) {
-                NumberKind.HOUR -> modulo(logical, wheel.count)
-                NumberKind.MINUTE, NumberKind.SECOND ->
-                    modulo(logical, wheel.count) * rangeDurationWheelProfileStep(profileIndex)
-            }
-            drawCylinderValue(canvas, relative.toFloat(), centerX, valuePaint) {
+            val value = values[modulo(logical, values.size)]
+            drawCylinderValue(
+                canvas = canvas,
+                relative = relative.toFloat(),
+                centerX = centerX,
+                paint = valuePaint,
+                overLimit = timeValueIsOverLimit(kind, value),
+            ) {
                 drawNumber(canvas, value, valuePaint)
             }
+        }
+    }
+
+    private fun currentErrorMask(): Int {
+        val hours = currentHour()
+        val minutes = currentMinute()
+        val seconds = currentSecond()
+        return when {
+            hours > maximumParts.hours ->
+                RANGE_DURATION_WHEEL_ERROR_HOUR or
+                    RANGE_DURATION_WHEEL_ERROR_MINUTE or
+                    RANGE_DURATION_WHEEL_ERROR_SECOND
+            hours < maximumParts.hours -> 0
+            minutes > maximumParts.minutes ->
+                RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
+            minutes < maximumParts.minutes -> 0
+            seconds > maximumParts.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
+            else -> 0
+        }
+    }
+
+    private fun timeValueIsOverLimit(kind: NumberKind, candidate: Int): Boolean {
+        val errorMask = currentErrorMask()
+        return when (kind) {
+            NumberKind.HOUR ->
+                errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0 ||
+                    candidate > maximumParts.hours
+            NumberKind.MINUTE ->
+                errorMask and RANGE_DURATION_WHEEL_ERROR_MINUTE != 0 ||
+                    (currentHour() == maximumParts.hours && candidate > maximumParts.minutes)
+            NumberKind.SECOND ->
+                errorMask and RANGE_DURATION_WHEEL_ERROR_SECOND != 0 ||
+                    (currentHour() == maximumParts.hours &&
+                        currentMinute() == maximumParts.minutes &&
+                        candidate > maximumParts.seconds)
         }
     }
 
@@ -426,6 +514,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         relative: Float,
         centerX: Float,
         paint: Paint,
+        overLimit: Boolean = false,
         drawText: () -> Unit,
     ) {
         val angle = relative * ANGLE_STEP_DEGREES
@@ -442,7 +531,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         val opacity = min(1f, facing * (0.55f + edgeFade * 0.45f))
         val centerMix = (1f - absolute / 0.85f).coerceIn(0f, 1f)
 
-        paint.color = blendColor(mutedColor, inkColor, centerMix)
+        paint.color = if (overLimit) errorColor else blendColor(mutedColor, inkColor, centerMix)
         paint.alpha = (opacity * 255f).toInt().coerceIn(0, 255)
 
         canvas.save()

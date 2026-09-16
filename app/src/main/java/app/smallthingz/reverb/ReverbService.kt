@@ -1138,11 +1138,13 @@ class ReverbService : Service() {
             val totalDuration = snapshot.durationSeconds
             val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
             val boundedEnd = endOffsetSeconds.toDouble().coerceIn(boundedStart, totalDuration)
-            val targetBytesPerSecond = exportConfig.sampleRate.toLong() *
-                exportConfig.channelMode.channelCount.toLong() *
-                exportConfig.sampleFormat.bytesPerSample.toLong()
-            val maxDuration = exportPayloadLimitBytes(exportConfig.format, exportConfig.sampleFormat).toDouble() /
-                targetBytesPerSecond.coerceAtLeast(1L).toDouble()
+            val maxDuration = exportDurationLimitExactSeconds(
+                format = exportConfig.format,
+                codec = exportConfig.codec,
+                sampleRate = exportConfig.sampleRate,
+                channelCount = exportConfig.channelMode.channelCount,
+                sampleFormat = exportConfig.sampleFormat,
+            )
             val clampedStart = maxOf(boundedStart, boundedEnd - maxDuration)
             snapshot.acquireRange(clampedStart, boundedEnd)
         } catch (error: Exception) {
@@ -1166,8 +1168,13 @@ class ReverbService : Service() {
         requestedStartSeconds: Double,
         requestedEndSeconds: Double,
     ): PersistentAudioChunkStore.RangeLease? {
-        val targetBytesPerSecond = fillRate.coerceAtLeast(1L).toDouble()
-        val maxDuration = exportPayloadLimitBytes(outputFormat, pcmSampleFormat).toDouble() / targetBytesPerSecond
+        val maxDuration = exportDurationLimitExactSeconds(
+            format = outputFormat,
+            codec = outputCodec,
+            sampleRate = sampleRate,
+            channelCount = channelMode.channelCount,
+            sampleFormat = pcmSampleFormat,
+        )
         val end = requestedEndSeconds.coerceAtLeast(requestedStartSeconds)
         val start = maxOf(requestedStartSeconds, end - maxDuration)
         return store.acquireRange(start, end)

@@ -24,18 +24,76 @@ class RangeDurationWheelMathTest {
     }
 
     @Test
-    fun steppedValues_chooseNearestCircularValue() {
-        assertEquals(0, nearestRangeDurationWheelSteppedValue(59, 5))
-        assertEquals(55, nearestRangeDurationWheelSteppedValue(54, 5))
-        assertEquals(15, nearestRangeDurationWheelSteppedValue(17, 15))
-        assertEquals(0, nearestRangeDurationWheelSteppedValue(59, 15))
-    }
-
-    @Test
     fun hoursAreNotClockBounded() {
         val parts = splitRangeDurationWheelSeconds(86_400)
         assertEquals(24, parts.hours)
         assertEquals(0, parts.minutes)
         assertEquals(0, parts.seconds)
     }
+    @Test
+    fun normalProfileRing_doesNotInventFiftyNineAsAStep() {
+        assertEquals(
+            listOf(0, 15, 30, 45),
+            rangeDurationWheelValues(
+                step = 15,
+                maxInclusive = 59,
+                currentValue = 0,
+                includeMaximumBoundary = false,
+            ).toList(),
+        )
+    }
+
+    @Test
+    fun limitAwareRings_includeExactBoundaryRegardlessOfProfile() {
+        assertEquals(
+            listOf(0, 15, 24),
+            rangeDurationWheelValues(step = 15, maxInclusive = 24, currentValue = 24).toList(),
+        )
+        assertEquals(
+            listOf(0, 15, 16),
+            rangeDurationWheelValues(step = 15, maxInclusive = 16, currentValue = 16).toList(),
+        )
+    }
+
+    @Test
+    fun limitAwareRings_preserveAbnormalCurrentValueUntilUserLeavesIt() {
+        assertEquals(
+            listOf(0, 1, 2, 3, 4, 5, 6, 13),
+            rangeDurationWheelValues(step = 1, maxInclusive = 6, currentValue = 13).toList(),
+        )
+        assertEquals(
+            listOf(0, 15, 24, 25),
+            rangeDurationWheelValues(step = 15, maxInclusive = 24, currentValue = 25).toList(),
+        )
+    }
+
+    @Test
+    fun fractionalLimitDisplay_neverShowsValidOverflowAsSafe() {
+        val max = 6 * 3_600.0 + 24 * 60.0 + 16.75
+        assertEquals(6 * 3_600 + 24 * 60 + 16, rangeDurationWheelWholeLimitSeconds(max))
+        assertEquals(6 * 3_600 + 24 * 60 + 16, rangeDurationWheelDisplaySeconds(max, max))
+        assertEquals(6 * 3_600 + 24 * 60 + 17, rangeDurationWheelDisplaySeconds(max + 0.01, max))
+    }
+
+    @Test
+    fun errorMask_isHierarchicalAtExportBoundary() {
+        val max = 6 * 3_600 + 24 * 60 + 16
+        assertEquals(0, rangeDurationWheelErrorMask(5, 59, 59, max))
+        assertEquals(0, rangeDurationWheelErrorMask(6, 24, 16, max))
+        assertEquals(
+            RANGE_DURATION_WHEEL_ERROR_SECOND,
+            rangeDurationWheelErrorMask(6, 24, 17, max),
+        )
+        assertEquals(
+            RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND,
+            rangeDurationWheelErrorMask(6, 25, 0, max),
+        )
+        assertEquals(
+            RANGE_DURATION_WHEEL_ERROR_HOUR or
+                RANGE_DURATION_WHEEL_ERROR_MINUTE or
+                RANGE_DURATION_WHEEL_ERROR_SECOND,
+            rangeDurationWheelErrorMask(13, 0, 0, max),
+        )
+    }
+
 }

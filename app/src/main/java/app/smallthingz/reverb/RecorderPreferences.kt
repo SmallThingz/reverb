@@ -671,6 +671,20 @@ fun exportDurationLimitSeconds(
     )
 }
 
+fun exportDurationLimitExactSeconds(
+    format: ExportFormat,
+    codec: ExportCodec,
+    sampleRate: Int,
+    channelCount: Int,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+): Double {
+    if (sampleRate <= 0 || channelCount <= 0) return 0.0
+    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0.0
+    val bytesPerSecond = bytesPerSecond(sampleRate, channelCount, sampleFormat)
+    if (bytesPerSecond <= 0L) return 0.0
+    return exportPayloadLimitBytes(format, sampleFormat).toDouble() / bytesPerSecond.toDouble()
+}
+
 fun resolveOperationalSampleRate(
     context: Context,
     requestedRate: Int,

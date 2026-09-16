@@ -508,4 +508,29 @@ class RangeExportEditorMathTest {
         assertTrue(normalized[2] > normalized[1])
         assertTrue(normalized[1] > normalized[0])
     }
+    @Test
+    fun exportLimitComparison_usesExactFractionalBoundary() {
+        val max = 6 * 3_600.0 + 24 * 60.0 + 16.75
+        assertTrue(rangeExportSelectionWithinLimit(max, max))
+        assertTrue(rangeExportSelectionWithinLimit(max - 0.001, max))
+        assertFalse(rangeExportSelectionWithinLimit(max + 0.001, max))
+        assertFalse(rangeExportSelectionWithinLimit(Double.NaN, max))
+        assertFalse(rangeExportSelectionWithinLimit(max, Double.NaN))
+    }
+
+    @Test
+    fun exactEndpointSubtraction_preventsFloatRoundedLimitDisagreement() {
+        val start = 25_847.966796875f
+        val end = 74_543.7421875f
+        val maximum = 48_695.77382086168
+
+        val floatRoundedDuration = (end - start).toDouble()
+        val exactEndpointDuration = rangeSelectionDurationExactSeconds(start, end)
+
+        assertEquals(48_695.7734375, floatRoundedDuration, 0.0)
+        assertEquals(48_695.775390625, exactEndpointDuration, 0.0)
+        assertTrue(rangeExportSelectionWithinLimit(floatRoundedDuration, maximum))
+        assertFalse(rangeExportSelectionWithinLimit(exactEndpointDuration, maximum))
+    }
+
 }

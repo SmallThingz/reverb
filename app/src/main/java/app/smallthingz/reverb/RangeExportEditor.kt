@@ -273,6 +273,23 @@ internal fun adjustRangeEditTarget(
     return RangeEditUpdate(RangeEditValues(start, end))
 }
 
+internal fun rangeSelectionDurationExactSeconds(
+    startSeconds: Float,
+    endSeconds: Float,
+): Double {
+    if (!startSeconds.isFinite() || !endSeconds.isFinite()) return 0.0
+    return (endSeconds.toDouble() - startSeconds.toDouble()).coerceAtLeast(0.0)
+}
+
+internal fun rangeExportSelectionWithinLimit(
+    selectedDurationSeconds: Double,
+    maximumDurationSeconds: Double,
+): Boolean = selectedDurationSeconds.isFinite() &&
+    maximumDurationSeconds.isFinite() &&
+    selectedDurationSeconds >= 0.0 &&
+    maximumDurationSeconds >= 0.0 &&
+    selectedDurationSeconds <= maximumDurationSeconds
+
 internal fun resizeRangeSelectionDuration(
     values: RangeEditValues,
     target: RangeEditTarget,
@@ -497,8 +514,11 @@ internal class RangeExportEditorState(
     private var fineAdjustShuttleActive = false
     private var lastAuditionAtMillis = 0L
 
+    val selectionDurationExactSeconds: Double
+        get() = rangeSelectionDurationExactSeconds(startSeconds, endSeconds)
+
     val selectionDurationSeconds: Float
-        get() = (endSeconds - startSeconds).coerceAtLeast(0f)
+        get() = selectionDurationExactSeconds.toFloat()
 
     val snapshotReady: Boolean
         get() = snapshot != null
@@ -800,7 +820,7 @@ internal fun RangeExportHomeContent(
     oneShotEnabled: Boolean,
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
-    maxExportDurationSeconds: Float,
+    maxExportDurationSeconds: Double,
     modifier: Modifier = Modifier,
     backProgress: Float = 0f,
     visualizerVisible: Boolean,
@@ -938,6 +958,7 @@ internal fun RangeExportHomeContent(
                     ) {
                         RangeSelectionDurationWheel(
                             state = state,
+                            maxExportDurationSeconds = maxExportDurationSeconds,
                             enabled = interactionReady && backProgress <= 0f,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -977,23 +998,16 @@ internal fun RangeExportHomeContent(
                         .height(if (compact) 120.dp else 132.dp)
                         .graphicsLayer { alpha = chromeAlpha() },
                 )
-                if (state.selectionDurationSeconds > maxExportDurationSeconds) {
-                    Text(
-                        text = stringResource(
-                            R.string.range_export_limit_hint,
-                            formatRangeTimeInput(maxExportDurationSeconds.toDouble()),
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
             }
         }
 
         RangeExportControls(
             modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
             state = state,
+            canExport = rangeExportSelectionWithinLimit(
+                state.selectionDurationExactSeconds,
+                maxExportDurationSeconds,
+            ),
             selectedBuffer = selectedBuffer,
             activeBuffer = activeBuffer,
             isListening = isListening,
@@ -1025,12 +1039,12 @@ internal fun RangeExportHomeContent(
 @Composable
 private fun RangeSelectionDurationWheel(
     state: RangeExportEditorState,
+    maxExportDurationSeconds: Double,
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_selected)
-    val selectedSeconds = state.selectionDurationSeconds.roundToInt().coerceAtLeast(0)
     AndroidView(
         factory = { context -> RangeDurationWheelView(context) },
         update = { view ->
@@ -1044,9 +1058,10 @@ private fun RangeSelectionDurationWheel(
                 ink = colors.onSurface.toArgb(),
                 muted = colors.onSurfaceVariant.toArgb(),
                 border = colors.outlineVariant.toArgb(),
+                error = colors.error.toArgb(),
             )
-            view.setMaximumDurationSeconds(state.durationSeconds.roundToInt().coerceAtLeast(0))
-            view.setDurationSeconds(selectedSeconds)
+            view.setMaximumDurationSeconds(maxExportDurationSeconds)
+            view.setDurationSeconds(state.selectionDurationExactSeconds)
         },
         modifier = modifier,
     )
@@ -1926,6 +1941,7 @@ internal fun SpringFineSeekControl(
 private fun RangeExportControls(
     modifier: Modifier = Modifier,
     state: RangeExportEditorState,
+    canExport: Boolean,
     selectedBuffer: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
     isListening: Boolean,
@@ -1936,6 +1952,9 @@ private fun RangeExportControls(
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
+    val exportEnabled = state.snapshotReady && canExport
+    val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
+    val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
     val discardDraftOnPointerDown = Modifier.pointerInput(state) {
@@ -2022,9 +2041,9 @@ private fun RangeExportControls(
                             view.post(onExport)
                         }
                     },
-                    enabled = state.snapshotReady,
+                    enabled = exportEnabled,
                     shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.primary,
+                    color = exportContainerColor,
                     modifier = Modifier.height(50.dp),
                 ) {
                     Row(
@@ -2035,13 +2054,13 @@ private fun RangeExportControls(
                         Icon(
                             imageVector = AppIcons.save,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
+                            tint = exportContentColor,
                             modifier = Modifier.size(20.dp),
                         )
                         Text(
                             text = stringResource(R.string.export),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = exportContentColor,
                         )
                     }
                 }

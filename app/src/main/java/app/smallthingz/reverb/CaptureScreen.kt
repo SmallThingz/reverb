@@ -768,13 +768,13 @@ fun CaptureScreen(
             }
         }
         val rangeConfig = currentExportConfig(context, service)
-        val rangeMaxDurationSeconds = exportDurationLimitSeconds(
+        val rangeMaxDurationSeconds = exportDurationLimitExactSeconds(
             rangeConfig.format,
             rangeConfig.codec,
             rangeConfig.sampleRate,
             rangeConfig.channelCount,
             rangeConfig.sampleFormat,
-        ).toFloat().coerceAtLeast(1f)
+        )
         val dismissRangeExport: () -> Unit = {
             rangeSnapshot?.close()
             rangeSnapshot = null
@@ -1042,7 +1042,7 @@ private fun MainCaptureContent(
     loopingBlobActivity: Float,
     rangeSnapshot: ReverbService.TimelineSnapshot?,
     rangeSnapshotBuffer: ReverbService.BufferSlot?,
-    rangeMaxExportDurationSeconds: Float,
+    rangeMaxExportDurationSeconds: Double,
     rangeBackProgress: Float,
     onCancelRangeExport: () -> Unit,
     onSubmitRangeExport: (Float, Float) -> Unit,
@@ -2091,20 +2091,21 @@ private fun buildCustomExportRange(
     val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
     val start = requestedStartSeconds.toDouble().coerceIn(0.0, available).toFloat()
     val end = requestedEndSeconds.toDouble().coerceIn(start.toDouble(), available).toFloat()
-    val maxDuration = exportDurationLimitSeconds(
+    val maxDuration = exportDurationLimitExactSeconds(
         exportConfig.format,
         exportConfig.codec,
         exportConfig.sampleRate,
         exportConfig.channelCount,
         exportConfig.sampleFormat,
-    ).toFloat().coerceAtLeast(1f)
-    return if (end - start <= maxDuration) {
+    )
+    val selectedDuration = rangeSelectionDurationExactSeconds(start, end)
+    return if (rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {
         ExportRange(start, end, null)
     } else {
         ExportRange(
-            startSeconds = (end - maxDuration).coerceAtLeast(0f),
+            startSeconds = (end.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),
             endSeconds = end,
-            warningDurationSeconds = maxDuration,
+            warningDurationSeconds = maxDuration.toFloat(),
         )
     }
 }
@@ -2116,18 +2117,18 @@ private fun handleExport(
     onRange: (ExportRange) -> Unit,
 ) {
     val exportConfig = currentExportConfig(context, service)
-    val maxDuration = exportDurationLimitSeconds(
+    val maxDuration = exportDurationLimitExactSeconds(
         exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
         exportConfig.channelCount, exportConfig.sampleFormat,
-    ).toFloat().coerceAtLeast(1f)
-    if (bufferSeconds <= maxDuration) {
+    )
+    if (rangeExportSelectionWithinLimit(bufferSeconds.toDouble(), maxDuration)) {
         onRange(ExportRange(0f, bufferSeconds, null))
     } else {
         onRange(
             ExportRange(
-                startSeconds = (bufferSeconds - maxDuration).coerceAtLeast(0f),
+                startSeconds = (bufferSeconds.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),
                 endSeconds = bufferSeconds,
-                warningDurationSeconds = maxDuration,
+                warningDurationSeconds = maxDuration.toFloat(),
             ),
         )
     }

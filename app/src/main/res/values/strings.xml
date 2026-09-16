@@ -50,7 +50,6 @@
     <string name="export_range_title">Export range</string>
     <string name="range_export_selected">selected</string>
     <string name="range_export_scrubbing">scrubbing</string>
-    <string name="range_export_limit_hint">Export limit: %1$s</string>
     <string name="export_limit_dialog_title">Export limit</string>
     <string name="export_limit_dialog_message">Current length is too large. Only exporting last %1$s.</string>
     <string name="saving">Saving…</string>
