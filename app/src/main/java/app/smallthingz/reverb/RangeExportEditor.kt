@@ -1295,13 +1295,13 @@ private fun bubbleOffset(xPx: Float, fullWidthPx: Float, bubbleWidthPx: Float): 
 }
 
 @Composable
-internal fun RangeTimelineBoundaryVisual(
+internal fun RangeTimelineMarkerVisual(
     active: Boolean,
+    cursor: Boolean,
     modifier: Modifier = Modifier,
     visualAlpha: Float = 1f,
 ) {
-    val colors = MaterialTheme.colorScheme
-    val lineColor = if (active) colors.tertiary else colors.onSurface
+    val lineColor = if (active) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface
     Box(
         modifier = modifier.graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
         contentAlignment = Alignment.Center,
@@ -1309,8 +1309,8 @@ internal fun RangeTimelineBoundaryVisual(
         Box(
             modifier = Modifier
                 .fillMaxHeight(RANGE_TIMELINE_MARKER_HEIGHT_FRACTION)
-                .width(RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp),
-            contentAlignment = Alignment.Center,
+                .width(if (cursor) 10.dp else RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp),
+            contentAlignment = if (cursor) Alignment.BottomCenter else Alignment.Center,
         ) {
             Box(
                 Modifier
@@ -1322,50 +1322,17 @@ internal fun RangeTimelineBoundaryVisual(
                     .background(lineColor, RoundedCornerShape(99.dp)),
             )
             Surface(
-                modifier = Modifier.size(
-                    RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp,
-                    RANGE_TIMELINE_BOUNDARY_GRIP_HEIGHT_DP.dp,
-                ),
-                shape = RoundedCornerShape(7.dp),
-                color = lineColor,
-                shadowElevation = if (active) 3.dp else 1.dp,
-            ) {}
-        }
-    }
-}
-
-@Composable
-internal fun RangeTimelineCursorVisual(
-    active: Boolean,
-    modifier: Modifier = Modifier,
-    visualAlpha: Float = 1f,
-) {
-    val colors = MaterialTheme.colorScheme
-    val lineColor = if (active) colors.tertiary else colors.onSurface
-    Box(
-        modifier = modifier.graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight(RANGE_TIMELINE_MARKER_HEIGHT_FRACTION)
-                .width(10.dp),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Box(
-                Modifier
-                    .width(
-                        if (active) RANGE_TIMELINE_ACTIVE_LINE_WIDTH_DP.dp
-                        else RANGE_TIMELINE_LINE_WIDTH_DP.dp,
+                modifier = if (cursor) {
+                    Modifier.size(RANGE_TIMELINE_CURSOR_DOT_DP.dp)
+                } else {
+                    Modifier.size(
+                        RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP.dp,
+                        RANGE_TIMELINE_BOUNDARY_GRIP_HEIGHT_DP.dp,
                     )
-                    .fillMaxHeight()
-                    .background(lineColor, RoundedCornerShape(99.dp)),
-            )
-            Surface(
-                modifier = Modifier.size(RANGE_TIMELINE_CURSOR_DOT_DP.dp),
-                shape = CircleShape,
+                },
+                shape = if (cursor) CircleShape else RoundedCornerShape(7.dp),
                 color = lineColor,
-                shadowElevation = if (active) 4.dp else 1.dp,
+                shadowElevation = if (active) (if (cursor) 4.dp else 3.dp) else 1.dp,
             ) {}
         }
     }
@@ -1448,19 +1415,12 @@ private fun RangeTimelineBar(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (active) {
-            RangeTimelineCursorVisual(
-                active = true,
-                visualAlpha = visualAlpha,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            RangeTimelineBoundaryVisual(
-                active = false,
-                visualAlpha = visualAlpha,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        RangeTimelineMarkerVisual(
+            active = active,
+            cursor = active,
+            visualAlpha = visualAlpha,
+            modifier = Modifier.fillMaxSize(),
+        )
         Box(Modifier.fillMaxSize().then(dragModifier))
     }
 }

@@ -789,8 +789,9 @@ internal fun RecordingInlinePlayer(
             val visualWidthPx = with(density) { visualWidth.toPx() }
             val waveformWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
             if (!trimMode) {
-                RangeTimelineCursorVisual(
+                RangeTimelineMarkerVisual(
                     active = false,
+                    cursor = true,
                     visualAlpha = 0.74f,
                     modifier = Modifier
                         .offset {
@@ -823,32 +824,18 @@ internal fun RecordingInlinePlayer(
                     }
                     .width(visualWidth)
                     .fillMaxHeight()
-                if (startIsCursor) {
-                    RangeTimelineCursorVisual(
-                        active = true,
-                        visualAlpha = trimVisualAlpha,
-                        modifier = startModifier,
-                    )
-                } else {
-                    RangeTimelineBoundaryVisual(
-                        active = false,
-                        visualAlpha = trimVisualAlpha,
-                        modifier = startModifier,
-                    )
-                }
-                if (endIsCursor) {
-                    RangeTimelineCursorVisual(
-                        active = true,
-                        visualAlpha = trimVisualAlpha,
-                        modifier = endModifier,
-                    )
-                } else {
-                    RangeTimelineBoundaryVisual(
-                        active = false,
-                        visualAlpha = trimVisualAlpha,
-                        modifier = endModifier,
-                    )
-                }
+                RangeTimelineMarkerVisual(
+                    active = startIsCursor,
+                    cursor = startIsCursor,
+                    visualAlpha = trimVisualAlpha,
+                    modifier = startModifier,
+                )
+                RangeTimelineMarkerVisual(
+                    active = endIsCursor,
+                    cursor = endIsCursor,
+                    visualAlpha = trimVisualAlpha,
+                    modifier = endModifier,
+                )
             }
         }
 
