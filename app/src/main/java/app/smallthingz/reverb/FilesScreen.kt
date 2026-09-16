@@ -874,6 +874,7 @@ private fun RecordingItem(
     onPlaybackFailed: () -> Unit,
 ) {
     val chrome = appChrome()
+    var operationBusy by remember(item.recording.id) { mutableStateOf(false) }
     Box {
         RecordingEntityCard(
             recording = item.recording,
@@ -882,6 +883,7 @@ private fun RecordingItem(
                 .padding(bottom = 10.dp),
             isSelected = isSelected,
             selectionActive = selectionActive,
+            interactionsEnabled = !operationBusy,
             onClick = onClick,
             onLongClick = onLongClick,
             onIconLongClick = onIconLongClick,
@@ -893,6 +895,7 @@ private fun RecordingItem(
                     onTrimRequestConsumed = onTrimRequestConsumed,
                     onTrimSaved = onTrimSaved,
                     onWaveformCached = onWaveformCached,
+                    onBusyChange = { operationBusy = it },
                     onCollapse = onCollapse,
                     onPlaybackFailed = onPlaybackFailed,
                 )

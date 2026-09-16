@@ -45,6 +45,7 @@ internal fun RecordingEntityCard(
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     selectionActive: Boolean = false,
+    interactionsEnabled: Boolean = true,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     onIconLongClick: (() -> Unit)? = null,
@@ -60,6 +61,7 @@ internal fun RecordingEntityCard(
         modifier = modifier,
         isSelected = isSelected,
         selectionActive = selectionActive,
+        interactionsEnabled = interactionsEnabled,
         onClick = onClick,
         onLongClick = onLongClick,
         onIconLongClick = onIconLongClick,
@@ -103,6 +105,7 @@ private fun RecordingSummaryCard(
     modifier: Modifier,
     isSelected: Boolean = false,
     selectionActive: Boolean = false,
+    interactionsEnabled: Boolean = true,
     showProgress: Boolean = false,
     trailingContent: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
@@ -134,7 +137,7 @@ private fun RecordingSummaryCard(
         border = BorderStroke(1.dp, chrome.border),
         tonalElevation = 0.dp,
     ) {
-        val iconInteractionModifier = if (onClick != null) {
+        val iconInteractionModifier = if (interactionsEnabled && onClick != null) {
             Modifier.combinedClickable(
                 onClick = onClick,
                 onLongClick = onIconLongClick ?: onLongClick ?: {},
@@ -142,7 +145,7 @@ private fun RecordingSummaryCard(
         } else {
             Modifier
         }
-        val cardInteractionModifier = if (onClick != null) {
+        val cardInteractionModifier = if (interactionsEnabled && onClick != null) {
             Modifier.combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick ?: {},

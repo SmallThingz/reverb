@@ -212,6 +212,7 @@ internal fun RecordingInlinePlayer(
     onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
     onWaveformCached: (RecordingEntity) -> Unit,
+    onBusyChange: (Boolean) -> Unit = {},
     onCollapse: () -> Unit,
     onPlaybackFailed: () -> Unit,
     modifier: Modifier = Modifier,
@@ -249,6 +250,9 @@ internal fun RecordingInlinePlayer(
     var trimSaving by remember(recordingRevisionKey) { mutableStateOf(false) }
     var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
     var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
+
+    LaunchedEffect(trimSaving) { onBusyChange(trimSaving) }
+    DisposableEffect(Unit) { onDispose { onBusyChange(false) } }
 
     var coarseWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
     var coarseBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
@@ -944,6 +948,7 @@ internal fun RecordingInlinePlayer(
                         if (!trimSaving && trimEndMillis > trimStartMillis) {
                             trimSaving = true
                             trimError = false
+                            onBusyChange(true)
                             scope.launch {
                                 try {
                                     val trimmed = saveTrimmedRecordingCopy(
@@ -953,12 +958,14 @@ internal fun RecordingInlinePlayer(
                                         endMillis = trimEndMillis,
                                     )
                                     trimSaving = false
+                                    onBusyChange(false)
                                     trimMode = false
                                     onTrimSaved(trimmed)
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (_: Exception) {
                                     trimSaving = false
+                                    onBusyChange(false)
                                     trimError = true
                                 }
                             }
