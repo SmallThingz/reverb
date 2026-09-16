@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -76,6 +77,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
@@ -266,6 +268,34 @@ internal fun adjustRangeEditTarget(
         }
         RangeEditTarget.END -> {
             end = requestedSeconds.coerceIn((start + minRangeSeconds).coerceAtMost(duration), duration)
+        }
+    }
+    return RangeEditUpdate(RangeEditValues(start, end))
+}
+
+internal fun resizeRangeSelectionDuration(
+    values: RangeEditValues,
+    target: RangeEditTarget,
+    requestedDurationSeconds: Float,
+    durationSeconds: Float,
+    minRangeSeconds: Float = 0.05f,
+): RangeEditUpdate {
+    val duration = durationSeconds.takeIf { it.isFinite() }
+        ?.coerceAtLeast(minRangeSeconds) ?: minRangeSeconds
+    var start = values.startSeconds.coerceIn(0f, duration)
+    var end = values.endSeconds.coerceIn(start, duration)
+    val currentDuration = (end - start).coerceAtLeast(minRangeSeconds)
+    val requested = requestedDurationSeconds.takeIf { it.isFinite() }
+        ?.coerceAtLeast(minRangeSeconds) ?: currentDuration
+    when (target) {
+        RangeEditTarget.START -> {
+            start = (end - requested).coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
+        }
+        RangeEditTarget.END -> {
+            end = (start + requested).coerceIn(
+                (start + minRangeSeconds).coerceAtMost(duration),
+                duration,
+            )
         }
     }
     return RangeEditUpdate(RangeEditValues(start, end))
@@ -564,6 +594,24 @@ internal class RangeExportEditorState(
                 values = currentEditValues(),
                 target = target,
                 requestedSeconds = requestedSeconds,
+                durationSeconds = durationSeconds,
+            ),
+        )
+    }
+
+    fun beginSelectionDurationEdit() {
+        if (activeTextTarget != null || activeTextDraft != null) {
+            invalidateTextEditing()
+        }
+        pausePreview()
+    }
+
+    fun setSelectionDuration(requestedDurationSeconds: Float) {
+        applyEditUpdate(
+            resizeRangeSelectionDuration(
+                values = currentEditValues(),
+                target = lastTarget,
+                requestedDurationSeconds = requestedDurationSeconds,
                 durationSeconds = durationSeconds,
             ),
         )
@@ -888,14 +936,13 @@ internal fun RangeExportHomeContent(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
                     ) {
-                        Text(
-                            text = formatRangeTimeInput(state.selectionDurationSeconds.toDouble()),
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 22.sp,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
+                        RangeSelectionDurationWheel(
+                            state = state,
+                            enabled = interactionReady && backProgress <= 0f,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                                .height(160.dp),
                         )
                         Text(
                             text = stringResource(R.string.range_export_selected),
@@ -903,7 +950,7 @@ internal fun RangeExportHomeContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(4.dp))
                 }
                 RangeExportTimeline(
                     state = state,
@@ -973,6 +1020,36 @@ internal fun RangeExportHomeContent(
             }
         }
     }
+}
+
+@Composable
+private fun RangeSelectionDurationWheel(
+    state: RangeExportEditorState,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val label = stringResource(R.string.range_export_selected)
+    val selectedSeconds = state.selectionDurationSeconds.roundToInt().coerceAtLeast(0)
+    AndroidView(
+        factory = { context -> RangeDurationWheelView(context) },
+        update = { view ->
+            view.isEnabled = enabled
+            view.setAccessibilityLabel(label)
+            view.onInteractionStart = state::beginSelectionDurationEdit
+            view.onDurationChanged = { seconds ->
+                state.setSelectionDuration(seconds.toFloat())
+            }
+            view.setPalette(
+                ink = colors.onSurface.toArgb(),
+                muted = colors.onSurfaceVariant.toArgb(),
+                border = colors.outlineVariant.toArgb(),
+            )
+            view.setMaximumDurationSeconds(state.durationSeconds.roundToInt().coerceAtLeast(0))
+            view.setDurationSeconds(selectedSeconds)
+        },
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -1922,19 +1999,10 @@ private fun RangeExportControls(
                         tint = chrome.ink,
                     )
                 }
-                Column(
+                Box(
                     modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = formatRangeTimeInput(state.selectionDurationSeconds.toDouble()),
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        color = chrome.ink,
-                        maxLines = 1,
-                    )
                     Text(
                         text = stringResource(
                             if (state.isScrubbing) R.string.range_export_scrubbing

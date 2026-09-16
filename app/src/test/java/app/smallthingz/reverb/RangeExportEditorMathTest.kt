@@ -112,6 +112,34 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun selectionDurationMovesActiveBoundary_andDefaultsCleanlyToStartSemantics() {
+        val initial = RangeEditValues(startSeconds = 20f, endSeconds = 80f)
+
+        val moveStart = resizeRangeSelectionDuration(
+            values = initial,
+            target = RangeEditTarget.START,
+            requestedDurationSeconds = 25f,
+            durationSeconds = 100f,
+        )
+        assertEquals(55f, moveStart.values.startSeconds, 0f)
+        assertEquals(80f, moveStart.values.endSeconds, 0f)
+
+        val moveEnd = resizeRangeSelectionDuration(
+            values = initial,
+            target = RangeEditTarget.END,
+            requestedDurationSeconds = 25f,
+            durationSeconds = 100f,
+        )
+        assertEquals(20f, moveEnd.values.startSeconds, 0f)
+        assertEquals(45f, moveEnd.values.endSeconds, 0f)
+
+        val clampStart = resizeRangeSelectionDuration(initial, RangeEditTarget.START, 500f, 100f)
+        val clampEnd = resizeRangeSelectionDuration(initial, RangeEditTarget.END, 500f, 100f)
+        assertEquals(0f, clampStart.values.startSeconds, 0f)
+        assertEquals(100f, clampEnd.values.endSeconds, 0f)
+    }
+
+    @Test
     fun boundaryCursorPreview_playsForwardFromStart_andLeadInToEnd() {
         assertEquals(
             BoundaryCursorPreviewWindow(10f, 30f),
