@@ -195,6 +195,12 @@ internal fun reconcileCaptureExportStatus(
     else -> status
 }
 
+internal fun captureExportUiBusy(
+    exporting: Boolean,
+    receiverAttached: Boolean,
+    status: CaptureSaveStatus?,
+): Boolean = exporting || (receiverAttached && status is CaptureSaveStatus.Saving)
+
 private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
@@ -303,10 +309,15 @@ fun CaptureScreen(
                     oneShotEnabled = oneShotIsEnabled
                     oneShotFull = oneShotIsFull
                     loopingEnabled = loopingIsEnabled
-                    isSaving = exporting
+                    val receiverAttached = bookkeeping.activeSaveReceiver != null
                     saveStatus = reconcileCaptureExportStatus(
                         exporting = exporting,
-                        receiverAttached = bookkeeping.activeSaveReceiver != null,
+                        receiverAttached = receiverAttached,
+                        status = saveStatus,
+                    )
+                    isSaving = captureExportUiBusy(
+                        exporting = exporting,
+                        receiverAttached = receiverAttached,
                         status = saveStatus,
                     )
 

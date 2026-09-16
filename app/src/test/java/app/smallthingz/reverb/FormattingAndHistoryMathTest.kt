@@ -1818,6 +1818,7 @@ class FormattingAndHistoryMathTest {
             status = null,
         )
         assertEquals(CaptureSaveStatus.Saving(cancellable = true), restored)
+        assertTrue(captureExportUiBusy(exporting = true, receiverAttached = false, status = restored))
         assertEquals(
             null,
             reconcileCaptureExportStatus(
@@ -1826,6 +1827,7 @@ class FormattingAndHistoryMathTest {
                 status = restored,
             ),
         )
+        assertFalse(captureExportUiBusy(exporting = false, receiverAttached = false, status = null))
         val attached = CaptureSaveStatus.Saving(cancellable = false)
         assertEquals(
             attached,
@@ -1835,6 +1837,7 @@ class FormattingAndHistoryMathTest {
                 status = attached,
             ),
         )
+        assertTrue(captureExportUiBusy(exporting = false, receiverAttached = true, status = attached))
     }
 
     @Test
