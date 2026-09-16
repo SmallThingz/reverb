@@ -16,6 +16,8 @@ import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 
 internal const val EXIT_REASON_MEMORY_LIMITER = 17
 internal const val EXIT_REASON_ANOMALY = 18
@@ -54,6 +56,28 @@ internal fun toggleRecordingIncidentAcknowledgement(
 ): RecordingIncident = incident.copy(
     acknowledgedAtMillis = if (incident.acknowledged) 0L else acknowledgedAtMillis.coerceAtLeast(1L),
 )
+
+internal fun recordingIncidentsShareCaptureSession(
+    left: RecordingIncident,
+    right: RecordingIncident,
+): Boolean = left.pid > 0 && right.pid == left.pid &&
+    left.captureArmedAtMillis > 0L && right.captureArmedAtMillis == left.captureArmedAtMillis
+
+internal fun mergeRecordingIncidentEvidence(
+    existing: RecordingIncident,
+    incoming: RecordingIncident,
+): RecordingIncident {
+    val incomingHasExitEvidence = incoming.exitReason != ApplicationExitInfo.REASON_UNKNOWN
+    val existingHasExitEvidence = existing.exitReason != ApplicationExitInfo.REASON_UNKNOWN
+    val base = if (incomingHasExitEvidence && !existingHasExitEvidence) incoming else existing
+    return base.copy(
+        resumedAtMillis = existing.resumedAtMillis.takeIf { it > 0L }
+            ?: incoming.resumedAtMillis,
+        acknowledgedAtMillis = existing.acknowledgedAtMillis.takeIf { it > 0L }
+            ?: incoming.acknowledgedAtMillis,
+        description = base.description ?: existing.description ?: incoming.description,
+    )
+}
 
 private data class ActiveRecordingSessionMarker(
     val armed: Boolean,
@@ -129,13 +153,6 @@ internal object RecordingIncidentStore {
             markerFile.delete()
             return
         }
-        val listeningExpected = getRecorderPreferences(appContext)
-            .getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-        if (!listeningExpected) {
-            markerFile.delete()
-            return
-        }
-
         val currentElapsed = SystemClock.elapsedRealtime()
         if (marker.armedElapsedRealtimeMillis > currentElapsed) {
             // elapsedRealtime resets only across a device restart. Capture was durably armed,
@@ -165,10 +182,11 @@ internal object RecordingIncidentStore {
         // Preserve the previous armed session before the restarted recorder can overwrite the
         // active marker. ExitInfo can lag process startup, so absence of evidence is not evidence
         // of a clean exit. The pending queue is retried on startup, capture start, and history read.
-        if (enqueuePendingSession(appContext, marker)) {
-            markerFile.delete()
-            resolvePendingSessions(appContext)
-        }
+        // Do not allow the next capture start to overwrite the only durable evidence of the
+        // previous armed session. Any read/write failure propagates so capture fails closed.
+        enqueuePendingSession(appContext, marker)
+        markerFile.delete()
+        resolvePendingSessions(appContext)
     }
 
     @Synchronized
@@ -193,10 +211,40 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
+    fun recordCaptureServiceStopped(context: Context, description: String) {
+        val appContext = context.applicationContext
+        val marker = try {
+            readSession(sessionFile(appContext))
+        } catch (_: IOException) {
+            return
+        } ?: return
+        if (!marker.armed) return
+
+        // Service-only teardown may not produce ApplicationExitInfo. Record the outage now but
+        // keep the marker armed so a subsequent process death can enrich this same session.
+        runCatching {
+            appendIncident(
+                appContext,
+                incidentWithoutExitEvidence(
+                    marker = marker,
+                    occurredAtMillis = System.currentTimeMillis(),
+                    description = description,
+                ),
+            )
+        }
+    }
+
+    @Synchronized
     fun recordCaptureInterrupted(context: Context, description: String) {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)
-        val marker = readSession(file) ?: return
+        val marker = try {
+            readSession(file)
+        } catch (_: IOException) {
+            // Preserve unreadable evidence for startup recovery; a framework timeout must not
+            // turn bookkeeping corruption into a second process crash.
+            return
+        } ?: return
         if (!marker.armed) return
 
         // Persist the incident before disarming the session. If history persistence fails,
@@ -220,7 +268,14 @@ internal object RecordingIncidentStore {
     fun recordKnownCaptureStop(context: Context) {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)
-        val existing = readSession(file) ?: return
+        val existing = try {
+            readSession(file)
+        } catch (_: IOException) {
+            // This path is reached only for an explicit known stop. The user intent is now
+            // authoritative, so discard an unreadable stale marker rather than crashing stop.
+            file.delete()
+            return
+        } ?: return
         if (!existing.armed) return
         runCatching {
             writeSession(file, existing.copy(armed = false))
@@ -265,14 +320,15 @@ internal object RecordingIncidentStore {
     private fun enqueuePendingSession(
         context: Context,
         marker: ActiveRecordingSessionMarker,
-    ): Boolean = runCatching {
+    ) {
         val file = pendingSessionFile(context)
         val existing = readPendingSessions(file)
-        if (existing.any { sameSession(it.marker, marker) }) return@runCatching true
-        val updated = (existing + PendingRecordingSession(marker)).takeLast(MAX_PENDING_SESSIONS)
-        writePendingSessions(file, updated)
-        true
-    }.getOrDefault(false)
+        if (existing.any { sameSession(it.marker, marker) }) return
+        writePendingSessions(
+            file,
+            (existing + PendingRecordingSession(marker)).takeLast(MAX_PENDING_SESSIONS),
+        )
+    }
 
     private fun resolvePendingSessions(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
@@ -420,10 +476,22 @@ internal object RecordingIncidentStore {
     private fun appendIncident(context: Context, incident: RecordingIncident) {
         val file = historyFile(context)
         val existing = readHistory(file)
-        if (existing.any { it.kind == incident.kind && it.occurredAtMillis == incident.occurredAtMillis }) return
-        val updated = (existing + incident)
-            .sortedBy { it.occurredAtMillis }
-            .takeLast(MAX_INCIDENTS)
+        val sessionIndex = existing.indexOfFirst { candidate ->
+            candidate.kind == incident.kind &&
+                recordingIncidentsShareCaptureSession(candidate, incident)
+        }
+        val exactIndex = existing.indexOfFirst { candidate ->
+            candidate.kind == incident.kind && candidate.occurredAtMillis == incident.occurredAtMillis
+        }
+        val index = sessionIndex.takeIf { it >= 0 } ?: exactIndex
+        val updated = if (index >= 0) {
+            existing.toMutableList().apply {
+                this[index] = mergeRecordingIncidentEvidence(this[index], incident)
+            }.sortedBy { it.occurredAtMillis }
+        } else {
+            (existing + incident).sortedBy { it.occurredAtMillis }.takeLast(MAX_INCIDENTS)
+        }
+        if (updated == existing) return
         writeHistory(file, updated)
         signalHistoryChanged()
     }
@@ -441,12 +509,11 @@ internal object RecordingIncidentStore {
         AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
 
-    private fun readSession(file: AtomicFile): ActiveRecordingSessionMarker? = runCatching {
-        DataInputStream(BufferedInputStream(file.openRead())).use { input ->
-            if (input.readInt() != SESSION_MAGIC || input.readUnsignedByte() != SESSION_FORMAT_VERSION) return null
+    private fun readSession(file: AtomicFile): ActiveRecordingSessionMarker? =
+        readAtomic(file, "recording session") { input ->
+            requireFileHeader(input, SESSION_MAGIC, SESSION_FORMAT_VERSION, "recording session")
             readSessionMarker(input)
         }
-    }.getOrNull()
 
     private fun writeSession(file: AtomicFile, marker: ActiveRecordingSessionMarker) {
         writeAtomic(file) { output ->
@@ -456,12 +523,13 @@ internal object RecordingIncidentStore {
         }
     }
 
-    private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> = runCatching {
-        DataInputStream(BufferedInputStream(file.openRead())).use { input ->
-            if (input.readInt() != PENDING_MAGIC || input.readUnsignedByte() != PENDING_FORMAT_VERSION) {
-                return emptyList()
+    private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> =
+        readAtomic(file, "pending recording incidents") { input ->
+            requireFileHeader(input, PENDING_MAGIC, PENDING_FORMAT_VERSION, "pending recording incidents")
+            val count = input.readUnsignedShort()
+            if (count > MAX_PENDING_SESSIONS) {
+                throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_SESSIONS")
             }
-            val count = input.readUnsignedShort().coerceAtMost(MAX_PENDING_SESSIONS)
             buildList(count) {
                 repeat(count) {
                     add(
@@ -472,8 +540,7 @@ internal object RecordingIncidentStore {
                     )
                 }
             }
-        }
-    }.getOrDefault(emptyList())
+        } ?: emptyList()
 
     private fun writePendingSessions(
         file: AtomicFile,
@@ -501,7 +568,13 @@ internal object RecordingIncidentStore {
         armedAtMillis = input.readLong(),
         armedElapsedRealtimeMillis = input.readLong(),
         packageLastUpdateTimeMillis = input.readLong(),
-    )
+    ).also { marker ->
+        if (marker.pid <= 0 || marker.processStartElapsedRealtimeMillis < 0L ||
+            marker.armedAtMillis <= 0L || marker.armedElapsedRealtimeMillis < 0L
+        ) {
+            throw IOException("Invalid recording session marker")
+        }
+    }
 
     private fun writeSessionMarker(
         output: DataOutputStream,
@@ -515,33 +588,34 @@ internal object RecordingIncidentStore {
         output.writeLong(marker.packageLastUpdateTimeMillis)
     }
 
-    private fun readHistory(file: AtomicFile): List<RecordingIncident> = runCatching {
-        DataInputStream(BufferedInputStream(file.openRead())).use { input ->
-            if (input.readInt() != HISTORY_MAGIC) return emptyList()
-            when (input.readUnsignedByte()) {
+    private fun readHistory(file: AtomicFile): List<RecordingIncident> =
+        readAtomic(file, "recording incident history") { input ->
+            if (input.readInt() != HISTORY_MAGIC) throw IOException("Invalid recording incident history magic")
+            when (val version = input.readUnsignedByte()) {
                 LEGACY_HISTORY_FORMAT_VERSION -> readLegacyHistory(input)
                 HISTORY_FORMAT_VERSION -> readCurrentHistory(input)
-                else -> emptyList()
+                else -> throw IOException("Unsupported recording incident history version $version")
             }
-        }
-    }.getOrDefault(emptyList())
+        } ?: emptyList()
 
     private fun readLegacyHistory(input: DataInputStream): List<RecordingIncident> {
-        val count = input.readUnsignedShort().coerceAtMost(MAX_INCIDENTS)
+        val count = input.readUnsignedShort()
+        if (count > MAX_INCIDENTS) throw IOException("Incident count $count exceeds $MAX_INCIDENTS")
         return buildList(count) {
             repeat(count) {
                 val kindCode = input.readByte()
                 val timestamp = input.readLong()
                 val kind = RecordingIncidentKind.fromStorageCode(kindCode)
-                if (kind != null && timestamp > 0L) {
-                    add(RecordingIncident(occurredAtMillis = timestamp, kind = kind))
-                }
+                    ?: throw IOException("Unknown recording incident kind $kindCode")
+                if (timestamp <= 0L) throw IOException("Invalid recording incident timestamp $timestamp")
+                add(RecordingIncident(occurredAtMillis = timestamp, kind = kind))
             }
         }
     }
 
     private fun readCurrentHistory(input: DataInputStream): List<RecordingIncident> {
-        val count = input.readUnsignedShort().coerceAtMost(MAX_INCIDENTS)
+        val count = input.readUnsignedShort()
+        if (count > MAX_INCIDENTS) throw IOException("Incident count $count exceeds $MAX_INCIDENTS")
         return buildList(count) {
             repeat(count) {
                 val kindCode = input.readByte()
@@ -556,27 +630,29 @@ internal object RecordingIncidentStore {
                 val rssKb = input.readLong()
                 val processStartedAtMillis = input.readLong()
                 val captureArmedAtMillis = input.readLong()
-                val description = input.readUTF().takeIf { it.isNotBlank() }
+                val description = input.readUTF().takeIf { it.isNotBlank() }?.take(MAX_DESCRIPTION_CHARS)
                 val kind = RecordingIncidentKind.fromStorageCode(kindCode)
-                if (kind != null && occurredAtMillis > 0L) {
-                    add(
-                        RecordingIncident(
-                            occurredAtMillis = occurredAtMillis,
-                            resumedAtMillis = resumedAtMillis,
-                            acknowledgedAtMillis = acknowledgedAtMillis,
-                            kind = kind,
-                            exitReason = exitReason,
-                            exitStatus = exitStatus,
-                            pid = pid,
-                            importance = importance,
-                            pssKb = pssKb,
-                            rssKb = rssKb,
-                            processStartedAtMillis = processStartedAtMillis,
-                            captureArmedAtMillis = captureArmedAtMillis,
-                            description = description,
-                        ),
-                    )
+                    ?: throw IOException("Unknown recording incident kind $kindCode")
+                if (occurredAtMillis <= 0L) {
+                    throw IOException("Invalid recording incident timestamp $occurredAtMillis")
                 }
+                add(
+                    RecordingIncident(
+                        occurredAtMillis = occurredAtMillis,
+                        resumedAtMillis = resumedAtMillis,
+                        acknowledgedAtMillis = acknowledgedAtMillis,
+                        kind = kind,
+                        exitReason = exitReason,
+                        exitStatus = exitStatus,
+                        pid = pid,
+                        importance = importance,
+                        pssKb = pssKb,
+                        rssKb = rssKb,
+                        processStartedAtMillis = processStartedAtMillis,
+                        captureArmedAtMillis = captureArmedAtMillis,
+                        description = description,
+                    ),
+                )
             }
         }
     }
@@ -602,6 +678,36 @@ internal object RecordingIncidentStore {
                 output.writeUTF(incident.description.orEmpty().take(MAX_DESCRIPTION_CHARS))
             }
         }
+    }
+
+    private inline fun <T> readAtomic(
+        file: AtomicFile,
+        label: String,
+        block: (DataInputStream) -> T,
+    ): T? {
+        val stream = try {
+            file.openRead()
+        } catch (_: FileNotFoundException) {
+            return null
+        }
+        return try {
+            DataInputStream(BufferedInputStream(stream)).use(block)
+        } catch (error: IOException) {
+            throw IOException("Unable to read $label", error)
+        } catch (error: RuntimeException) {
+            throw IOException("Unable to decode $label", error)
+        }
+    }
+
+    private fun requireFileHeader(
+        input: DataInputStream,
+        expectedMagic: Int,
+        expectedVersion: Int,
+        label: String,
+    ) {
+        if (input.readInt() != expectedMagic) throw IOException("Invalid $label magic")
+        val version = input.readUnsignedByte()
+        if (version != expectedVersion) throw IOException("Unsupported $label version $version")
     }
 
     private inline fun writeAtomic(file: AtomicFile, block: (DataOutputStream) -> Unit) {

@@ -276,9 +276,13 @@ class ReverbService : Service() {
     }
 
     override fun onDestroy() {
-        // Service destruction alone is not evidence of a known/intentional capture stop.
-        // Explicit user stops and known recorder failures disarm through their own transition.
-        // Leaving the marker armed here lets a later Android-classified process death be recovered.
+        // Service destruction is an interruption when capture is still armed. Keep the marker
+        // armed so a subsequent process death can enrich the provisional incident with Android
+        // exit evidence; explicit known stops have already disarmed it and produce nothing here.
+        RecordingIncidentStore.recordCaptureServiceStopped(
+            this,
+            "Recorder service stopped while capture was running",
+        )
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
@@ -1809,7 +1813,10 @@ class ReverbService : Service() {
             nextGeneration
         }
         reportPersistentStoreFailure(operation, error)
-        RecordingIncidentStore.recordKnownCaptureStop(this)
+        RecordingIncidentStore.recordCaptureInterrupted(
+            this,
+            "Capture stopped after persistence failure: $operation",
+        )
         audioHandler.post {
             if (generation != listeningCommandGeneration.get() || state == STATE_LISTENING) return@post
             audioHandler.removeCallbacks(audioReader)
@@ -1984,7 +1991,10 @@ class ReverbService : Service() {
             state = STATE_READY
             committed
         }
-        RecordingIncidentStore.recordKnownCaptureStop(this)
+        RecordingIncidentStore.recordCaptureInterrupted(
+            this,
+            "Capture stopped after audio input failure",
+        )
         audioHandler.removeCallbacks(audioReader)
         runCatching { sealActiveChunks() }
         releaseAudioRecord()

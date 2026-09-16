@@ -50,6 +50,38 @@ class RecordingIncidentStoreTest {
         assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_OTHER) == "System stop")
     }
 
+
+    @Test
+    fun provisionalServiceStopMergesLaterExitEvidenceWithoutDuplicatingSession() {
+        val provisional = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            resumedAtMillis = 12_000L,
+            acknowledgedAtMillis = 13_000L,
+            exitReason = ApplicationExitInfo.REASON_UNKNOWN,
+            pid = 42,
+            captureArmedAtMillis = 9_000L,
+            description = "Recorder service stopped while capture was running",
+        )
+        val classified = RecordingIncident(
+            occurredAtMillis = 10_500L,
+            resumedAtMillis = 0L,
+            exitReason = ApplicationExitInfo.REASON_PACKAGE_UPDATED,
+            exitStatus = 7,
+            pid = 42,
+            captureArmedAtMillis = 9_000L,
+            description = "package updated",
+        )
+
+        assertTrue(recordingIncidentsShareCaptureSession(provisional, classified))
+        val merged = mergeRecordingIncidentEvidence(provisional, classified)
+        assertTrue(merged.exitReason == ApplicationExitInfo.REASON_PACKAGE_UPDATED)
+        assertTrue(merged.exitStatus == 7)
+        assertTrue(merged.occurredAtMillis == 10_500L)
+        assertTrue(merged.resumedAtMillis == 12_000L)
+        assertTrue(merged.acknowledgedAtMillis == 13_000L)
+        assertTrue(merged.description == "package updated")
+    }
+
     @Test
     fun incidentKindUsesStableByteIdentity() {
         assertTrue(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
