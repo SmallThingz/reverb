@@ -8,6 +8,7 @@ import android.system.Os
 import android.system.OsConstants
 import java.io.DataInputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -42,6 +43,20 @@ internal data class ResolvedRetentionConfiguration(
     val configuration: RetentionConfiguration,
     val source: RetentionConfigurationSource,
 )
+
+internal enum class RetentionRecoveryReadState {
+    MISSING,
+    VALID,
+    INVALID,
+}
+
+internal data class RetentionRecoveryRead(
+    val state: RetentionRecoveryReadState,
+    val configuration: RetentionConfiguration? = null,
+)
+
+internal fun legacyRetentionPreferencesAllowed(recoveryState: RetentionRecoveryReadState): Boolean =
+    recoveryState == RetentionRecoveryReadState.MISSING
 
 private val retentionPersistenceLock = Any()
 
@@ -161,7 +176,8 @@ internal fun retentionConfigurationForRead(context: Context): RetentionConfigura
     withRetentionPersistenceLock {
         val prefs = getRecorderPreferences(context)
         val values = readRetentionPreferenceValues(prefs)
-        val recovery = readRetentionRecoveryConfiguration(context)
+        val recoveryRead = readRetentionRecovery(context)
+        val recovery = recoveryRead.configuration
         val verifiedPrimary = retentionConfigurationFromPreferences(
             values = values,
             recoveryFallback = null,
@@ -176,7 +192,7 @@ internal fun retentionConfigurationForRead(context: Context): RetentionConfigura
         retentionConfigurationFromPreferences(
             values = values,
             recoveryFallback = recovery,
-            allowLegacyWithoutDigest = recovery == null,
+            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
         ) ?: recovery ?: defaultRetentionConfiguration()
     }
 
@@ -196,11 +212,12 @@ internal fun retentionMutationIsSafe(context: Context): Boolean =
     withRetentionPersistenceLock {
         val prefs = getRecorderPreferences(context)
         val values = readRetentionPreferenceValues(prefs)
-        val recovery = readRetentionRecoveryConfiguration(context)
+        val recoveryRead = readRetentionRecovery(context)
+        val recovery = recoveryRead.configuration
         val primary = retentionConfigurationFromPreferences(
             values = values,
             recoveryFallback = recovery,
-            allowLegacyWithoutDigest = recovery == null,
+            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
         )
         primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
     }
@@ -300,13 +317,19 @@ internal fun decodeRetentionRecoveryConfiguration(bytes: ByteArray): RetentionCo
     )
 }
 
-internal fun readRetentionRecoveryConfiguration(context: Context): RetentionConfiguration? {
+internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
     val atomicFile = AtomicFile(retentionRecoveryFile(context))
-    return runCatching {
+    val bytes = try {
         // openRead() first so AtomicFile can recover its backup/new-file state after a crash.
-        val bytes = atomicFile.openRead().use { input -> DataInputStream(input).readBytes() }
-        decodeRetentionRecoveryConfiguration(bytes)
-    }.getOrNull()
+        atomicFile.openRead().use { input -> DataInputStream(input).readBytes() }
+    } catch (_: FileNotFoundException) {
+        return RetentionRecoveryRead(RetentionRecoveryReadState.MISSING)
+    } catch (_: Exception) {
+        return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+    }
+    val configuration = decodeRetentionRecoveryConfiguration(bytes)
+        ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+    return RetentionRecoveryRead(RetentionRecoveryReadState.VALID, configuration)
 }
 
 internal fun writeRetentionRecoveryConfiguration(

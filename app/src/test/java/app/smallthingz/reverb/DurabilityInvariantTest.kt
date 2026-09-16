@@ -456,6 +456,13 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun legacyRetentionBootstrapRequiresPositivelyMissingRecoveryJournal() {
+        assertTrue(legacyRetentionPreferencesAllowed(RetentionRecoveryReadState.MISSING))
+        assertFalse(legacyRetentionPreferencesAllowed(RetentionRecoveryReadState.VALID))
+        assertFalse(legacyRetentionPreferencesAllowed(RetentionRecoveryReadState.INVALID))
+    }
+
+    @Test
     fun retentionPreferences_preservePreciseIndependentTimeAndSizeValues() {
         val size = retentionConfigurationFromPreferences(
             RetentionPreferenceValues(

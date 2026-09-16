@@ -2391,13 +2391,14 @@ class ReverbService : Service() {
             val historyExists = loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()
             val prefs = getRecorderPreferences(this)
             val preferenceValues = readRetentionPreferenceValues(prefs)
-            val recovery = readRetentionRecoveryConfiguration(this)
+            val recoveryRead = readRetentionRecovery(this)
+            val recovery = recoveryRead.configuration
             val primary = retentionConfigurationFromPreferences(
                 values = preferenceValues,
                 recoveryFallback = recovery,
-                // Legacy installs predate the checksum. Trust them only for the one-time
-                // bootstrap where no independent recovery journal exists yet.
-                allowLegacyWithoutDigest = recovery == null,
+                // Legacy installs predate the checksum. Trust digest-less preferences only when
+                // the recovery journal is positively absent, never when it is corrupt/unreadable.
+                allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
             )
             val resolved = resolveRetentionConfiguration(
                 primary = primary,
