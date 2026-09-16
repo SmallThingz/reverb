@@ -146,6 +146,7 @@ class ReverbService : Service() {
     // advances only when capture continuity breaks, so an in-flight read can survive a buffer
     // handoff without surviving Stop -> Start or failure boundaries.
     private val captureContinuityGeneration = AtomicLong()
+    @Volatile private var serviceDestroying = false
     private val listeningIntentLock = Any()
 
     @Volatile
@@ -280,14 +281,10 @@ class ReverbService : Service() {
     }
 
     override fun onDestroy() {
-        captureContinuityGeneration.incrementAndGet()
-        // Service destruction is an interruption when capture is still armed. Keep the marker
-        // armed so a subsequent process death can enrich the provisional incident with Android
-        // exit evidence; explicit known stops have already disarmed it and produce nothing here.
-        RecordingIncidentStore.recordCaptureServiceStopped(
-            this,
-            "Recorder service stopped while capture was running",
-        )
+        // Generic service teardown is not a user Stop. Preserve the AudioRecord read that already
+        // owns the microphone, but prevent any later queued/read-reschedule from starting once
+        // teardown begins. Explicit Stop/failure paths already invalidate continuity themselves.
+        serviceDestroying = true
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
@@ -297,6 +294,13 @@ class ReverbService : Service() {
         }
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
+        // Timestamp the outage after microphone teardown so incident duration does not include
+        // the final in-flight batch that was still successfully persisted. Keep the marker armed
+        // so later process-exit evidence can enrich this provisional same-session incident.
+        RecordingIncidentStore.recordCaptureServiceStopped(
+            this,
+            "Recorder service stopped while capture was running",
+        )
         val stoppedTileSnapshot = RecordingQuickTileStateCache.markServiceStopped(this)
         RecordingQuickTiles.publishSnapshot(this, stoppedTileSnapshot, requestSystemRefresh = true)
         releaseWakeLock()
@@ -1915,6 +1919,7 @@ class ReverbService : Service() {
     }
 
     private fun readCaptureIntoScratch(generation: Long): Int {
+        if (!captureReadMayStart(serviceDestroying)) return 0
         if (generation != listeningCommandGeneration.get()) return 0
         val currentRecord = audioRecord ?: return 0
         if (audioRecordGeneration != generation) return 0
@@ -1967,10 +1972,16 @@ class ReverbService : Service() {
             requestDurabilitySyncIfDue()
         }
 
-        // A command that changed the state generation owns scheduling the next read.
-        if (!commandGenerationUnchanged) return read
-        if (state != STATE_LISTENING) return read
-        if (audioRecord !== currentRecord) return read
+        // A command that changed the state generation owns scheduling the next read. Generic
+        // teardown may begin while this blocking read is in flight: keep these bytes, but never
+        // start another read after the destroy boundary.
+        if (!captureReadShouldReschedule(
+                commandGenerationUnchanged = commandGenerationUnchanged,
+                serviceDestroying = serviceDestroying,
+                recorderListening = state == STATE_LISTENING,
+                recordStillOwned = audioRecord === currentRecord,
+            )
+        ) return read
         if (read > 0) {
             audioHandler.post(audioReader)
         } else {
@@ -3008,6 +3019,15 @@ internal fun shouldRetrySuspendedListeningOnForegroundBind(
     persistenceFailureBlocked: Boolean,
 ): Boolean = listeningIntentEnabled &&
     (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
+
+internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun captureReadShouldReschedule(
+    commandGenerationUnchanged: Boolean,
+    serviceDestroying: Boolean,
+    recorderListening: Boolean,
+    recordStillOwned: Boolean,
+): Boolean = commandGenerationUnchanged && !serviceDestroying && recorderListening && recordStillOwned
 
 internal fun captureReadMayCommit(
     readContinuityGeneration: Long,

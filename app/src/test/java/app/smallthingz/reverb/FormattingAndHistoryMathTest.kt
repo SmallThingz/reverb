@@ -703,6 +703,28 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun serviceDestroyKeepsOnlyTheReadAlreadyInFlight() {
+        assertTrue(captureReadMayStart(serviceDestroying = false))
+        assertFalse(captureReadMayStart(serviceDestroying = true))
+        assertTrue(
+            captureReadShouldReschedule(
+                commandGenerationUnchanged = true,
+                serviceDestroying = false,
+                recorderListening = true,
+                recordStillOwned = true,
+            ),
+        )
+        assertFalse(
+            captureReadShouldReschedule(
+                commandGenerationUnchanged = true,
+                serviceDestroying = true,
+                recorderListening = true,
+                recordStillOwned = true,
+            ),
+        )
+    }
+
+    @Test
     fun inFlightCaptureReadSurvivesOnlyContinuousSessionChanges() {
         assertTrue(
             captureReadMayCommit(
