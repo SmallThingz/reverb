@@ -799,12 +799,12 @@ fun SettingsScreen(
         keyboardController?.hide()
     }
 
-    LaunchedEffect(active) {
-        if (!active) {
-            // A save transaction captured the edited values before moving to IO. Rolling the
-            // retained Settings composition back while that transaction is in flight can leave
-            // the hidden UI stale after the newer values commit successfully.
-            if (!settingsPersisting && hasUnsavedChanges) restorePreviousSettings()
+    LaunchedEffect(active, settingsPersisting) {
+        if (!active && !settingsPersisting) {
+            // A save transaction owns the edited values until it completes. If it succeeds,
+            // hasUnsavedChanges becomes false; if it fails, this reruns and restores the last
+            // durable snapshot instead of leaving hidden retained UI with uncommitted values.
+            if (hasUnsavedChanges) restorePreviousSettings()
             releaseInputFocus()
         }
     }
