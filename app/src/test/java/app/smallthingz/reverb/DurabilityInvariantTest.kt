@@ -1480,6 +1480,12 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun outputCleanupFailure_failsClosedInsteadOfEscaping() {
+        assertTrue(runOutputCleanupFailClosed { true })
+        assertFalse(runOutputCleanupFailClosed { throw IllegalStateException("journal unreadable") })
+    }
+
+    @Test
     fun verifiedOutput_neverPublishesWithoutDurableRecoveryMarker() {
         requireVerifiedOutputRecoveryMarker(true, "target")
         assertThrows(IOException::class.java) {

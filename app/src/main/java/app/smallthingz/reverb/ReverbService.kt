@@ -1462,16 +1462,20 @@ class ReverbService : Service() {
                         finishExportFailure(exportToken, receiver, message, e)
                     } finally {
                         closeLeaseOnce()
-                        if (shouldDeleteExportTarget(
-                            cancelled = exportToken.cancelled.get(),
-                            verifiedComplete = verifiedComplete,
-                            committed = committed,
-                            preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
-                        )) {
-                            deleteOutputTarget(outTarget, cleanupDigest)
+                        try {
+                            if (shouldDeleteExportTarget(
+                                    cancelled = exportToken.cancelled.get(),
+                                    verifiedComplete = verifiedComplete,
+                                    committed = committed,
+                                    preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
+                                )
+                            ) {
+                                deleteOutputTarget(outTarget, cleanupDigest)
+                            }
+                        } finally {
+                            clearExportState(exportToken)
+                            Thread.interrupted()
                         }
-                        clearExportState(exportToken)
-                        Thread.interrupted()
                     }
                     Unit
                 },

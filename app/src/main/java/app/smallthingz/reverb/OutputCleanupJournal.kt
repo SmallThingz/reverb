@@ -305,11 +305,18 @@ internal fun verifiedExportStagingFingerprint(
 private fun verifiedExportStagingEntriesLocked(context: Context): Set<String> =
     getRecorderPreferences(context).requireDurableStringSet(PrefKey.VERIFIED_EXPORT_STAGING)
 
+internal inline fun runOutputCleanupFailClosed(block: () -> Boolean): Boolean =
+    try {
+        block()
+    } catch (_: Exception) {
+        false
+    }
+
 internal fun suppressAndDeleteOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedDigest: CopyDigest,
-): Boolean {
+): Boolean = runOutputCleanupFailClosed {
     val id = target.id
     // Cleanup revokes crash-recovery authority before any destructive attempt. If that
     // synchronous preference update cannot be made durable, fail closed and keep the bytes.
@@ -347,7 +354,7 @@ internal fun suppressAndDeleteOutputTarget(
     if (!putPendingOutputCleanup(context, record)) return false
     val cleaned = deletePendingOutputAsset(context, record)
     if (cleaned) removePendingOutputCleanup(context, id)
-    return cleaned
+    cleaned
 }
 
 internal fun copyDigestMatches(expected: CopyDigest, actual: CopyDigest): Boolean =
