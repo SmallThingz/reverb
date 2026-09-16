@@ -73,6 +73,7 @@ import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
@@ -869,15 +870,16 @@ private fun MainScreen(
     var recordingIncidents by remember { mutableStateOf<List<RecordingIncident>>(emptyList()) }
     val hasIncidentAlert = recordingIncidents.any { !it.acknowledged }
 
-    suspend fun loadIncidents() {
+    suspend fun loadIncidents(): Boolean {
         val loaded = try {
             withContext(Dispatchers.IO) { RecordingIncidentStore.readIncidents(context) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            return
+            return false
         }
         recordingIncidents = loaded
+        return true
     }
 
     fun toggleIncidentAcknowledged(incident: RecordingIncident) {
@@ -899,8 +901,15 @@ private fun MainScreen(
 
     LaunchedEffect(Unit) {
         // StateFlow emits immediately for the initial load, then refreshes again whenever
-        // recovery, resume-time completion, or checked-state changes durable history.
-        RecordingIncidentStore.historyRevision.collect { loadIncidents() }
+        // recovery, resume-time completion, or checked-state changes durable history. A
+        // transient read failure must not strand the alert on this revision forever.
+        RecordingIncidentStore.historyRevision.collect {
+            var retryDelayMillis = 500L
+            while (!loadIncidents()) {
+                delay(retryDelayMillis)
+                retryDelayMillis = (retryDelayMillis * 2L).coerceAtMost(30_000L)
+            }
+        }
     }
 
     fun refreshLibrarySnapshot() {
