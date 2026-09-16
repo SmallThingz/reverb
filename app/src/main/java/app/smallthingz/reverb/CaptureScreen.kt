@@ -2149,11 +2149,9 @@ private fun startExport(
         } else {
             recorder.dumpRecordingRange(range.startSeconds, range.endSeconds, receiver, "")
         }
-    } catch (_: Exception) {
+    } catch (error: Exception) {
         runCatching { snapshot?.close() }
-        setSaving(false)
-        onStatus(null)
-        onError(context.getString(R.string.save_failed))
+        receiver.fileFailed(context.getString(R.string.save_failed), error)
     }
 }
 
@@ -2265,10 +2263,12 @@ private class SaveResultReceiver(
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
     private val uiCallbacks = SaveUiCallbackGate(setSaving, onStatus, onError, onSaved)
+    private val terminalDelivered = AtomicBoolean(false)
 
     fun detachUi() = uiCallbacks.detach()
 
     override fun fileReady(recording: RecordingEntity) {
+        if (!terminalDelivered.compareAndSet(false, true)) return
         // Range-memory bookkeeping is convenience state; it must never suppress terminal
         // delivery for a recording that is already durably committed.
         runCatching { onCommitted() }
@@ -2279,6 +2279,7 @@ private class SaveResultReceiver(
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
+        if (!terminalDelivered.compareAndSet(false, true)) return
         val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
         if (!uiCallbacks.failed(text)) {
             NotifyFileReceiver(appContext).fileFailed(message, error)
@@ -2287,6 +2288,7 @@ private class SaveResultReceiver(
     }
 
     override fun fileCancelled() {
+        if (!terminalDelivered.compareAndSet(false, true)) return
         uiCallbacks.cancelled()
         finish()
     }
