@@ -1027,7 +1027,17 @@ class DurabilityInvariantTest {
 
         assertTrue(
             documentRenameTransitionIsSafe(
+                true, RecordingAssetState.PRESENT, oldIdentity, sameUriIdentity, before, same,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
                 true, RecordingAssetState.PRESENT, oldIdentity, sameUriIdentity, before, null,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                true, RecordingAssetState.PRESENT, oldIdentity, sameUriIdentity, before, changed,
             ),
         )
         assertFalse(

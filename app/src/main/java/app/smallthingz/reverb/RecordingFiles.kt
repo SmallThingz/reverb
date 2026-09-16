@@ -2282,13 +2282,13 @@ internal fun documentRenameTransitionIsSafe(
     afterDigest: CopyDigest?,
 ): Boolean {
     if (afterIdentity.isBlank()) return false
+    val before = beforeDigest ?: return false
+    val after = afterDigest ?: return false
+    if (!copyDigestMatches(before, after)) return false
     if (sourceUriUnchanged) {
         return sameProviderObjectAcrossMutation(beforeIdentity, afterIdentity)
     }
-    if (oldUriStateAfterRename != RecordingAssetState.MISSING) return false
-    val before = beforeDigest ?: return false
-    val after = afterDigest ?: return false
-    return copyDigestMatches(before, after)
+    return oldUriStateAfterRename == RecordingAssetState.MISSING
 }
 
 private fun renameDocumentRecording(
@@ -2321,7 +2321,10 @@ private fun renameDocumentRecording(
         val sourceUriUnchanged = renamedUri == sourceUri
         val oldState = if (sourceUriUnchanged) RecordingAssetState.PRESENT
         else recordingAssetState(context, recording)
-        val afterDigest = if (sourceUriUnchanged) null else sha256StableRecording(context, renamed)
+        // Rename is metadata, not a content mutation. Verify the selected bytes again even when
+        // the provider keeps the same URI; document ID continuity alone cannot prove that a
+        // buggy/provider-side rename did not rewrite or truncate the recording.
+        val afterDigest = sha256StableRecording(context, renamed)
         if (!documentRenameTransitionIsSafe(
                 sourceUriUnchanged = sourceUriUnchanged,
                 oldUriStateAfterRename = oldState,
