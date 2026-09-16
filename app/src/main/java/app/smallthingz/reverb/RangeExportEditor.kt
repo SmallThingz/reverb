@@ -264,7 +264,7 @@ internal fun adjustRangeEditTarget(
     minRangeSeconds: Float = 0.05f,
 ): RangeEditUpdate {
     val minimumRange = minRangeSeconds.coerceAtLeast(0f)
-    val duration = durationSeconds.coerceAtLeast(minimumRange)
+    val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
     val boundedMinimum = minimumRange.coerceAtMost(duration)
     var start = values.startSeconds.coerceIn(0f, duration)
     var end = values.endSeconds.coerceIn(start, duration)
@@ -350,20 +350,20 @@ internal fun resizeRangeSelectionDuration(
     durationSeconds: Float,
     minRangeSeconds: Float = 0.05f,
 ): RangeEditUpdate {
-    val duration = durationSeconds.takeIf { it.isFinite() }
-        ?.coerceAtLeast(minRangeSeconds) ?: minRangeSeconds
+    val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+    val minimumRange = minRangeSeconds.coerceAtLeast(0f).coerceAtMost(duration)
     var start = values.startSeconds.coerceIn(0f, duration)
     var end = values.endSeconds.coerceIn(start, duration)
-    val currentDuration = (end - start).coerceAtLeast(minRangeSeconds)
+    val currentDuration = (end - start).coerceAtLeast(minimumRange)
     val requested = requestedDurationSeconds.takeIf { it.isFinite() }
-        ?.coerceAtLeast(minRangeSeconds) ?: currentDuration
+        ?.coerceAtLeast(minimumRange) ?: currentDuration
     when (target) {
         RangeEditTarget.START -> {
-            start = (end - requested).coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
+            start = (end - requested).coerceIn(0f, (end - minimumRange).coerceAtLeast(0f))
         }
         RangeEditTarget.END -> {
             end = (start + requested).coerceIn(
-                (start + minRangeSeconds).coerceAtMost(duration),
+                (start + minimumRange).coerceAtMost(duration),
                 duration,
             )
         }
@@ -521,6 +521,9 @@ internal fun projectFineAdjustShuttleTarget(
     return editTargetValue(projected.values, target)
 }
 
+internal fun rangeTimelineDurationSeconds(value: Float): Float =
+    value.takeIf { it.isFinite() && it > 0f } ?: 0.05f
+
 internal class RangeExportEditorState(
     initialDurationSeconds: Float,
     private val rememberedRangeExport: RememberedRangeExport? = null,
@@ -529,7 +532,7 @@ internal class RangeExportEditorState(
 
     var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
         private set
-    var durationSeconds by mutableFloatStateOf(initialDurationSeconds.coerceAtLeast(0.05f))
+    var durationSeconds by mutableFloatStateOf(rangeTimelineDurationSeconds(initialDurationSeconds))
         private set
     private val initialRestoredRange = restoreRememberedRangeExport(durationSeconds, rememberedRangeExport)
     private var restoreRememberedRangeOnFirstSnapshot = rememberedRangeExport != null
@@ -587,7 +590,7 @@ internal class RangeExportEditorState(
     fun attachSnapshot(value: ReverbService.TimelineSnapshot) {
         invalidateTextEditing()
         val previousDuration = durationSeconds
-        val nextDuration = value.durationSeconds.toFloat().coerceAtLeast(0.05f)
+        val nextDuration = rangeTimelineDurationSeconds(value.durationSeconds.toFloat())
         val endWasAtLiveEdge = kotlin.math.abs(endSeconds - previousDuration) <= 0.15f
         snapshot = value
         durationSeconds = nextDuration

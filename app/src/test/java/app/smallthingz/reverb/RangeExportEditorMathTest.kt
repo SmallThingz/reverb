@@ -119,6 +119,30 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun subMinimumTimelineNeverInventsAudioPastTheRealEnd() {
+        assertEquals(0.02f, rangeTimelineDurationSeconds(0.02f), 0f)
+
+        val actual = RangeEditValues(startSeconds = 0f, endSeconds = 0.02f)
+        val moved = adjustRangeEditTarget(
+            values = actual,
+            target = RangeEditTarget.START,
+            requestedSeconds = 0.01f,
+            durationSeconds = 0.02f,
+        )
+        assertEquals(0f, moved.values.startSeconds, 0f)
+        assertEquals(0.02f, moved.values.endSeconds, 0f)
+
+        val resized = resizeRangeSelectionDuration(
+            values = actual,
+            target = RangeEditTarget.END,
+            requestedDurationSeconds = 0.05f,
+            durationSeconds = 0.02f,
+        )
+        assertEquals(0f, resized.values.startSeconds, 0f)
+        assertEquals(0.02f, resized.values.endSeconds, 0f)
+    }
+
+    @Test
     fun rangeBoundariesPushEachOther_andPreserveMinimumRange() {
         val initial = RangeEditValues(startSeconds = 20f, endSeconds = 80f)
         val movedStart = adjustRangeEditTarget(
