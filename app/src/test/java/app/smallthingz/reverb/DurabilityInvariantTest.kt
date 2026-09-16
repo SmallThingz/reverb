@@ -1154,6 +1154,8 @@ class DurabilityInvariantTest {
                 false, RecordingAssetState.MISSING, oldIdentity, "", before, same,
             ),
         )
+        assertFalse(rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged = true))
+        assertTrue(rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged = false))
     }
 
     @Test

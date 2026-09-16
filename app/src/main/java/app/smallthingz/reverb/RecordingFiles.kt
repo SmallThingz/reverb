@@ -2410,6 +2410,9 @@ internal fun documentRenameTransitionIsSafe(
     return oldUriStateAfterRename == RecordingAssetState.MISSING
 }
 
+internal fun rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged: Boolean): Boolean =
+    !sourceUriUnchanged
+
 private fun renameDocumentRecording(
     context: Context,
     recording: RecordingEntity,
@@ -2453,6 +2456,19 @@ private fun renameDocumentRecording(
                 afterDigest = afterDigest,
             )
         ) {
+            if (rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
+                !suppressProviderOutputWithoutDeletion(
+                    context = context,
+                    storageType = RecordingStorageType.DOCUMENT,
+                    id = renamedUri.toString(),
+                    // Suppress only while the returned URI still contains the bytes the user
+                    // selected. If it is unrelated/different content, cleanup replay drops the
+                    // suppression without ever granting deletion authority.
+                    digest = beforeDigest,
+                )
+            ) {
+                Log.w(TAG, "Unable to suppress rejected document rename result $renamedUri")
+            }
             Log.w(TAG, "Document recording identity changed during rename: ${recording.id} -> $renamedUri")
             return@runCatching null
         }
