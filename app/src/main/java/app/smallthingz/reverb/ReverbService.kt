@@ -247,21 +247,37 @@ class ReverbService : Service() {
                 return@post
             }
             mainHandler.post {
-                if (
-                    state != STATE_LISTENING &&
-                    shouldAttemptAutomaticListeningStart(
-                        listeningIntentEnabled = isListeningEnabled(),
+                val listeningIntentEnabled = isListeningEnabled()
+                if (!shouldAttemptAutomaticListeningStart(
+                        listeningIntentEnabled = listeningIntentEnabled,
+                        foregroundStartBlocked = foregroundStartBlocked,
+                        persistenceFailureBlocked = persistenceFailureBlocked,
+                    )
+                ) return@post
+
+                val currentGeneration = listeningCommandGeneration.get()
+                if (shouldEnsureRuntimeCaptureAfterInitialization(
+                        listeningIntentEnabled = listeningIntentEnabled,
+                        recorderState = state,
                         foregroundStartBlocked = foregroundStartBlocked,
                         persistenceFailureBlocked = persistenceFailureBlocked,
                     )
                 ) {
-                    innerStartListening()
+                    // Sticky onStartCommand can queue a start with the pre-initialization
+                    // generation. Resolving the configured buffer may advance that generation;
+                    // always ensure capture with the current one once initialization settles.
+                    audioHandler.post { startAudioInputOnAudioThread(currentGeneration) }
+                } else {
+                    innerStartListening(currentGeneration)
                 }
             }
         }
     }
 
     override fun onDestroy() {
+        // A normal service teardown is not a process-shutdown incident. Hard process death does
+        // not receive this callback, so only genuinely abrupt exits leave the session armed.
+        RecordingIncidentStore.markCaptureStopped(this)
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
@@ -534,7 +550,12 @@ class ReverbService : Service() {
                 generation = listeningCommandGeneration.get(),
             )
         }
-        if (enabled) innerStartListening(generation) else innerStopListening()
+        if (enabled) {
+            innerStartListening(generation)
+        } else {
+            RecordingIncidentStore.markCaptureStopped(this)
+            innerStopListening()
+        }
         return ListeningCommandResult(accepted = true, generation = generation)
     }
 
@@ -828,6 +849,7 @@ class ReverbService : Service() {
             listeningCommandGeneration.incrementAndGet()
             state = STATE_PAUSED
         }
+        RecordingIncidentStore.markCaptureStopped(this)
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
             try {
@@ -901,6 +923,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
+        RecordingIncidentStore.markCaptureRunning(this)
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
@@ -1690,6 +1713,7 @@ class ReverbService : Service() {
             state = STATE_PAUSED
             committed
         }
+        RecordingIncidentStore.markCaptureStopped(this)
         audioHandler.removeCallbacks(audioReader)
         try {
             sealActiveChunks()
@@ -1765,6 +1789,7 @@ class ReverbService : Service() {
             nextGeneration
         }
         reportPersistentStoreFailure(operation, error)
+        RecordingIncidentStore.markCaptureStopped(this)
         audioHandler.post {
             if (generation != listeningCommandGeneration.get() || state == STATE_LISTENING) return@post
             audioHandler.removeCallbacks(audioReader)
@@ -1881,6 +1906,7 @@ class ReverbService : Service() {
                 releaseAudioRecord()
                 false
             } else if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                RecordingIncidentStore.markCaptureRunning(this)
                 lastDurabilitySyncRequestNanos = System.nanoTime()
                 audioHandler.post(audioReader)
                 true
@@ -1930,6 +1956,7 @@ class ReverbService : Service() {
             state = STATE_READY
             committed
         }
+        RecordingIncidentStore.markCaptureStopped(this)
         audioHandler.removeCallbacks(audioReader)
         runCatching { sealActiveChunks() }
         releaseAudioRecord()
@@ -2226,6 +2253,7 @@ class ReverbService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         foregroundServiceTimedOut = true
+        RecordingIncidentStore.markCaptureStopped(this)
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
             Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
             requestExportCancellation(preserveVerifiedOutput = true)
@@ -2847,6 +2875,18 @@ internal fun shouldAttemptAutomaticListeningStart(
     foregroundStartBlocked: Boolean,
     persistenceFailureBlocked: Boolean,
 ): Boolean = listeningIntentEnabled && !foregroundStartBlocked && !persistenceFailureBlocked
+
+internal fun shouldEnsureRuntimeCaptureAfterInitialization(
+    listeningIntentEnabled: Boolean,
+    recorderState: Int,
+    foregroundStartBlocked: Boolean,
+    persistenceFailureBlocked: Boolean,
+): Boolean = recorderState == ReverbService.STATE_LISTENING &&
+    shouldAttemptAutomaticListeningStart(
+        listeningIntentEnabled = listeningIntentEnabled,
+        foregroundStartBlocked = foregroundStartBlocked,
+        persistenceFailureBlocked = persistenceFailureBlocked,
+    )
 
 internal fun shouldRetrySuspendedListeningOnForegroundBind(
     listeningIntentEnabled: Boolean,

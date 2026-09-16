@@ -24,7 +24,9 @@ internal val AppTopBarContentHeight = 66.dp
 @Composable
 internal fun AppTopBar(
     onBrandClick: () -> Unit,
+    onIncidentsClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    hasIncidents: Boolean,
     applyStatusBarPadding: Boolean = true,
     barHeight: Dp = AppTopBarContentHeight,
 ) {
@@ -50,6 +52,26 @@ internal fun AppTopBar(
                 contentDescription = stringResource(R.string.app_name),
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+
+        Surface(
+            onClick = onIncidentsClick,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 56.dp)
+                .size(46.dp),
+            shape = buttonShape,
+            color = chrome.field,
+            border = BorderStroke(1.dp, if (hasIncidents) MaterialTheme.colorScheme.error.copy(alpha = 0.55f) else chrome.border),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = AppIcons.incidents,
+                    contentDescription = stringResource(R.string.open_incidents),
+                    tint = if (hasIncidents) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
         }
 
         Surface(

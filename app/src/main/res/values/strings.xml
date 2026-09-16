@@ -158,7 +158,13 @@
     <string name="cancel">Cancel</string>
     <string name="settings_title">Settings</string>
     <string name="close">Close</string>
+    <string name="back">Back</string>
     <string name="open_settings">Open settings</string>
+    <string name="incidents_title">Incidents</string>
+    <string name="open_incidents">Open incidents</string>
+    <string name="incidents_empty">No recording incidents</string>
+    <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
+    <string name="incident_unexpected_shutdown">Recording stopped because Reverb shut down unexpectedly.</string>
     <string name="duration_hours_minutes">%1$dh %2$dm</string>
     <string name="duration_minutes_seconds">%1$dm %2$ds</string>
     <string name="duration_seconds">%1$ds</string>

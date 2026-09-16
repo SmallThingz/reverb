@@ -107,7 +107,9 @@ fun FilesScreen(
     onParentRefreshRequested: () -> Unit = {},
     showNormalTopBar: Boolean = true,
     onBrandClick: () -> Unit = {},
+    onIncidentsClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
+    hasIncidents: Boolean = false,
     onDismissLibrary: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -506,7 +508,9 @@ fun FilesScreen(
                     if (selectionBackProgress > 0f) {
                         AppTopBar(
                             onBrandClick = onBrandClick,
+                            onIncidentsClick = onIncidentsClick,
                             onSettingsClick = onSettingsClick,
+                            hasIncidents = hasIncidents,
                             applyStatusBarPadding = false,
                         )
                     }
@@ -568,7 +572,9 @@ fun FilesScreen(
             } else if (showNormalTopBar) {
                 AppTopBar(
                     onBrandClick = onBrandClick,
+                    onIncidentsClick = onIncidentsClick,
                     onSettingsClick = onSettingsClick,
+                    hasIncidents = hasIncidents,
                     applyStatusBarPadding = false,
                 )
             } else {

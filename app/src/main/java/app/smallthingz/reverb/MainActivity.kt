@@ -50,6 +50,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -72,6 +73,8 @@ import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 
 private const val URI_SCHEME_PACKAGE = "package"
@@ -802,6 +805,7 @@ private fun MainScreen(
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var settingsBufferTargetCode by rememberSaveable { mutableIntStateOf(-1) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    var showIncidents by rememberSaveable { mutableStateOf(false) }
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var librarySelectionActive by remember { mutableStateOf(false) }
     var libraryExpandedRecordingActive by remember { mutableStateOf(false) }
@@ -817,8 +821,12 @@ private fun MainScreen(
             settingsBufferTargetCode = -1
         },
     )
+    val incidentsBackMotion = rememberPredictiveBackMotion(
+        enabled = showIncidents && !showAboutDialog,
+        onBack = { showIncidents = false },
+    )
     val libraryBackMotion = rememberPredictiveBackMotion(
-        enabled = showLibrary && !showSettings && !librarySelectionActive &&
+        enabled = showLibrary && !showSettings && !showIncidents && !librarySelectionActive &&
             !libraryExpandedRecordingActive && !showAboutDialog,
         onBack = { showLibrary = false },
     )
@@ -849,6 +857,20 @@ private fun MainScreen(
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
+    var recordingIncidents by remember { mutableStateOf<List<RecordingIncident>>(emptyList()) }
+
+    suspend fun loadIncidents() {
+        recordingIncidents = withContext(Dispatchers.IO) {
+            RecordingIncidentStore.readIncidents(context)
+        }
+    }
+
+    fun openIncidents() {
+        showIncidents = true
+        scope.launch { loadIncidents() }
+    }
+
+    LaunchedEffect(Unit) { loadIncidents() }
 
     fun refreshLibrarySnapshot() {
         val generation = ++libraryRefreshGeneration[0]
@@ -914,10 +936,10 @@ private fun MainScreen(
                 .background(MaterialTheme.colorScheme.surface)
                 .appNoise(noiseBrush)
                 .semantics {
-                    if (showSettings || showLibrary || showAboutDialog) hideFromAccessibility()
+                    if (showSettings || showLibrary || showIncidents || showAboutDialog) hideFromAccessibility()
                 }
-                .pointerInput(showSettings, showLibrary, showAboutDialog) {
-                    if (showSettings || showLibrary || showAboutDialog) return@pointerInput
+                .pointerInput(showSettings, showLibrary, showIncidents, showAboutDialog) {
+                    if (showSettings || showLibrary || showIncidents || showAboutDialog) return@pointerInput
                     detectVerticalDragGestures(
                         onDragStart = { offset ->
                             settingsDragProgress = 0f
@@ -968,17 +990,19 @@ private fun MainScreen(
             topBar = {
                 AppTopBar(
                     onBrandClick = { showAboutDialog = true },
+                    onIncidentsClick = ::openIncidents,
                     onSettingsClick = {
                         settingsBufferTargetCode = -1
                         showSettings = true
                     },
+                    hasIncidents = recordingIncidents.isNotEmpty(),
                 )
             },
         ) { innerPadding ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
                 if (permissionsGranted) {
                     CaptureScreen(
-                        visualizerVisible = !showSettings && !showLibrary && !showAboutDialog,
+                        visualizerVisible = !showSettings && !showLibrary && !showIncidents && !showAboutDialog,
                         onOpenLibrary = { showLibrary = true },
                         onRecordingSaved = { refreshLibrarySnapshot() },
                         onOpenBufferSettings = { bufferSlot ->
@@ -1075,7 +1099,7 @@ private fun MainScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = libraryTopPadding),
-                        active = showLibrary && !showAboutDialog,
+                        active = showLibrary && !showIncidents && !showAboutDialog,
                         initialRecordings = librarySnapshot,
                         onSelectionActiveChange = { librarySelectionActive = it },
                         onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
@@ -1088,11 +1112,16 @@ private fun MainScreen(
                         },
                         onParentRefreshRequested = { refreshLibrarySnapshot() },
                         onBrandClick = { showAboutDialog = true },
+                        onIncidentsClick = {
+                            closeLibrary()
+                            openIncidents()
+                        },
                         onSettingsClick = {
                             closeLibrary()
                             settingsBufferTargetCode = -1
                             showSettings = true
                         },
+                        hasIncidents = recordingIncidents.isNotEmpty(),
                         onDismissLibrary = ::closeLibrary,
                     )
                 }
@@ -1108,13 +1137,30 @@ private fun MainScreen(
             ) {
                 AppTopBar(
                     onBrandClick = { showAboutDialog = true },
+                    onIncidentsClick = {
+                        closeLibrary()
+                        openIncidents()
+                    },
                     onSettingsClick = {
                         closeLibrary()
                         settingsBufferTargetCode = -1
                         showSettings = true
                     },
+                    hasIncidents = recordingIncidents.isNotEmpty(),
                 )
             }
+        }
+
+        if (showIncidents) {
+            IncidentsScreen(
+                incidents = recordingIncidents,
+                onBack = { showIncidents = false },
+                backProgress = incidentsBackMotion.progress.value,
+                backDirection = predictiveBackHorizontalDirection(incidentsBackMotion.swipeEdge),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(6f),
+            )
         }
     }
 

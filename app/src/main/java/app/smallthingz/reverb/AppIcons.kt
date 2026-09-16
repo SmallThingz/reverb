@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 
 internal object AppIcons {
     val settings: ImageVector = Icons.Rounded.Settings
+    val incidents: ImageVector = Icons.Rounded.Warning
     val share: ImageVector = Icons.Rounded.Share
     val delete: ImageVector = Icons.Rounded.Delete
     val edit: ImageVector = Icons.Rounded.Edit

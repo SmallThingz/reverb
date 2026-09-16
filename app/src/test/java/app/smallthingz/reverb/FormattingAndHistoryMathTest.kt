@@ -829,6 +829,34 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun initializationEnsuresRuntimeCaptureWhenStickyStartAlreadySetLogicalListening() {
+        assertTrue(
+            shouldEnsureRuntimeCaptureAfterInitialization(
+                listeningIntentEnabled = true,
+                recorderState = ReverbService.STATE_LISTENING,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldEnsureRuntimeCaptureAfterInitialization(
+                listeningIntentEnabled = true,
+                recorderState = ReverbService.STATE_PAUSED,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldEnsureRuntimeCaptureAfterInitialization(
+                listeningIntentEnabled = true,
+                recorderState = ReverbService.STATE_LISTENING,
+                foregroundStartBlocked = true,
+                persistenceFailureBlocked = false,
+            ),
+        )
+    }
+
+    @Test
     fun foregroundBind_retriesSuspendedDurableIntent() {
         assertTrue(
             shouldRetrySuspendedListeningOnForegroundBind(
