@@ -99,6 +99,12 @@
 
 
         <provider
+            android:name=".VerifiedRecordingProvider"
+            android:authorities="${applicationId}.recording-provider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <provider
             android:name=".VerifiedRecordingFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"

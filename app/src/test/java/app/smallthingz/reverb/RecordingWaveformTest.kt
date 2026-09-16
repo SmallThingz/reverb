@@ -259,7 +259,19 @@ class RecordingWaveformTest {
         assertTrue(providerRecordingIdentityMatches(first, legacy))
         assertTrue(verifiedOpenProviderIdentityMatches(first, legacy))
         assertTrue(verifiedOpenProviderIdentityMatches(legacy, first))
+        assertFalse(verifiedOpenProviderIdentityMatches("", first))
         assertFalse(verifiedOpenProviderIdentityMatches(first, "provider:MEDIASTORE:other"))
+
+        val request = VerifiedProviderRequest(
+            storageType = RecordingStorageType.MEDIASTORE,
+            sourceId = "content://media/external/audio/media/1",
+            expectedIdentity = first,
+            mimeType = "audio/wav",
+            displayName = "clip.wav",
+            sizeBytes = 4_000L,
+        )
+        assertEquals(request, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request)))
+        assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request).dropLast(1)))
         assertFalse(providerRecordingIdentityMatches("", first))
         assertFalse(providerRecordingIdentityMatches(first, ""))
         assertFalse(providerRecordingIdentityMatches(first, "provider:MEDIASTORE:other"))

@@ -222,10 +222,10 @@ fun buildRecordingUri(
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> {
-            check(recordingContentIdentityMatches(context, recording)) {
-                "Recording changed in provider: ${recording.id}"
+            check(recording.fileIdentity.isNotBlank()) {
+                "Recording identity is unavailable; refresh the Library before sharing"
             }
-            recording.id.toUri()
+            buildVerifiedProviderUri(context, recording)
         }
     }
 }

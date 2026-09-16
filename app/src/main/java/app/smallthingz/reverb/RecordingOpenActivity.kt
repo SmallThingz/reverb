@@ -40,6 +40,8 @@ class RecordingOpenActivity : ComponentActivity() {
         private const val EXTRA_STORAGE_TYPE = "recording_storage_type"
         private const val EXTRA_MIME_TYPE = "recording_mime_type"
         private const val EXTRA_FILE_IDENTITY = "recording_file_identity"
+        private const val EXTRA_DISPLAY_NAME = "recording_display_name"
+        private const val EXTRA_SIZE_BYTES = "recording_size_bytes"
 
         fun intentFor(context: Context, recording: RecordingEntity): Intent =
             Intent(context, RecordingOpenActivity::class.java).apply {
@@ -47,12 +49,14 @@ class RecordingOpenActivity : ComponentActivity() {
                 putExtra(EXTRA_STORAGE_TYPE, recording.storageType.storageCode)
                 putExtra(EXTRA_MIME_TYPE, recording.mimeType)
                 putExtra(EXTRA_FILE_IDENTITY, recording.fileIdentity)
+                putExtra(EXTRA_DISPLAY_NAME, recording.displayName)
+                putExtra(EXTRA_SIZE_BYTES, recording.sizeBytes)
             }
     }
 }
 
 internal fun verifiedOpenProviderIdentityMatches(expected: String, current: String): Boolean =
-    expected.isBlank() || providerRecordingIdentityMatches(expected, current)
+    expected.isNotBlank() && providerRecordingIdentityMatches(expected, current)
 
 internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? {
     val id = source.getStringExtra("recording_id")?.takeIf { it.isNotBlank() } ?: return null
@@ -77,16 +81,25 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
         }
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> id.toUri().also { candidate ->
+        -> {
             val expectedIdentity = source.getStringExtra("recording_file_identity").orEmpty()
-            if (expectedIdentity.isNotBlank()) {
-                val currentIdentity = resolveProviderRecordingIdentity(context, storage, candidate)
-                if (!verifiedOpenProviderIdentityMatches(expectedIdentity, currentIdentity)) return null
-            }
-            val readable = runCatching {
-                context.contentResolver.openFileDescriptor(candidate, "r")?.use { true } ?: false
-            }.getOrDefault(false)
-            if (!readable) return null
+            if (expectedIdentity.isBlank()) return null
+            val displayName = source.getStringExtra("recording_display_name")
+                ?.takeIf { it.isNotBlank() } ?: "recording"
+            val sizeBytes = source.getLongExtra("recording_size_bytes", 0L).coerceAtLeast(0L)
+            runCatching {
+                buildVerifiedProviderUri(
+                    context,
+                    VerifiedProviderRequest(
+                        storageType = storage,
+                        sourceId = id,
+                        expectedIdentity = expectedIdentity,
+                        mimeType = mimeType,
+                        displayName = displayName,
+                        sizeBytes = sizeBytes,
+                    ),
+                )
+            }.getOrNull() ?: return null
         }
     }
     return Intent(Intent.ACTION_VIEW).apply {
