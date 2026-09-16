@@ -853,10 +853,9 @@ fun CaptureScreen(
             status = saveStatus,
             onCancel = {
                 val recorder = service
-                if (recorder != null) {
-                    recorder.cancelCurrentExport()
-                    // Cancellation can lose a race with final commit. Keep the status visible
-                    // and non-cancellable until the service delivers the terminal callback.
+                if (recorder != null && recorder.cancelCurrentExport()) {
+                    // Cancellation can lose the race with verified publication. Only switch the
+                    // card to non-cancellable when the service actually accepted the request.
                     saveStatus = markExportCancelRequested(saveStatus)
                 }
             },

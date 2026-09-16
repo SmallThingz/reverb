@@ -44,6 +44,7 @@
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation, and main-thread service teardown must not await in-flight export executor completion.
+- Export cancellation is accepted only before verified final-name publication claims the export token. Once publication begins, Cancel loses the race and must not interrupt or clean up the published verified audio; later catalog/metadata failure preserves the recording.
 - FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial output must never enter the Library as a finished recording. SAF providers that cannot rename verified staging fail closed instead of copying into a visible final-name document.
 - Persisted SAF read grants are retained as recovery paths for existing recordings; do not add pending-grant bookkeeping unless an explicit, verified grant-release workflow actually consumes it.
 - Legacy old-session `export` staging may use structural recovery; `copy` staging and current-process staging remain hidden and non-destructive.

@@ -1509,6 +1509,14 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun exportCancellationStopsAtVerifiedPublicationBoundary() {
+        assertTrue(exportCancellationAllowed(publicationStarted = false, committed = false))
+        assertFalse(exportCancellationAllowed(publicationStarted = true, committed = false))
+        assertFalse(exportCancellationAllowed(publicationStarted = false, committed = true))
+        assertFalse(exportCancellationAllowed(publicationStarted = true, committed = true))
+    }
+
+    @Test
     fun exportCleanup_neverDeletesVerifiedDataExceptExplicitPrecommitCancellation() {
         assertTrue(shouldDeleteExportTarget(cancelled = false, verifiedComplete = false, committed = false))
         assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = false))

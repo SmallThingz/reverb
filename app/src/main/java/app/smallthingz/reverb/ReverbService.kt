@@ -1312,7 +1312,9 @@ class ReverbService : Service() {
         var clearedImmediately = false
         val cancelled = synchronized(exportStateLock) {
             val token = activeExportToken ?: return@synchronized false
-            if (token.committed.get()) return@synchronized false
+            if (!exportCancellationAllowed(token.publicationStarted.get(), token.committed.get())) {
+                return@synchronized false
+            }
 
             if (preserveVerifiedOutput) token.preserveVerifiedOutput.set(true)
             token.cancelled.set(true)
@@ -1429,6 +1431,9 @@ class ReverbService : Service() {
                         requireVerifiedOutputRecoveryMarker(recoveryMarkerPersisted, target.id)
                         verifiedComplete = true
                         ensureExportNotCancelled(exportToken)
+                        if (!claimExportPublication(exportToken)) {
+                            throw InterruptedIOException("Export cancelled")
+                        }
                         val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
                         outTarget = finalizedTarget
                         if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId)) {
@@ -1545,9 +1550,18 @@ class ReverbService : Service() {
             activeExportToken === token && !token.cancelled.get()
         }
 
+    private fun claimExportPublication(token: ExportCancellationToken): Boolean =
+        synchronized(exportStateLock) {
+            activeExportToken === token &&
+                !token.cancelled.get() &&
+                !token.committed.get() &&
+                token.publicationStarted.compareAndSet(false, true)
+        }
+
     private fun markExportCommitted(token: ExportCancellationToken): Boolean =
         synchronized(exportStateLock) {
             activeExportToken === token &&
+                token.publicationStarted.get() &&
                 !token.cancelled.get() &&
                 token.committed.compareAndSet(false, true)
         }
@@ -2875,6 +2889,9 @@ class ReverbService : Service() {
         // `started` flips as the callable begins. Until then, queued cancellation owns
         // lease cleanup; after that point the callable owns it.
         val started: AtomicBoolean = AtomicBoolean(false),
+        // Cancellation owns the token only until verified final-name publication begins.
+        // Once this flips, publication/final metadata owns completion and Cancel loses the race.
+        val publicationStarted: AtomicBoolean = AtomicBoolean(false),
         val committed: AtomicBoolean = AtomicBoolean(false),
         val preserveVerifiedOutput: AtomicBoolean = AtomicBoolean(false),
         val terminalDelivered: AtomicBoolean = AtomicBoolean(false),
@@ -3017,6 +3034,11 @@ internal fun captureReaderTransition(
     recordRunning -> CaptureReaderTransition.ADOPT
     else -> CaptureReaderTransition.RESTART
 }
+
+internal fun exportCancellationAllowed(
+    publicationStarted: Boolean,
+    committed: Boolean,
+): Boolean = !publicationStarted && !committed
 
 internal fun shouldDeleteExportTarget(
     cancelled: Boolean,
