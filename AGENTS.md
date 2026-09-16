@@ -43,7 +43,7 @@
 # Reverb durability invariants
 
 - Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or replace the source recording as part of trim.
-- Provider-backed trim revalidates the selected source after the last source read while the verified target is still hidden; source uncertainty/change must fail before recovery-marker grant or final-name publication.
+- Provider-backed trim requires a pre-existing stable provider identity and revalidates the selected source after the last source read while the verified target is still hidden; identity-less provider rows remain playback-only until reconciliation establishes identity, and source uncertainty/change must fail before recovery-marker grant or final-name publication.
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
 - Library/catalog read uncertainty is never an authoritative empty Library: preserve the last known rows, keep first-load pending, and let storage reconciliation retry; catalog-corruption first paint signals unavailable after preservation/reset instead of publishing a transient empty snapshot.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.

@@ -711,8 +711,15 @@ fun FilesScreen(
                                         },
                                         onTrim = {
                                             contextMenuRecordingId = null
-                                            setExpandedRecording(recording.id)
-                                            trimRequestRecordingId = recording.id
+                                            if (!recordingHasStableTrimIdentity(recording)) {
+                                                showPassiveNotice(
+                                                    resources.getString(R.string.recording_unavailable),
+                                                    FeedbackTone.ERROR,
+                                                )
+                                            } else {
+                                                setExpandedRecording(recording.id)
+                                                trimRequestRecordingId = recording.id
+                                            }
                                         },
                                         onDelete = { deleteRecordings(listOf(recording)) },
                                         onMultiSelect = {

@@ -978,6 +978,39 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun trimRequiresStableSelectedSourceIdentity() {
+        val base = RecordingEntity(
+            id = "content://docs/clip",
+            displayName = "clip.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 1L,
+            durationMillis = 2_000L,
+            sizeBytes = 4_000L,
+            codecSummary = "PCM",
+            storageType = RecordingStorageType.DOCUMENT,
+            directoryId = "content://docs/tree",
+        )
+        assertFalse(recordingHasStableTrimIdentity(base))
+        assertTrue(recordingHasStableTrimIdentity(
+            base.copy(
+                fileIdentity = providerRecordingIdentity(
+                    RecordingStorageType.DOCUMENT, base.id, base.sizeBytes, 9L,
+                ),
+            ),
+        ))
+        assertFalse(recordingHasStableTrimIdentity(
+            base.copy(storageType = RecordingStorageType.FILE, id = "/recordings/clip.wav"),
+        ))
+        assertTrue(recordingHasStableTrimIdentity(
+            base.copy(
+                storageType = RecordingStorageType.FILE,
+                id = "/recordings/clip.wav",
+                fileIdentity = "stat:1:2:3:4:5",
+            ),
+        ))
+    }
+
+    @Test
     fun trimPublicationValidatesSourceBeforeRecoveryGrantAndPublish() {
         val events = mutableListOf<String>()
         assertThrows(IOException::class.java) {

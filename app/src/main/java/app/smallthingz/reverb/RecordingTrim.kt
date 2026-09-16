@@ -11,6 +11,9 @@ import kotlin.math.roundToLong
 private const val TRIM_COPY_BUFFER_BYTES = 128 * 1024
 private const val TRIM_TAG = "RecordingTrim"
 
+internal fun recordingHasStableTrimIdentity(recording: RecordingEntity): Boolean =
+    recording.fileIdentity.isNotBlank()
+
 internal suspend fun saveTrimmedRecordingCopy(
     context: Context,
     recording: RecordingEntity,
@@ -51,6 +54,9 @@ private fun writeTrimmedRecordingCopy(
     startMillis: Int,
     endMillis: Int,
 ): RecordingEntity {
+    if (!recordingHasStableTrimIdentity(recording)) {
+        throw IOException("Recording identity is unavailable for trim")
+    }
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
     var target: RecordingOutputTarget? = null
     var verifiedComplete = false
