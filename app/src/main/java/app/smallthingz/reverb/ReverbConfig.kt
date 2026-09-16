@@ -14,7 +14,6 @@ object ReverbConfig {
     const val FALLBACK_MIME_TYPE_AUDIO = "audio/*"
     const val FALLBACK_DISPLAY_NAME = "Reverb"
     const val MIB_SUFFIX = " MiB"
-    const val ESTIMATE_EXACT_PREFIX = "="
     const val CODEC_SUMMARY_SEPARATOR = " · "
 
     const val PREFERRED_DEFAULT_SAMPLE_RATE = 44_100

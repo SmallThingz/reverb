@@ -74,8 +74,6 @@
     <string name="recording_details_location">Расположение:</string>
     <string name="player_play">Воспроизвести</string>
     <string name="player_pause">Пауза</string>
-    <string name="player_seek_back">Назад на 10 секунд</string>
-    <string name="player_seek_forward">Вперёд на 10 секунд</string>
     <string name="close">Закрыть</string>
     <plurals name="move_recordings_done">
         <item quantity="one">Перемещена %1$d запись.</item>

@@ -72,8 +72,6 @@
     <string name="recording_details_location">Localização:</string>
     <string name="player_play">Reproduzir</string>
     <string name="player_pause">Pausar</string>
-    <string name="player_seek_back">Voltar 10 segundos</string>
-    <string name="player_seek_forward">Avançar 10 segundos</string>
     <string name="close">Fechar</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d gravação movida.</item>

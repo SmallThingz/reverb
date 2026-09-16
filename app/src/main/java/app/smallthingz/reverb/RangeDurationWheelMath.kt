@@ -3,8 +3,6 @@ package app.smallthingz.reverb
 import kotlin.math.ceil
 import kotlin.math.floor
 
-internal const val RANGE_DURATION_WHEEL_MAX_HOURS: Int = Int.MAX_VALUE / 3_600
-
 internal data class RangeDurationWheelTimeParts(
     val hours: Int,
     val minutes: Int,

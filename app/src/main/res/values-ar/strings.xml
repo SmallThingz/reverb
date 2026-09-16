@@ -74,8 +74,6 @@
     <string name="recording_details_location">الموقع:</string>
     <string name="player_play">تشغيل</string>
     <string name="player_pause">إيقاف مؤقت</string>
-    <string name="player_seek_back">رجوع 10 ثوانٍ</string>
-    <string name="player_seek_forward">تقديم 10 ثوانٍ</string>
     <string name="close">إغلاق</string>
     <plurals name="move_recordings_done">
         <item quantity="zero">تم نقل %1$d تسجيل.</item>

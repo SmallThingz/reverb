@@ -74,8 +74,6 @@
     <string name="recording_details_location">Lokasi:</string>
     <string name="player_play">Putar</string>
     <string name="player_pause">Jeda</string>
-    <string name="player_seek_back">Mundur 10 detik</string>
-    <string name="player_seek_forward">Maju 10 detik</string>
     <string name="close">Tutup</string>
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d rekaman dipindahkan.</item>

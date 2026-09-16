@@ -147,8 +147,6 @@
     <string name="recording_details_location">Location:</string>
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
-    <string name="player_seek_back">Back 10 seconds</string>
-    <string name="player_seek_forward">Forward 10 seconds</string>
     <string name="trim_recording">Trim</string>
     <string name="trim_save_copy">Save copy</string>
     <string name="trim_saving">Saving trim…</string>

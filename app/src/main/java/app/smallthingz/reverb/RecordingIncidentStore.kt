@@ -224,15 +224,6 @@ internal object RecordingIncidentStore {
         return updated
     }
 
-    @Synchronized
-    internal fun clearForTests(context: Context) {
-        val appContext = context.applicationContext
-        sessionFile(appContext).delete()
-        pendingSessionFile(appContext).delete()
-        historyFile(appContext).delete()
-        signalHistoryChanged()
-    }
-
     private fun markerBelongsToCurrentProcess(marker: ActiveRecordingSessionMarker): Boolean =
         marker.pid == Process.myPid() &&
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()

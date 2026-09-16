@@ -74,8 +74,6 @@
     <string name="recording_details_location">Ort:</string>
     <string name="player_play">Abspielen</string>
     <string name="player_pause">Pause</string>
-    <string name="player_seek_back">10 Sekunden zurück</string>
-    <string name="player_seek_forward">10 Sekunden vor</string>
     <string name="close">Schließen</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d Aufnahme verschoben.</item>

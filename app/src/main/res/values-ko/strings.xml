@@ -74,8 +74,6 @@
     <string name="recording_details_location">위치:</string>
     <string name="player_play">재생</string>
     <string name="player_pause">일시정지</string>
-    <string name="player_seek_back">10초 뒤로</string>
-    <string name="player_seek_forward">10초 앞으로</string>
     <string name="close">닫기</string>
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d개의 녹음을 이동했습니다.</item>

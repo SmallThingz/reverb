@@ -74,8 +74,6 @@
     <string name="recording_details_location">مکان:</string>
     <string name="player_play">پخش</string>
     <string name="player_pause">مکث</string>
-    <string name="player_seek_back">۱۰ ثانیه عقب</string>
-    <string name="player_seek_forward">۱۰ ثانیه جلو</string>
     <string name="close">بستن</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d ضبط منتقل شد.</item>

@@ -74,8 +74,6 @@
     <string name="recording_details_location">स्थान:</string>
     <string name="player_play">चलाएँ</string>
     <string name="player_pause">रोकें</string>
-    <string name="player_seek_back">10 सेकंड पीछे</string>
-    <string name="player_seek_forward">10 सेकंड आगे</string>
     <string name="close">बंद करें</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d रिकॉर्डिंग स्थानांतरित की गई।</item>

@@ -74,8 +74,6 @@
     <string name="recording_details_location">Emplacement :</string>
     <string name="player_play">Lire</string>
     <string name="player_pause">Pause</string>
-    <string name="player_seek_back">Reculer de 10 secondes</string>
-    <string name="player_seek_forward">Avancer de 10 secondes</string>
     <string name="close">Fermer</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d enregistrement déplacé.</item>

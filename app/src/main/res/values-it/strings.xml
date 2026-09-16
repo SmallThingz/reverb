@@ -72,8 +72,6 @@
     <string name="recording_details_location">Posizione:</string>
     <string name="player_play">Riproduci</string>
     <string name="player_pause">Pausa</string>
-    <string name="player_seek_back">Indietro di 10 secondi</string>
-    <string name="player_seek_forward">Avanti di 10 secondi</string>
     <string name="close">Chiudi</string>
     <plurals name="move_recordings_done">
         <item quantity="one">%1$d registrazione spostata.</item>
