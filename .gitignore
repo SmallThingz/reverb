@@ -26,3 +26,7 @@ lint-baseline.xml
 # Signing material kept local
 *.keystore
 *.jks
+
+# Agent scratch / worktrees
+.tmp/
+.worktree/
