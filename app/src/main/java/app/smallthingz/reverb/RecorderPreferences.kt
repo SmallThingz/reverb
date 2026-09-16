@@ -270,11 +270,13 @@ internal fun rememberSuccessfulRangeExport(
     availableSeconds: Double,
     startSeconds: Float,
     endSeconds: Float,
+    actualSelectionMillis: Long? = null,
 ) {
     val remembered = rememberedRangeExportFromSavedRange(
         availableSeconds = availableSeconds,
         startSeconds = startSeconds,
         endSeconds = endSeconds,
+        actualSelectionMillis = actualSelectionMillis,
     ) ?: return
     val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
     // This is UI convenience state, not audio durability state. SaveResultReceiver runs on

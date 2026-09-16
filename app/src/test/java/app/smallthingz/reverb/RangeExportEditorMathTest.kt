@@ -36,6 +36,15 @@ class RangeExportEditorMathTest {
         )
         assertEquals(null, rememberedRangeExportFromSavedRange(100.0, 20f, 20f))
         assertEquals(null, rememberedRangeExportFromSavedRange(Double.NaN, 10f, 20f))
+        assertEquals(
+            RememberedRangeExport(selectionLengthMillis = 12_000L, endOffsetMillis = 15_000L),
+            rememberedRangeExportFromSavedRange(
+                availableSeconds = 100.0,
+                startSeconds = 50f,
+                endSeconds = 85f,
+                actualSelectionMillis = 12_000L,
+            ),
+        )
     }
 
     @Test

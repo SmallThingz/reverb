@@ -165,13 +165,19 @@ internal fun rememberedRangeExportFromSavedRange(
     availableSeconds: Double,
     startSeconds: Float,
     endSeconds: Float,
+    actualSelectionMillis: Long? = null,
 ): RememberedRangeExport? {
     val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null
     if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null
     val start = startSeconds.toDouble().coerceIn(0.0, available)
     val end = endSeconds.toDouble().coerceIn(start, available)
-    val selectionMillis = ((end - start) * 1_000.0).roundToLong()
-    if (selectionMillis <= 0L) return null
+    val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()
+    if (requestedSelectionMillis <= 0L) return null
+    val availableMillis = (available * 1_000.0).roundToLong().coerceAtLeast(1L)
+    val selectionMillis = actualSelectionMillis
+        ?.takeIf { it > 0L }
+        ?.coerceAtMost(availableMillis)
+        ?: requestedSelectionMillis
     val endOffsetMillis = ((available - end) * 1_000.0).roundToLong().coerceAtLeast(0L)
     return RememberedRangeExport(selectionMillis, endOffsetMillis)
 }

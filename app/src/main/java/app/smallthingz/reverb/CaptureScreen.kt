@@ -2129,7 +2129,7 @@ private fun startExport(
         onStatus = onStatus,
         onError = onError,
         onSaved = onSaved,
-        onCommitted = {
+        onCommitted = { recording ->
             range.rememberOnSave?.let { memory ->
                 rememberSuccessfulRangeExport(
                     context = appContext,
@@ -2137,6 +2137,7 @@ private fun startExport(
                     availableSeconds = memory.availableSeconds,
                     startSeconds = range.startSeconds,
                     endSeconds = range.endSeconds,
+                    actualSelectionMillis = recording.durationMillis,
                 )
             }
         },
@@ -2258,7 +2259,7 @@ private class SaveResultReceiver(
     onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit = {},
     onSaved: () -> Unit = {},
-    private val onCommitted: () -> Unit = {},
+    private val onCommitted: (RecordingEntity) -> Unit = {},
     private val onTerminal: (SaveResultReceiver) -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
@@ -2271,7 +2272,7 @@ private class SaveResultReceiver(
         if (!terminalDelivered.compareAndSet(false, true)) return
         // Range-memory bookkeeping is convenience state; it must never suppress terminal
         // delivery for a recording that is already durably committed.
-        runCatching { onCommitted() }
+        runCatching { onCommitted(recording) }
         if (!uiCallbacks.saved(recording)) {
             NotifyFileReceiver(appContext).fileReady(recording)
         }
