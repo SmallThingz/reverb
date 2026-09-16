@@ -11,8 +11,10 @@ import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
 import java.util.WeakHashMap
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -345,6 +347,13 @@ internal class PlaybackHeadFrameCounter {
     }
 }
 
+internal fun executeIfAccepted(executor: Executor, task: Runnable): Boolean = try {
+    executor.execute(task)
+    true
+} catch (_: RejectedExecutionException) {
+    false
+}
+
 internal fun previewPlaybackDrainStalled(
     lastAdvanceMillis: Long,
     nowMillis: Long,
@@ -605,7 +614,9 @@ internal class TimelineAudioPreviewController : Closeable {
 
     private fun enqueueLatest(block: () -> Unit) {
         executor.queue.clear()
-        executor.execute(block)
+        // A late gesture can race disposal after observing closed=false. Executor rejection is
+        // therefore a normal lifecycle boundary, not an exception that should escape to UI.
+        executeIfAccepted(executor, Runnable(block))
     }
 
     private fun cancelCurrent() {
@@ -617,12 +628,20 @@ internal class TimelineAudioPreviewController : Closeable {
             activeTrack.also { activeTrack = null }
         }
         if (track != null) {
-            if (!releaseExecutor.isShutdown) {
-                releaseExecutor.execute { releaseTrackOnce(track) }
-            } else {
-                // close() calls cancelCurrent() before shutting this executor down, so this is
-                // only a defensive fallback for an unexpected late cancellation.
-                releaseTrackOnce(track)
+            val releaseQueued = !releaseExecutor.isShutdown && executeIfAccepted(
+                releaseExecutor,
+                Runnable { releaseTrackOnce(track) },
+            )
+            if (!releaseQueued) {
+                // shutdown can race the isShutdown observation. Never fall back to releasing
+                // AudioTrack on the UI caller: AudioFlinger teardown can block. A one-shot
+                // daemon keeps this rare shutdown race off-thread; duplicate release is guarded.
+                runCatching {
+                    Thread(
+                        { releaseTrackOnce(track) },
+                        "Reverb-range-preview-release-fallback",
+                    ).apply { isDaemon = true }.start()
+                }
             }
         }
     }

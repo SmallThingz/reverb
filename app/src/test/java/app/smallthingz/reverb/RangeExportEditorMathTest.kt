@@ -8,6 +8,19 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun previewExecutorRejection_isALifecycleNoOpInsteadOfCallerCrash() {
+        var ran = false
+        val direct = java.util.concurrent.Executor { task -> task.run() }
+        assertTrue(executeIfAccepted(direct, Runnable { ran = true }))
+        assertTrue(ran)
+
+        val rejecting = java.util.concurrent.Executor {
+            throw java.util.concurrent.RejectedExecutionException("closed")
+        }
+        assertFalse(executeIfAccepted(rejecting, Runnable { error("must not run") }))
+    }
+
+    @Test
     fun previewDrainWatchdogRequiresContinuousStall() {
         assertFalse(previewPlaybackDrainStalled(1_000L, 2_999L, 2_000L))
         assertTrue(previewPlaybackDrainStalled(1_000L, 3_000L, 2_000L))
