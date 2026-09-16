@@ -1064,11 +1064,6 @@ internal fun RangeExportHomeContent(
                 maxExportDurationSeconds,
             ),
             selectedBuffer = selectedBuffer,
-            activeBuffer = activeBuffer,
-            isListening = isListening,
-            oneShotEnabled = oneShotEnabled,
-            oneShotFull = oneShotFull,
-            loopingEnabled = loopingEnabled,
             onCancel = onCancel,
             onExport = { onExport(state.startSeconds, state.endSeconds) },
         )
@@ -2006,11 +2001,6 @@ private fun RangeExportControls(
     state: RangeExportEditorState,
     canExport: Boolean,
     selectedBuffer: ReverbService.BufferSlot,
-    activeBuffer: ReverbService.BufferSlot?,
-    isListening: Boolean,
-    oneShotEnabled: Boolean,
-    oneShotFull: Boolean,
-    loopingEnabled: Boolean,
     onCancel: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -2033,109 +2023,85 @@ private fun RangeExportControls(
             }
         }
     }
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = chrome.field,
+        border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
+        modifier = modifier.fillMaxWidth().height(70.dp),
     ) {
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = chrome.field,
-            border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
-            modifier = Modifier.alpha(0.54f),
+        Row(
+            modifier = Modifier.fillMaxSize().padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            BufferSelector(
-                selectedBuffer = selectedBuffer,
-                activeBuffer = activeBuffer,
-                isListening = isListening,
-                oneShotEnabled = oneShotEnabled,
-                oneShotFull = oneShotFull,
-                loopingEnabled = loopingEnabled,
-                interactionEnabled = false,
-                onSelectBuffer = {},
-                modifier = Modifier.size(242.dp, 54.dp),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = chrome.field,
-            border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
-            modifier = Modifier.fillMaxWidth().height(70.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            IconButton(
+                onClick = {
+                    state.invalidateTextEditing()
+                    focusManager.clearFocus(force = true)
+                    onCancel()
+                },
+                modifier = Modifier.size(50.dp).then(discardDraftOnPointerDown),
             ) {
-                IconButton(
-                    onClick = {
-                        state.invalidateTextEditing()
-                        focusManager.clearFocus(force = true)
-                        onCancel()
-                    },
-                    modifier = Modifier.size(50.dp).then(discardDraftOnPointerDown),
+                Icon(
+                    imageVector = AppIcons.close,
+                    contentDescription = stringResource(R.string.close),
+                    tint = chrome.ink,
+                )
+            }
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = chrome.raised,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
                 ) {
-                    Icon(
-                        imageVector = AppIcons.close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = chrome.ink,
+                    Text(
+                        text = stringResource(
+                            when (selectedBuffer) {
+                                ReverbService.BufferSlot.ONE_SHOT -> R.string.buffer_one_shot
+                                ReverbService.BufferSlot.LOOPING -> R.string.buffer_loop
+                            },
+                        ),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = chrome.ink,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                     )
                 }
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = chrome.raised,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
-                    ) {
-                        Text(
-                            text = stringResource(
-                                when (selectedBuffer) {
-                                    ReverbService.BufferSlot.ONE_SHOT -> R.string.buffer_one_shot
-                                    ReverbService.BufferSlot.LOOPING -> R.string.buffer_loop
-                                },
-                            ),
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = chrome.ink,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                        )
+            }
+            Surface(
+                onClick = {
+                    // Export is a commit boundary. A valid draft becomes the range; an invalid
+                    // draft blocks export rather than leaking a stale value into the request.
+                    if (state.commitActiveTextEditing()) {
+                        focusManager.clearFocus(force = true)
+                        view.post(onExport)
                     }
-                }
-                Surface(
-                    onClick = {
-                        // Export is a commit boundary. A valid draft becomes the range; an invalid
-                        // draft blocks export rather than leaking a stale value into the request.
-                        if (state.commitActiveTextEditing()) {
-                            focusManager.clearFocus(force = true)
-                            view.post(onExport)
-                        }
-                    },
-                    enabled = exportEnabled,
-                    shape = RoundedCornerShape(20.dp),
-                    color = exportContainerColor,
-                    modifier = Modifier.height(50.dp),
+                },
+                enabled = exportEnabled,
+                shape = RoundedCornerShape(20.dp),
+                color = exportContainerColor,
+                modifier = Modifier.height(50.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 15.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 15.dp),
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.save,
-                            contentDescription = null,
-                            tint = exportContentColor,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Text(
-                            text = stringResource(R.string.export),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = exportContentColor,
-                        )
-                    }
+                    Icon(
+                        imageVector = AppIcons.save,
+                        contentDescription = null,
+                        tint = exportContentColor,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = stringResource(R.string.export),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = exportContentColor,
+                    )
                 }
             }
         }
