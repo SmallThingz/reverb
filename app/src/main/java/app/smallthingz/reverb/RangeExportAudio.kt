@@ -28,6 +28,7 @@ private const val PREVIEW_WRITE_BYTES = 2_400
 private const val SCRUB_AUDITION_SECONDS = 0.14
 private const val SCRUB_AUDITION_LEAD_SECONDS = 0.02
 private const val PREVIEW_PROGRESS_INTERVAL_MILLIS = 32L
+private const val PREVIEW_DRAIN_STALL_TIMEOUT_MILLIS = 2_000L
 private const val SHUTTLE_GRAIN_OUTPUT_SECONDS = 0.040
 private const val SHUTTLE_CROSSFADE_SECONDS = 0.008
 private const val SHUTTLE_SOURCE_HOP_SECONDS = SHUTTLE_GRAIN_OUTPUT_SECONDS - SHUTTLE_CROSSFADE_SECONDS
@@ -343,6 +344,14 @@ internal class PlaybackHeadFrameCounter {
         return wraps + current
     }
 }
+
+internal fun previewPlaybackDrainStalled(
+    lastAdvanceMillis: Long,
+    nowMillis: Long,
+    timeoutMillis: Long = PREVIEW_DRAIN_STALL_TIMEOUT_MILLIS,
+): Boolean = timeoutMillis > 0L &&
+    nowMillis >= lastAdvanceMillis &&
+    nowMillis - lastAdvanceMillis >= timeoutMillis
 
 internal fun ReverbService.TimelineSnapshot.readWaveformEnvelopeProgressive(
     pass: RangeWaveformPass,
@@ -875,10 +884,19 @@ internal class TimelineAudioPreviewController : Closeable {
             val targetFrames = (readResult.durationSeconds * PREVIEW_SAMPLE_RATE.toDouble())
                 .roundToLong()
                 .coerceAtLeast(0L)
+            var lastPlayedFrames = -1L
+            var lastPlaybackAdvanceAt = SystemClock.elapsedRealtime()
             while (true) {
                 checkCurrent(token)
                 val played = playbackHead.update(track.playbackHeadPosition)
                 if (played >= targetFrames) break
+                val now = SystemClock.elapsedRealtime()
+                if (played > lastPlayedFrames) {
+                    lastPlayedFrames = played
+                    lastPlaybackAdvanceAt = now
+                } else if (previewPlaybackDrainStalled(lastPlaybackAdvanceAt, now)) {
+                    throw IOException("Audio preview playback stalled")
+                }
                 if (reportProgress) {
                     postIfCurrent(token) {
                         onProgress(

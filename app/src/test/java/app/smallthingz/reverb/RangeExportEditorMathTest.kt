@@ -8,6 +8,13 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun previewDrainWatchdogRequiresContinuousStall() {
+        assertFalse(previewPlaybackDrainStalled(1_000L, 2_999L, 2_000L))
+        assertTrue(previewPlaybackDrainStalled(1_000L, 3_000L, 2_000L))
+        assertFalse(previewPlaybackDrainStalled(3_000L, 2_000L, 2_000L))
+    }
+
+    @Test
     fun playbackHeadCounterExtendsUnsignedWraps() {
         val counter = PlaybackHeadFrameCounter()
         assertEquals(0L, counter.update(0))
