@@ -1059,6 +1059,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun serviceBindingCallback_rejectsRetiredBindLifetime() {
+        assertTrue(captureServiceBindingCallbackIsCurrent(7L, 7L, screenAlive = true))
+        assertFalse(captureServiceBindingCallbackIsCurrent(6L, 7L, screenAlive = true))
+        assertFalse(captureServiceBindingCallbackIsCurrent(7L, 7L, screenAlive = false))
+    }
+
+    @Test
     fun bufferRecordingIndicator_requiresListeningEvenWhenLastActiveSlotMatches() {
         assertFalse(
             isBufferActivelyRecording(

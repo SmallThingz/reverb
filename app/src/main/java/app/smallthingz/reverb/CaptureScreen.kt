@@ -206,6 +206,12 @@ internal fun captureServiceInteractionReady(
     stateHydrated: Boolean,
 ): Boolean = serviceConnected && stateHydrated
 
+internal fun captureServiceBindingCallbackIsCurrent(
+    callbackBindingGeneration: Long,
+    currentBindingGeneration: Long,
+    screenAlive: Boolean,
+): Boolean = screenAlive && callbackBindingGeneration == currentBindingGeneration
+
 private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
@@ -348,67 +354,6 @@ fun CaptureScreen(
         )
     }
 
-    val connection = remember {
-        object : ServiceConnection {
-            override fun onServiceConnected(className: ComponentName, binder: IBinder) {
-                val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
-                    ?: run {
-                        rangeSnapshot?.close()
-                        rangeSnapshot = null
-                        rangeSnapshotBuffer = null
-                        pendingExportSnapshot?.close()
-                        pendingExportSnapshot = null
-                        pendingExportRange = null
-                        showExportClampDialog = false
-                        pendingClearBuffer = null
-                        invalidateCustomRangePreparation()
-                        bookkeeping.serviceConnectionGeneration++
-                        serviceStateHydrated = false
-                        service = null
-                        return
-                    }
-                val connectedService = typedBinder.service
-                if (service != null && service !== connectedService) {
-                    rangeSnapshot?.close()
-                    rangeSnapshot = null
-                    rangeSnapshotBuffer = null
-                    pendingExportSnapshot?.close()
-                    pendingExportSnapshot = null
-                    pendingExportRange = null
-                    showExportClampDialog = false
-                    pendingClearBuffer = null
-                    invalidateCustomRangePreparation()
-                }
-                bookkeeping.serviceConnectionGeneration++
-                bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
-                serviceStateHydrated = false
-                service = connectedService
-                requestRecorderState(connectedService)
-            }
-
-            override fun onServiceDisconnected(name: ComponentName) {
-                rangeSnapshot?.close()
-                rangeSnapshot = null
-                rangeSnapshotBuffer = null
-                pendingExportSnapshot?.close()
-                pendingExportSnapshot = null
-                pendingExportRange = null
-                showExportClampDialog = false
-                pendingClearBuffer = null
-                invalidateCustomRangePreparation()
-                if (isSaving) {
-                    // Service teardown does not cancel already-started export work. Keep the
-                    // saving card until its terminal receiver callback, but disable cancellation
-                    // because there is no live binder to deliver a new cancel request through.
-                    saveStatus = markExportCancelRequested(saveStatus)
-                }
-                bookkeeping.serviceConnectionGeneration++
-                serviceStateHydrated = false
-                service = null
-            }
-        }
-    }
-
     val activeBufferState = androidx.compose.runtime.rememberUpdatedState(activeBuffer)
     val selectedBufferState = androidx.compose.runtime.rememberUpdatedState(selectedBuffer)
     val visualizationCallback = remember {
@@ -461,16 +406,94 @@ fun CaptureScreen(
     }
 
     DisposableEffect(lifecycleOwner) {
-        var bound = false
+        var boundConnection: ServiceConnection? = null
+
+        fun clearConnectedServiceState(markSavingAsCancelRequested: Boolean) {
+            rangeSnapshot?.close()
+            rangeSnapshot = null
+            rangeSnapshotBuffer = null
+            pendingExportSnapshot?.close()
+            pendingExportSnapshot = null
+            pendingExportRange = null
+            showExportClampDialog = false
+            pendingClearBuffer = null
+            invalidateCustomRangePreparation()
+            if (markSavingAsCancelRequested && isSaving) {
+                // Service teardown does not cancel already-started export work. Keep the
+                // saving card until its terminal receiver callback, but disable cancellation
+                // because there is no live binder to deliver a new cancel request through.
+                saveStatus = markExportCancelRequested(saveStatus)
+            }
+            serviceStateHydrated = false
+            service = null
+        }
+
+        fun unbindCurrentConnection() {
+            val current = boundConnection ?: return
+            // Invalidate callbacks before unbinding. Android can already have a callback queued
+            // on the main looper; that callback belongs to this retired bind lifetime.
+            boundConnection = null
+            bookkeeping.serviceConnectionGeneration++
+            runCatching { context.unbindService(current) }
+        }
+
         fun bindIfNeeded() {
-            if (!bound && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                bound = context.bindService(
+            if (boundConnection != null ||
+                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            ) return
+
+            val bindingGeneration = longArrayOf(++bookkeeping.serviceConnectionGeneration)
+            val candidate = object : ServiceConnection {
+                private fun isCurrent(): Boolean = captureServiceBindingCallbackIsCurrent(
+                    callbackBindingGeneration = bindingGeneration[0],
+                    currentBindingGeneration = bookkeeping.serviceConnectionGeneration,
+                    screenAlive = screenAlive.get(),
+                )
+
+                override fun onServiceConnected(className: ComponentName, binder: IBinder) {
+                    if (!isCurrent()) return
+                    val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
+                        ?: run {
+                            clearConnectedServiceState(markSavingAsCancelRequested = false)
+                            bindingGeneration[0] = ++bookkeeping.serviceConnectionGeneration
+                            return
+                        }
+                    val connectedService = typedBinder.service
+                    if (service != null && service !== connectedService) {
+                        clearConnectedServiceState(markSavingAsCancelRequested = false)
+                    }
+                    bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
+                    serviceStateHydrated = false
+                    service = connectedService
+                    requestRecorderState(connectedService)
+                }
+
+                override fun onServiceDisconnected(name: ComponentName) {
+                    if (!isCurrent()) return
+                    clearConnectedServiceState(markSavingAsCancelRequested = true)
+                    // This binding remains registered and Android may reconnect it. Advance both
+                    // the global generation and this connection's token so old state callbacks
+                    // die while a legitimate reconnect on the same binding remains acceptable.
+                    bindingGeneration[0] = ++bookkeeping.serviceConnectionGeneration
+                }
+            }
+            boundConnection = candidate
+            val bound = runCatching {
+                context.bindService(
                     Intent(context, ReverbService::class.java),
-                    connection,
+                    candidate,
                     Context.BIND_AUTO_CREATE,
                 )
+            }.getOrDefault(false)
+            if (!bound && boundConnection === candidate) {
+                boundConnection = null
+                if (bookkeeping.serviceConnectionGeneration == bindingGeneration[0]) {
+                    bookkeeping.serviceConnectionGeneration++
+                }
+                clearConnectedServiceState(markSavingAsCancelRequested = false)
             }
         }
+
         // LifecycleRegistry catches newly added observers up to the current state
         // synchronously. Do not let that catch-up ON_START bypass the deliberate first-frame
         // bind below; real later starts occur after addObserver returns.
@@ -481,22 +504,8 @@ fun CaptureScreen(
 
                 Lifecycle.Event.ON_STOP -> {
                     detachActiveSaveUi()
-                    rangeSnapshot?.close()
-                    rangeSnapshot = null
-                    rangeSnapshotBuffer = null
-                    pendingExportSnapshot?.close()
-                    pendingExportSnapshot = null
-                    pendingExportRange = null
-                    showExportClampDialog = false
-                    pendingClearBuffer = null
-                    invalidateCustomRangePreparation()
-                    if (bound) {
-                        context.unbindService(connection)
-                        bound = false
-                    }
-                    bookkeeping.serviceConnectionGeneration++
-                    serviceStateHydrated = false
-                    service = null
+                    clearConnectedServiceState(markSavingAsCancelRequested = false)
+                    unbindCurrentConnection()
                 }
 
                 else -> {}
@@ -510,19 +519,8 @@ fun CaptureScreen(
             view.removeCallbacks(initialBind)
             lifecycleOwner.lifecycle.removeObserver(observer)
             detachActiveSaveUi()
-            rangeSnapshot?.close()
-            rangeSnapshot = null
-            rangeSnapshotBuffer = null
-            pendingExportSnapshot?.close()
-            pendingExportSnapshot = null
-            pendingClearBuffer = null
-            invalidateCustomRangePreparation()
-            if (bound) {
-                context.unbindService(connection)
-                bound = false
-            }
-            bookkeeping.serviceConnectionGeneration++
-            service = null
+            clearConnectedServiceState(markSavingAsCancelRequested = false)
+            unbindCurrentConnection()
         }
     }
 
