@@ -172,6 +172,24 @@ internal fun retentionConfigurationFromPreferences(
     return configuration
 }
 
+internal fun retentionConfigurationForOperationalRead(context: Context): RetentionConfiguration? =
+    withRetentionPersistenceLock {
+        val prefs = getRecorderPreferences(context)
+        val values = readRetentionPreferenceValues(prefs)
+        val recoveryRead = readRetentionRecovery(context)
+        val recovery = recoveryRead.configuration
+        val primary = retentionConfigurationFromPreferences(
+            values = values,
+            recoveryFallback = recovery,
+            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
+        )
+        resolveRetentionConfiguration(
+            primary = primary,
+            recovery = recovery,
+            historyExists = hasPersistedBufferHistoryArtifacts(context),
+        )?.configuration
+    }
+
 internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration =
     withRetentionPersistenceLock {
         val prefs = getRecorderPreferences(context)

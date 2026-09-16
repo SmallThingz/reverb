@@ -332,7 +332,7 @@ private fun configuredSizeHasWholeFrame(
 }
 
 fun isConfiguredOneShotBufferEnabled(context: Context): Boolean {
-    val retention = retentionConfigurationForRead(context)
+    val retention = retentionConfigurationForOperationalRead(context) ?: return false
     return when (retention.mode) {
         RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.oneShotSizeBytes)
         RetentionMode.TIME -> retention.oneShotSeconds > 0L
@@ -340,7 +340,7 @@ fun isConfiguredOneShotBufferEnabled(context: Context): Boolean {
 }
 
 fun isConfiguredLoopingBufferEnabled(context: Context): Boolean {
-    val retention = retentionConfigurationForRead(context)
+    val retention = retentionConfigurationForOperationalRead(context) ?: return false
     return when (retention.mode) {
         RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.loopingSizeBytes)
         RetentionMode.TIME -> retention.loopingSeconds > 0L
@@ -494,7 +494,7 @@ fun getConfiguredMemorySizeBytes(
     channelMode: ChannelMode = getConfiguredChannelMode(context),
     sampleFormat: PcmSampleFormat = getConfiguredPcmSampleFormat(context),
 ): Long {
-    val retention = retentionConfigurationForRead(context)
+    val retention = retentionConfigurationForOperationalRead(context) ?: return 0L
     return when (retention.mode) {
         RetentionMode.SIZE -> {
             val frameBytes = channelMode.channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
