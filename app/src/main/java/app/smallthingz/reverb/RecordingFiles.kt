@@ -821,11 +821,12 @@ private fun finalizeDocumentOutputTarget(
     val sourceUri = requireNotNull(target.uri)
     requireCurrentOutputFingerprint(context, target, expectedFingerprint)
     val treeUri = target.directoryId.toUri()
-    val tree = DocumentFile.fromTreeUri(context, treeUri)
-        ?: throw IOException("Unable to access output directory while publishing recording")
-    val finalName = findAvailableDisplayName(target.displayName) { candidate ->
-        tree.findFile(candidate)?.uri?.let { it != sourceUri } == true
-    }
+    val finalName = findAvailableDocumentDisplayName(
+        context = context,
+        treeUri = treeUri,
+        requestedDisplayName = target.displayName,
+        excludedUri = sourceUri,
+    )
     if (!documentSupportsRename(context, sourceUri)) {
         throw IOException("Output provider cannot safely publish verified staging without rename support")
     }
@@ -2421,11 +2422,13 @@ private fun renameDocumentRecording(
     return runCatching {
         val sourceUri = recording.id.toUri()
         val document = DocumentFile.fromSingleUri(context, sourceUri) ?: return@runCatching null
-        val tree = DocumentFile.fromTreeUri(context, recording.directoryId.toUri()) ?: return@runCatching null
-        val uniqueName = findAvailableDisplayName(displayName) { candidate ->
-            tree.findFile(candidate)?.uri?.let { it != document.uri } == true
-        }
-        if (uniqueName == document.name) {
+        val uniqueName = findAvailableDocumentDisplayName(
+            context = context,
+            treeUri = recording.directoryId.toUri(),
+            requestedDisplayName = displayName,
+            excludedUri = sourceUri,
+        )
+        if (uniqueName == recording.displayName || uniqueName == document.name) {
             return@runCatching recording
         }
         // A provider is allowed to return a new URI when rename changes its document ID.
@@ -2517,12 +2520,12 @@ private fun createDocumentOutputTarget(
     startedAtMillis: Long,
     stagingKind: StagingOutputKind,
 ): RecordingOutputTarget {
-    val tree = DocumentFile.fromTreeUri(context, treeUri)
-        ?: throw IOException("Unable to access output directory")
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
-    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
-        tree.findFile(candidate) != null
-    }
+    val uniqueName = findAvailableDocumentDisplayName(
+        context = context,
+        treeUri = treeUri,
+        requestedDisplayName = safeDisplayName,
+    )
     val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind)
     val documentUri = DocumentsContract.createDocument(
         context.contentResolver,
@@ -2541,6 +2544,19 @@ private fun createDocumentOutputTarget(
         uri = documentUri,
         staging = true,
     )
+}
+
+private fun findAvailableDocumentDisplayName(
+    context: Context,
+    treeUri: Uri,
+    requestedDisplayName: String,
+    excludedUri: Uri? = null,
+): String {
+    val occupied = queryDocumentTreeEntries(context, treeUri)
+        .asSequence()
+        .filter { entry -> excludedUri == null || entry.uri != excludedUri }
+        .mapNotNullTo(HashSet()) { entry -> entry.name?.takeIf { it.isNotBlank() } }
+    return findAvailableDisplayName(requestedDisplayName) { candidate -> candidate in occupied }
 }
 
 internal fun findAvailableDisplayName(
