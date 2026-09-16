@@ -22,7 +22,7 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun inlineTrimFineSeek_movesOnlySelectedBoundary_andPreservesMinimumRange() {
+    fun inlineTrimFineSeek_pushesOppositeBoundaryAtMinimumRange() {
         fun adjusted(start: Int, end: Int, target: InlineFineSeekTarget, delta: Int) =
             adjustInlineFineSeekTarget(
                 InlineFineSeekValues(cursorMillis = 4_000, startMillis = start, endMillis = end),
@@ -40,12 +40,20 @@ class FormattingAndHistoryMathTest {
             adjusted(1_000, 8_000, InlineFineSeekTarget.TRIM_END, -250),
         )
         assertEquals(
-            InlineFineSeekValues(4_000, 7_950, 8_000),
+            InlineFineSeekValues(4_000, 8_400, 8_450),
             adjusted(7_900, 8_000, InlineFineSeekTarget.TRIM_START, 500),
         )
         assertEquals(
-            InlineFineSeekValues(4_000, 1_000, 1_050),
+            InlineFineSeekValues(4_000, 550, 600),
             adjusted(1_000, 1_100, InlineFineSeekTarget.TRIM_END, -500),
+        )
+        assertEquals(
+            InlineFineSeekValues(4_000, 8_950, 9_000),
+            adjusted(9_950, 10_000, InlineFineSeekTarget.TRIM_END, -1_000),
+        )
+        assertEquals(
+            InlineFineSeekValues(4_000, 1_000, 1_050),
+            adjusted(0, 50, InlineFineSeekTarget.TRIM_START, 1_000),
         )
     }
 

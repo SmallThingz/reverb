@@ -259,15 +259,33 @@ internal fun adjustRangeEditTarget(
     durationSeconds: Float,
     minRangeSeconds: Float = 0.05f,
 ): RangeEditUpdate {
-    val duration = durationSeconds.coerceAtLeast(minRangeSeconds)
+    val minimumRange = minRangeSeconds.coerceAtLeast(0f)
+    val duration = durationSeconds.coerceAtLeast(minimumRange)
+    val boundedMinimum = minimumRange.coerceAtMost(duration)
     var start = values.startSeconds.coerceIn(0f, duration)
     var end = values.endSeconds.coerceIn(start, duration)
+    if (end - start < boundedMinimum) {
+        end = (start + boundedMinimum).coerceAtMost(duration)
+        start = (end - boundedMinimum).coerceAtLeast(0f)
+    }
     when (target) {
         RangeEditTarget.START -> {
-            start = requestedSeconds.coerceIn(0f, (end - minRangeSeconds).coerceAtLeast(0f))
+            val requested = requestedSeconds.coerceIn(0f, (duration - boundedMinimum).coerceAtLeast(0f))
+            if (requested > end - boundedMinimum) {
+                start = requested
+                end = (start + boundedMinimum).coerceAtMost(duration)
+            } else {
+                start = requested
+            }
         }
         RangeEditTarget.END -> {
-            end = requestedSeconds.coerceIn((start + minRangeSeconds).coerceAtMost(duration), duration)
+            val requested = requestedSeconds.coerceIn(boundedMinimum.coerceAtMost(duration), duration)
+            if (requested < start + boundedMinimum) {
+                end = requested
+                start = (end - boundedMinimum).coerceAtLeast(0f)
+            } else {
+                end = requested
+            }
         }
     }
     return RangeEditUpdate(RangeEditValues(start, end))

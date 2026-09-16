@@ -81,6 +81,49 @@ internal data class InlineFineSeekValues(
     val endMillis: Int,
 )
 
+internal fun adjustInlineTrimTarget(
+    values: InlineFineSeekValues,
+    durationMillis: Int,
+    target: InlineFineSeekTarget,
+    requestedMillis: Int,
+): InlineFineSeekValues {
+    require(target != InlineFineSeekTarget.PLAYHEAD)
+    val duration = durationMillis.coerceAtLeast(1)
+    val minimumRange = minOf(50, duration)
+    var start = values.startMillis.coerceIn(0, duration)
+    var end = values.endMillis.coerceIn(start, duration)
+    if (end - start < minimumRange) {
+        end = (start + minimumRange).coerceAtMost(duration)
+        start = (end - minimumRange).coerceAtLeast(0)
+    }
+    when (target) {
+        InlineFineSeekTarget.TRIM_START -> {
+            val requested = requestedMillis.coerceIn(0, (duration - minimumRange).coerceAtLeast(0))
+            if (requested > end - minimumRange) {
+                start = requested
+                end = (start + minimumRange).coerceAtMost(duration)
+            } else {
+                start = requested
+            }
+        }
+        InlineFineSeekTarget.TRIM_END -> {
+            val requested = requestedMillis.coerceIn(minimumRange.coerceAtMost(duration), duration)
+            if (requested < start + minimumRange) {
+                end = requested
+                start = (end - minimumRange).coerceAtLeast(0)
+            } else {
+                end = requested
+            }
+        }
+        InlineFineSeekTarget.PLAYHEAD -> error("Playhead is not a trim boundary")
+    }
+    return InlineFineSeekValues(
+        cursorMillis = values.cursorMillis.coerceIn(0, duration),
+        startMillis = start,
+        endMillis = end,
+    )
+}
+
 internal fun adjustInlineFineSeekTarget(
     values: InlineFineSeekValues,
     durationMillis: Int,
@@ -88,33 +131,22 @@ internal fun adjustInlineFineSeekTarget(
     deltaMillis: Int,
 ): InlineFineSeekValues {
     val duration = durationMillis.coerceAtLeast(1)
-    val start = values.startMillis.coerceIn(0, duration)
-    val end = values.endMillis.coerceIn(start, duration)
     val cursor = values.cursorMillis.coerceIn(0, duration)
-    val minimumRange = minOf(50, duration)
-    return when (target) {
-        InlineFineSeekTarget.PLAYHEAD -> InlineFineSeekValues(
-            cursorMillis = (cursor + deltaMillis).coerceIn(0, duration),
-            startMillis = start,
-            endMillis = end,
-        )
-        InlineFineSeekTarget.TRIM_START -> InlineFineSeekValues(
-            cursorMillis = cursor,
-            startMillis = (start + deltaMillis).coerceIn(
-                0,
-                (end - minimumRange).coerceAtLeast(0),
-            ),
-            endMillis = end,
-        )
-        InlineFineSeekTarget.TRIM_END -> InlineFineSeekValues(
-            cursorMillis = cursor,
-            startMillis = start,
-            endMillis = (end + deltaMillis).coerceIn(
-                (start + minimumRange).coerceAtMost(duration),
-                duration,
-            ),
-        )
+    if (target == InlineFineSeekTarget.PLAYHEAD) {
+        val requested = (cursor.toLong() + deltaMillis.toLong()).coerceIn(0L, duration.toLong()).toInt()
+        val start = values.startMillis.coerceIn(0, duration)
+        val end = values.endMillis.coerceIn(start, duration)
+        return InlineFineSeekValues(requested, start, end)
     }
+    val current = when (target) {
+        InlineFineSeekTarget.TRIM_START -> values.startMillis
+        InlineFineSeekTarget.TRIM_END -> values.endMillis
+        InlineFineSeekTarget.PLAYHEAD -> cursor
+    }
+    val requested = (current.toLong() + deltaMillis.toLong())
+        .coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong())
+        .toInt()
+    return adjustInlineTrimTarget(values, duration, target, requested)
 }
 
 internal fun inlineTrimGestureTarget(
@@ -728,25 +760,17 @@ internal fun RecordingInlinePlayer(
                                 currentPosition = millis
                                 return
                             }
-                            val minimumRange = minOf(50, duration.coerceAtLeast(1))
-                            when (dragTarget) {
-                                InlineFineSeekTarget.TRIM_START -> {
-                                    trimStartMillis = millis.coerceIn(
-                                        0,
-                                        (trimEndMillis - minimumRange).coerceAtLeast(0),
-                                    )
-                                }
-                                InlineFineSeekTarget.TRIM_END -> {
-                                    trimEndMillis = millis.coerceIn(
-                                        (trimStartMillis + minimumRange).coerceAtMost(duration),
-                                        duration,
-                                    )
-                                }
-                                InlineFineSeekTarget.PLAYHEAD -> Unit
-                            }
+                            val adjusted = adjustInlineTrimTarget(
+                                values = currentInlineFineSeekValues(),
+                                durationMillis = duration,
+                                target = dragTarget,
+                                requestedMillis = millis,
+                            )
+                            trimStartMillis = adjusted.startMillis
+                            trimEndMillis = adjusted.endMillis
                             currentPosition = when (dragTarget) {
-                                InlineFineSeekTarget.TRIM_START -> trimStartMillis
-                                InlineFineSeekTarget.TRIM_END -> trimEndMillis
+                                InlineFineSeekTarget.TRIM_START -> adjusted.startMillis
+                                InlineFineSeekTarget.TRIM_END -> adjusted.endMillis
                                 InlineFineSeekTarget.PLAYHEAD -> currentPosition
                             }
                             trimError = false

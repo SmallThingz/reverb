@@ -85,7 +85,7 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun rangeEditorHasOnlyBoundaryTargets_andPreservesMinimumRange() {
+    fun rangeBoundariesPushEachOther_andPreserveMinimumRange() {
         val initial = RangeEditValues(startSeconds = 20f, endSeconds = 80f)
         val movedStart = adjustRangeEditTarget(
             values = initial,
@@ -93,8 +93,8 @@ class RangeExportEditorMathTest {
             requestedSeconds = 79.99f,
             durationSeconds = 100f,
         )
-        assertEquals(79.95f, movedStart.values.startSeconds, 0.0001f)
-        assertEquals(80f, movedStart.values.endSeconds, 0f)
+        assertEquals(79.99f, movedStart.values.startSeconds, 0.0001f)
+        assertEquals(80.04f, movedStart.values.endSeconds, 0.0001f)
 
         val movedEnd = adjustRangeEditTarget(
             values = initial,
@@ -102,8 +102,18 @@ class RangeExportEditorMathTest {
             requestedSeconds = 20.01f,
             durationSeconds = 100f,
         )
-        assertEquals(20f, movedEnd.values.startSeconds, 0f)
-        assertEquals(20.05f, movedEnd.values.endSeconds, 0.0001f)
+        assertEquals(19.96f, movedEnd.values.startSeconds, 0.0001f)
+        assertEquals(20.01f, movedEnd.values.endSeconds, 0.0001f)
+
+        val rightCorner = RangeEditValues(startSeconds = 99.95f, endSeconds = 100f)
+        val pushedAwayFromRight = adjustRangeEditTarget(rightCorner, RangeEditTarget.END, 90f, 100f)
+        assertEquals(89.95f, pushedAwayFromRight.values.startSeconds, 0.0001f)
+        assertEquals(90f, pushedAwayFromRight.values.endSeconds, 0f)
+
+        val leftCorner = RangeEditValues(startSeconds = 0f, endSeconds = 0.05f)
+        val pushedAwayFromLeft = adjustRangeEditTarget(leftCorner, RangeEditTarget.START, 10f, 100f)
+        assertEquals(10f, pushedAwayFromLeft.values.startSeconds, 0f)
+        assertEquals(10.05f, pushedAwayFromLeft.values.endSeconds, 0.0001f)
 
         val clampedStart = adjustRangeEditTarget(initial, RangeEditTarget.START, -50f, 100f)
         val clampedEnd = adjustRangeEditTarget(initial, RangeEditTarget.END, 150f, 100f)
@@ -319,13 +329,13 @@ class RangeExportEditorMathTest {
             pendingDeltaSeconds = 0.25f,
             durationSeconds = 40f,
         ), 0.0001f)
-        assertEquals(29.95f, projectFineAdjustShuttleTarget(
+        assertEquals(39.95f, projectFineAdjustShuttleTarget(
             values = values,
             target = RangeEditTarget.START,
             pendingDeltaSeconds = 100f,
             durationSeconds = 40f,
         ), 0.0001f)
-        assertEquals(10.05f, projectFineAdjustShuttleTarget(
+        assertEquals(0.05f, projectFineAdjustShuttleTarget(
             values = values,
             target = RangeEditTarget.END,
             pendingDeltaSeconds = -100f,
