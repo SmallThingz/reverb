@@ -80,9 +80,4 @@
         <item quantity="many">%1$d enregistrements déplacés.</item>
         <item quantity="other">%1$d enregistrements déplacés.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">%1$d entrée manquante supprimée.</item>
-        <item quantity="many">%1$d entrées manquantes supprimées.</item>
-        <item quantity="other">%1$d entrées manquantes supprimées.</item>
-    </plurals>
 </resources>

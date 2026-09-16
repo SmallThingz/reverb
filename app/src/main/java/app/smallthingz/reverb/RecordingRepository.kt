@@ -736,7 +736,6 @@ object RecordingRepository {
         val skipped: Int = 0,
         val failed: Int = 0,
         val cleanupFailed: Int = 0,
-        val removedMissing: Int = 0,
     ) {
         val hasFailures: Boolean
             get() = failed > 0 || cleanupFailed > 0

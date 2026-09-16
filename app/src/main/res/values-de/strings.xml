@@ -79,8 +79,4 @@
         <item quantity="one">%1$d Aufnahme verschoben.</item>
         <item quantity="other">%1$d Aufnahmen verschoben.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">%1$d fehlender Eintrag entfernt.</item>
-        <item quantity="other">%1$d fehlende Einträge entfernt.</item>
-    </plurals>
 </resources>

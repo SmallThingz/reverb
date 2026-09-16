@@ -79,8 +79,4 @@
         <item quantity="one">%1$d ضبط منتقل شد.</item>
         <item quantity="other">%1$d ضبط منتقل شد.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">%1$d ورودی گم‌شده حذف شد.</item>
-        <item quantity="other">%1$d ورودی گم‌شده حذف شد.</item>
-    </plurals>
 </resources>

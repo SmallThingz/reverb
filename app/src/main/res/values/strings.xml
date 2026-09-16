@@ -180,10 +180,6 @@
         <item quantity="one">Source cleanup for %1$d recording could not complete; an extra copy may remain.</item>
         <item quantity="other">Source cleanup for %1$d recordings could not complete; extra copies may remain.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">Removed %1$d missing entry.</item>
-        <item quantity="other">Removed %1$d missing entries.</item>
-    </plurals>
     <string name="volume_internal_shared_storage">Internal shared storage</string>
     <string name="volume_documents">Documents</string>
     <string name="volume_storage_template">Storage %s</string>

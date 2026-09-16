@@ -78,7 +78,4 @@
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d rekaman dipindahkan.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="other">%1$d entri yang hilang dihapus.</item>
-    </plurals>
 </resources>

@@ -81,10 +81,4 @@
         <item quantity="many">Перемещено %1$d записей.</item>
         <item quantity="other">Перемещено %1$d записей.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">Удалена %1$d отсутствующая запись.</item>
-        <item quantity="few">Удалено %1$d отсутствующие записи.</item>
-        <item quantity="many">Удалено %1$d отсутствующих записей.</item>
-        <item quantity="other">Удалено %1$d отсутствующих записей.</item>
-    </plurals>
 </resources>

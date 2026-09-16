@@ -83,12 +83,4 @@
         <item quantity="many">تم نقل %1$d تسجيلًا.</item>
         <item quantity="other">تم نقل %1$d تسجيل.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="zero">تمت إزالة %1$d إدخال مفقود.</item>
-        <item quantity="one">تمت إزالة إدخال مفقود واحد.</item>
-        <item quantity="two">تمت إزالة إدخالين مفقودين.</item>
-        <item quantity="few">تمت إزالة %1$d إدخالات مفقودة.</item>
-        <item quantity="many">تمت إزالة %1$d إدخالًا مفقودًا.</item>
-        <item quantity="other">تمت إزالة %1$d إدخال مفقود.</item>
-    </plurals>
 </resources>

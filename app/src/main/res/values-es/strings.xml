@@ -80,9 +80,4 @@
         <item quantity="many">Se movieron %1$d grabaciones.</item>
         <item quantity="other">Se movieron %1$d grabaciones.</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">Se eliminó %1$d entrada faltante.</item>
-        <item quantity="many">Se eliminaron %1$d entradas faltantes.</item>
-        <item quantity="other">Se eliminaron %1$d entradas faltantes.</item>
-    </plurals>
 </resources>

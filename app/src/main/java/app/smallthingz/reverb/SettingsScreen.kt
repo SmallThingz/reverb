@@ -781,14 +781,6 @@ fun SettingsScreen(
                         ),
                     )
                 }
-                if (result.removedMissing > 0) {
-                    add(
-                        resources.getQuantityString(
-                            R.plurals.move_recordings_removed_missing,
-                            result.removedMissing, result.removedMissing,
-                        ),
-                    )
-                }
             }
             val message = messageParts.joinToString(" ").ifBlank { resources.getString(R.string.move_recordings_none) }
             refreshMoveRecordingsAvailability()

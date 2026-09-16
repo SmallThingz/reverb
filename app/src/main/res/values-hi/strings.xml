@@ -79,8 +79,4 @@
         <item quantity="one">%1$d रिकॉर्डिंग स्थानांतरित की गई।</item>
         <item quantity="other">%1$d रिकॉर्डिंग्स स्थानांतरित की गईं।</item>
     </plurals>
-    <plurals name="move_recordings_removed_missing">
-        <item quantity="one">%1$d गुम प्रविष्टि हटाई गई।</item>
-        <item quantity="other">%1$d गुम प्रविष्टियाँ हटाई गईं।</item>
-    </plurals>
 </resources>
