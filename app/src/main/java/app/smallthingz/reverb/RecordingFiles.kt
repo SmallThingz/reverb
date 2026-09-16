@@ -2254,9 +2254,14 @@ private fun renameMediaStoreRecording(
     if (uniqueName == recording.displayName) return@runCatching recording
     val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName) }
     if (context.contentResolver.update(uri, values, null, null) <= 0) return@runCatching null
+    val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
+    if (!sameProviderObjectAcrossMutation(recording.fileIdentity, renamedIdentity)) {
+        Log.w(TAG, "MediaStore recording identity changed during rename: ${recording.id}")
+        return@runCatching null
+    }
     val renamed = recording.copy(
         displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
-        fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri),
+        fileIdentity = renamedIdentity,
     )
     rebindRecordingWaveformCache(recording, renamed)
 }.onFailure { Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", it) }.getOrNull()
