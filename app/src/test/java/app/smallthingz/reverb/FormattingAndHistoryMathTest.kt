@@ -1544,7 +1544,33 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun exactWavExportDurationLimit_matchesPayloadBudgetAndFlooredWholeSeconds() {
+    fun exactWavDurationLimitEndsOnACompleteOutputFrame() {
+        listOf(
+            1 to PcmSampleFormat.PCM_16,
+            2 to PcmSampleFormat.PCM_16,
+            1 to PcmSampleFormat.PCM_FLOAT,
+            2 to PcmSampleFormat.PCM_FLOAT,
+        ).forEach { (channelCount, sampleFormat) ->
+            val frameBytes = channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+            val payloadBudget = exportPayloadLimitBytes(ExportFormat.WAV, sampleFormat)
+            val alignedPayload = payloadBudget - payloadBudget % frameBytes
+            val bytesPerSecond = 44_100L * frameBytes
+            val exactLimit = exportDurationLimitExactSeconds(
+                format = ExportFormat.WAV,
+                codec = ExportCodec.PCM_16,
+                sampleRate = 44_100,
+                channelCount = channelCount,
+                sampleFormat = sampleFormat,
+            )
+            assertEquals(alignedPayload.toDouble() / bytesPerSecond.toDouble(), exactLimit, 0.0)
+            assertEquals(0L, alignedPayload % frameBytes)
+            assertTrue(alignedPayload <= payloadBudget)
+            assertTrue(alignedPayload + frameBytes > payloadBudget)
+        }
+    }
+
+    @Test
+    fun exactWavExportDurationLimit_matchesFrameAlignedBudgetAndFlooredWholeSeconds() {
         val exact = exportDurationLimitExactSeconds(
             format = ExportFormat.WAV,
             codec = ExportCodec.PCM_16,
@@ -1553,7 +1579,9 @@ class FormattingAndHistoryMathTest {
             sampleFormat = PcmSampleFormat.PCM_16,
         )
         val payload = exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_16)
-        assertEquals(payload.toDouble() / (48_000.0 * 2.0 * 2.0), exact, 0.0)
+        val frameBytes = 2L * PcmSampleFormat.PCM_16.bytesPerSample.toLong()
+        val alignedPayload = payload - payload % frameBytes
+        assertEquals(alignedPayload.toDouble() / (48_000.0 * frameBytes.toDouble()), exact, 0.0)
         assertEquals(
             exportDurationLimitSeconds(
                 ExportFormat.WAV, ExportCodec.PCM_16, 48_000, 2, PcmSampleFormat.PCM_16,

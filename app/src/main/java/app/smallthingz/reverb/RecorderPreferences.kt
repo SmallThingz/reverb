@@ -682,7 +682,14 @@ fun exportDurationLimitExactSeconds(
     if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0.0
     val bytesPerSecond = bytesPerSecond(sampleRate, channelCount, sampleFormat)
     if (bytesPerSecond <= 0L) return 0.0
-    return exportPayloadLimitBytes(format, sampleFormat).toDouble() / bytesPerSecond.toDouble()
+    val frameBytes = channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+    if (frameBytes <= 0L) return 0.0
+    // WavAudioFileWriter accepts only complete PCM frames. Keep the UI/service limit on the
+    // largest whole-frame payload that fits the container so a duration cannot render safe
+    // and then fail merely because the raw byte budget ends in the middle of a frame.
+    val payloadBudget = exportPayloadLimitBytes(format, sampleFormat)
+    val frameAlignedPayloadBudget = payloadBudget - payloadBudget % frameBytes
+    return frameAlignedPayloadBudget.toDouble() / bytesPerSecond.toDouble()
 }
 
 fun resolveOperationalSampleRate(
