@@ -1016,25 +1016,16 @@ internal fun RangeExportHomeContent(
                 verticalArrangement = Arrangement.Center,
             ) {
                 if (!compact) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
-                    ) {
-                        RangeSelectionDurationWheel(
-                            state = state,
-                            maxExportDurationSeconds = maxExportDurationSeconds,
-                            enabled = interactionReady && backProgress <= 0f,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 24.dp)
-                                .height(160.dp),
-                        )
-                        Text(
-                            text = stringResource(R.string.range_export_selected),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    RangeSelectionDurationWheel(
+                        state = state,
+                        maxExportDurationSeconds = maxExportDurationSeconds,
+                        enabled = interactionReady && backProgress <= 0f,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp)
+                            .height(160.dp)
+                            .graphicsLayer { alpha = chromeAlpha() },
+                    )
                     Spacer(Modifier.height(4.dp))
                 }
                 RangeExportTimeline(
@@ -1108,7 +1099,7 @@ private fun RangeSelectionDurationWheel(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
-    val label = stringResource(R.string.range_export_selected)
+    val label = stringResource(R.string.range_export_duration)
     val wheelMaximumDurationSeconds =
         state.selectionDurationWheelLimitExactSeconds(maxExportDurationSeconds)
     AndroidView(
@@ -2094,15 +2085,25 @@ private fun RangeExportControls(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = stringResource(
-                            if (state.isScrubbing) R.string.range_export_scrubbing
-                            else R.string.range_export_selected,
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = chrome.muted,
-                        maxLines = 1,
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = chrome.raised,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, chrome.border),
+                    ) {
+                        Text(
+                            text = stringResource(
+                                when (selectedBuffer) {
+                                    ReverbService.BufferSlot.ONE_SHOT -> R.string.buffer_one_shot
+                                    ReverbService.BufferSlot.LOOPING -> R.string.buffer_loop
+                                },
+                            ),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = chrome.ink,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
                 }
                 Surface(
                     onClick = {
