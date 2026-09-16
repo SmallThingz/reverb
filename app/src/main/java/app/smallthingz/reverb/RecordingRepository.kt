@@ -159,8 +159,9 @@ object RecordingRepository {
                     if (recording.directoryId == targetDirectoryId) return@forEach
                     val updated = when (recordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> {
-                            movable = true
-                            markRecordingPresent(recording, nowMillis)
+                            val present = markRecordingPresent(recording, nowMillis)
+                            if (recordingDestructiveIdentityMatches(context, present)) movable = true
+                            present
                         }
                         RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                         RecordingAssetState.UNAVAILABLE -> recording
@@ -475,6 +476,13 @@ object RecordingRepository {
                             return@forEach
                         }
                     }
+                    if (!recordingDestructiveIdentityMatches(context, present)) {
+                        // A move is copy + delete. If source identity cannot be proven before
+                        // copying, a later cleanup can never safely retire that source and
+                        // repeated move attempts would accumulate duplicate targets.
+                        skipped++
+                        return@forEach
+                    }
 
                     if (present.directoryId == targetDirectoryId) {
                         if (present != recording) stateUpdates += present
@@ -587,6 +595,7 @@ object RecordingRepository {
         for (source in legacy) {
             if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
             if (recordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
+            if (!recordingDestructiveIdentityMatches(context, source)) continue
 
             // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
             // verified copy preserves intentionally duplicated recordings; only an explicit
