@@ -44,6 +44,16 @@ class RangeDurationWheelMathTest {
     }
 
     @Test
+    fun reachableTenMinuteBoundary_doesNotExposeElevenMinutes() {
+        val values = rangeDurationWheelValues(
+            step = 1,
+            maxInclusive = 10,
+            currentValue = 10,
+        )
+        assertEquals((0..10).toList(), values.toList())
+    }
+
+    @Test
     fun limitAwareRings_includeExactBoundaryRegardlessOfProfile() {
         assertEquals(
             listOf(0, 15, 24),

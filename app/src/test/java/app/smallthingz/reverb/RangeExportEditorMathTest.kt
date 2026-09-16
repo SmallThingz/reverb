@@ -174,6 +174,77 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun selectionDurationWheelLimit_respectsFixedOppositeBoundary() {
+        val values = RangeEditValues(startSeconds = 120f, endSeconds = 600f)
+
+        assertEquals(
+            600.0,
+            rangeSelectionDurationReachableLimitSeconds(
+                values = values,
+                target = RangeEditTarget.START,
+                timelineDurationSeconds = 900f,
+            ),
+            0.0,
+        )
+        assertEquals(
+            780.0,
+            rangeSelectionDurationReachableLimitSeconds(
+                values = values,
+                target = RangeEditTarget.END,
+                timelineDurationSeconds = 900f,
+            ),
+            0.0,
+        )
+    }
+
+    @Test
+    fun selectionDurationWheelLimit_usesStricterReachabilityOrExportLimit() {
+        val tenMinuteEnd = RangeEditValues(startSeconds = 0f, endSeconds = 600f)
+        assertEquals(
+            600.0,
+            rangeSelectionDurationWheelLimitSeconds(
+                values = tenMinuteEnd,
+                target = RangeEditTarget.START,
+                timelineDurationSeconds = 3_600f,
+                exportLimitSeconds = 10_000.0,
+            ),
+            0.0,
+        )
+        assertEquals(
+            500.5,
+            rangeSelectionDurationWheelLimitSeconds(
+                values = tenMinuteEnd,
+                target = RangeEditTarget.START,
+                timelineDurationSeconds = 3_600f,
+                exportLimitSeconds = 500.5,
+            ),
+            0.0,
+        )
+    }
+
+    @Test
+    fun wheelReachabilityLimit_matchesDurationClampSoImpossibleElevenMinutesCannotBeShown() {
+        val values = RangeEditValues(startSeconds = 0f, endSeconds = 600f)
+        val wheelLimit = rangeSelectionDurationWheelLimitSeconds(
+            values = values,
+            target = RangeEditTarget.START,
+            timelineDurationSeconds = 600f,
+            exportLimitSeconds = 10_000.0,
+        )
+        val clamped = resizeRangeSelectionDuration(
+            values = values,
+            target = RangeEditTarget.START,
+            requestedDurationSeconds = 660f,
+            durationSeconds = 600f,
+        )
+
+        assertEquals(600.0, wheelLimit, 0.0)
+        assertEquals(600.0, rangeSelectionDurationExactSeconds(
+            clamped.values.startSeconds, clamped.values.endSeconds,
+        ), 0.0)
+    }
+
+    @Test
     fun boundaryCursorPreview_playsForwardFromStart_andLeadInToEnd() {
         assertEquals(
             BoundaryCursorPreviewWindow(10f, 30f),

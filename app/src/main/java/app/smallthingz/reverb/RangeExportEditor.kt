@@ -315,6 +315,37 @@ internal fun rangeExportSelectionWithinLimit(
     maximumDurationSeconds >= 0.0 &&
     selectedDurationSeconds <= maximumDurationSeconds
 
+internal fun rangeSelectionDurationReachableLimitSeconds(
+    values: RangeEditValues,
+    target: RangeEditTarget,
+    timelineDurationSeconds: Float,
+): Double {
+    val duration = timelineDurationSeconds.takeIf { it.isFinite() }
+        ?.coerceAtLeast(0f)?.toDouble() ?: 0.0
+    val start = values.startSeconds.takeIf { it.isFinite() }
+        ?.toDouble()?.coerceIn(0.0, duration) ?: 0.0
+    val end = values.endSeconds.takeIf { it.isFinite() }
+        ?.toDouble()?.coerceIn(start, duration) ?: start
+    return when (target) {
+        RangeEditTarget.START -> end
+        RangeEditTarget.END -> (duration - start).coerceAtLeast(0.0)
+    }
+}
+
+internal fun rangeSelectionDurationWheelLimitSeconds(
+    values: RangeEditValues,
+    target: RangeEditTarget,
+    timelineDurationSeconds: Float,
+    exportLimitSeconds: Double,
+): Double {
+    val exportLimit = exportLimitSeconds.takeIf { it.isFinite() }
+        ?.coerceAtLeast(0.0) ?: 0.0
+    return minOf(
+        exportLimit,
+        rangeSelectionDurationReachableLimitSeconds(values, target, timelineDurationSeconds),
+    )
+}
+
 internal fun resizeRangeSelectionDuration(
     values: RangeEditValues,
     target: RangeEditTarget,
@@ -544,6 +575,14 @@ internal class RangeExportEditorState(
 
     val selectionDurationSeconds: Float
         get() = selectionDurationExactSeconds.toFloat()
+
+    fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =
+        rangeSelectionDurationWheelLimitSeconds(
+            values = currentEditValues(),
+            target = lastTarget,
+            timelineDurationSeconds = durationSeconds,
+            exportLimitSeconds = exportLimitSeconds,
+        )
 
     val snapshotReady: Boolean
         get() = snapshot != null
@@ -1070,6 +1109,8 @@ private fun RangeSelectionDurationWheel(
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_selected)
+    val wheelMaximumDurationSeconds =
+        state.selectionDurationWheelLimitExactSeconds(maxExportDurationSeconds)
     AndroidView(
         factory = { context -> RangeDurationWheelView(context) },
         update = { view ->
@@ -1085,7 +1126,7 @@ private fun RangeSelectionDurationWheel(
                 border = colors.outlineVariant.toArgb(),
                 error = colors.error.toArgb(),
             )
-            view.setMaximumDurationSeconds(maxExportDurationSeconds)
+            view.setMaximumDurationSeconds(wheelMaximumDurationSeconds)
             view.setDurationSeconds(state.selectionDurationExactSeconds)
         },
         modifier = modifier,
