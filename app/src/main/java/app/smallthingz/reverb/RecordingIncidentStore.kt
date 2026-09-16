@@ -193,6 +193,30 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
+    fun recordCaptureInterrupted(context: Context, description: String) {
+        val appContext = context.applicationContext
+        val file = sessionFile(appContext)
+        val marker = readSession(file) ?: return
+        if (!marker.armed) return
+
+        // Persist the incident before disarming the session. If history persistence fails,
+        // leave the marker armed so restart recovery still has a chance to report the outage.
+        val persisted = runCatching {
+            appendIncident(
+                appContext,
+                incidentWithoutExitEvidence(
+                    marker = marker,
+                    occurredAtMillis = System.currentTimeMillis(),
+                    description = description,
+                ),
+            )
+        }.isSuccess
+        if (!persisted) return
+        runCatching { writeSession(file, marker.copy(armed = false)) }
+            .onFailure { file.delete() }
+    }
+
+    @Synchronized
     fun recordKnownCaptureStop(context: Context) {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)

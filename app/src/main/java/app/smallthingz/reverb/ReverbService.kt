@@ -2261,7 +2261,10 @@ class ReverbService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         foregroundServiceTimedOut = true
-        RecordingIncidentStore.recordKnownCaptureStop(this)
+        RecordingIncidentStore.recordCaptureInterrupted(
+            this,
+            "Foreground service timed out while capture was running",
+        )
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
             Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
             requestExportCancellation(preserveVerifiedOutput = true)
