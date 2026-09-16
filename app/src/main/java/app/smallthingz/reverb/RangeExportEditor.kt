@@ -252,6 +252,13 @@ internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: 
 internal fun rangeBlobMorphTranslation(progress: Float, sourceCenterPx: Float, targetCenterPx: Float): Float =
     (sourceCenterPx - targetCenterPx) * (1f - progress.coerceIn(0f, 1f))
 
+internal fun rangeTimelineDragDeltaPx(
+    initialMarkerCenterPx: Float,
+    currentMarkerCenterPx: Float,
+    downLocalX: Float,
+    currentLocalX: Float,
+): Float = (currentMarkerCenterPx + currentLocalX) - (initialMarkerCenterPx + downLocalX)
+
 internal fun adjustRangeEditTarget(
     values: RangeEditValues,
     target: RangeEditTarget,
@@ -1390,13 +1397,19 @@ private fun RangeTimelineBar(
                     RangeEditTarget.START -> state.startSeconds
                     RangeEditTarget.END -> state.endSeconds
                 }
+                val markerCenterAtDown = xPx()
                 var dragging = false
                 try {
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) break
-                        val deltaX = change.position.x - down.position.x
+                        val deltaX = rangeTimelineDragDeltaPx(
+                            initialMarkerCenterPx = markerCenterAtDown,
+                            currentMarkerCenterPx = xPx(),
+                            downLocalX = down.position.x,
+                            currentLocalX = change.position.x,
+                        )
                         if (!dragging && abs(deltaX) > touchSlop) {
                             dragging = true
                             state.beginBoundaryScrub(target)
