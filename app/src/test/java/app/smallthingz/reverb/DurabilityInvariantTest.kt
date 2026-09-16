@@ -351,19 +351,20 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun catalogCorruption_firstPaintResetsButDoesNotRunProviderRebuild() = runBlocking {
+    fun catalogCorruption_firstPaintResetsAndSignalsRetryWithoutProviderRebuild() {
         val events = mutableListOf<String>()
-        val result = recoverCatalogAfterCorruption(
-            mode = CatalogCorruptionRecoveryMode.FIRST_PAINT,
-            reset = { events += "reset" },
-            rebuild = {
-                events += "rebuild"
-                listOf("unexpected")
-            },
-            emptyValue = emptyList(),
-        )
-
-        assertEquals(emptyList<String>(), result)
+        assertThrows(CatalogFirstPaintUnavailableException::class.java) {
+            runBlocking {
+                recoverCatalogAfterCorruption(
+                    mode = CatalogCorruptionRecoveryMode.FIRST_PAINT,
+                    reset = { events += "reset" },
+                    rebuild = {
+                        events += "rebuild"
+                        listOf("unexpected")
+                    },
+                )
+            }
+        }
         assertEquals(listOf("reset"), events)
     }
 
@@ -389,7 +390,6 @@ class DurabilityInvariantTest {
                 events += "rebuild"
                 listOf(recovered)
             },
-            emptyValue = emptyList(),
         )
 
         assertEquals(listOf(recovered), result)
@@ -408,7 +408,6 @@ class DurabilityInvariantTest {
                         events += "rebuild"
                         throw IOException("still unavailable")
                     },
-                    emptyValue = emptyList<String>(),
                 )
             }
         }

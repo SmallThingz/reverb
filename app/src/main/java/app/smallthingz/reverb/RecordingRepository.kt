@@ -27,15 +27,18 @@ internal enum class CatalogCorruptionRecoveryMode {
     REFRESH,
 }
 
+internal class CatalogFirstPaintUnavailableException : IOException(
+    "Recording catalog was reset after corruption and requires storage reconciliation",
+)
+
 internal suspend fun <T> recoverCatalogAfterCorruption(
     mode: CatalogCorruptionRecoveryMode,
     reset: () -> Unit,
     rebuild: suspend () -> T,
-    emptyValue: T,
 ): T {
     reset()
     return when (mode) {
-        CatalogCorruptionRecoveryMode.FIRST_PAINT -> emptyValue
+        CatalogCorruptionRecoveryMode.FIRST_PAINT -> throw CatalogFirstPaintUnavailableException()
         CatalogCorruptionRecoveryMode.REFRESH -> rebuild()
     }
 }
@@ -71,7 +74,6 @@ object RecordingRepository {
                         mode = CatalogCorruptionRecoveryMode.REFRESH,
                         reset = { RecordingDatabase.resetAfterCorruption() },
                         rebuild = { refreshLocked(context) },
-                        emptyValue = emptyList(),
                     )
                 }
             }
@@ -108,11 +110,10 @@ object RecordingRepository {
                     // The preservation handler froze and copied the corrupt database before
                     // removing its active files. First paint must not crash while waiting for
                     // refresh() to rebuild from authoritative storage.
-                    recoverCatalogAfterCorruption(
+                    recoverCatalogAfterCorruption<List<RecordingEntity>>(
                         mode = CatalogCorruptionRecoveryMode.FIRST_PAINT,
                         reset = { RecordingDatabase.resetAfterCorruption() },
-                        rebuild = { emptyList() },
-                        emptyValue = emptyList(),
+                        rebuild = { error("FIRST_PAINT never rebuilds providers") },
                     )
                 }
             }

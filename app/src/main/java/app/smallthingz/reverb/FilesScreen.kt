@@ -296,14 +296,16 @@ fun FilesScreen(
             return@LaunchedEffect
         }
         if (!hasLoaded) {
-            recordings = try {
-                RecordingRepository.listKnown(context)
+            try {
+                recordings = RecordingRepository.listKnown(context)
+                hasLoaded = true
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                emptyList()
+                // A local catalog read failure is not an authoritative empty Library. Keep the
+                // last known rows and leave first-load pending; the scheduled reconciliation
+                // below owns user-visible failure reporting if storage is still unavailable.
             }
-            hasLoaded = true
         }
 
         // Guarantee a first frame from the local DB before any SAF/filesystem work.

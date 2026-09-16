@@ -43,6 +43,7 @@
 
 - Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or replace the source recording as part of trim.
 - Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
+- Library/catalog read uncertainty is never an authoritative empty Library: preserve the last known rows, keep first-load pending, and let storage reconciliation retry; catalog-corruption first paint signals unavailable after preservation/reset instead of publishing a transient empty snapshot.
 - Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
 - Verified exports survive metadata/UI/service failures; service teardown is not user cancellation, and main-thread service teardown must not await in-flight export executor completion.
 - UI-started exports may outlive the Capture composition. When that UI stops or disposes, the retained export receiver releases all Activity/Compose callbacks and finishes with application-context bookkeeping/notification only; the Service must never retain a dead Capture UI for the export lifetime.
