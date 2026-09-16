@@ -64,6 +64,11 @@ internal fun recordingTileDurationSeconds(
     ReverbService.BufferSlot.LOOPING -> snapshot.loopingSeconds
 }.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
 
+internal fun recordingTileShowsDuration(
+    bufferSlot: ReverbService.BufferSlot,
+    snapshot: RecordingTileSnapshot,
+): Boolean = !(snapshot.listening && snapshot.activeBuffer == bufferSlot)
+
 internal fun recordingTileRefreshPriority(
     bufferSlot: ReverbService.BufferSlot,
     snapshot: RecordingTileSnapshot,
@@ -517,6 +522,7 @@ abstract class RecordingTileService : TileService() {
             }
         }
         val duration = formatShortTimer(recordingTileDurationSeconds(bufferSlot, snapshot))
+        val showDuration = permissionGranted && recordingTileShowsDuration(bufferSlot, snapshot)
         tile.label = getString(labelRes)
         tile.icon = Icon.createWithResource(this, iconRes)
         tile.state = if (!permissionGranted) {
@@ -532,12 +538,24 @@ abstract class RecordingTileService : TileService() {
                 -> Tile.STATE_UNAVAILABLE
             }
         }
-        tile.contentDescription = "${tile.label}, $status, $duration"
+        tile.contentDescription = when {
+            !permissionGranted -> "${tile.label}, $status"
+            showDuration -> "${tile.label}, $status, $duration"
+            else -> "${tile.label}, $status"
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (permissionGranted) duration else status
+            tile.subtitle = when {
+                !permissionGranted -> status
+                showDuration -> duration
+                else -> status
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            tile.stateDescription = if (permissionGranted) "$status, $duration" else status
+            tile.stateDescription = when {
+                !permissionGranted -> status
+                showDuration -> "$status, $duration"
+                else -> status
+            }
         }
         tile.updateTile()
         RecordingQuickTiles.onTileRendered(this, snapshot)

@@ -1113,6 +1113,29 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileDurationVisibility_hidesTheActuallyRecordingBufferOnly() {
+        val loopingRunning = RecordingTileSnapshot(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.LOOPING,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+            oneShotSeconds = 65.9f,
+            loopingSeconds = 3_661.2f,
+        )
+        assertTrue(recordingTileShowsDuration(ReverbService.BufferSlot.ONE_SHOT, loopingRunning))
+        assertFalse(recordingTileShowsDuration(ReverbService.BufferSlot.LOOPING, loopingRunning))
+
+        val oneShotRunning = loopingRunning.copy(activeBuffer = ReverbService.BufferSlot.ONE_SHOT)
+        assertFalse(recordingTileShowsDuration(ReverbService.BufferSlot.ONE_SHOT, oneShotRunning))
+        assertTrue(recordingTileShowsDuration(ReverbService.BufferSlot.LOOPING, oneShotRunning))
+
+        val stopped = loopingRunning.copy(listening = false)
+        assertTrue(recordingTileShowsDuration(ReverbService.BufferSlot.ONE_SHOT, stopped))
+        assertTrue(recordingTileShowsDuration(ReverbService.BufferSlot.LOOPING, stopped))
+    }
+
+    @Test
     fun quickTileDurationCache_roundTripsAtDisplayPrecision() {
         assertEquals(0L, quickTileDurationMillis(Float.NaN))
         assertEquals(0L, quickTileDurationMillis(-1f))
