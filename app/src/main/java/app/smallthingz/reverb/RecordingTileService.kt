@@ -124,6 +124,15 @@ internal fun recordingTileActionSatisfied(
     RecordingTileClickAction.NONE -> true
 }
 
+internal fun stoppedRecordingTileSnapshot(
+    persisted: RecordingTileSnapshot,
+    live: RecordingTileSnapshot?,
+): RecordingTileSnapshot = persisted.copy(
+    listening = false,
+    oneShotSeconds = live?.oneShotSeconds ?: persisted.oneShotSeconds,
+    loopingSeconds = live?.loopingSeconds ?: persisted.loopingSeconds,
+)
+
 internal object RecordingQuickTileStateCache {
     @Volatile
     private var liveSnapshot: RecordingTileSnapshot? = null
@@ -137,14 +146,18 @@ internal object RecordingQuickTileStateCache {
     }
 
     fun markServiceStopped(context: Context): RecordingTileSnapshot {
-        val stopped = read(context).copy(listening = false)
+        // Persisted settings own the stopped state. The last live snapshot contributes only
+        // duration counters, so a concurrent Settings commit cannot be overwritten by stale
+        // runtime enabled/full/destination fields during Service teardown.
+        val stopped = stoppedRecordingTileSnapshot(readPersisted(context), liveSnapshot)
         liveSnapshot = stopped
         persistDurations(context, stopped)
         return stopped
     }
 
-    fun read(context: Context): RecordingTileSnapshot {
-        liveSnapshot?.let { return it }
+    fun read(context: Context): RecordingTileSnapshot = liveSnapshot ?: readPersisted(context)
+
+    private fun readPersisted(context: Context): RecordingTileSnapshot {
         val prefs = getRecorderPreferences(context)
         return RecordingTileSnapshot(
             listening = false,

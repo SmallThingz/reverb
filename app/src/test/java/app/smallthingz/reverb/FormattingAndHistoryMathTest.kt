@@ -1227,6 +1227,32 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun stoppedQuickTileUsesPersistedSettingsButKeepsLatestDurations() {
+        val persisted = RecordingTileSnapshot(
+            listening = false,
+            activeBuffer = ReverbService.BufferSlot.LOOPING,
+            oneShotEnabled = false,
+            oneShotFull = false,
+            loopingEnabled = true,
+            oneShotSeconds = 1f,
+            loopingSeconds = 2f,
+        )
+        val staleLive = RecordingTileSnapshot(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = true,
+            loopingEnabled = false,
+            oneShotSeconds = 11f,
+            loopingSeconds = 22f,
+        )
+        assertEquals(
+            persisted.copy(oneShotSeconds = 11f, loopingSeconds = 22f),
+            stoppedRecordingTileSnapshot(persisted, staleLive),
+        )
+    }
+
+    @Test
     fun quickTileDurationCache_roundTripsAtDisplayPrecision() {
         assertEquals(0L, quickTileDurationMillis(Float.NaN))
         assertEquals(0L, quickTileDurationMillis(-1f))
