@@ -185,6 +185,16 @@ internal sealed interface CaptureSaveStatus {
 internal fun markExportCancelRequested(status: CaptureSaveStatus?): CaptureSaveStatus? =
     if (status is CaptureSaveStatus.Saving) status.copy(cancellable = false) else status
 
+internal fun reconcileCaptureExportStatus(
+    exporting: Boolean,
+    receiverAttached: Boolean,
+    status: CaptureSaveStatus?,
+): CaptureSaveStatus? = when {
+    exporting && status == null -> CaptureSaveStatus.Saving(cancellable = true)
+    !exporting && !receiverAttached && status is CaptureSaveStatus.Saving -> null
+    else -> status
+}
+
 private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
@@ -273,6 +283,7 @@ fun CaptureScreen(
                     oneShotIsEnabled: Boolean,
                     oneShotIsFull: Boolean,
                     loopingIsEnabled: Boolean,
+                    exporting: Boolean,
                 ) {
                     if (!shouldApplyRecorderStateSnapshot(
                             snapshotConnectionGeneration = requestConnectionGeneration,
@@ -292,6 +303,12 @@ fun CaptureScreen(
                     oneShotEnabled = oneShotIsEnabled
                     oneShotFull = oneShotIsFull
                     loopingEnabled = loopingIsEnabled
+                    isSaving = exporting
+                    saveStatus = reconcileCaptureExportStatus(
+                        exporting = exporting,
+                        receiverAttached = bookkeeping.activeSaveReceiver != null,
+                        status = saveStatus,
+                    )
 
                     if (!bookkeeping.startupBufferChosen) {
                         selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(

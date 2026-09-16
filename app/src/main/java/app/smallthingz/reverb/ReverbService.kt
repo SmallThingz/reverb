@@ -2153,6 +2153,7 @@ class ReverbService : Service() {
                 val loopingBytes = availableBufferedSampleBytes(BufferSlot.LOOPING)
                 val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
                 val listening = isLogicalListeningState(state, isListeningEnabled())
+                val exporting = hasActiveExport()
                 val activeBuffer = activeBufferSlot
                 mainHandler.post {
                     callback.state(
@@ -2166,6 +2167,7 @@ class ReverbService : Service() {
                         oneShotBufferEnabled,
                         oneShotFull,
                         loopingBufferEnabled,
+                        exporting,
                     )
                 }
             } catch (error: Exception) {
@@ -2183,6 +2185,7 @@ class ReverbService : Service() {
                         oneShotBufferEnabled,
                         false,
                         loopingBufferEnabled,
+                        hasActiveExport(),
                     )
                 }
             }
@@ -2850,6 +2853,7 @@ class ReverbService : Service() {
             oneShotIsEnabled: Boolean,
             oneShotIsFull: Boolean,
             loopingIsEnabled: Boolean,
+            exporting: Boolean,
         )
     }
 

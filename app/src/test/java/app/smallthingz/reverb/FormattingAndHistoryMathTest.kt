@@ -1785,6 +1785,33 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun exportStateSnapshotRestoresDetachedUiBusyState() {
+        val restored = reconcileCaptureExportStatus(
+            exporting = true,
+            receiverAttached = false,
+            status = null,
+        )
+        assertEquals(CaptureSaveStatus.Saving(cancellable = true), restored)
+        assertEquals(
+            null,
+            reconcileCaptureExportStatus(
+                exporting = false,
+                receiverAttached = false,
+                status = restored,
+            ),
+        )
+        val attached = CaptureSaveStatus.Saving(cancellable = false)
+        assertEquals(
+            attached,
+            reconcileCaptureExportStatus(
+                exporting = false,
+                receiverAttached = true,
+                status = attached,
+            ),
+        )
+    }
+
+    @Test
     fun exportCancelRequest_keepsSavingStatusVisibleAndDisablesRepeatCancel() {
         assertEquals(
             CaptureSaveStatus.Saving(cancellable = false),
