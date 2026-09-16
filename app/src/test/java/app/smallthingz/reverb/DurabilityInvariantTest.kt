@@ -1536,6 +1536,19 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun malformedDeletionJournalRetainsSuppressionWithoutDeleteAuthority() {
+        val id = "/storage/emulated/0/Music/Reverb/clip.wav"
+        val encodedId = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(id.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        val malformed = "v3|$encodedId|4|${"cd".repeat(32)}|0|1|not-a-uuid|broken"
+
+        assertEquals(null, decodePendingDeletionIntent(malformed))
+        assertEquals(id, pendingDeletionSuppressedId(malformed))
+        assertEquals("content://legacy/id", pendingDeletionSuppressedId("content://legacy/id"))
+        assertEquals(null, pendingDeletionSuppressedId("v99|$encodedId|broken"))
+    }
+
+    @Test
     fun claimedFileDeletion_deletesExactObservedObject() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "delete-exact-").toFile()

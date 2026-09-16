@@ -340,9 +340,7 @@ object RecordingRepository {
         getRecorderPreferences(context).requireDurableStringSet(PrefKey.PENDING_RECORDING_DELETIONS)
 
     private fun pendingDeletionIds(context: Context): Set<String> =
-        pendingDeletionEntries(context).mapNotNullTo(mutableSetOf()) { raw ->
-            decodePendingDeletionIntent(raw)?.id ?: raw.takeUnless(::isEncodedPendingDeletionEntry)
-        }
+        pendingDeletionEntries(context).mapNotNullTo(mutableSetOf(), ::pendingDeletionSuppressedId)
 
     private fun createPendingDeletionIntent(
         context: Context,
@@ -375,7 +373,7 @@ object RecordingRepository {
     private fun putPendingDeletionLocked(context: Context, intent: PendingDeletionIntent): Boolean {
         val current = pendingDeletionEntries(context)
         val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            decodePendingDeletionIntent(raw)?.id == intent.id || raw == intent.id
+            pendingDeletionSuppressedId(raw) == intent.id
         }
         updated += encodePendingDeletionIntent(intent)
         return getRecorderPreferences(context).edit()
@@ -386,7 +384,7 @@ object RecordingRepository {
     private fun removePendingDeletionLocked(context: Context, id: String): Boolean {
         val current = pendingDeletionEntries(context)
         val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            decodePendingDeletionIntent(raw)?.id == id || raw == id
+            pendingDeletionSuppressedId(raw) == id
         }
         return writePendingDeletionEntries(context, updated)
     }
@@ -886,6 +884,28 @@ private fun isEncodedPendingDeletionEntry(raw: String): Boolean =
     raw.startsWith(PENDING_DELETION_V1_PREFIX) ||
     raw.startsWith(PENDING_DELETION_V2_PREFIX) ||
     raw.startsWith(PENDING_DELETION_V3_PREFIX)
+
+private fun looksLikeVersionedPendingDeletionEntry(raw: String): Boolean {
+    if (!raw.startsWith('v')) return false
+    val separator = raw.indexOf('|')
+    if (separator <= 1) return false
+    return raw.substring(1, separator).all(Char::isDigit)
+}
+
+internal fun pendingDeletionSuppressedId(raw: String): String? {
+    decodePendingDeletionIntent(raw)?.let { return it.id }
+    if (!isEncodedPendingDeletionEntry(raw)) {
+        return raw.takeIf { it.isNotBlank() && !looksLikeVersionedPendingDeletionEntry(it) }
+    }
+    val parts = raw.split('|')
+    if (parts.size < 2) return null
+    // Suppression needs only the selected recording ID, never the digest/identity/token that
+    // grants destructive authority. Recover it from a recognized torn record so first paint
+    // cannot resurrect a deletion while recovery determines what actually happened on disk.
+    return runCatching {
+        String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+}
 
 internal fun pendingDeletionMatchesDigest(
     intent: PendingDeletionIntent,
