@@ -1044,6 +1044,57 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun publishedOutputIdentityWinsOverLaterPathOrUriObservation() {
+        val publishedProviderIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 9L,
+        )
+        val replacementProviderIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 10L,
+        )
+        val providerTarget = RecordingOutputTarget(
+            id = "content://docs/clip",
+            displayName = "clip.wav",
+            mimeType = "audio/wav",
+            storageType = RecordingStorageType.DOCUMENT,
+            directoryId = "content://docs/tree",
+            startedAtMillis = 1L,
+            publishedIdentity = publishedProviderIdentity,
+        )
+        assertEquals(
+            publishedProviderIdentity,
+            recordingIdentityForPublishedTarget(providerTarget) { replacementProviderIdentity },
+        )
+        var resolverCalls = 0
+        assertEquals(
+            publishedProviderIdentity,
+            recordingIdentityForPublishedTarget(providerTarget) {
+                resolverCalls++
+                replacementProviderIdentity
+            },
+        )
+        assertEquals(0, resolverCalls)
+        assertEquals(
+            replacementProviderIdentity,
+            recordingIdentityForPublishedTarget(providerTarget.copy(publishedIdentity = "")) {
+                replacementProviderIdentity
+            },
+        )
+
+        val publishedFileIdentity = "stat:1:2:3:4:5"
+        val replacementFileIdentity = "stat:1:3:6:7:8"
+        val fileTarget = providerTarget.copy(
+            id = "/recordings/clip.wav",
+            storageType = RecordingStorageType.FILE,
+            directoryId = "/recordings",
+            publishedIdentity = publishedFileIdentity,
+        )
+        assertEquals(
+            publishedFileIdentity,
+            recordingIdentityForPublishedTarget(fileTarget) { replacementFileIdentity },
+        )
+    }
+
+    @Test
     fun documentRename_requiresSameObjectOrVerifiedUriHandoff() {
         val before = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))

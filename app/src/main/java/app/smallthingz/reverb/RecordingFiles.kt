@@ -106,6 +106,7 @@ data class RecordingOutputTarget(
     val file: File? = null,
     val uri: Uri? = null,
     val staging: Boolean = false,
+    val publishedIdentity: String = "",
 )
 
 /** Legacy app-private location used by older Reverb builds; always scanned for recovery. */
@@ -676,8 +677,15 @@ private fun finalizeMediaStoreOutputTarget(
     ) {
         throw IOException("Published MediaStore recording no longer matches verified staging")
     }
+    val publishedIdentity = published.providerIdentity
+        ?.takeIf { it.isNotBlank() }
+        ?: throw IOException("Published MediaStore recording has no stable identity")
     val actualName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: finalName
-    return target.copy(displayName = actualName, staging = false)
+    return target.copy(
+        displayName = actualName,
+        staging = false,
+        publishedIdentity = publishedIdentity,
+    )
 }
 
 @Throws(IOException::class)
@@ -700,7 +708,8 @@ private fun finalizeFileOutputTarget(
     if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
         throw IOException("Output staging file changed after verification")
     }
-    val destination = publishStagedFile(source, target.displayName, expectedFingerprint)
+    val published = publishStagedFileResult(source, target.displayName, expectedFingerprint)
+    val destination = published.file
     if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
         MediaScannerConnection.scanFile(context, arrayOf(destination.absolutePath), arrayOf(target.mimeType), null)
     }
@@ -709,15 +718,28 @@ private fun finalizeFileOutputTarget(
         displayName = destination.name,
         file = destination,
         staging = false,
+        publishedIdentity = published.identity,
     )
 }
+
+private data class PublishedStagedFile(
+    val file: File,
+    val identity: String,
+)
 
 @Throws(IOException::class)
 internal fun publishStagedFile(
     source: File,
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
-): File {
+): File = publishStagedFileResult(source, finalDisplayName, expectedFingerprint).file
+
+@Throws(IOException::class)
+private fun publishStagedFileResult(
+    source: File,
+    finalDisplayName: String,
+    expectedFingerprint: StableOutputFingerprint? = null,
+): PublishedStagedFile {
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
     if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
         throw IOException("Verified file output has no stable object identity")
@@ -729,15 +751,19 @@ internal fun publishStagedFile(
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
             // when a racing destination exists its replacement semantics are provider-specific.
             Files.move(source.toPath(), destination.toPath())
-            if (expectedFingerprint != null) {
+            val publishedIdentity = if (expectedFingerprint != null) {
                 val published = readStableFileOutputFingerprint(destination)
                 if (published == null || !verifiedFilePublishMatches(expectedFingerprint, published)) {
                     preserveUnexpectedPublishedFile(source, destination, finalDisplayName)
                     throw IOException("Published file was not the verified staging object")
                 }
+                published.fileKey?.takeIf { it.isNotBlank() }
+                    ?: throw IOException("Published file has no stable identity")
+            } else {
+                ""
             }
             forceRecordingDirectoryDurable(parent)
-            return destination
+            return PublishedStagedFile(destination, publishedIdentity)
         } catch (_: FileAlreadyExistsException) {
             continue
         }
@@ -810,14 +836,31 @@ private fun finalizeDocumentOutputTarget(
     } ?: throw IOException("Output provider failed to atomically publish recording")
     val published = readStableOutputFingerprint(context, RecordingStorageType.DOCUMENT, renamedUri.toString())
         ?: throw IOException("Unable to verify published document recording")
-    if (!copyDigestMatches(expectedFingerprint.digest, published.digest)) {
-        throw IOException("Published document content no longer matches verified staging")
+    val sourceUriUnchanged = renamedUri == sourceUri
+    val oldState = if (sourceUriUnchanged) {
+        RecordingAssetState.PRESENT
+    } else {
+        queryUriAssetState(
+            context = context,
+            uri = sourceUri,
+            projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+            logId = sourceUri.toString(),
+        )
     }
-    if (renamedUri == sourceUri &&
-        !sameProviderObjectAcrossMutation(expectedFingerprint.providerIdentity, published.providerIdentity)
+    if (!documentRenameTransitionIsSafe(
+            sourceUriUnchanged = sourceUriUnchanged,
+            oldUriStateAfterRename = oldState,
+            beforeIdentity = expectedFingerprint.providerIdentity.orEmpty(),
+            afterIdentity = published.providerIdentity.orEmpty(),
+            beforeDigest = expectedFingerprint.digest,
+            afterDigest = published.digest,
+        )
     ) {
-        throw IOException("Published document object no longer matches verified staging")
+        throw IOException("Published document no longer matches verified staging rename")
     }
+    val publishedIdentity = published.providerIdentity
+        ?.takeIf { it.isNotBlank() }
+        ?: throw IOException("Published document recording has no stable identity")
     val actualName = DocumentFile.fromSingleUri(context, renamedUri)?.name
         ?.takeIf { it.isNotBlank() }
         ?: finalName
@@ -826,6 +869,7 @@ private fun finalizeDocumentOutputTarget(
         displayName = actualName,
         uri = renamedUri,
         staging = false,
+        publishedIdentity = publishedIdentity,
     )
 }
 
@@ -844,6 +888,11 @@ private fun documentSupportsRename(context: Context, uri: Uri): Boolean = runCat
     .getOrDefault(false)
 
 
+internal inline fun recordingIdentityForPublishedTarget(
+    target: RecordingOutputTarget,
+    resolveIdentity: () -> String,
+): String = target.publishedIdentity.takeIf { it.isNotBlank() } ?: resolveIdentity()
+
 fun buildRecordingEntity(
     context: Context,
     target: RecordingOutputTarget,
@@ -852,11 +901,15 @@ fun buildRecordingEntity(
     knownSizeBytes: Long? = null,
 ): RecordingEntity {
     val sizeBytes = knownSizeBytes?.takeIf { it > 0L } ?: resolveOutputTargetSize(context, target)
-    val identity = when (target.storageType) {
-        RecordingStorageType.FILE -> target.file?.let(::resolveFileIdentity).orEmpty()
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> target.uri?.let { resolveProviderRecordingIdentity(context, target.storageType, it) }.orEmpty()
+    // Publication already proved the exact object. A later path/URI lookup can race replacement;
+    // never let that second observation retarget the just-published catalog row.
+    val identity = recordingIdentityForPublishedTarget(target) {
+        when (target.storageType) {
+            RecordingStorageType.FILE -> target.file?.let(::resolveFileIdentity).orEmpty()
+            RecordingStorageType.DOCUMENT,
+            RecordingStorageType.MEDIASTORE,
+            -> target.uri?.let { resolveProviderRecordingIdentity(context, target.storageType, it) }.orEmpty()
+        }
     }
     return RecordingEntity(
         id = target.id,
@@ -1247,13 +1300,17 @@ fun copyRecordingToConfiguredDirectory(
         val finalizedTarget = finalizeOutputTarget(context, resolvedTarget, targetFingerprint)
         target = finalizedTarget
 
-        val copiedIdentity = when (finalizedTarget.storageType) {
-            RecordingStorageType.FILE -> finalizedTarget.file?.let(::resolveFileIdentity).orEmpty()
-            RecordingStorageType.DOCUMENT,
-            RecordingStorageType.MEDIASTORE,
-            -> finalizedTarget.uri?.let { uri ->
-                resolveProviderRecordingIdentity(context, finalizedTarget.storageType, uri)
-            }.orEmpty()
+        // The finalizer already verified and pinned the published object. Only legacy/non-staging
+        // callers may need a fresh lookup; never re-resolve a verified move target after publish.
+        val copiedIdentity = recordingIdentityForPublishedTarget(finalizedTarget) {
+            when (finalizedTarget.storageType) {
+                RecordingStorageType.FILE -> finalizedTarget.file?.let(::resolveFileIdentity).orEmpty()
+                RecordingStorageType.DOCUMENT,
+                RecordingStorageType.MEDIASTORE,
+                -> finalizedTarget.uri?.let { uri ->
+                    resolveProviderRecordingIdentity(context, finalizedTarget.storageType, uri)
+                }.orEmpty()
+            }
         }
         rebindRecordingWaveformCache(
             source = recording,
