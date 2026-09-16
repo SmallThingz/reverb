@@ -188,7 +188,7 @@ fun SettingsScreen(
     var availableCodecs by remember { mutableStateOf(supportedCodecs(supportedFormats().first())) }
     var availableSourceModes by remember { mutableStateOf(AudioSourceMode.availableModes()) }
     var availableChannelModes by remember { mutableStateOf(ChannelMode.entries.toList()) }
-    var availableRouteModes by remember { mutableStateOf(InputRouteMode.entries.toList()) }
+    var availableRouteModes by remember { mutableStateOf(supportedInputRouteModes(context)) }
     var availableSampleRates by remember { mutableStateOf(standardSampleRates()) }
 
     // Text inputs
@@ -667,8 +667,8 @@ fun SettingsScreen(
         availableFormats = supportedFormats()
         selectedFormat = configuredFormat.takeIf { it in availableFormats } ?: availableFormats.first()
 
-        availableRouteModes = InputRouteMode.entries
-        selectedRoute = configuredRouteVal
+        availableRouteModes = supportedInputRouteModes(context)
+        selectedRoute = configuredRouteVal.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
 
         selectedSampleFormat = configuredSampleFormatVal
 
