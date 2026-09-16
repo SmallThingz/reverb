@@ -61,6 +61,7 @@
 - Retention preference commits and the recovery journal form one serialized transaction: persist the recovery snapshot first, then commit preferences, and do not let retention readers observe the in-process gap. If a crash leaves the two durable copies disagreeing while history exists, capture fails closed and the UI reads the recovery copy for explicit resolution.
 - In-place PCM boundary rewrites require atomic same-directory replacement; never fall back to non-atomic replacement of the only live audio chunk.
 - Provider-backed move source deletion is content-fingerprinted and journaled before deletion; crash replay may finish metadata cleanup but must never replay physical provider deletion.
+- Provider deletion crosses into catalog cleanup only after the provider asset is positively observed missing; a provider success return followed by unavailable/present state keeps the deletion journal for later reconciliation.
 - Explicit looping-retention shrink keeps the maximum newest frame-aligned window; partial boundary trimming waits for active read leases rather than dropping an extra whole chunk.
 
 - Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob renderer/animation to implement the timeline.

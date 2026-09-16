@@ -981,6 +981,11 @@ internal fun recordingDestructiveIdentityMatches(context: Context, recording: Re
 internal fun recordingDeletionIdentityMatches(context: Context, recording: RecordingEntity): Boolean =
     recordingDestructiveIdentityMatches(context, recording)
 
+internal fun providerDeletionCompleted(
+    deleteReportedSuccess: Boolean,
+    observedState: RecordingAssetState,
+): Boolean = deleteReportedSuccess && observedState == RecordingAssetState.MISSING
+
 internal fun resolveFileIdentity(file: File): String {
     val attributes = runCatching {
         Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
@@ -1118,10 +1123,12 @@ internal fun deleteVerifiedRecordingAsset(
 
         RecordingStorageType.DOCUMENT -> runCatching {
             val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
-            document?.delete() == true
+            val deleted = document?.delete() == true
+            providerDeletionCompleted(deleted, recordingAssetState(context, recording))
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
         RecordingStorageType.MEDIASTORE -> runCatching {
-            context.contentResolver.delete(recording.id.toUri(), null, null) > 0
+            val deleted = context.contentResolver.delete(recording.id.toUri(), null, null) > 0
+            providerDeletionCompleted(deleted, recordingAssetState(context, recording))
         }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
     }
 }

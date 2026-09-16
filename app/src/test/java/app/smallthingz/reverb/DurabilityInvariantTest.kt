@@ -966,6 +966,14 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun providerDeleteRequiresPositivePostDeleteAbsence() {
+        assertTrue(providerDeletionCompleted(true, RecordingAssetState.MISSING))
+        assertFalse(providerDeletionCompleted(true, RecordingAssetState.PRESENT))
+        assertFalse(providerDeletionCompleted(true, RecordingAssetState.UNAVAILABLE))
+        assertFalse(providerDeletionCompleted(false, RecordingAssetState.MISSING))
+    }
+
+    @Test
     fun moveResult_reportsCopyAndSourceCleanupFailures() {
         assertFalse(RecordingRepository.MoveResult(moved = 1).hasFailures)
         assertTrue(RecordingRepository.MoveResult(failed = 1).hasFailures)
