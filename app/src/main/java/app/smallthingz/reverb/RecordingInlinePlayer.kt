@@ -203,6 +203,7 @@ private class InlinePlayerBookkeeping {
     var resumeAfterScrub = false
     var released = false
     var fineSeekShuttleActive = false
+    var initialAutoStartPending = true
 }
 
 @Composable
@@ -212,10 +213,10 @@ internal fun RecordingInlinePlayer(
     onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
     onWaveformCached: (RecordingEntity) -> Unit,
-    onBusyChange: (Boolean) -> Unit = {},
     onCollapse: () -> Unit,
     onPlaybackFailed: () -> Unit,
     modifier: Modifier = Modifier,
+    onBusyChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
@@ -454,6 +455,7 @@ internal fun RecordingInlinePlayer(
     DisposableEffect(recordingRevisionKey) {
         var disposed = false
         playbackBookkeeping.released = false
+        playbackBookkeeping.initialAutoStartPending = true
         val player = MediaPlayer()
         player.setAudioAttributes(
             AudioAttributes.Builder()
@@ -469,8 +471,15 @@ internal fun RecordingInlinePlayer(
             if (!trimMode || trimEndMillis >= previousDuration - 1) trimEndMillis = duration
             currentPosition = currentPosition.coerceIn(0, duration)
             if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                preparedPlayer.start()
-                isPlaying = true
+                runCatching { preparedPlayer.start() }
+                    .onSuccess {
+                        playbackBookkeeping.initialAutoStartPending = false
+                        isPlaying = true
+                    }
+                    .onFailure {
+                        releasePlayer()
+                        onPlaybackFailed()
+                    }
             }
         }
         player.setOnSeekCompleteListener { activePlayer ->
@@ -528,17 +537,36 @@ internal fun RecordingInlinePlayer(
 
     DisposableEffect(lifecycleOwner, recordingRevisionKey) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                if (playbackBookkeeping.fineSeekShuttleActive) {
-                    fineSeekPreviewController.stopShuttle()
-                    playbackBookkeeping.fineSeekShuttleActive = false
-                    isScrubbing = false
-                    playbackBookkeeping.resumeAfterScrub = false
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    if (prepared && playbackBookkeeping.initialAutoStartPending && !trimSaving) {
+                        val player = mediaPlayer
+                        runCatching { player?.start() }
+                            .onSuccess {
+                                if (player != null) {
+                                    playbackBookkeeping.initialAutoStartPending = false
+                                    isPlaying = true
+                                }
+                            }
+                            .onFailure {
+                                releasePlayer()
+                                onPlaybackFailed()
+                            }
+                    }
                 }
-                if (isPlaying) {
-                    runCatching { mediaPlayer?.pause() }
-                    isPlaying = false
+                Lifecycle.Event.ON_PAUSE -> {
+                    if (playbackBookkeeping.fineSeekShuttleActive) {
+                        fineSeekPreviewController.stopShuttle()
+                        playbackBookkeeping.fineSeekShuttleActive = false
+                        isScrubbing = false
+                        playbackBookkeeping.resumeAfterScrub = false
+                    }
+                    if (isPlaying) {
+                        runCatching { mediaPlayer?.pause() }
+                        isPlaying = false
+                    }
                 }
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
