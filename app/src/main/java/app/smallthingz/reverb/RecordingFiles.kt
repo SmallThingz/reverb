@@ -856,6 +856,31 @@ private fun finalizeDocumentOutputTarget(
             afterDigest = published.digest,
         )
     ) {
+        // The provider has already crossed its rename boundary. Do not trust the returned URI
+        // enough to delete it, but do keep an unsafe/copy-like result out of Reverb's Library.
+        // Suppress the original staging URI too when it survived so recovery cannot repeatedly
+        // invoke the same broken rename and manufacture more final-name copies.
+        val returnedSuppressed = suppressProviderOutputWithoutDeletion(
+            context = context,
+            storageType = RecordingStorageType.DOCUMENT,
+            id = renamedUri.toString(),
+            digest = published.digest,
+        )
+        val sourceSuppressed = sourceUriUnchanged || suppressProviderOutputWithoutDeletion(
+            context = context,
+            storageType = RecordingStorageType.DOCUMENT,
+            id = sourceUri.toString(),
+            digest = expectedFingerprint.digest,
+        )
+        if (!returnedSuppressed || !sourceSuppressed) {
+            Log.w(TAG, "Unable to durably suppress unsafe document publish $sourceUri -> $renamedUri")
+        }
+        val recoveryRevoked = runCatching {
+            removeVerifiedExportStaging(context, target.storageType, target.id)
+        }.getOrDefault(false)
+        if (!recoveryRevoked) {
+            Log.w(TAG, "Unable to revoke recovery for unsafe document publish ${target.id}")
+        }
         throw IOException("Published document no longer matches verified staging rename")
     }
     val publishedIdentity = published.providerIdentity

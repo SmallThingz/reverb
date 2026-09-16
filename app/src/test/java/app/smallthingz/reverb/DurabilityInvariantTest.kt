@@ -1254,6 +1254,38 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun suppressionOnlyProviderOutput_neverGainsDeletionAuthority() {
+        val digest = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val record = requireNotNull(
+            suppressionOnlyProviderOutputRecord(
+                RecordingStorageType.DOCUMENT, "content://docs/unsafe-final", digest,
+            ),
+        )
+        val currentIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/unsafe-final", 4L, 9L,
+        )
+
+        assertEquals(null, record.providerIdentity)
+        assertEquals(null, record.fileKey)
+        assertEquals(
+            PendingOutputCleanupMatch.UNPROVEN,
+            classifyPendingOutputCleanup(
+                record, digest.byteCount, digest.sha256.toHexString(), null, currentIdentity,
+            ),
+        )
+        assertEquals(
+            PendingOutputCleanupMatch.REPLACED,
+            classifyPendingOutputCleanup(
+                record, digest.byteCount, "aa".repeat(32), null, currentIdentity,
+            ),
+        )
+        assertEquals(
+            null,
+            suppressionOnlyProviderOutputRecord(RecordingStorageType.FILE, "/recordings/clip.wav", digest),
+        )
+    }
+
+    @Test
     fun verifiedExportStaging_requiresExactDigestAndStableObjectIdentity() {
         val digest = CopyDigest(4L, ByteArray(32) { 0x01 })
         val fileRecord = VerifiedExportStagingRecord(

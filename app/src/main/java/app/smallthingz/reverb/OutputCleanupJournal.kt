@@ -184,6 +184,35 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
     pendingOutputCleanupEntriesLocked(context).mapNotNullTo(mutableSetOf(), ::pendingOutputCleanupSuppressedId)
 }
 
+internal fun suppressionOnlyProviderOutputRecord(
+    storageType: RecordingStorageType,
+    id: String,
+    digest: CopyDigest,
+): PendingOutputCleanupRecord? {
+    if (storageType == RecordingStorageType.FILE || id.isBlank() || digest.byteCount <= 0L) return null
+    return PendingOutputCleanupRecord(
+        storageType = storageType,
+        id = id,
+        byteCount = digest.byteCount,
+        sha256Hex = digest.sha256.toHexString(),
+        fileKey = null,
+        providerIdentity = null,
+    )
+}
+
+internal fun suppressProviderOutputWithoutDeletion(
+    context: Context,
+    storageType: RecordingStorageType,
+    id: String,
+    digest: CopyDigest,
+): Boolean = runOutputCleanupFailClosed {
+    val record = suppressionOnlyProviderOutputRecord(storageType, id, digest) ?: return@runOutputCleanupFailClosed false
+    // Deliberately omit provider identity. The cleanup replay classifier therefore remains
+    // UNPROVEN while these exact bytes occupy the URI: enough to suppress Library import,
+    // never enough to authorize physical deletion of an uncertain provider object.
+    putPendingOutputCleanup(context, record)
+}
+
 internal fun verifiedExportStagingRecordMatches(
     record: VerifiedExportStagingRecord,
     fingerprint: StableOutputFingerprint,
