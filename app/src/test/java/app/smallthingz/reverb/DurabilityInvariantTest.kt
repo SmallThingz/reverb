@@ -946,6 +946,19 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun freshMoveCopyCollisionPreservesExistingTargets() {
+        val occupied = setOf("clip.wav", "clip (2).wav")
+        assertEquals(
+            "clip (3).wav",
+            findAvailableDisplayName("clip.wav") { candidate -> candidate in occupied },
+        )
+        assertEquals(
+            "clip",
+            findAvailableDisplayName("clip") { false },
+        )
+    }
+
+    @Test
     fun moveSourceCleanup_neverDeletesChangedOrUnavailableSource() {
         assertEquals(
             MoveSourceCleanupAction.DELETE_SOURCE,

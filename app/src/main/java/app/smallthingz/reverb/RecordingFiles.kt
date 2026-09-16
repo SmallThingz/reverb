@@ -2365,7 +2365,7 @@ private fun createDocumentOutputTarget(
     )
 }
 
-private fun findAvailableDisplayName(
+internal fun findAvailableDisplayName(
     requestedDisplayName: String,
     exists: (String) -> Boolean,
 ): String {

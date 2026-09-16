@@ -493,15 +493,11 @@ object RecordingRepository {
                 var moved = 0
                 var failed = 0
                 var cleanupFailed = 0
-                val durableTargets = current
-                    .filter { it.directoryId == targetDirectoryId && isRecordingEligibleForMove(it.id, pendingIds) }
-                    .toMutableList()
                 moveCandidates.forEach { source ->
-                    val recoveredTarget = durableTargets.firstOrNull { candidate ->
-                        candidate.displayName == source.displayName &&
-                            recordingsHaveSameContent(context, source, candidate)
-                    }
-                    val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source)
+                    // Equal bytes/name are not proof that an existing target belongs to this
+                    // move. Without a durable source→target transaction marker, preserve any
+                    // existing target and make a fresh verified copy before touching the source.
+                    val target = copyRecordingToConfiguredDirectory(context, source)
                     if (target == null) {
                         failed++
                         return@forEach
@@ -512,7 +508,6 @@ object RecordingRepository {
                         source = source,
                         target = target,
                     )
-                    if (recoveredTarget == null) durableTargets += target
                     moved++
                     if (!cleanupComplete) cleanupFailed++
                 }
@@ -586,23 +581,17 @@ object RecordingRepository {
 
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
         val dao = dao(context)
-        val targetDirectoryId = getConfiguredOutputDirectoryId(context)
         val pendingIds = pendingDeletionIds(context)
-        val durableTargets = dao.listByDirectory(targetDirectoryId)
-            .filter { isRecordingEligibleForMove(it.id, pendingIds) }
-            .toMutableList()
         val legacy = dao.listByDirectory(legacyDirectoryId)
 
         for (source in legacy) {
             if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
             if (recordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
 
-            // If a previous process died after publishing the target but before committing
-            // the catalog switch, reuse that byte-identical target instead of duplicating it.
-            val recoveredTarget = durableTargets.firstOrNull { candidate ->
-                candidate.displayName == source.displayName && recordingsHaveSameContent(context, source, candidate)
-            }
-            val target = recoveredTarget ?: copyRecordingToConfiguredDirectory(context, source) ?: continue
+            // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
+            // verified copy preserves intentionally duplicated recordings; only an explicit
+            // future source→target transaction marker may authorize target reuse.
+            val target = copyRecordingToConfiguredDirectory(context, source) ?: continue
 
             val cleanupComplete = commitVerifiedMoveLocked(
                 context = context,
@@ -610,7 +599,6 @@ object RecordingRepository {
                 source = source,
                 target = target,
             )
-            if (recoveredTarget == null) durableTargets += target
             if (!cleanupComplete) {
                 Log.w(
                     "RecordingRepository",
@@ -677,7 +665,7 @@ object RecordingRepository {
     private suspend fun updateMissingStatesLocked(
         context: Context,
         skipDirectoryId: String? = null,
-    ): Int {
+    ) {
         val dao = dao(context)
         val all = dao.listAll()
         val nowMillis = System.currentTimeMillis()
@@ -692,7 +680,6 @@ object RecordingRepository {
             if (updated != recording) updates += updated
         }
         dao.applyChanges(updates, emptyList())
-        return 0
     }
 
     private fun cleanupMovedSourceAfterVerifiedCopy(
