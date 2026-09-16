@@ -48,6 +48,13 @@ internal data class RecordingIncident(
     val recoveryPending: Boolean get() = resumedAtMillis == 0L
 }
 
+internal fun toggleRecordingIncidentAcknowledgement(
+    incident: RecordingIncident,
+    acknowledgedAtMillis: Long,
+): RecordingIncident = incident.copy(
+    acknowledgedAtMillis = if (incident.acknowledged) 0L else acknowledgedAtMillis.coerceAtLeast(1L),
+)
+
 private data class ActiveRecordingSessionMarker(
     val armed: Boolean,
     val pid: Int,
@@ -208,16 +215,19 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun acknowledgeIncident(context: Context, incident: RecordingIncident): List<RecordingIncident> {
+    fun toggleIncidentAcknowledged(context: Context, incident: RecordingIncident): List<RecordingIncident> {
         val appContext = context.applicationContext
         val file = historyFile(appContext)
         val existing = readHistory(file)
         val index = existing.indexOfFirst {
             it.kind == incident.kind && it.occurredAtMillis == incident.occurredAtMillis
         }
-        if (index < 0 || existing[index].acknowledged) return existing
+        if (index < 0) return existing
         val updated = existing.toMutableList().apply {
-            this[index] = this[index].copy(acknowledgedAtMillis = System.currentTimeMillis())
+            this[index] = toggleRecordingIncidentAcknowledgement(
+                incident = this[index],
+                acknowledgedAtMillis = System.currentTimeMillis(),
+            )
         }
         writeHistory(file, updated)
         signalHistoryChanged()

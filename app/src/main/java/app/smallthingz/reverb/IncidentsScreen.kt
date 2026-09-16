@@ -2,7 +2,10 @@ package app.smallthingz.reverb
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -74,28 +78,19 @@ internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
     else -> "Process exit $reason"
 }
 
-private fun formatIncidentWindow(incident: RecordingIncident): String {
-    val dateFormatter = incidentDateFormatter()
-    val clockFormatter = incidentClockFormatter()
-    val startAt = Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault())
-    val start = clockFormatter.format(startAt)
-    val end = when {
-        incident.resumedAtMillis > 0L -> {
-            val resumedAt = Instant.ofEpochMilli(incident.resumedAtMillis).atZone(ZoneId.systemDefault())
-            if (resumedAt.toLocalDate() == startAt.toLocalDate()) {
-                clockFormatter.format(resumedAt)
-            } else {
-                "${dateFormatter.format(resumedAt)} ${clockFormatter.format(resumedAt)}"
-            }
-        }
-        incident.recoveryPending -> "…"
-        else -> "?"
+internal fun formatIncidentStopSummary(incident: RecordingIncident): String {
+    val stoppedAt = incidentClockFormatter().format(
+        Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault()),
+    )
+    val duration = recordingIncidentDowntimeMillis(incident)?.let { millis ->
+        val seconds = ((millis + 999L) / 1000L).coerceAtLeast(1L)
+        formatDurationInput(seconds)
+    } ?: if (incident.recoveryPending) {
+        "…"
+    } else {
+        "?"
     }
-    val downtime = recordingIncidentDowntimeMillis(incident)?.let { duration ->
-        val seconds = ((duration + 999L) / 1000L).coerceAtLeast(1L)
-        " · ${formatDurationInput(seconds)} offline"
-    }.orEmpty()
-    return "$start → $end$downtime"
+    return "Stopped at $stoppedAt for $duration"
 }
 
 private fun formatIncidentMemory(kb: Long): String {
@@ -157,7 +152,7 @@ private fun incidentAgeLine(incident: RecordingIncident): String = buildList {
 internal fun IncidentsScreen(
     incidents: List<RecordingIncident>,
     onBack: () -> Unit,
-    onAcknowledge: (RecordingIncident) -> Unit,
+    onToggleAcknowledged: (RecordingIncident) -> Unit,
     modifier: Modifier = Modifier,
     backProgress: Float = 0f,
     backDirection: Float = 1f,
@@ -209,7 +204,7 @@ internal fun IncidentsScreen(
                         items = incidents.asReversed(),
                         key = { incident -> "${incident.kind.storageCode}:${incident.occurredAtMillis}" },
                     ) { incident ->
-                        IncidentCard(incident = incident, onAcknowledge = { onAcknowledge(incident) })
+                        IncidentCard(incident = incident, onToggleAcknowledged = { onToggleAcknowledged(incident) })
                     }
                 }
             }
@@ -220,21 +215,47 @@ internal fun IncidentsScreen(
 @Composable
 private fun IncidentCard(
     incident: RecordingIncident,
-    onAcknowledge: () -> Unit,
+    onToggleAcknowledged: () -> Unit,
 ) {
     val unacknowledged = !incident.acknowledged
     val date = remember(incident.occurredAtMillis) { formatRecordingIncidentTime(incident.occurredAtMillis) }
-    val window = remember(incident.occurredAtMillis, incident.resumedAtMillis) { formatIncidentWindow(incident) }
+    val stopSummary = remember(incident.occurredAtMillis, incident.resumedAtMillis) {
+        formatIncidentStopSummary(incident)
+    }
     val cause = remember(incident) { incidentCauseLine(incident) }
     val runtime = remember(incident) { incidentRuntimeLine(incident) }
     val age = remember(incident) { incidentAgeLine(incident) }
     val description = incident.description?.takeIf { it.isNotBlank() }
+    val context = LocalContext.current
+    val copyLabel = stringResource(R.string.incident_copy_label)
+    val copiedMessage = stringResource(R.string.incident_copied)
+    val copyText = remember(incident, date, stopSummary, cause, runtime, age, description) {
+        buildList {
+            add(date)
+            add(stopSummary)
+            if (cause.isNotEmpty()) add(cause)
+            if (runtime.isNotEmpty()) add(runtime)
+            if (age.isNotEmpty()) add(age)
+            if (description != null) add(description)
+        }.joinToString("\n")
+    }
+    val copyIncident = {
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+            ClipData.newPlainText(copyLabel, copyText),
+        )
+        AppFeedbackCenter.post(copiedMessage, FeedbackTone.SUCCESS)
+    }
     val hasDetails = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
     val border = if (unacknowledged) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
     val fill = if (unacknowledged) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerHigh
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onToggleAcknowledged,
+                onLongClick = copyIncident,
+            ),
         shape = RoundedCornerShape(18.dp),
         color = fill,
         border = BorderStroke(1.dp, border),
@@ -243,17 +264,30 @@ private fun IncidentCard(
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text(date, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                    Text(window, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stopSummary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (unacknowledged) {
-                    IconButton(onClick = onAcknowledge, modifier = Modifier.size(38.dp)) {
-                        Icon(
-                            imageVector = AppIcons.check,
-                            contentDescription = stringResource(R.string.incident_dismiss_alert),
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .combinedClickable(
+                            onClick = onToggleAcknowledged,
+                            onLongClick = copyIncident,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (incident.acknowledged) AppIcons.checked else AppIcons.unchecked,
+                        contentDescription = stringResource(
+                            if (incident.acknowledged) R.string.incident_mark_unchecked
+                            else R.string.incident_mark_checked,
+                        ),
+                        tint = if (unacknowledged) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
             }
             if (hasDetails) {

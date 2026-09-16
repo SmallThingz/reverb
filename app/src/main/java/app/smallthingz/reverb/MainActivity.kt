@@ -867,14 +867,14 @@ private fun MainScreen(
         }
     }
 
-    fun acknowledgeIncident(incident: RecordingIncident) {
+    fun toggleIncidentAcknowledged(incident: RecordingIncident) {
         scope.launch {
             val updated = withContext(Dispatchers.IO) {
-                runCatching { RecordingIncidentStore.acknowledgeIncident(context, incident) }
+                runCatching { RecordingIncidentStore.toggleIncidentAcknowledged(context, incident) }
             }
             updated.onSuccess { recordingIncidents = it }
                 .onFailure {
-                    AppFeedbackCenter.post(context.getString(R.string.incident_dismiss_failed), FeedbackTone.ERROR)
+                    AppFeedbackCenter.post(context.getString(R.string.incident_update_failed), FeedbackTone.ERROR)
                 }
         }
     }
@@ -886,7 +886,7 @@ private fun MainScreen(
 
     LaunchedEffect(Unit) {
         // StateFlow emits immediately for the initial load, then refreshes again whenever
-        // recovery, resume-time completion, or acknowledgement changes durable history.
+        // recovery, resume-time completion, or checked-state changes durable history.
         RecordingIncidentStore.historyRevision.collect { loadIncidents() }
     }
 
@@ -1173,7 +1173,7 @@ private fun MainScreen(
             IncidentsScreen(
                 incidents = recordingIncidents,
                 onBack = { showIncidents = false },
-                onAcknowledge = ::acknowledgeIncident,
+                onToggleAcknowledged = ::toggleIncidentAcknowledged,
                 backProgress = incidentsBackMotion.progress.value,
                 backDirection = predictiveBackHorizontalDirection(incidentsBackMotion.swipeEdge),
                 modifier = Modifier

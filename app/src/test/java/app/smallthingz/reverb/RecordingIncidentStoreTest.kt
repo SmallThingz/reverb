@@ -84,6 +84,39 @@ class RecordingIncidentStoreTest {
         assertTrue(updated[2].resumedAtMillis == 900L)
     }
 
+
+    @Test
+    fun acknowledgementCanBeCheckedAndUncheckedWithoutChangingIncidentIdentity() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 1_000L,
+            resumedAtMillis = 2_000L,
+            exitReason = ApplicationExitInfo.REASON_PACKAGE_UPDATED,
+        )
+        val checked = toggleRecordingIncidentAcknowledgement(incident, acknowledgedAtMillis = 3_000L)
+        assertTrue(checked.acknowledged)
+        assertTrue(checked.acknowledgedAtMillis == 3_000L)
+        assertTrue(checked.occurredAtMillis == incident.occurredAtMillis)
+        assertTrue(checked.resumedAtMillis == incident.resumedAtMillis)
+
+        val unchecked = toggleRecordingIncidentAcknowledgement(checked, acknowledgedAtMillis = 4_000L)
+        assertFalse(unchecked.acknowledged)
+        assertTrue(unchecked.acknowledgedAtMillis == 0L)
+        assertTrue(unchecked.occurredAtMillis == incident.occurredAtMillis)
+    }
+
+    @Test
+    fun incidentStopSummaryShowsStopTimeAndDurationWithoutRestartTime() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            resumedAtMillis = 15_250L,
+        )
+        val summary = formatIncidentStopSummary(incident)
+        assertTrue(summary.startsWith("Stopped at "))
+        assertTrue(summary.contains(" for 0:06"))
+        assertFalse(summary.contains("→"))
+        assertFalse(summary.contains("stopped for"))
+    }
+
     @Test
     fun downtimeAndAcknowledgementStayIndependentFromHistoryRetention() {
         val incident = RecordingIncident(

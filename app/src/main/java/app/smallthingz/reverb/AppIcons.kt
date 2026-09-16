@@ -7,6 +7,8 @@ import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCut
@@ -48,6 +50,8 @@ internal object AppIcons {
     val trim: ImageVector = Icons.Rounded.ContentCut
     val back: ImageVector = Icons.AutoMirrored.Rounded.ArrowBack
     val check: ImageVector = Icons.Rounded.Check
+    val checked: ImageVector = Icons.Rounded.CheckCircle
+    val unchecked: ImageVector = Icons.Rounded.RadioButtonUnchecked
     val multiSelect: ImageVector = Icons.Rounded.SelectAll
     val play: ImageVector = Icons.Rounded.PlayArrow
     val pause: ImageVector = Icons.Rounded.Pause
