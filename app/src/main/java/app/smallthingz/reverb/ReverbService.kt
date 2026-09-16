@@ -924,10 +924,22 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
-        RecordingIncidentStore.recordCaptureStarted(this)
+        if (!armCaptureIncidentTrackingOnAudioThread()) return
+        if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
+    }
+
+    private fun armCaptureIncidentTrackingOnAudioThread(): Boolean {
+        check(audioHandler.looper == Looper.myLooper())
+        return try {
+            RecordingIncidentStore.recordCaptureStarted(this)
+            true
+        } catch (error: Exception) {
+            pauseListeningAfterPersistenceFailure("arm capture incident tracking", error)
+            false
+        }
     }
 
     private fun innerStopListening() {
@@ -1860,7 +1872,10 @@ class ReverbService : Service() {
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
         if (read == AudioRecord.ERROR_DEAD_OBJECT) {
             if (generation != listeningCommandGeneration.get() || audioRecordGeneration != generation) return 0
-            if (!restartAudioRecordOnAudioThread(generation)) {
+            if (!restartAudioRecordOnAudioThread(generation) &&
+                state == STATE_LISTENING &&
+                !persistenceFailureBlocked
+            ) {
                 throw IOException("Audio input disconnected")
             }
             return 0
@@ -1914,10 +1929,15 @@ class ReverbService : Service() {
                 releaseAudioRecord()
                 false
             } else if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                RecordingIncidentStore.recordCaptureStarted(this)
-                lastDurabilitySyncRequestNanos = System.nanoTime()
-                audioHandler.post(audioReader)
-                true
+                if (!armCaptureIncidentTrackingOnAudioThread()) {
+                    false
+                } else if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) {
+                    false
+                } else {
+                    lastDurabilitySyncRequestNanos = System.nanoTime()
+                    audioHandler.post(audioReader)
+                    true
+                }
             } else {
                 releaseAudioRecord()
                 false

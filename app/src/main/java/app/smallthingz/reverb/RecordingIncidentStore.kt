@@ -329,9 +329,9 @@ internal object RecordingIncidentStore {
         val manager = context.getSystemService(ActivityManager::class.java) ?: return null
         return runCatching {
             manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
-                .firstOrNull { info ->
-                    info.pid == marker.pid && info.timestamp >= marker.armedAtMillis
-                }
+                .asSequence()
+                .filter { info -> info.pid == marker.pid && info.timestamp >= marker.armedAtMillis }
+                .minByOrNull(ApplicationExitInfo::getTimestamp)
         }.getOrNull()
     }
 
