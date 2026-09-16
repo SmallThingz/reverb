@@ -45,11 +45,11 @@ internal fun isSpuriousRecordingProcessExitReason(reason: Int): Boolean = when (
     ApplicationExitInfo.REASON_FREEZER,
     ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
     ApplicationExitInfo.REASON_LOW_MEMORY,
-    ApplicationExitInfo.REASON_OTHER,
     ApplicationExitInfo.REASON_SIGNALED,
     -> true
 
     ApplicationExitInfo.REASON_EXIT_SELF,
+    ApplicationExitInfo.REASON_OTHER,
     ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE,
     ApplicationExitInfo.REASON_PACKAGE_UPDATED,
     ApplicationExitInfo.REASON_PERMISSION_CHANGE,
