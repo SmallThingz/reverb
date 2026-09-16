@@ -130,7 +130,7 @@ class RecordingIncidentStoreTest {
         val merged = mergeRecordingIncidentEvidence(provisional, classified)
         assertTrue(merged.exitReason == ApplicationExitInfo.REASON_PACKAGE_UPDATED)
         assertTrue(merged.exitStatus == 7)
-        assertTrue(merged.occurredAtMillis == 10_500L)
+        assertTrue(merged.occurredAtMillis == 10_000L)
         assertTrue(merged.resumedAtMillis == 12_000L)
         assertTrue(merged.acknowledgedAtMillis == 13_000L)
         assertTrue(merged.description == "package updated")

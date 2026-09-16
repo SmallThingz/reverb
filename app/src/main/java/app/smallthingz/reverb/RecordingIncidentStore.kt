@@ -89,6 +89,9 @@ internal fun mergeRecordingIncidentEvidence(
     val existingHasExitEvidence = existing.exitReason != ApplicationExitInfo.REASON_UNKNOWN
     val base = if (incomingHasExitEvidence && !existingHasExitEvidence) incoming else existing
     return base.copy(
+        // Android process death can occur after capture already stopped. Preserve the earliest
+        // observed interruption boundary while enriching it with later process-exit evidence.
+        occurredAtMillis = minOf(existing.occurredAtMillis, incoming.occurredAtMillis),
         resumedAtMillis = existing.resumedAtMillis.takeIf { it > 0L }
             ?: incoming.resumedAtMillis,
         acknowledgedAtMillis = existing.acknowledgedAtMillis.takeIf { it > 0L }
