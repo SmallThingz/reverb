@@ -173,6 +173,7 @@ class MainActivity : ComponentActivity() {
             batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         }
         themeMode = configuredThemeMode
+        val onboardingBuffers = if (showOnboarding) getConfiguredBufferAvailability(this) else null
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
@@ -186,8 +187,8 @@ class MainActivity : ComponentActivity() {
                         notificationAllowed = notificationPermissionGranted,
                         notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
                         batteryOptimizationAllowed = batteryOptimizationAllowed,
-                        initialOneShotEnabled = isConfiguredOneShotBufferEnabled(this),
-                        initialLoopingEnabled = isConfiguredLoopingBufferEnabled(this),
+                        initialOneShotEnabled = onboardingBuffers?.oneShotEnabled == true,
+                        initialLoopingEnabled = onboardingBuffers?.loopingEnabled == true,
                         onRequestMicrophone = {
                             microphonePermissionRequested = true
                             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)

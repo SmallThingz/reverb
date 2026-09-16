@@ -11,6 +11,45 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun operationalBufferAvailabilityFailsClosedAndRespectsFrameSize() {
+        val unavailable = configuredBufferAvailability(
+            retention = null,
+            channelMode = ChannelMode.STEREO,
+            sampleFormat = PcmSampleFormat.PCM_16,
+        )
+        assertFalse(unavailable.oneShotEnabled)
+        assertFalse(unavailable.loopingEnabled)
+
+        val timed = configuredBufferAvailability(
+            retention = RetentionConfiguration(
+                mode = RetentionMode.TIME,
+                oneShotSeconds = 0L,
+                oneShotSizeBytes = 1L,
+                loopingSeconds = 1L,
+                loopingSizeBytes = 0L,
+            ),
+            channelMode = ChannelMode.STEREO,
+            sampleFormat = PcmSampleFormat.PCM_16,
+        )
+        assertFalse(timed.oneShotEnabled)
+        assertTrue(timed.loopingEnabled)
+
+        val sized = configuredBufferAvailability(
+            retention = RetentionConfiguration(
+                mode = RetentionMode.SIZE,
+                oneShotSeconds = 1L,
+                oneShotSizeBytes = 3L,
+                loopingSeconds = 0L,
+                loopingSizeBytes = 4L,
+            ),
+            channelMode = ChannelMode.STEREO,
+            sampleFormat = PcmSampleFormat.PCM_16,
+        )
+        assertFalse(sized.oneShotEnabled)
+        assertTrue(sized.loopingEnabled)
+    }
+
+    @Test
     fun safePreferenceRead_fallsBackOnStoredTypeMismatch() {
         assertEquals(48_000, safePreferenceRead(48_000) { throw ClassCastException("wrong type") })
         assertEquals(96_000, safePreferenceRead(48_000) { 96_000 })

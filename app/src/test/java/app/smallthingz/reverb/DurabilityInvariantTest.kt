@@ -979,6 +979,13 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun providerOutputCleanupRequiresPositivePostDeleteAbsence() {
+        assertTrue(providerOutputCleanupCompleted(OutputCleanupAssetState.MISSING))
+        assertFalse(providerOutputCleanupCompleted(OutputCleanupAssetState.PRESENT))
+        assertFalse(providerOutputCleanupCompleted(OutputCleanupAssetState.UNAVAILABLE))
+    }
+
+    @Test
     fun providerDeleteRequiresPositivePostDeleteAbsence() {
         assertTrue(providerDeletionCompleted(true, RecordingAssetState.MISSING))
         assertFalse(providerDeletionCompleted(true, RecordingAssetState.PRESENT))

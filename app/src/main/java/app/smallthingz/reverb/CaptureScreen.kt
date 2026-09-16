@@ -228,6 +228,7 @@ fun CaptureScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
+    val initialBufferAvailability = remember(context) { getConfiguredBufferAvailability(context) }
     var service by remember { mutableStateOf<ReverbService?>(null) }
     var serviceStateHydrated by remember { mutableStateOf(false) }
     var isListening by remember { mutableStateOf(false) }
@@ -237,9 +238,9 @@ fun CaptureScreen(
     var oneShotPayloadBytes by remember { mutableLongStateOf(0L) }
     var loopingDurationSeconds by remember { mutableFloatStateOf(0f) }
     var loopingPayloadBytes by remember { mutableLongStateOf(0L) }
-    var oneShotEnabled by remember { mutableStateOf(isConfiguredOneShotBufferEnabled(context)) }
+    var oneShotEnabled by remember { mutableStateOf(initialBufferAvailability.oneShotEnabled) }
     var oneShotFull by remember { mutableStateOf(false) }
-    var loopingEnabled by remember { mutableStateOf(isConfiguredLoopingBufferEnabled(context)) }
+    var loopingEnabled by remember { mutableStateOf(initialBufferAvailability.loopingEnabled) }
     var selectedBuffer by rememberSaveable {
         mutableStateOf(
             if (oneShotEnabled) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING,

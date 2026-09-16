@@ -159,12 +159,13 @@ internal object RecordingQuickTileStateCache {
 
     private fun readPersisted(context: Context): RecordingTileSnapshot {
         val prefs = getRecorderPreferences(context)
+        val buffers = getConfiguredBufferAvailability(context)
         return RecordingTileSnapshot(
             listening = false,
             activeBuffer = readCaptureBufferSlotPreference(prefs),
-            oneShotEnabled = isConfiguredOneShotBufferEnabled(context),
+            oneShotEnabled = buffers.oneShotEnabled,
             oneShotFull = prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
-            loopingEnabled = isConfiguredLoopingBufferEnabled(context),
+            loopingEnabled = buffers.loopingEnabled,
             oneShotSeconds = cachedTileDurationSeconds(
                 prefs.safeLong(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS, 0L),
             ),

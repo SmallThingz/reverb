@@ -47,7 +47,10 @@ internal data class VerifiedExportStagingRecord(
     val providerIdentity: String?,
 )
 
-private enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
+internal enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
+
+internal fun providerOutputCleanupCompleted(observedState: OutputCleanupAssetState): Boolean =
+    observedState == OutputCleanupAssetState.MISSING
 
 internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord): String = buildString {
     append(OUTPUT_CLEANUP_RECORD_VERSION).append('|')
@@ -553,13 +556,13 @@ private fun deletePendingOutputAsset(
     RecordingStorageType.DOCUMENT -> runCatching {
         if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
         val document = DocumentFile.fromSingleUri(context, record.id.toUri()) ?: return@runCatching false
-        if (document.delete()) true
-        else outputCleanupAssetState(context, record.storageType, record.id) == OutputCleanupAssetState.MISSING
+        document.delete()
+        providerOutputCleanupCompleted(outputCleanupAssetState(context, record.storageType, record.id))
     }.getOrDefault(false)
     RecordingStorageType.MEDIASTORE -> runCatching {
         if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
-        if (context.contentResolver.delete(record.id.toUri(), null, null) > 0) true
-        else outputCleanupAssetState(context, record.storageType, record.id) == OutputCleanupAssetState.MISSING
+        context.contentResolver.delete(record.id.toUri(), null, null)
+        providerOutputCleanupCompleted(outputCleanupAssetState(context, record.storageType, record.id))
     }.getOrDefault(false)
 }
 

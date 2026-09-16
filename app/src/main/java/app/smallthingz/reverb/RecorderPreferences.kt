@@ -321,31 +321,48 @@ fun getConfiguredThemeMode(context: Context): AppThemeMode = readByteBackedPrefe
     storageCode = AppThemeMode::storageCode,
 )
 
+internal data class ConfiguredBufferAvailability(
+    val oneShotEnabled: Boolean,
+    val loopingEnabled: Boolean,
+)
+
 private fun configuredSizeHasWholeFrame(
-    context: Context,
     sizeBytes: Long,
+    channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat,
 ): Boolean {
-    val channelCount = getConfiguredChannelMode(context).channelCount
-    val bytesPerSample = getConfiguredPcmSampleFormat(context).bytesPerSample
-    val frameBytes = channelCount * bytesPerSample
+    val frameBytes = channelMode.channelCount * sampleFormat.bytesPerSample
     return normalizeRetentionValue(RetentionMode.SIZE, sizeBytes, frameBytes) > 0L
 }
 
-fun isConfiguredOneShotBufferEnabled(context: Context): Boolean {
-    val retention = retentionConfigurationForOperationalRead(context) ?: return false
-    return when (retention.mode) {
-        RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.oneShotSizeBytes)
-        RetentionMode.TIME -> retention.oneShotSeconds > 0L
+internal fun configuredBufferAvailability(
+    retention: RetentionConfiguration?,
+    channelMode: ChannelMode,
+    sampleFormat: PcmSampleFormat,
+): ConfiguredBufferAvailability {
+    if (retention == null) return ConfiguredBufferAvailability(false, false)
+    fun enabled(seconds: Long, sizeBytes: Long): Boolean = when (retention.mode) {
+        RetentionMode.SIZE -> configuredSizeHasWholeFrame(sizeBytes, channelMode, sampleFormat)
+        RetentionMode.TIME -> seconds > 0L
     }
+    return ConfiguredBufferAvailability(
+        oneShotEnabled = enabled(retention.oneShotSeconds, retention.oneShotSizeBytes),
+        loopingEnabled = enabled(retention.loopingSeconds, retention.loopingSizeBytes),
+    )
 }
 
-fun isConfiguredLoopingBufferEnabled(context: Context): Boolean {
-    val retention = retentionConfigurationForOperationalRead(context) ?: return false
-    return when (retention.mode) {
-        RetentionMode.SIZE -> configuredSizeHasWholeFrame(context, retention.loopingSizeBytes)
-        RetentionMode.TIME -> retention.loopingSeconds > 0L
-    }
-}
+internal fun getConfiguredBufferAvailability(context: Context): ConfiguredBufferAvailability =
+    configuredBufferAvailability(
+        retention = retentionConfigurationForOperationalRead(context),
+        channelMode = getConfiguredChannelMode(context),
+        sampleFormat = getConfiguredPcmSampleFormat(context),
+    )
+
+fun isConfiguredOneShotBufferEnabled(context: Context): Boolean =
+    getConfiguredBufferAvailability(context).oneShotEnabled
+
+fun isConfiguredLoopingBufferEnabled(context: Context): Boolean =
+    getConfiguredBufferAvailability(context).loopingEnabled
 
 fun isOnboardingPending(context: Context): Boolean {
     return !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
@@ -362,6 +379,8 @@ fun finishOnboarding(
         if (!retentionMutationIsSafe(context)) return@withRetentionPersistenceLock false
         val current = retentionConfigurationForRead(context)
         val defaults = defaultRetentionConfiguration()
+        val configuredChannelMode = getConfiguredChannelMode(context)
+        val configuredSampleFormat = getConfiguredPcmSampleFormat(context)
         val updated = when (current.mode) {
             RetentionMode.TIME -> current.copy(
                 oneShotSeconds = if (oneShotEnabled) {
@@ -377,13 +396,17 @@ fun finishOnboarding(
             )
             RetentionMode.SIZE -> current.copy(
                 oneShotSizeBytes = if (oneShotEnabled) {
-                    current.oneShotSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                    current.oneShotSizeBytes.takeIf {
+                        configuredSizeHasWholeFrame(it, configuredChannelMode, configuredSampleFormat)
+                    }
                         ?: defaults.oneShotSizeBytes
                 } else {
                     0L
                 },
                 loopingSizeBytes = if (loopingEnabled) {
-                    current.loopingSizeBytes.takeIf { configuredSizeHasWholeFrame(context, it) }
+                    current.loopingSizeBytes.takeIf {
+                        configuredSizeHasWholeFrame(it, configuredChannelMode, configuredSampleFormat)
+                    }
                         ?: defaults.loopingSizeBytes
                 } else {
                     0L
