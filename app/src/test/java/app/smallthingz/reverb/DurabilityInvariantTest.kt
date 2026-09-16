@@ -1480,10 +1480,10 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun verifiedExport_neverPublishesWithoutDurableRecoveryMarker() {
-        requireVerifiedExportRecoveryMarker(true, "target")
+    fun verifiedOutput_neverPublishesWithoutDurableRecoveryMarker() {
+        requireVerifiedOutputRecoveryMarker(true, "target")
         assertThrows(IOException::class.java) {
-            requireVerifiedExportRecoveryMarker(false, "target")
+            requireVerifiedOutputRecoveryMarker(false, "target")
         }
     }
 

@@ -224,6 +224,15 @@ internal fun stableOutputFingerprintMatches(
     }
 }
 
+internal fun requireVerifiedOutputRecoveryMarker(
+    persisted: Boolean,
+    targetId: String = "",
+) {
+    if (persisted) return
+    val suffix = targetId.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+    throw java.io.IOException("Verified output recovery marker could not be persisted$suffix")
+}
+
 internal fun putVerifiedExportStaging(
     context: Context,
     target: RecordingOutputTarget,

@@ -89,9 +89,8 @@ private fun writeTrimmedRecordingCopy(
                 expectedPayloadSha256 = writer.payloadSha256,
             )
             cleanupDigest = verifiedOutput.digest
-            if (!putVerifiedExportStaging(context, outputTarget, verifiedOutput)) {
-                Log.w(TRIM_TAG, "Verified trim recovery marker could not be persisted: ${outputTarget.id}")
-            }
+            val recoveryMarkerPersisted = putVerifiedExportStaging(context, outputTarget, verifiedOutput)
+            requireVerifiedOutputRecoveryMarker(recoveryMarkerPersisted, outputTarget.id)
             verifiedComplete = true
             val finalized = finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
             if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId)) {
