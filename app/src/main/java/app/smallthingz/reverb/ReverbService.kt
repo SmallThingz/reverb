@@ -1406,9 +1406,9 @@ class ReverbService : Service() {
                             expectedPayloadSha256 = writer.payloadSha256,
                         )
                         cleanupDigest = verifiedOutput.digest
-                        if (!putVerifiedExportStaging(this@ReverbService, target, verifiedOutput)) {
-                            Log.w(TAG, "Verified export recovery marker could not be persisted: ${target.id}")
-                        }
+                        val recoveryMarkerPersisted =
+                            putVerifiedExportStaging(this@ReverbService, target, verifiedOutput)
+                        requireVerifiedExportRecoveryMarker(recoveryMarkerPersisted, target.id)
                         verifiedComplete = true
                         ensureExportNotCancelled(exportToken)
                         val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
@@ -2958,6 +2958,15 @@ internal fun captureReaderTransition(
     requestedGeneration != currentGeneration || !listening -> CaptureReaderTransition.IGNORE
     recordRunning -> CaptureReaderTransition.ADOPT
     else -> CaptureReaderTransition.RESTART
+}
+
+internal fun requireVerifiedExportRecoveryMarker(
+    persisted: Boolean,
+    targetId: String = "",
+) {
+    if (persisted) return
+    val suffix = targetId.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+    throw IOException("Verified export recovery marker could not be persisted$suffix")
 }
 
 internal fun shouldDeleteExportTarget(

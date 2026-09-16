@@ -1480,6 +1480,14 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun verifiedExport_neverPublishesWithoutDurableRecoveryMarker() {
+        requireVerifiedExportRecoveryMarker(true, "target")
+        assertThrows(IOException::class.java) {
+            requireVerifiedExportRecoveryMarker(false, "target")
+        }
+    }
+
+    @Test
     fun exportCleanup_neverDeletesVerifiedDataExceptExplicitPrecommitCancellation() {
         assertTrue(shouldDeleteExportTarget(cancelled = false, verifiedComplete = false, committed = false))
         assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = false))
