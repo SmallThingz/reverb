@@ -330,6 +330,20 @@ internal enum class RangeWaveformPass(
     ),
 }
 
+internal class PlaybackHeadFrameCounter {
+    private var wraps = 0L
+    private var previous = 0L
+    private var initialized = false
+
+    fun update(playbackHeadPosition: Int): Long {
+        val current = playbackHeadPosition.toLong() and 0xffff_ffffL
+        if (initialized && current < previous) wraps += 1L shl 32
+        previous = current
+        initialized = true
+        return wraps + current
+    }
+}
+
 internal fun ReverbService.TimelineSnapshot.readWaveformEnvelopeProgressive(
     pass: RangeWaveformPass,
     onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
@@ -825,6 +839,7 @@ internal class TimelineAudioPreviewController : Closeable {
                 activeTrack = track
             }
             track.play()
+            val playbackHead = PlaybackHeadFrameCounter()
 
             var lastProgressAt = 0L
             val readResult = child.readNormalized(
@@ -844,7 +859,7 @@ internal class TimelineAudioPreviewController : Closeable {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastProgressAt >= PREVIEW_PROGRESS_INTERVAL_MILLIS) {
                             lastProgressAt = now
-                            val played = unsignedPlaybackHead(track.playbackHeadPosition)
+                            val played = playbackHead.update(track.playbackHeadPosition)
                             postIfCurrent(token) {
                                 onProgress(
                                     (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
@@ -857,21 +872,22 @@ internal class TimelineAudioPreviewController : Closeable {
                 count
             }
 
-            if (reportProgress) {
-                val targetFrames = (readResult.durationSeconds * PREVIEW_SAMPLE_RATE.toDouble())
-                    .roundToLong()
-                    .coerceAtLeast(0L)
-                while (unsignedPlaybackHead(track.playbackHeadPosition) < targetFrames) {
-                    checkCurrent(token)
-                    val played = unsignedPlaybackHead(track.playbackHeadPosition)
+            val targetFrames = (readResult.durationSeconds * PREVIEW_SAMPLE_RATE.toDouble())
+                .roundToLong()
+                .coerceAtLeast(0L)
+            while (true) {
+                checkCurrent(token)
+                val played = playbackHead.update(track.playbackHeadPosition)
+                if (played >= targetFrames) break
+                if (reportProgress) {
                     postIfCurrent(token) {
                         onProgress(
                             (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
                                 .coerceAtMost(endSeconds),
                         )
                     }
-                    Thread.sleep(16L)
                 }
+                Thread.sleep(16L)
             }
             checkCurrent(token)
             postIfCurrent(token, onFinished)
@@ -945,8 +961,6 @@ internal class TimelineAudioPreviewController : Closeable {
             if (isCurrent(token)) block()
         }
     }
-
-    private fun unsignedPlaybackHead(value: Int): Long = value.toLong() and 0xffff_ffffL
 
     private class PreviewCancelled : RuntimeException()
 }

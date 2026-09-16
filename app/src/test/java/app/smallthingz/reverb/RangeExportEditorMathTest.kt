@@ -8,6 +8,16 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun playbackHeadCounterExtendsUnsignedWraps() {
+        val counter = PlaybackHeadFrameCounter()
+        assertEquals(0L, counter.update(0))
+        assertEquals(2_147_483_647L, counter.update(Int.MAX_VALUE))
+        assertEquals(2_147_483_648L, counter.update(Int.MIN_VALUE))
+        assertEquals(4_294_967_295L, counter.update(-1))
+        assertEquals(4_294_967_301L, counter.update(5))
+    }
+
+    @Test
     fun rememberedRangeExportStoresLengthAndPositionFromTimelineEnd() {
         assertEquals(
             RememberedRangeExport(selectionLengthMillis = 20_000L, endOffsetMillis = 15_000L),
