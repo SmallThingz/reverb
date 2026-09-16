@@ -215,7 +215,10 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         drawSelection(canvas, profileCenter, profileWidth * 0.40f)
         canvas.drawLine(dividerX, 0f, dividerX, height.toFloat(), linePaint)
 
-        val errorMask = currentErrorMask()
+        val selectedHour = currentHour()
+        val selectedMinute = currentMinute()
+        val selectedSecond = currentSecond()
+        val errorMask = currentErrorMask(selectedHour, selectedMinute, selectedSecond)
         colonPaint.alpha = 255
         colonPaint.color = if (
             errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0
@@ -226,9 +229,15 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         ) errorColor else mutedColor
         canvas.drawText(":", secondColon, height * 0.5f + colonBaseline, colonPaint)
 
-        drawNumberWheel(canvas, hourWheel, hourCenter, NumberKind.HOUR)
-        drawNumberWheel(canvas, minuteWheel, minuteCenter, NumberKind.MINUTE)
-        drawNumberWheel(canvas, secondWheel, secondCenter, NumberKind.SECOND)
+        drawNumberWheel(
+            canvas, hourWheel, hourCenter, NumberKind.HOUR, selectedHour, selectedMinute, errorMask,
+        )
+        drawNumberWheel(
+            canvas, minuteWheel, minuteCenter, NumberKind.MINUTE, selectedHour, selectedMinute, errorMask,
+        )
+        drawNumberWheel(
+            canvas, secondWheel, secondCenter, NumberKind.SECOND, selectedHour, selectedMinute, errorMask,
+        )
         drawProfileWheel(canvas, profileCenter)
     }
 
@@ -437,6 +446,9 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         wheel: Wheel,
         centerX: Float,
         kind: NumberKind,
+        selectedHour: Int,
+        selectedMinute: Int,
+        errorMask: Int,
     ) {
         val values = when (kind) {
             NumberKind.HOUR -> hourValues
@@ -454,46 +466,50 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
                 relative = relative.toFloat(),
                 centerX = centerX,
                 paint = valuePaint,
-                overLimit = timeValueIsOverLimit(kind, value),
+                overLimit = timeValueIsOverLimit(
+                    kind, value, selectedHour, selectedMinute, errorMask,
+                ),
             ) {
                 drawNumber(canvas, value, valuePaint)
             }
         }
     }
 
-    private fun currentErrorMask(): Int {
-        val hours = currentHour()
-        val minutes = currentMinute()
-        val seconds = currentSecond()
-        return when {
-            hours > maximumParts.hours ->
-                RANGE_DURATION_WHEEL_ERROR_HOUR or
-                    RANGE_DURATION_WHEEL_ERROR_MINUTE or
-                    RANGE_DURATION_WHEEL_ERROR_SECOND
-            hours < maximumParts.hours -> 0
-            minutes > maximumParts.minutes ->
-                RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
-            minutes < maximumParts.minutes -> 0
-            seconds > maximumParts.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
-            else -> 0
-        }
+    private fun currentErrorMask(
+        hours: Int,
+        minutes: Int,
+        seconds: Int,
+    ): Int = when {
+        hours > maximumParts.hours ->
+            RANGE_DURATION_WHEEL_ERROR_HOUR or
+                RANGE_DURATION_WHEEL_ERROR_MINUTE or
+                RANGE_DURATION_WHEEL_ERROR_SECOND
+        hours < maximumParts.hours -> 0
+        minutes > maximumParts.minutes ->
+            RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
+        minutes < maximumParts.minutes -> 0
+        seconds > maximumParts.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
+        else -> 0
     }
 
-    private fun timeValueIsOverLimit(kind: NumberKind, candidate: Int): Boolean {
-        val errorMask = currentErrorMask()
-        return when (kind) {
-            NumberKind.HOUR ->
-                errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0 ||
-                    candidate > maximumParts.hours
-            NumberKind.MINUTE ->
-                errorMask and RANGE_DURATION_WHEEL_ERROR_MINUTE != 0 ||
-                    (currentHour() == maximumParts.hours && candidate > maximumParts.minutes)
-            NumberKind.SECOND ->
-                errorMask and RANGE_DURATION_WHEEL_ERROR_SECOND != 0 ||
-                    (currentHour() == maximumParts.hours &&
-                        currentMinute() == maximumParts.minutes &&
-                        candidate > maximumParts.seconds)
-        }
+    private fun timeValueIsOverLimit(
+        kind: NumberKind,
+        candidate: Int,
+        selectedHour: Int,
+        selectedMinute: Int,
+        errorMask: Int,
+    ): Boolean = when (kind) {
+        NumberKind.HOUR ->
+            errorMask and RANGE_DURATION_WHEEL_ERROR_HOUR != 0 ||
+                candidate > maximumParts.hours
+        NumberKind.MINUTE ->
+            errorMask and RANGE_DURATION_WHEEL_ERROR_MINUTE != 0 ||
+                (selectedHour == maximumParts.hours && candidate > maximumParts.minutes)
+        NumberKind.SECOND ->
+            errorMask and RANGE_DURATION_WHEEL_ERROR_SECOND != 0 ||
+                (selectedHour == maximumParts.hours &&
+                    selectedMinute == maximumParts.minutes &&
+                    candidate > maximumParts.seconds)
     }
 
     private fun drawProfileWheel(canvas: Canvas, centerX: Float) {
