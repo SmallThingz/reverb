@@ -67,6 +67,20 @@ internal fun recordingIncidentsShareCaptureSession(
 ): Boolean = left.pid > 0 && right.pid == left.pid &&
     left.captureArmedAtMillis > 0L && right.captureArmedAtMillis == left.captureArmedAtMillis
 
+internal fun recordingIncidentReferenceMatches(
+    candidate: RecordingIncident,
+    reference: RecordingIncident,
+): Boolean = candidate.kind == reference.kind &&
+    (candidate.occurredAtMillis == reference.occurredAtMillis ||
+        recordingIncidentsShareCaptureSession(candidate, reference))
+
+internal fun exitTimestampBelongsToPriorProcess(
+    exitTimestampMillis: Long,
+    captureArmedAtMillis: Long,
+    currentProcessStartedAtMillis: Long,
+): Boolean = exitTimestampMillis >= captureArmedAtMillis &&
+    (currentProcessStartedAtMillis <= 0L || exitTimestampMillis <= currentProcessStartedAtMillis)
+
 internal fun mergeRecordingIncidentEvidence(
     existing: RecordingIncident,
     incoming: RecordingIncident,
@@ -339,8 +353,8 @@ internal object RecordingIncidentStore {
         val appContext = context.applicationContext
         val file = historyFile(appContext)
         val existing = readHistory(file)
-        val index = existing.indexOfFirst {
-            it.kind == incident.kind && it.occurredAtMillis == incident.occurredAtMillis
+        val index = existing.indexOfFirst { candidate ->
+            recordingIncidentReferenceMatches(candidate, incident)
         }
         if (index < 0) return existing
         val updated = existing.toMutableList().apply {
@@ -426,10 +440,17 @@ internal object RecordingIncidentStore {
     ): ApplicationExitInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         val manager = context.getSystemService(ActivityManager::class.java) ?: return null
+        val currentProcessStartedAtMillis = currentProcessStartedAtWallClockMillis()
         return runCatching {
             manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
                 .asSequence()
-                .filter { info -> info.pid == marker.pid && info.timestamp >= marker.armedAtMillis }
+                .filter { info ->
+                    info.pid == marker.pid && exitTimestampBelongsToPriorProcess(
+                        exitTimestampMillis = info.timestamp,
+                        captureArmedAtMillis = marker.armedAtMillis,
+                        currentProcessStartedAtMillis = currentProcessStartedAtMillis,
+                    )
+                }
                 .minByOrNull(ApplicationExitInfo::getTimestamp)
         }.getOrNull()
     }
@@ -478,6 +499,12 @@ internal object RecordingIncidentStore {
         } else {
             -1L
         }
+    }
+
+    private fun currentProcessStartedAtWallClockMillis(): Long {
+        val elapsedSinceStart = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
+        if (elapsedSinceStart < 0L) return -1L
+        return (System.currentTimeMillis() - elapsedSinceStart).coerceAtLeast(1L)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)

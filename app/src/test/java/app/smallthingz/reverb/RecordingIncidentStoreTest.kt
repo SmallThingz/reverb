@@ -77,6 +77,35 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun incidentReferenceSurvivesEvidenceTimestampEnrichment() {
+        val provisional = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            pid = 42,
+            captureArmedAtMillis = 9_000L,
+        )
+        val enriched = provisional.copy(
+            occurredAtMillis = 10_500L,
+            exitReason = ApplicationExitInfo.REASON_CRASH,
+        )
+        assertTrue(recordingIncidentReferenceMatches(enriched, provisional))
+        assertTrue(recordingIncidentReferenceMatches(provisional, enriched))
+        assertFalse(
+            recordingIncidentReferenceMatches(
+                enriched.copy(captureArmedAtMillis = 8_000L),
+                provisional,
+            ),
+        )
+    }
+
+    @Test
+    fun priorProcessExitEvidenceIsBoundedBeforeCurrentProcessStart() {
+        assertTrue(exitTimestampBelongsToPriorProcess(10_500L, 10_000L, 11_000L))
+        assertTrue(exitTimestampBelongsToPriorProcess(11_000L, 10_000L, 11_000L))
+        assertFalse(exitTimestampBelongsToPriorProcess(9_999L, 10_000L, 11_000L))
+        assertFalse(exitTimestampBelongsToPriorProcess(11_001L, 10_000L, 11_000L))
+    }
+
+    @Test
     fun provisionalServiceStopMergesLaterExitEvidenceWithoutDuplicatingSession() {
         val provisional = RecordingIncident(
             occurredAtMillis = 10_000L,
