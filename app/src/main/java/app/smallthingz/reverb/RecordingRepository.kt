@@ -158,7 +158,7 @@ object RecordingRepository {
                 dao.listAll().forEach { recording ->
                     if (!isRecordingEligibleForMove(recording.id, pendingIds)) return@forEach
                     if (recording.directoryId == targetDirectoryId) return@forEach
-                    val updated = when (recordingAssetState(context, recording)) {
+                    val updated = when (selectedRecordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> {
                             val present = markRecordingPresent(recording, nowMillis)
                             if (recordingDestructiveIdentityMatches(context, present)) movable = true
@@ -464,7 +464,7 @@ object RecordingRepository {
                         skipped++
                         return@forEach
                     }
-                    val present = when (recordingAssetState(context, recording)) {
+                    val present = when (selectedRecordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                         RecordingAssetState.MISSING -> {
                             val missing = markRecordingMissing(recording, nowMillis)
@@ -595,7 +595,7 @@ object RecordingRepository {
 
         for (source in legacy) {
             if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
-            if (recordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
+            if (selectedRecordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
             if (!recordingDestructiveIdentityMatches(context, source)) continue
 
             // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
@@ -661,7 +661,7 @@ object RecordingRepository {
             .forEach { recording ->
                 // Never convert a scan gap into catalog deletion. Provider visibility,
                 // removable storage, and persisted permissions can all recover later.
-                val updated = when (recordingAssetState(context, recording)) {
+                val updated = when (selectedRecordingAssetState(context, recording)) {
                     RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                     RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                     RecordingAssetState.UNAVAILABLE -> recording
@@ -682,7 +682,7 @@ object RecordingRepository {
         val updates = mutableListOf<RecordingEntity>()
         all.forEach { recording ->
             if (recording.directoryId == skipDirectoryId) return@forEach
-            val updated = when (recordingAssetState(context, recording)) {
+            val updated = when (selectedRecordingAssetState(context, recording)) {
                 RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                 RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
                 RecordingAssetState.UNAVAILABLE -> recording

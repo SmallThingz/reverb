@@ -1154,6 +1154,43 @@ internal fun recordingAssetState(
     }
 }
 
+internal fun selectedRecordingAssetState(
+    rawState: RecordingAssetState,
+    storageType: RecordingStorageType,
+    storedIdentity: String,
+    currentIdentity: String,
+): RecordingAssetState {
+    if (rawState != RecordingAssetState.PRESENT || storedIdentity.isBlank()) return rawState
+    if (currentIdentity.isBlank()) return RecordingAssetState.UNAVAILABLE
+    val matches = when (storageType) {
+        RecordingStorageType.FILE -> fileIdentityMatches(storedIdentity, currentIdentity)
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> providerRecordingIdentityMatches(storedIdentity, currentIdentity)
+    }
+    return if (matches) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+}
+
+internal fun selectedRecordingAssetState(
+    context: Context,
+    recording: RecordingEntity,
+): RecordingAssetState {
+    val rawState = recordingAssetState(context, recording)
+    if (rawState != RecordingAssetState.PRESENT || recording.fileIdentity.isBlank()) return rawState
+    val currentIdentity = when (val storageType = recording.storageType) {
+        RecordingStorageType.FILE -> resolveFileIdentity(File(recording.id))
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
+    }
+    return selectedRecordingAssetState(
+        rawState = rawState,
+        storageType = recording.storageType,
+        storedIdentity = recording.fileIdentity,
+        currentIdentity = currentIdentity,
+    )
+}
+
 internal fun deleteVerifiedRecordingAsset(
     context: Context,
     recording: RecordingEntity,

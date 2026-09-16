@@ -1760,6 +1760,62 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun selectedAssetState_hidesProvenReplacementButPreservesIdentityUncertainty() {
+        val providerStored = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 9L,
+        )
+        val providerSame = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 9L,
+        )
+        val providerReplacement = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 10L,
+        )
+
+        assertEquals(
+            RecordingAssetState.PRESENT,
+            selectedRecordingAssetState(
+                RecordingAssetState.PRESENT, RecordingStorageType.DOCUMENT, providerStored, providerSame,
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.MISSING,
+            selectedRecordingAssetState(
+                RecordingAssetState.PRESENT, RecordingStorageType.DOCUMENT, providerStored, providerReplacement,
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.UNAVAILABLE,
+            selectedRecordingAssetState(
+                RecordingAssetState.PRESENT, RecordingStorageType.DOCUMENT, providerStored, "",
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.PRESENT,
+            selectedRecordingAssetState(
+                RecordingAssetState.PRESENT, RecordingStorageType.DOCUMENT, "", providerReplacement,
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.UNAVAILABLE,
+            selectedRecordingAssetState(
+                RecordingAssetState.UNAVAILABLE, RecordingStorageType.DOCUMENT, providerStored, providerReplacement,
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.MISSING,
+            selectedRecordingAssetState(
+                RecordingAssetState.MISSING, RecordingStorageType.FILE, "stat:1:2:3:4:5", "stat:1:3:4:5:6",
+            ),
+        )
+        assertEquals(
+            RecordingAssetState.MISSING,
+            selectedRecordingAssetState(
+                RecordingAssetState.PRESENT, RecordingStorageType.FILE, "stat:1:2:3:4:5", "stat:1:3:4:5:6",
+            ),
+        )
+    }
+
+    @Test
     fun libraryPresentation_hidesMissingAndPendingRowsWithoutForgettingThem() {
         val base = RecordingEntity(
             id = "present", displayName = "present.wav", mimeType = "audio/wav",
