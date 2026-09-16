@@ -800,7 +800,7 @@ private fun finalizeDocumentOutputTarget(
     val finalName = findAvailableDisplayName(target.displayName) { candidate ->
         tree.findFile(candidate)?.uri?.let { it != sourceUri } == true
     }
-    if (!canSafelyPublishDocumentOutput(documentSupportsRename(context, sourceUri))) {
+    if (!documentSupportsRename(context, sourceUri)) {
         throw IOException("Output provider cannot safely publish verified staging without rename support")
     }
     val renamedUri = try {
@@ -843,7 +843,6 @@ private fun documentSupportsRename(context: Context, uri: Uri): Boolean = runCat
 }.onFailure { Log.w(TAG, "Unable to inspect document publish capabilities for $uri", it) }
     .getOrDefault(false)
 
-internal fun canSafelyPublishDocumentOutput(supportsRename: Boolean): Boolean = supportsRename
 
 fun buildRecordingEntity(
     context: Context,

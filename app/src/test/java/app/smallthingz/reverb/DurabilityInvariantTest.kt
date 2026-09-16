@@ -939,13 +939,6 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun renameRollback_requiresExactOriginalPhysicalIdentity() {
-        assertTrue(renameRollbackRestoredOriginal("old-id", "old-id"))
-        assertFalse(renameRollbackRestoredOriginal("old-id", "new-id"))
-        assertFalse(renameRollbackRestoredOriginal("old-id", null))
-    }
-
-    @Test
     fun moveSourceCleanup_neverDeletesChangedOrUnavailableSource() {
         assertEquals(
             MoveSourceCleanupAction.DELETE_SOURCE,
@@ -1560,12 +1553,6 @@ class DurabilityInvariantTest {
         assertFalse(canRecoverPendingMedia(44L, 0L))
         assertFalse(canRecoverPendingMedia(0L, 0L))
         assertTrue(canRecoverPendingMedia(45L, 1L))
-    }
-
-    @Test
-    fun safPublication_requiresRenameSupportToStayHiddenUntilVerified() {
-        assertTrue(canSafelyPublishDocumentOutput(supportsRename = true))
-        assertFalse(canSafelyPublishDocumentOutput(supportsRename = false))
     }
 
     @Test

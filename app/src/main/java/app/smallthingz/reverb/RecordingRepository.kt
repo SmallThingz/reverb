@@ -46,6 +46,9 @@ object RecordingRepository {
     private val backgroundDeleteLock = Any()
     private var backgroundDeleteJob: Job? = null
 
+    private fun dao(context: Context): RecordingDao =
+        RecordingDatabase.getInstance(context).recordingDao()
+
     private suspend fun awaitBackgroundDeletes() {
         while (true) {
             val pending = synchronized(backgroundDeleteLock) { backgroundDeleteJob } ?: return
@@ -81,7 +84,7 @@ object RecordingRepository {
         updateMissingStatesLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
         val pending = pendingDeletionIds(context)
         return visibleCatalogRecordings(
-            RecordingDatabase.getInstance(context).recordingDao().listAll(),
+            dao(context).listAll(),
             pending,
         )
     }
@@ -98,7 +101,7 @@ object RecordingRepository {
                 try {
                     val pending = pendingDeletionIds(context)
                     visibleCatalogRecordings(
-                        RecordingDatabase.getInstance(context).recordingDao().listAll(),
+                        dao(context).listAll(),
                         pending,
                     )
                 } catch (corrupt: SQLiteDatabaseCorruptException) {
@@ -146,7 +149,7 @@ object RecordingRepository {
             awaitBackgroundDeletes()
             mutex.withLock {
                 replayPendingDeletionsLocked(context)
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val dao = dao(context)
                 val pendingIds = pendingDeletionIds(context)
                 val nowMillis = System.currentTimeMillis()
                 val updates = mutableListOf<RecordingEntity>()
@@ -173,7 +176,7 @@ object RecordingRepository {
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val dao = dao(context)
                 val existing = dao.findById(recording.id)
                 val presentRecording = mergeObservedRecording(
                     existing = existing, observed = recording,
@@ -195,7 +198,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 if (!recordingContentIdentityMatches(context, recording)) return@withLock false
-                RecordingDatabase.getInstance(context).recordingDao().updateWaveformCache(
+                dao(context).updateWaveformCache(
                     recording = recording,
                     waveformData = waveformData,
                     waveformRevision = waveformRevision,
@@ -208,7 +211,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 replayPendingDeletionsLocked(context)
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val dao = dao(context)
                 val tracked = dao.findById(recording.id) ?: return@withLock true
                 if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
                 if (tracked.storageType == RecordingStorageType.FILE &&
@@ -259,7 +262,7 @@ object RecordingRepository {
     private suspend fun replayPendingDeletionsLocked(context: Context) {
         val rawEntries = pendingDeletionEntries(context)
         if (rawEntries.isEmpty()) return
-        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val dao = dao(context)
         val byId = dao.listAll().associateBy { it.id }
         for (raw in rawEntries) {
             val intent = decodePendingDeletionIntent(raw)
@@ -405,7 +408,7 @@ object RecordingRepository {
     ): RecordingEntity? {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val dao = dao(context)
                 val tracked = dao.findById(recording.id) ?: return@withLock null
                 if (!sameRecordingActionTarget(recording, tracked)) {
                     throw IOException("Recording changed before rename")
@@ -428,7 +431,7 @@ object RecordingRepository {
                     val rolledBack = runCatching {
                         renameRecordingAsset(context, renamed, tracked.displayName)
                     }.getOrNull()
-                    if (!renameRollbackRestoredOriginal(tracked.id, rolledBack?.id)) {
+                    if (rolledBack?.id != tracked.id) {
                         runCatching { dao.deleteById(tracked.id) }
                     }
                     throw error
@@ -443,7 +446,7 @@ object RecordingRepository {
             awaitBackgroundDeletes()
             mutex.withLock {
                 replayPendingDeletionsLocked(context)
-                val dao = RecordingDatabase.getInstance(context).recordingDao()
+                val dao = dao(context)
                 val current = dao.listAll()
                 val pendingIds = pendingDeletionIds(context)
                 if (current.isEmpty()) {
@@ -584,7 +587,7 @@ object RecordingRepository {
     }
 
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
-        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val dao = dao(context)
         val targetDirectoryId = getConfiguredOutputDirectoryId(context)
         val pendingIds = pendingDeletionIds(context)
         val durableTargets = dao.listByDirectory(targetDirectoryId)
@@ -634,7 +637,7 @@ object RecordingRepository {
         directoryId: String,
         scan: (Map<String, RecordingEntity>) -> List<RecordingEntity>,
     ) {
-        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val dao = dao(context)
         val existing = dao.listByDirectory(directoryId)
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
@@ -669,7 +672,7 @@ object RecordingRepository {
         context: Context,
         skipDirectoryId: String? = null,
     ): Int {
-        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        val dao = dao(context)
         val all = dao.listAll()
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
@@ -739,9 +742,6 @@ object RecordingRepository {
             get() = failed > 0 || cleanupFailed > 0
     }
 }
-
-internal fun renameRollbackRestoredOriginal(originalId: String, rolledBackId: String?): Boolean =
-    rolledBackId == originalId
 
 internal enum class MoveSourceCleanupAction { DELETE_SOURCE, COMPLETE, KEEP_SOURCE }
 
