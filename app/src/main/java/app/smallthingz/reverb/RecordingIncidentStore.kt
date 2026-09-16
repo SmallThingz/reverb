@@ -21,6 +21,10 @@ import java.io.IOException
 
 internal const val EXIT_REASON_MEMORY_LIMITER = 17
 internal const val EXIT_REASON_ANOMALY = 18
+internal const val MAX_PENDING_INCIDENT_SESSIONS = 128
+
+internal fun pendingIncidentQueueCanAppend(existingCount: Int): Boolean =
+    existingCount in 0 until MAX_PENDING_INCIDENT_SESSIONS
 
 internal enum class RecordingIncidentKind(val storageCode: Byte) {
     UNEXPECTED_SHUTDOWN(1),
@@ -139,7 +143,6 @@ internal object RecordingIncidentStore {
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val HISTORY_FORMAT_VERSION = 2
     private const val MAX_INCIDENTS = 128
-    private const val MAX_PENDING_SESSIONS = 16
     private const val MAX_DESCRIPTION_CHARS = 384
     private const val SESSION_FILE_NAME = "recording-session.bin"
     private const val PENDING_SESSION_FILE_NAME = "recording-incident-pending.bin"
@@ -362,10 +365,12 @@ internal object RecordingIncidentStore {
         val file = pendingSessionFile(context)
         val existing = readPendingSessions(file)
         if (existing.any { sameSession(it.marker, marker) }) return
-        writePendingSessions(
-            file,
-            (existing + PendingRecordingSession(marker)).takeLast(MAX_PENDING_SESSIONS),
-        )
+        if (!pendingIncidentQueueCanAppend(existing.size)) {
+            throw IOException(
+                "Pending recording incident queue is full; refusing to discard interruption evidence",
+            )
+        }
+        writePendingSessions(file, existing + PendingRecordingSession(marker))
     }
 
     private fun resolvePendingSessions(context: Context) {
@@ -565,8 +570,8 @@ internal object RecordingIncidentStore {
         readAtomic(file, "pending recording incidents") { input ->
             requireFileHeader(input, PENDING_MAGIC, PENDING_FORMAT_VERSION, "pending recording incidents")
             val count = input.readUnsignedShort()
-            if (count > MAX_PENDING_SESSIONS) {
-                throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_SESSIONS")
+            if (count > MAX_PENDING_INCIDENT_SESSIONS) {
+                throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_INCIDENT_SESSIONS")
             }
             buildList(count) {
                 repeat(count) {
@@ -588,11 +593,16 @@ internal object RecordingIncidentStore {
             file.delete()
             return
         }
+        if (sessions.size > MAX_PENDING_INCIDENT_SESSIONS) {
+            throw IOException(
+                "Pending recording incident count ${sessions.size} exceeds $MAX_PENDING_INCIDENT_SESSIONS",
+            )
+        }
         writeAtomic(file) { output ->
             output.writeInt(PENDING_MAGIC)
             output.writeByte(PENDING_FORMAT_VERSION)
-            output.writeShort(sessions.size.coerceAtMost(MAX_PENDING_SESSIONS))
-            sessions.takeLast(MAX_PENDING_SESSIONS).forEach { session ->
+            output.writeShort(sessions.size)
+            sessions.forEach { session ->
                 writeSessionMarker(output, session.marker)
                 output.writeLong(session.resumedAtMillis)
             }

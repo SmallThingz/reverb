@@ -43,6 +43,14 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun pendingIncidentQueueFailsClosedBeforeEvidenceWouldBeDropped() {
+        assertTrue(pendingIncidentQueueCanAppend(0))
+        assertTrue(pendingIncidentQueueCanAppend(MAX_PENDING_INCIDENT_SESSIONS - 1))
+        assertFalse(pendingIncidentQueueCanAppend(MAX_PENDING_INCIDENT_SESSIONS))
+        assertFalse(pendingIncidentQueueCanAppend(MAX_PENDING_INCIDENT_SESSIONS + 1))
+    }
+
+    @Test
     fun externalStopReasonsHaveUsefulIncidentLabels() {
         assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_PACKAGE_UPDATED) == "Package updated")
         assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_USER_REQUESTED) == "User requested stop")
