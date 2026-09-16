@@ -801,7 +801,10 @@ fun SettingsScreen(
 
     LaunchedEffect(active) {
         if (!active) {
-            if (hasUnsavedChanges) restorePreviousSettings()
+            // A save transaction captured the edited values before moving to IO. Rolling the
+            // retained Settings composition back while that transaction is in flight can leave
+            // the hidden UI stale after the newer values commit successfully.
+            if (!settingsPersisting && hasUnsavedChanges) restorePreviousSettings()
             releaseInputFocus()
         }
     }
