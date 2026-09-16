@@ -142,6 +142,10 @@ class ReverbService : Service() {
     private var audioRecordGeneration = Long.MIN_VALUE
 
     private val listeningCommandGeneration = AtomicLong()
+    // Command versions also advance for harmless destination changes. This separate epoch
+    // advances only when capture continuity breaks, so an in-flight read can survive a buffer
+    // handoff without surviving Stop -> Start or failure boundaries.
+    private val captureContinuityGeneration = AtomicLong()
     private val listeningIntentLock = Any()
 
     @Volatile
@@ -276,6 +280,7 @@ class ReverbService : Service() {
     }
 
     override fun onDestroy() {
+        captureContinuityGeneration.incrementAndGet()
         // Service destruction is an interruption when capture is still armed. Keep the marker
         // armed so a subsequent process death can enrich the provisional incident with Android
         // exit evidence; explicit known stops have already disarmed it and produce nothing here.
@@ -561,6 +566,7 @@ class ReverbService : Service() {
         if (enabled) {
             innerStartListening(generation)
         } else {
+            captureContinuityGeneration.incrementAndGet()
             RecordingIncidentStore.recordKnownCaptureStop(this)
             innerStopListening()
         }
@@ -863,9 +869,13 @@ class ReverbService : Service() {
             // turns recording off forever.
             foregroundStartBlocked = true
             listeningCommandGeneration.incrementAndGet()
+            captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
         }
-        RecordingIncidentStore.recordKnownCaptureStop(this)
+        RecordingIncidentStore.recordCaptureInterrupted(
+            this,
+            "Capture stopped after foreground service start restriction",
+        )
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
             try {
@@ -1702,8 +1712,13 @@ class ReverbService : Service() {
             state == STATE_PAUSED
     }
 
-    private fun appendCapturedAudio(array: ByteArray, offset: Int, count: Int) {
-        when (activeBufferSlot) {
+    private fun appendCapturedAudio(
+        array: ByteArray,
+        offset: Int,
+        count: Int,
+        captureBufferSlot: BufferSlot = activeBufferSlot,
+    ) {
+        when (captureBufferSlot) {
             BufferSlot.LOOPING -> {
                 if (loopingBufferEnabled) {
                     loopingAudioChunkStore.append(array, offset, count)
@@ -1720,7 +1735,9 @@ class ReverbService : Service() {
                 if (oneShotFull) {
                     syncOneShotFullQuickTileOnAudioThread(refreshTiles = false)
                     if (loopingBufferEnabled) {
-                        switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
+                        if (activeBufferSlot != BufferSlot.LOOPING) {
+                            switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
+                        }
                         val overflow = count - writtenToOneShot
                         if (overflow > 0) {
                             loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
@@ -1752,6 +1769,7 @@ class ReverbService : Service() {
             val prefs = getRecorderPreferences(this)
             val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
             listeningCommandGeneration.incrementAndGet()
+            captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
             committed
         }
@@ -1827,6 +1845,7 @@ class ReverbService : Service() {
         val generation = synchronized(listeningIntentLock) {
             persistenceFailureBlocked = true
             val nextGeneration = listeningCommandGeneration.incrementAndGet()
+            captureContinuityGeneration.incrementAndGet()
             if (state == STATE_LISTENING) state = STATE_PAUSED
             nextGeneration
         }
@@ -1885,6 +1904,8 @@ class ReverbService : Service() {
         if (generation != listeningCommandGeneration.get()) return 0
         val currentRecord = audioRecord ?: return 0
         if (audioRecordGeneration != generation) return 0
+        val readContinuityGeneration = captureContinuityGeneration.get()
+        val captureBufferSlot = activeBufferSlot
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
         val requestedBytes = captureReadByteCount(
             sampleRate = sampleRate,
@@ -1909,17 +1930,31 @@ class ReverbService : Service() {
             throw IOException("AudioRecord read failed: $read")
         }
 
-        if (generation != listeningCommandGeneration.get() || audioRecord !== currentRecord || audioRecordGeneration != generation) return read
+        val commandGenerationUnchanged = generation == listeningCommandGeneration.get()
+        val recordStillOwned = audioRecord === currentRecord && audioRecordGeneration == generation
+        val continuousCapture = captureReadMayCommit(
+            readContinuityGeneration = readContinuityGeneration,
+            currentContinuityGeneration = captureContinuityGeneration.get(),
+            listeningIntentEnabled = isListeningEnabled(),
+            recorderListening = state == STATE_LISTENING,
+            recordStillOwned = recordStillOwned,
+        )
+        if (!continuousCapture) return read
+
         val alignedRead = read - read % frameBytes
         if (alignedRead > 0) {
             captureBuffer.position(0)
             captureBuffer.limit(alignedRead)
             captureBuffer.get(captureScratch, 0, alignedRead)
-            publishVisualization(captureScratch, 0, alignedRead)
-            appendCapturedAudio(captureScratch, 0, alignedRead)
+            // A destination-only version change may already have moved the UI to the new
+            // buffer. Avoid attributing this final old-buffer read to the new visualizer.
+            if (commandGenerationUnchanged) publishVisualization(captureScratch, 0, alignedRead)
+            appendCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot)
             requestDurabilitySyncIfDue()
         }
 
+        // A command that changed the state generation owns scheduling the next read.
+        if (!commandGenerationUnchanged) return read
         if (state != STATE_LISTENING) return read
         if (audioRecord !== currentRecord) return read
         if (read > 0) {
@@ -2006,6 +2041,7 @@ class ReverbService : Service() {
             // enabled. A later process may retry the user's durable intent if disk still
             // contains true.
             listeningCommandGeneration.incrementAndGet()
+            captureContinuityGeneration.incrementAndGet()
             state = STATE_READY
             committed
         }
@@ -2309,6 +2345,15 @@ class ReverbService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         foregroundServiceTimedOut = true
+        // Stop accepting in-flight PCM before any incident/journal I/O. A type transition can
+        // race this callback; preserve durable user intent so a foreground bind can retry.
+        synchronized(listeningIntentLock) {
+            if (state == STATE_LISTENING && isListeningEnabled()) {
+                listeningCommandGeneration.incrementAndGet()
+                captureContinuityGeneration.incrementAndGet()
+                state = STATE_PAUSED
+            }
+        }
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Foreground service timed out while capture was running",
@@ -2316,15 +2361,6 @@ class ReverbService : Service() {
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
             Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
             requestExportCancellation(preserveVerifiedOutput = true)
-        }
-        // A type transition can race the timeout callback. If microphone capture became
-        // active meanwhile, pause only the runtime capture and preserve the durable user
-        // intent; a foreground UI bind can restart it under the microphone-only FGS type.
-        synchronized(listeningIntentLock) {
-            if (state == STATE_LISTENING && isListeningEnabled()) {
-                listeningCommandGeneration.incrementAndGet()
-                state = STATE_PAUSED
-            }
         }
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
@@ -2955,6 +2991,15 @@ internal fun shouldRetrySuspendedListeningOnForegroundBind(
     persistenceFailureBlocked: Boolean,
 ): Boolean = listeningIntentEnabled &&
     (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
+
+internal fun captureReadMayCommit(
+    readContinuityGeneration: Long,
+    currentContinuityGeneration: Long,
+    listeningIntentEnabled: Boolean,
+    recorderListening: Boolean,
+    recordStillOwned: Boolean,
+): Boolean = recordStillOwned && recorderListening && listeningIntentEnabled &&
+    readContinuityGeneration == currentContinuityGeneration
 
 internal enum class CaptureReaderTransition {
     IGNORE,

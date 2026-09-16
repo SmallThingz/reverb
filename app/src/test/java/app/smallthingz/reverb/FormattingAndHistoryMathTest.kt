@@ -703,6 +703,46 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun inFlightCaptureReadSurvivesOnlyContinuousSessionChanges() {
+        assertTrue(
+            captureReadMayCommit(
+                readContinuityGeneration = 7L,
+                currentContinuityGeneration = 7L,
+                listeningIntentEnabled = true,
+                recorderListening = true,
+                recordStillOwned = true,
+            ),
+        )
+        assertFalse(
+            captureReadMayCommit(
+                readContinuityGeneration = 7L,
+                currentContinuityGeneration = 8L,
+                listeningIntentEnabled = true,
+                recorderListening = true,
+                recordStillOwned = true,
+            ),
+        )
+        assertFalse(
+            captureReadMayCommit(
+                readContinuityGeneration = 7L,
+                currentContinuityGeneration = 7L,
+                listeningIntentEnabled = false,
+                recorderListening = true,
+                recordStillOwned = true,
+            ),
+        )
+        assertFalse(
+            captureReadMayCommit(
+                readContinuityGeneration = 7L,
+                currentContinuityGeneration = 7L,
+                listeningIntentEnabled = true,
+                recorderListening = true,
+                recordStillOwned = false,
+            ),
+        )
+    }
+
+    @Test
     fun captureReaderTransition_adoptsNewGenerationWithoutSilentlyStoppingCapture() {
         assertEquals(
             CaptureReaderTransition.ADOPT,
