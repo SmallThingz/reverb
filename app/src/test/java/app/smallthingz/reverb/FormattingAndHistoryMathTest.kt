@@ -1293,6 +1293,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun destroyedTileRejectsAlreadyQueuedActionCallbacks() {
+        assertTrue(tileActionCallbackIsCurrent(true, 7L, 7L))
+        assertFalse(tileActionCallbackIsCurrent(false, 7L, 7L))
+        assertFalse(tileActionCallbackIsCurrent(true, 6L, 7L))
+        assertFalse(tileActionCallbackIsCurrent(false, 6L, 7L))
+    }
+
+    @Test
     fun stoppedQuickTileUsesPersistedSettingsButKeepsLatestDurations() {
         val persisted = RecordingTileSnapshot(
             listening = false,

@@ -124,6 +124,12 @@ internal fun recordingTileActionSatisfied(
     RecordingTileClickAction.NONE -> true
 }
 
+internal fun tileActionCallbackIsCurrent(
+    actionInFlight: Boolean,
+    callbackGeneration: Long,
+    currentGeneration: Long,
+): Boolean = actionInFlight && callbackGeneration == currentGeneration
+
 internal fun stoppedRecordingTileSnapshot(
     persisted: RecordingTileSnapshot,
     live: RecordingTileSnapshot?,
@@ -414,6 +420,12 @@ abstract class RecordingTileService : TileService() {
     override fun onDestroy() {
         tileListening = false
         RecordingQuickTiles.unregister(this)
+        // Recorder snapshot callbacks are posted independently of this TileService lifecycle.
+        // Invalidate their generation before unbinding so a callback that was already queued
+        // cannot execute a stale START/SWITCH/STOP after SystemUI destroys the tile service.
+        actionInFlight = false
+        actionGeneration++
+        actionTimeout = null
         mainHandler.removeCallbacksAndMessages(null)
         actionConnection?.let(::unbindActionConnection)
         super.onDestroy()
@@ -437,7 +449,9 @@ abstract class RecordingTileService : TileService() {
     private fun executeTileAction(recorder: ReverbService) {
         val generation = ++actionGeneration
         recorder.getRecordingTileSnapshot { liveSnapshot ->
-            if (!actionInFlight || generation != actionGeneration) return@getRecordingTileSnapshot
+            if (!tileActionCallbackIsCurrent(actionInFlight, generation, actionGeneration)) {
+                return@getRecordingTileSnapshot
+            }
             RecordingQuickTiles.publishSnapshot(this, liveSnapshot, requestSystemRefresh = false)
             val action = recordingTileClickAction(bufferSlot, liveSnapshot)
             val result = when (action) {
@@ -459,9 +473,11 @@ abstract class RecordingTileService : TileService() {
         action: RecordingTileClickAction,
         generation: Long,
     ) {
-        if (!actionInFlight || generation != actionGeneration) return
+        if (!tileActionCallbackIsCurrent(actionInFlight, generation, actionGeneration)) return
         recorder.getRecordingTileSnapshot { snapshot ->
-            if (!actionInFlight || generation != actionGeneration) return@getRecordingTileSnapshot
+            if (!tileActionCallbackIsCurrent(actionInFlight, generation, actionGeneration)) {
+                return@getRecordingTileSnapshot
+            }
             RecordingQuickTiles.publishSnapshot(this, snapshot, requestSystemRefresh = false)
             if (recordingTileActionSatisfied(action, bufferSlot, snapshot)) {
                 finishTileAction(snapshot)
