@@ -349,9 +349,10 @@ fun CaptureScreen(
                 pendingClearBuffer = null
                 invalidateCustomRangePreparation()
                 if (isSaving) {
-                    isSaving = false
-                    saveStatus = null
-                    errorMessage = resources.getString(R.string.save_failed)
+                    // Service teardown does not cancel already-started export work. Keep the
+                    // saving card until its terminal receiver callback, but disable cancellation
+                    // because there is no live binder to deliver a new cancel request through.
+                    saveStatus = markExportCancelRequested(saveStatus)
                 }
                 bookkeeping.serviceConnectionGeneration++
                 service = null
