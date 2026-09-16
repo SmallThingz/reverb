@@ -1826,6 +1826,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun recorderActionsStayLockedUntilConnectedStateIsHydrated() {
+        assertFalse(captureServiceInteractionReady(serviceConnected = false, stateHydrated = false))
+        assertFalse(captureServiceInteractionReady(serviceConnected = true, stateHydrated = false))
+        assertFalse(captureServiceInteractionReady(serviceConnected = false, stateHydrated = true))
+        assertTrue(captureServiceInteractionReady(serviceConnected = true, stateHydrated = true))
+    }
+
+    @Test
     fun exportStateSnapshotRestoresDetachedUiBusyState() {
         val restored = reconcileCaptureExportStatus(
             exporting = true,

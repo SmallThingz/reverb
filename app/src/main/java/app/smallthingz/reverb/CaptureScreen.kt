@@ -201,6 +201,11 @@ internal fun captureExportUiBusy(
     status: CaptureSaveStatus?,
 ): Boolean = exporting || (receiverAttached && status is CaptureSaveStatus.Saving)
 
+internal fun captureServiceInteractionReady(
+    serviceConnected: Boolean,
+    stateHydrated: Boolean,
+): Boolean = serviceConnected && stateHydrated
+
 private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
@@ -224,6 +229,7 @@ fun CaptureScreen(
     val scope = rememberCoroutineScope()
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
+    var serviceStateHydrated by remember { mutableStateOf(false) }
     var isListening by remember { mutableStateOf(false) }
     var activeBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
     var isSaving by remember { mutableStateOf(false) }
@@ -320,6 +326,7 @@ fun CaptureScreen(
                         receiverAttached = receiverAttached,
                         status = saveStatus,
                     )
+                    serviceStateHydrated = true
 
                     if (!bookkeeping.startupBufferChosen) {
                         selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
@@ -355,6 +362,7 @@ fun CaptureScreen(
                         pendingClearBuffer = null
                         invalidateCustomRangePreparation()
                         bookkeeping.serviceConnectionGeneration++
+                        serviceStateHydrated = false
                         service = null
                         return
                     }
@@ -372,6 +380,7 @@ fun CaptureScreen(
                 }
                 bookkeeping.serviceConnectionGeneration++
                 bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
+                serviceStateHydrated = false
                 service = connectedService
                 requestRecorderState(connectedService)
             }
@@ -393,6 +402,7 @@ fun CaptureScreen(
                     saveStatus = markExportCancelRequested(saveStatus)
                 }
                 bookkeeping.serviceConnectionGeneration++
+                serviceStateHydrated = false
                 service = null
             }
         }
@@ -484,6 +494,7 @@ fun CaptureScreen(
                         bound = false
                     }
                     bookkeeping.serviceConnectionGeneration++
+                    serviceStateHydrated = false
                     service = null
                 }
 
@@ -667,12 +678,12 @@ fun CaptureScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         val onListenToggle = remember(
-            service, isSaving, isListening, activeBuffer,
+            service, serviceStateHydrated, isSaving, isListening, activeBuffer,
             oneShotEnabled, oneShotFull, loopingEnabled,
         ) {
             { bufferSlot: ReverbService.BufferSlot ->
                 val recorder = service
-                if (recorder != null && !isSaving) {
+                if (recorder != null && serviceStateHydrated && !isSaving) {
                     val action = captureBlobTapAction(
                         requested = bufferSlot,
                         isListening = isListening,
@@ -699,15 +710,17 @@ fun CaptureScreen(
                 }
             }
         }
-        val onClearBuffer = remember(isSaving) {
+        val onClearBuffer = remember(isSaving, service, serviceStateHydrated) {
             { bufferSlot: ReverbService.BufferSlot ->
-                if (!isSaving) pendingClearBuffer = bufferSlot
+                if (captureServiceInteractionReady(service != null, serviceStateHydrated) && !isSaving) {
+                    pendingClearBuffer = bufferSlot
+                }
             }
         }
-        val onExportFull = remember(service, isSaving, isPreparingRange) {
+        val onExportFull = remember(service, serviceStateHydrated, isSaving, isPreparingRange) {
             { bufferSlot: ReverbService.BufferSlot ->
                 val s = service
-                if (s != null && !isSaving && !isPreparingRange) {
+                if (s != null && serviceStateHydrated && !isSaving && !isPreparingRange) {
                     isPreparingRange = true
                     s.acquireTimelineSnapshot(bufferSlot) { snapshot ->
                         isPreparingRange = false
@@ -754,13 +767,14 @@ fun CaptureScreen(
         }
         val onExportCustom = remember(
             service,
+            serviceStateHydrated,
             isSaving,
             isPreparingRange,
             oneShotDurationSeconds,
             loopingDurationSeconds,
         ) {
             { bufferSlot: ReverbService.BufferSlot ->
-                if (!isSaving && !isPreparingRange) {
+                if (serviceStateHydrated && !isSaving && !isPreparingRange) {
                     val s = service
                     if (s != null) {
                         val secs = when (bufferSlot) {
@@ -881,6 +895,7 @@ fun CaptureScreen(
             isListening = isListening,
             isSaving = isSaving,
             service = service,
+            serviceStateHydrated = serviceStateHydrated,
             oneShotBlobController = oneShotBlobController,
             loopingBlobController = loopingBlobController,
             oneShotBlobActivity = latestBlobActivity[0],
@@ -1088,6 +1103,7 @@ private fun MainCaptureContent(
     isListening: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
+    serviceStateHydrated: Boolean,
     oneShotBlobController: AudioBlobController,
     loopingBlobController: AudioBlobController,
     oneShotBlobActivity: Float,
@@ -1243,7 +1259,7 @@ private fun MainCaptureContent(
         activeBuffer = activeBuffer,
     )
     val displayedRecording = displayedUiState == CaptureBufferUiState.RECORDING
-    val serviceReady = service != null
+    val serviceReady = captureServiceInteractionReady(service != null, serviceStateHydrated)
     val hasHistory = displayedMetrics.seconds > 0f
 
     val requestBufferNavigation: (ReverbService.BufferSlot) -> Unit = { target ->
@@ -1344,6 +1360,7 @@ private fun MainCaptureContent(
                 onListenToggle = { onListenToggle(renderedBuffer) },
                 onOpenBufferSettings = { onOpenBufferSettings(renderedBuffer) },
                 visualizerVisible = visualizerVisible,
+                interactionEnabled = serviceReady,
                 onBlobBoundsInRoot = { bounds -> homeBlobBoundsInRoot[0] = bounds },
             )
         }
