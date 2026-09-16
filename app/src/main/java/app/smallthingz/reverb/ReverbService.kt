@@ -625,7 +625,15 @@ class ReverbService : Service() {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
                 }
-                reportError(getString(R.string.recorder_state_persist_failed))
+                val persistenceError = IOException("Unable to persist capture destination handoff")
+                if (state == STATE_LISTENING && isListeningEnabled()) {
+                    // Losing the handoff transaction is an unexpected capture interruption, not
+                    // evidence that the user asked recording to stop. Preserve durable intent so
+                    // a later foreground bind can retry once persistence is healthy again.
+                    pauseListeningAfterPersistenceFailure("capture destination handoff", persistenceError)
+                } else {
+                    reportPersistentStoreFailure("capture destination handoff", persistenceError)
+                }
                 return false
             }
         }
