@@ -427,6 +427,9 @@ fun FilesScreen(
         deletionJob[0] = scope.launch {
             delay(4_500L)
             notice = null
+            // Close the undo transaction before any physical delete begins. A stale
+            // FeedbackCard callback may still be dispatched for one frame after notice clears.
+            deletionJob[0] = null
             finalizeDeletions()
             isDeleting = false
         }
@@ -439,7 +442,9 @@ fun FilesScreen(
     }
 
     fun undoDelete() {
-        deletionJob[0]?.cancel()
+        val undoJob = deletionJob[0] ?: return
+        if (notice?.canUndo != true || deletionsCommittedInBackground[0]) return
+        undoJob.cancel()
         deletionJob[0] = null
         pendingDeletions.clear()
         deletionsCommittedInBackground[0] = false
