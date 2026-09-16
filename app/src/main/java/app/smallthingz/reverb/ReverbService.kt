@@ -1782,16 +1782,37 @@ class ReverbService : Service() {
         generation: Long = listeningCommandGeneration.get(),
     ) {
         check(audioHandler.looper == Looper.myLooper())
-        val persisted = synchronized(listeningIntentLock) {
+        val disposition = synchronized(listeningIntentLock) {
             if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) return
             val prefs = getRecorderPreferences(this)
+            val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            if (!committed) {
+                // commit() already changed this process' in-memory preferences. Restore the
+                // previous intent as well as we can so a failed planned stop cannot silently
+                // become a durable Stop or masquerade as one in this process.
+                if (!prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit()) {
+                    Log.e(TAG, "Unable to restore listening intent after failed automatic stop")
+                }
+                persistenceFailureBlocked = true
+            }
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
-            committed
+            automaticCaptureStopDisposition(committed)
         }
-        RecordingIncidentStore.recordKnownCaptureStop(this)
+        when (disposition) {
+            AutomaticCaptureStopDisposition.KNOWN_STOP ->
+                RecordingIncidentStore.recordKnownCaptureStop(this)
+            AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE -> {
+                val error = IOException("Unable to persist automatic capture stop")
+                reportPersistentStoreFailure("persist automatic stop", error)
+                RecordingIncidentStore.recordCaptureInterrupted(
+                    this,
+                    "Capture stopped because automatic-stop persistence failed",
+                )
+            }
+        }
         audioHandler.removeCallbacks(audioReader)
         try {
             sealActiveChunks()
@@ -1800,9 +1821,6 @@ class ReverbService : Service() {
         } finally {
             releaseAudioRecord()
             updateWakeLockState()
-        }
-        if (!persisted) {
-            reportError(getString(R.string.recorder_state_persist_failed))
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         mainHandler.post {
@@ -2984,6 +3002,15 @@ internal fun foregroundServiceTypesForWork(
     exporting -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
     else -> 0
 }
+
+internal enum class AutomaticCaptureStopDisposition {
+    KNOWN_STOP,
+    PERSISTENCE_FAILURE,
+}
+
+internal fun automaticCaptureStopDisposition(stopIntentPersisted: Boolean): AutomaticCaptureStopDisposition =
+    if (stopIntentPersisted) AutomaticCaptureStopDisposition.KNOWN_STOP
+    else AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE
 
 internal fun captureSlotNeedsPersistence(
     previousStoredSlot: ReverbService.BufferSlot?,

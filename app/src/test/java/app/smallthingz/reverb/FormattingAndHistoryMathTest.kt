@@ -742,6 +742,18 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun automaticCaptureStopIsKnownOnlyAfterDurableIntentCommit() {
+        assertEquals(
+            AutomaticCaptureStopDisposition.KNOWN_STOP,
+            automaticCaptureStopDisposition(stopIntentPersisted = true),
+        )
+        assertEquals(
+            AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE,
+            automaticCaptureStopDisposition(stopIntentPersisted = false),
+        )
+    }
+
+    @Test
     fun serviceDestroyKeepsOnlyTheReadAlreadyInFlight() {
         assertTrue(captureReadMayStart(serviceDestroying = false))
         assertFalse(captureReadMayStart(serviceDestroying = true))
