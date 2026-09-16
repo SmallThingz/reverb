@@ -86,6 +86,25 @@ class RangeDurationWheelMathTest {
     }
 
     @Test
+    fun candidateFaceRedStateReflectsResultOfSelectingThatFace() {
+        val maximum = 6 * 3_600.0 + 24 * 60.0 + 16.75
+
+        // With an abnormal hour selected, moving the hour back into range can clear overage.
+        assertEquals(false, rangeDurationWheelCandidateIsOverLimit(6, 0, 0, maximum))
+        assertEquals(false, rangeDurationWheelCandidateIsOverLimit(5, 59, 59, maximum))
+        assertEquals(true, rangeDurationWheelCandidateIsOverLimit(13, 0, 0, maximum))
+
+        // Changing another field cannot clear an hour overage.
+        assertEquals(true, rangeDurationWheelCandidateIsOverLimit(13, 15, 0, maximum))
+        assertEquals(true, rangeDurationWheelCandidateIsOverLimit(13, 0, 15, maximum))
+
+        // At the maximum hour, only candidates whose resulting full time still exceeds M are red.
+        assertEquals(false, rangeDurationWheelCandidateIsOverLimit(6, 24, 16, maximum))
+        assertEquals(true, rangeDurationWheelCandidateIsOverLimit(6, 24, 17, maximum))
+        assertEquals(true, rangeDurationWheelCandidateIsOverLimit(6, 25, 0, maximum))
+    }
+
+    @Test
     fun errorMask_isHierarchicalAtExportBoundary() {
         val max = 6 * 3_600 + 24 * 60 + 16
         assertEquals(0, rangeDurationWheelErrorMask(5, 59, 59, max))

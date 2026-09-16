@@ -71,6 +71,19 @@ internal fun rangeDurationWheelDisplaySeconds(actualSeconds: Double, exactLimitS
     return rounded.coerceAtMost(Int.MAX_VALUE.toDouble()).toInt()
 }
 
+internal fun rangeDurationWheelCandidateIsOverLimit(
+    hours: Int,
+    minutes: Int,
+    seconds: Int,
+    maximumDurationSecondsExact: Double,
+): Boolean {
+    if (!maximumDurationSecondsExact.isFinite() || maximumDurationSecondsExact < 0.0) return true
+    val candidateSeconds = hours.coerceAtLeast(0).toLong() * 3_600L +
+        minutes.coerceIn(0, 59).toLong() * 60L +
+        seconds.coerceIn(0, 59).toLong()
+    return candidateSeconds.toDouble() > maximumDurationSecondsExact
+}
+
 internal fun rangeDurationWheelValues(
     step: Int,
     maxInclusive: Int,
