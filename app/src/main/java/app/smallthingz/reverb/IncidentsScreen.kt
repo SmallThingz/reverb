@@ -37,13 +37,14 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToLong
 
-private val IncidentDateFormatter: DateTimeFormatter =
+private fun incidentDateFormatter(): DateTimeFormatter =
     DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
-private val IncidentClockFormatter: DateTimeFormatter =
+
+private fun incidentClockFormatter(): DateTimeFormatter =
     DateTimeFormatter.ofPattern("h:mm:ss a", Locale.getDefault())
 
 internal fun formatRecordingIncidentTime(timestampMillis: Long): String =
-    IncidentDateFormatter.format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
+    incidentDateFormatter().format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
 
 internal fun recordingIncidentDowntimeMillis(incident: RecordingIncident): Long? =
     incident.resumedAtMillis.takeIf { it > 0L }?.let { resumed ->
@@ -74,15 +75,17 @@ internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
 }
 
 private fun formatIncidentWindow(incident: RecordingIncident): String {
+    val dateFormatter = incidentDateFormatter()
+    val clockFormatter = incidentClockFormatter()
     val startAt = Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault())
-    val start = IncidentClockFormatter.format(startAt)
+    val start = clockFormatter.format(startAt)
     val end = when {
         incident.resumedAtMillis > 0L -> {
             val resumedAt = Instant.ofEpochMilli(incident.resumedAtMillis).atZone(ZoneId.systemDefault())
             if (resumedAt.toLocalDate() == startAt.toLocalDate()) {
-                IncidentClockFormatter.format(resumedAt)
+                clockFormatter.format(resumedAt)
             } else {
-                "${IncidentDateFormatter.format(resumedAt)} ${IncidentClockFormatter.format(resumedAt)}"
+                "${dateFormatter.format(resumedAt)} ${clockFormatter.format(resumedAt)}"
             }
         }
         incident.recoveryPending -> "…"
