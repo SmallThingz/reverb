@@ -95,40 +95,22 @@ private val BYTES_IN_MEGABYTE = 1024L * 1024L
 private val retentionSizeFormatter =
     DecimalFormat(FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
 data class SettingsSnapshot(
-    var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
-    var retentionMode: RetentionMode = RetentionMode.TIME,
-    var oneShotRetentionTime: Int = 0,
-    var oneShotRetentionSizeBytes: Long = 0L,
-    var loopingRetentionTime: Int = 0,
-    var loopingRetentionSizeBytes: Long = 0L,
-    var format: ExportFormat? = null,
-    var codec: ExportCodec? = null,
-    var sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-    var source: AudioSourceMode? = null,
-    var channelMode: ChannelMode? = null,
-    var route: InputRouteMode? = null,
-    var sampleRate: Int = 0,
-    var exportDirectoryUri: String? = null,
-    var wakeLockEnabled: Boolean = false,
-) {
-    fun copyFrom(other: SettingsSnapshot) {
-        themeMode = other.themeMode
-        retentionMode = other.retentionMode
-        oneShotRetentionTime = other.oneShotRetentionTime
-        oneShotRetentionSizeBytes = other.oneShotRetentionSizeBytes
-        loopingRetentionTime = other.loopingRetentionTime
-        loopingRetentionSizeBytes = other.loopingRetentionSizeBytes
-        format = other.format
-        codec = other.codec
-        sampleFormat = other.sampleFormat
-        source = other.source
-        channelMode = other.channelMode
-        route = other.route
-        sampleRate = other.sampleRate
-        exportDirectoryUri = other.exportDirectoryUri
-        wakeLockEnabled = other.wakeLockEnabled
-    }
-}
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val retentionMode: RetentionMode = RetentionMode.TIME,
+    val oneShotRetentionTime: Int = 0,
+    val oneShotRetentionSizeBytes: Long = 0L,
+    val loopingRetentionTime: Int = 0,
+    val loopingRetentionSizeBytes: Long = 0L,
+    val format: ExportFormat? = null,
+    val codec: ExportCodec? = null,
+    val sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    val source: AudioSourceMode? = null,
+    val channelMode: ChannelMode? = null,
+    val route: InputRouteMode? = null,
+    val sampleRate: Int = 0,
+    val exportDirectoryUri: String? = null,
+    val wakeLockEnabled: Boolean = false,
+)
 
 internal fun shouldInvalidateCachedOneShotFull(
     previousMode: RetentionMode,
@@ -300,23 +282,23 @@ fun SettingsScreen(
         refreshSourceModes(preferredSource, preferredChannelMode, preferredRate)
     }
 
-    fun saveCurrentToSnapshot(snapshot: SettingsSnapshot) {
-        snapshot.themeMode = selectedTheme
-        snapshot.retentionMode = activeRetentionMode
-        snapshot.oneShotRetentionTime = oneShotRetentionTimeSecondsValue
-        snapshot.oneShotRetentionSizeBytes = oneShotRetentionSizeBytesValue
-        snapshot.loopingRetentionTime = loopingRetentionTimeSecondsValue
-        snapshot.loopingRetentionSizeBytes = loopingRetentionSizeBytesValue
-        snapshot.format = selectedFormat
-        snapshot.codec = selectedCodec
-        snapshot.sampleFormat = selectedSampleFormat
-        snapshot.source = selectedSource
-        snapshot.channelMode = selectedChannelMode
-        snapshot.route = selectedRoute
-        snapshot.sampleRate = selectedSampleRate
-        snapshot.exportDirectoryUri = selectedExportTreeUri?.toString()
-        snapshot.wakeLockEnabled = currentSnapshot.wakeLockEnabled
-    }
+    fun currentSettingsSnapshot(wakeLockEnabled: Boolean = currentSnapshot.wakeLockEnabled) = SettingsSnapshot(
+        themeMode = selectedTheme,
+        retentionMode = activeRetentionMode,
+        oneShotRetentionTime = oneShotRetentionTimeSecondsValue,
+        oneShotRetentionSizeBytes = oneShotRetentionSizeBytesValue,
+        loopingRetentionTime = loopingRetentionTimeSecondsValue,
+        loopingRetentionSizeBytes = loopingRetentionSizeBytesValue,
+        format = selectedFormat,
+        codec = selectedCodec,
+        sampleFormat = selectedSampleFormat,
+        source = selectedSource,
+        channelMode = selectedChannelMode,
+        route = selectedRoute,
+        sampleRate = selectedSampleRate,
+        exportDirectoryUri = selectedExportTreeUri?.toString(),
+        wakeLockEnabled = wakeLockEnabled,
+    )
 
     fun pushUndoState() {
         val invalidRetentionInput = when (activeRetentionMode) {
@@ -373,7 +355,7 @@ fun SettingsScreen(
         // changes presentation; it must never reparse the rounded display string.
         activeRetentionMode = mode
         refreshRetentionFields(preserveActiveInputs = false)
-        saveCurrentToSnapshot(currentSnapshot)
+        currentSnapshot = currentSettingsSnapshot()
         pushUndoState()
     }
 
@@ -413,7 +395,7 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
-        currentSnapshot = prev.copy()
+        currentSnapshot = prev
         hasUnsavedChanges = false
     }
 
@@ -639,8 +621,8 @@ fun SettingsScreen(
         // Re-render from the precise backing values after commit. This keeps the large
         // fields intentionally rounded without feeding that rounding back into storage.
         refreshRetentionFields(preserveActiveInputs = false)
-        saveCurrentToSnapshot(currentSnapshot)
-        originalSnapshot.copyFrom(currentSnapshot)
+        currentSnapshot = currentSettingsSnapshot()
+        originalSnapshot = currentSnapshot
         hasUnsavedChanges = false
         return true
         } finally {
@@ -695,9 +677,8 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
-        currentSnapshot = currentSnapshot.copy(wakeLockEnabled = isWakeLockEnabled(context))
-        saveCurrentToSnapshot(currentSnapshot)
-        originalSnapshot.copyFrom(currentSnapshot)
+        currentSnapshot = currentSettingsSnapshot(isWakeLockEnabled(context))
+        originalSnapshot = currentSnapshot
         hasUnsavedChanges = false
     }
 
@@ -717,7 +698,7 @@ fun SettingsScreen(
         }
         selectedExportTreeUri = treeUri
         exportPathText = describeOutputDirectory(context, treeUri)
-        saveCurrentToSnapshot(currentSnapshot)
+        currentSnapshot = currentSettingsSnapshot()
         pushUndoState()
         refreshMoveRecordingsAvailability()
     }
@@ -927,7 +908,7 @@ fun SettingsScreen(
                                 if (theme != selectedTheme) {
                                     selectedTheme = theme
                                     onThemeChanged(theme)
-                                    saveCurrentToSnapshot(currentSnapshot)
+                                    currentSnapshot = currentSettingsSnapshot()
                                     pushUndoState()
                                 }
                             },
@@ -960,7 +941,7 @@ fun SettingsScreen(
                         oneShotRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { oneShotRetentionTimeSecondsValue = it }
                         refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
+                        currentSnapshot = currentSettingsSnapshot()
                         pushUndoState()
                     },
                     onOneShotSizeChange = { value ->
@@ -969,7 +950,7 @@ fun SettingsScreen(
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
                             ?.let { oneShotRetentionSizeBytesValue = rawMegabytesToBytes(it) }
                         refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
+                        currentSnapshot = currentSettingsSnapshot()
                         pushUndoState()
                     },
                     onLoopingTimeChange = { value ->
@@ -977,7 +958,7 @@ fun SettingsScreen(
                         loopingRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { loopingRetentionTimeSecondsValue = it }
                         refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
+                        currentSnapshot = currentSettingsSnapshot()
                         pushUndoState()
                     },
                     onLoopingSizeChange = { value ->
@@ -986,7 +967,7 @@ fun SettingsScreen(
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
                             ?.let { loopingRetentionSizeBytesValue = rawMegabytesToBytes(it) }
                         refreshRetentionFields(preserveActiveInputs = true)
-                        saveCurrentToSnapshot(currentSnapshot)
+                        currentSnapshot = currentSettingsSnapshot()
                         pushUndoState()
                     },
                 )
@@ -1016,7 +997,7 @@ fun SettingsScreen(
                                 preferredRate = selectedSampleRate,
                             )
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1033,7 +1014,7 @@ fun SettingsScreen(
                             selectedChannelMode = channelMode
                             refreshSampleRates(selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1059,7 +1040,7 @@ fun SettingsScreen(
                                 preferredRate = selectedSampleRate,
                             )
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1075,7 +1056,7 @@ fun SettingsScreen(
                         onOptionSelected = { sampleRate ->
                             selectedSampleRate = sampleRate
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1097,7 +1078,7 @@ fun SettingsScreen(
                             selectedSource = source
                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1118,7 +1099,7 @@ fun SettingsScreen(
                                 preferredRate = selectedSampleRate,
                             )
                             refreshRetentionFields(preserveActiveInputs = true)
-                            saveCurrentToSnapshot(currentSnapshot)
+                            currentSnapshot = currentSettingsSnapshot()
                             pushUndoState()
                         },
                         modifier = Modifier.weight(1f),
@@ -1160,7 +1141,7 @@ fun SettingsScreen(
                                     selectedExportTreeUri = null
                                     refreshExportDirectoryUi()
                                     refreshMoveRecordingsAvailability()
-                                    saveCurrentToSnapshot(currentSnapshot)
+                                    currentSnapshot = currentSettingsSnapshot()
                                     pushUndoState()
                                 },
                                 modifier = Modifier
@@ -1213,8 +1194,7 @@ fun SettingsScreen(
                             ReverbSwitch(
                                 checked = currentSnapshot.wakeLockEnabled,
                                 onCheckedChange = { enabled ->
-                                    currentSnapshot = currentSnapshot.copy(wakeLockEnabled = enabled)
-                                    saveCurrentToSnapshot(currentSnapshot)
+                                    currentSnapshot = currentSettingsSnapshot(enabled)
                                     pushUndoState()
                                 },
                             )
