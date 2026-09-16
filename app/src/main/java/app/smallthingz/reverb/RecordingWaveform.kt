@@ -263,15 +263,23 @@ internal fun readWavPcm16MonoRange(
     return output
 }
 
-internal fun <T> withRecordingWavChannel(
+internal fun <T> withRecordingWavChannelIdentityGuard(
     context: Context,
     recording: RecordingEntity,
-    block: (FileChannel) -> T,
+    block: (FileChannel, sourceStillCurrent: () -> Boolean) -> T,
 ): T = when (recording.storageType) {
     RecordingStorageType.FILE -> {
         val input = openVerifiedFileInputStream(recording)
             ?: throw IOException("Recording changed on disk")
-        input.use { source -> source.channel.use(block) }
+        input.use { source ->
+            val sourceStillCurrent = {
+                fileDescriptorIdentityMatches(
+                    recording.fileIdentity,
+                    resolveFileDescriptorIdentity(input.fd),
+                )
+            }
+            block(source.channel, sourceStillCurrent)
+        }
     }
     RecordingStorageType.DOCUMENT,
     RecordingStorageType.MEDIASTORE,
@@ -282,14 +290,26 @@ internal fun <T> withRecordingWavChannel(
         val uri = recording.id.toUri()
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
             ?: throw IOException("Unable to open recording for reading")
-        val result = descriptor.use {
-            FileInputStream(it.fileDescriptor).channel.use(block)
+        descriptor.use { opened ->
+            FileInputStream(opened.fileDescriptor).channel.use { channel ->
+                val sourceStillCurrent = { recordingContentIdentityMatches(context, recording) }
+                if (!sourceStillCurrent()) {
+                    throw IOException("Recording changed in provider while opening")
+                }
+                block(channel, sourceStillCurrent)
+            }
         }
-        if (!recordingContentIdentityMatches(context, recording)) {
-            throw IOException("Recording changed in provider while reading")
-        }
-        result
     }
+}
+
+internal fun <T> withRecordingWavChannel(
+    context: Context,
+    recording: RecordingEntity,
+    block: (FileChannel) -> T,
+): T = withRecordingWavChannelIdentityGuard(context, recording) { channel, sourceStillCurrent ->
+    val result = block(channel)
+    if (!sourceStillCurrent()) throw IOException("Recording changed while reading")
+    result
 }
 
 internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {

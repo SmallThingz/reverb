@@ -978,6 +978,32 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun trimPublicationValidatesSourceBeforeRecoveryGrantAndPublish() {
+        val events = mutableListOf<String>()
+        assertThrows(IOException::class.java) {
+            publishVerifiedTrimAfterSourceValidation(
+                sourceStillCurrent = { events += "source"; false },
+                persistRecoveryMarker = { events += "marker"; true },
+                targetId = "target",
+                publish = { events += "publish" },
+            )
+        }
+        assertEquals(listOf("source"), events)
+
+        events.clear()
+        assertEquals(
+            "published",
+            publishVerifiedTrimAfterSourceValidation(
+                sourceStillCurrent = { events += "source"; true },
+                persistRecoveryMarker = { events += "marker"; true },
+                targetId = "target",
+                publish = { events += "publish"; "published" },
+            ),
+        )
+        assertEquals(listOf("source", "marker", "publish"), events)
+    }
+
+    @Test
     fun providerOutputCleanupRequiresPositivePostDeleteAbsence() {
         assertTrue(providerOutputCleanupCompleted(OutputCleanupAssetState.MISSING))
         assertFalse(providerOutputCleanupCompleted(OutputCleanupAssetState.PRESENT))

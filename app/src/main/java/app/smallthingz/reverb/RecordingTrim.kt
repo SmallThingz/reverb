@@ -31,6 +31,20 @@ internal fun trimmedRecordingBaseName(displayName: String): String {
     return "${base.ifBlank { FALLBACK_DISPLAY_NAME }} trim"
 }
 
+
+internal inline fun <T> publishVerifiedTrimAfterSourceValidation(
+    sourceStillCurrent: () -> Boolean,
+    persistRecoveryMarker: () -> Boolean,
+    targetId: String,
+    publish: () -> T,
+): T {
+    if (!sourceStillCurrent()) {
+        throw IOException("Recording changed while trim was being read")
+    }
+    requireVerifiedOutputRecoveryMarker(persistRecoveryMarker(), targetId)
+    return publish()
+}
+
 private fun writeTrimmedRecordingCopy(
     context: Context,
     recording: RecordingEntity,
@@ -42,7 +56,7 @@ private fun writeTrimmedRecordingCopy(
     var verifiedComplete = false
     var cleanupDigest: CopyDigest? = null
     try {
-        return withRecordingWavChannel(context, recording) { source ->
+        return withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
             val layout = readWavPcmLayout(source)
             val startFrame = millisToFrame(startMillis, layout.sampleRate)
                 .coerceIn(0L, layout.frameCount - 1L)
@@ -89,10 +103,17 @@ private fun writeTrimmedRecordingCopy(
                 expectedPayloadSha256 = writer.payloadSha256,
             )
             cleanupDigest = verifiedOutput.digest
-            val recoveryMarkerPersisted = putVerifiedExportStaging(context, outputTarget, verifiedOutput)
-            requireVerifiedOutputRecoveryMarker(recoveryMarkerPersisted, outputTarget.id)
-            verifiedComplete = true
-            val finalized = finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
+            // The source bytes are complete now, but the target is still hidden. Provider-backed
+            // recordings can change while their descriptor remains open, so revalidate the
+            // selected source before granting recovery authority or publishing a final name.
+            val finalized = publishVerifiedTrimAfterSourceValidation(
+                sourceStillCurrent = sourceStillCurrent,
+                persistRecoveryMarker = { putVerifiedExportStaging(context, outputTarget, verifiedOutput) },
+                targetId = outputTarget.id,
+            ) {
+                verifiedComplete = true
+                finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
+            }
             if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId)) {
                 Log.w(TRIM_TAG, "Unable to clear verified trim recovery marker: $stagingId")
             }
