@@ -51,6 +51,23 @@ class RecordingIncidentStoreTest {
     }
 
 
+
+    @Test
+    fun captureStartSeparatesTransparentRestartFromStaleSameProcessSession() {
+        assertTrue(
+            captureSessionStartDisposition(false, continuousRestart = false) ==
+                CaptureSessionStartDisposition.NEW_SESSION,
+        )
+        assertTrue(
+            captureSessionStartDisposition(true, continuousRestart = true) ==
+                CaptureSessionStartDisposition.CONTINUE_SESSION,
+        )
+        assertTrue(
+            captureSessionStartDisposition(true, continuousRestart = false) ==
+                CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION,
+        )
+    }
+
     @Test
     fun provisionalServiceStopMergesLaterExitEvidenceWithoutDuplicatingSession() {
         val provisional = RecordingIncident(

@@ -101,6 +101,17 @@ internal enum class RecordingExitDisposition {
 internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition =
     if (reason == null) RecordingExitDisposition.PENDING else RecordingExitDisposition.INCIDENT
 
+internal enum class CaptureSessionStartDisposition { NEW_SESSION, CONTINUE_SESSION, RESOLVE_INTERRUPTED_SESSION }
+
+internal fun captureSessionStartDisposition(
+    sameProcessArmedSession: Boolean,
+    continuousRestart: Boolean,
+): CaptureSessionStartDisposition = when {
+    !sameProcessArmedSession -> CaptureSessionStartDisposition.NEW_SESSION
+    continuousRestart -> CaptureSessionStartDisposition.CONTINUE_SESSION
+    else -> CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION
+}
+
 
 internal fun completeRecordingIncidentDowntimes(
     incidents: List<RecordingIncident>,
@@ -190,14 +201,41 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun recordCaptureStarted(context: Context) {
+    fun recordCaptureStarted(
+        context: Context,
+        continuousRestart: Boolean = false,
+    ) {
         val appContext = context.applicationContext
-        recoverPriorSessionIfNeeded(appContext)
+        val markerFile = sessionFile(appContext)
+        val existing = readSession(markerFile)
+        val sameProcessArmed = existing?.armed == true && markerBelongsToCurrentProcess(existing)
+        when (captureSessionStartDisposition(sameProcessArmed, continuousRestart)) {
+            CaptureSessionStartDisposition.CONTINUE_SESSION -> {
+                // A transparent AudioRecord/config restart is still the same logical capture
+                // session. Do not reset its arm timestamp or split later incident identity.
+                resolvePendingSessions(appContext)
+                return
+            }
+            CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION -> {
+                val marker = requireNotNull(existing)
+                appendIncident(
+                    appContext,
+                    incidentWithoutExitEvidence(
+                        marker = marker,
+                        occurredAtMillis = System.currentTimeMillis(),
+                        description = "Capture restarted after an unresolved interruption",
+                    ),
+                )
+                markerFile.delete()
+            }
+            CaptureSessionStartDisposition.NEW_SESSION -> recoverPriorSessionIfNeeded(appContext)
+        }
+
         val resumedAtMillis = System.currentTimeMillis()
         notePendingSessionsResumed(appContext, resumedAtMillis)
         resolvePendingSessions(appContext)
         writeSession(
-            sessionFile(appContext),
+            markerFile,
             ActiveRecordingSessionMarker(
                 armed = true,
                 pid = Process.myPid(),

@@ -490,7 +490,10 @@ class ReverbService : Service() {
                 publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
                 return
             }
-            CaptureReaderTransition.RESTART -> startAudioInputOnAudioThread(generation)
+            CaptureReaderTransition.RESTART -> startAudioInputOnAudioThread(
+                generation = generation,
+                continuousRestart = true,
+            )
             CaptureReaderTransition.ADOPT -> {
                 audioHandler.removeCallbacks(audioReader)
                 audioRecordGeneration = generation
@@ -872,7 +875,10 @@ class ReverbService : Service() {
         requestServiceStopWhenExportIdle()
     }
 
-    private fun startAudioInputOnAudioThread(generation: Long = listeningCommandGeneration.get()) {
+    private fun startAudioInputOnAudioThread(
+        generation: Long = listeningCommandGeneration.get(),
+        continuousRestart: Boolean = false,
+    ) {
         check(audioHandler.looper == Looper.myLooper())
         if (generation != listeningCommandGeneration.get()) return
         if (audioRecordGeneration == generation && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
@@ -928,17 +934,17 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), null, generation)
             return
         }
-        if (!armCaptureIncidentTrackingOnAudioThread()) return
+        if (!armCaptureIncidentTrackingOnAudioThread(continuousRestart = continuousRestart)) return
         if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
     }
 
-    private fun armCaptureIncidentTrackingOnAudioThread(): Boolean {
+    private fun armCaptureIncidentTrackingOnAudioThread(continuousRestart: Boolean = false): Boolean {
         check(audioHandler.looper == Looper.myLooper())
         return try {
-            RecordingIncidentStore.recordCaptureStarted(this)
+            RecordingIncidentStore.recordCaptureStarted(this, continuousRestart = continuousRestart)
             true
         } catch (error: Exception) {
             pauseListeningAfterPersistenceFailure("arm capture incident tracking", error)
@@ -1559,7 +1565,7 @@ class ReverbService : Service() {
             audioHandler.removeCallbacks(audioReader)
             sealActiveChunks()
             releaseAudioRecord()
-            startAudioInputOnAudioThread()
+            startAudioInputOnAudioThread(continuousRestart = true)
         } else {
             // While capture is active, the fields above describe the operational
             // AudioRecord configuration, which may be a hardware fallback from the
@@ -1936,7 +1942,7 @@ class ReverbService : Service() {
                 releaseAudioRecord()
                 false
             } else if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                if (!armCaptureIncidentTrackingOnAudioThread()) {
+                if (!armCaptureIncidentTrackingOnAudioThread(continuousRestart = true)) {
                     false
                 } else if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) {
                     false
