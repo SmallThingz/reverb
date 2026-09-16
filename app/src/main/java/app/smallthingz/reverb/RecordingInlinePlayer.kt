@@ -58,7 +58,6 @@ import java.io.FileDescriptor
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -587,48 +586,24 @@ internal fun RecordingInlinePlayer(
         waveformPass = RangeWaveformPass.COARSE
         waveformLoading = true
 
-        suspend fun constructPass(pass: RangeWaveformPass) {
-            val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
-            val worker = launch(Dispatchers.IO) {
-                val accumulator = ProgressiveWaveformAccumulator(pass.bucketCount)
-                try {
-                    readRecordingWaveformEnvelopeProgressive(appContext, recording, pass) { index, magnitude ->
-                        val update = accumulator.record(index, magnitude)
-                        update == null || updates.trySend(update).isSuccess
-                    }
-                    accumulator.finish()?.let { updates.trySend(it) }
-                } finally {
-                    updates.close()
-                }
-            }
-            try {
-                for (update in updates) {
-                    when (pass) {
-                        RangeWaveformPass.COARSE -> {
-                            if (update.values.size == coarseWaveform.size) {
-                                coarseWaveform = update.values
-                                coarseBuiltCount = update.builtCount.coerceIn(0, coarseWaveform.size)
-                            }
-                        }
-                        RangeWaveformPass.DETAIL -> {
-                            if (update.values.size == detailWaveform.size) {
-                                detailWaveform = update.values
-                                detailBuiltCount = update.builtCount.coerceIn(0, detailWaveform.size)
-                            }
-                        }
-                    }
-                }
-            } finally {
-                worker.cancel()
-                updates.close()
-            }
-        }
-
         try {
-            constructPass(RangeWaveformPass.COARSE)
-            delay(280L)
-            waveformPass = RangeWaveformPass.DETAIL
-            constructPass(RangeWaveformPass.DETAIL)
+            buildProgressiveWaveform(
+                readPass = { pass, onBucket ->
+                    readRecordingWaveformEnvelopeProgressive(appContext, recording, pass, onBucket)
+                },
+                onPassStarted = { waveformPass = it },
+            ) { pass, update ->
+                when (pass) {
+                    RangeWaveformPass.COARSE -> if (update.values.size == coarseWaveform.size) {
+                        coarseWaveform = update.values
+                        coarseBuiltCount = update.builtCount.coerceIn(0, coarseWaveform.size)
+                    }
+                    RangeWaveformPass.DETAIL -> if (update.values.size == detailWaveform.size) {
+                        detailWaveform = update.values
+                        detailBuiltCount = update.builtCount.coerceIn(0, detailWaveform.size)
+                    }
+                }
+            }
             val encoded = encodeRecordingWaveform(detailWaveform)
             if (encoded.isNotBlank() && RecordingRepository.cacheWaveform(
                     context = appContext,

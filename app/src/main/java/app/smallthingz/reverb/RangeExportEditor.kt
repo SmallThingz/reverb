@@ -80,10 +80,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlin.math.abs
@@ -959,36 +956,16 @@ internal fun RangeExportHomeContent(
         // essentially settled, resolve real audio into it left-to-right as before.
         snapshotFlow { transitionProgress.value }.first { it >= 0.96f }
 
-        suspend fun constructPass(pass: RangeWaveformPass) {
-            val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
-            val worker = launch(Dispatchers.IO) {
-                val accumulator = ProgressiveWaveformAccumulator(pass.bucketCount)
-                try {
-                    readySnapshot.readWaveformEnvelopeProgressive(pass) { index, magnitude ->
-                        val update = accumulator.record(index, magnitude)
-                        update == null || updates.trySend(update).isSuccess
-                    }
-                    accumulator.finish()?.let { updates.trySend(it) }
-                } finally {
-                    updates.close()
-                }
-            }
-            try {
-                for (update in updates) {
-                    state.publishWaveformSnapshot(pass, update)
-                }
-            } finally {
-                worker.cancel()
-                updates.close()
-            }
-        }
-
         try {
-            constructPass(RangeWaveformPass.COARSE)
-            // Let the coarse materialization visibly settle before the finer left-to-right polish begins.
-            delay(280L)
-            state.beginDetailedWaveformPass()
-            constructPass(RangeWaveformPass.DETAIL)
+            buildProgressiveWaveform(
+                readPass = { pass, onBucket ->
+                    readySnapshot.readWaveformEnvelopeProgressive(pass, onBucket)
+                },
+                onPassStarted = { pass ->
+                    if (pass == RangeWaveformPass.DETAIL) state.beginDetailedWaveformPass()
+                },
+                onSnapshot = state::publishWaveformSnapshot,
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } finally {
