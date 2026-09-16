@@ -1776,6 +1776,39 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun detachedSaveUiGateDropsDeadUiCallbacks() {
+        val events = mutableListOf<String>()
+        val gate = SaveUiCallbackGate(
+            setSaving = { events += "saving=$it" },
+            onStatus = { events += "status=${it?.javaClass?.simpleName ?: "null"}" },
+            onError = { events += "error=$it" },
+            onSaved = { events += "saved" },
+        )
+        val recording = RecordingEntity(
+            id = "id",
+            displayName = "clip.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 1L,
+            durationMillis = 1L,
+            sizeBytes = 1L,
+            codecSummary = "pcm",
+            storageType = RecordingStorageType.FILE,
+            directoryId = "dir",
+        )
+
+        assertTrue(gate.saved(recording))
+        assertEquals(listOf("status=Saved", "saving=false", "saved"), events)
+
+        events.clear()
+        gate.detach()
+        assertFalse(gate.attached)
+        assertFalse(gate.failed("late"))
+        assertFalse(gate.cancelled())
+        assertFalse(gate.saved(recording))
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
     fun retentionPresentation_roundsWithoutChangingIndependentBackingValues() {
         val exactSizeBytes = 123_456_789L
         val snapshot = SettingsSnapshot(

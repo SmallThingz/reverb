@@ -191,6 +191,7 @@ private class CaptureScreenBookkeeping {
     var serviceConnectionGeneration = 0L
     var customRangeRequestGeneration = 0L
     var pendingCustomRangeBuffer: ReverbService.BufferSlot? = null
+    var activeSaveReceiver: SaveResultReceiver? = null
 }
 
 @Composable
@@ -246,6 +247,15 @@ fun CaptureScreen(
         bookkeeping.pendingCustomRangeBuffer = null
         rangeSnapshotBuffer = null
         isPreparingRange = false
+    }
+
+    fun detachActiveSaveUi() {
+        bookkeeping.activeSaveReceiver?.detachUi()
+        bookkeeping.activeSaveReceiver = null
+        if (isSaving) {
+            isSaving = false
+            saveStatus = null
+        }
     }
 
     fun requestRecorderState(recorder: ReverbService) {
@@ -431,6 +441,7 @@ fun CaptureScreen(
                 Lifecycle.Event.ON_START -> if (observerInstalled) bindIfNeeded()
 
                 Lifecycle.Event.ON_STOP -> {
+                    detachActiveSaveUi()
                     rangeSnapshot?.close()
                     rangeSnapshot = null
                     rangeSnapshotBuffer = null
@@ -458,6 +469,7 @@ fun CaptureScreen(
         onDispose {
             view.removeCallbacks(initialBind)
             lifecycleOwner.lifecycle.removeObserver(observer)
+            detachActiveSaveUi()
             rangeSnapshot?.close()
             rangeSnapshot = null
             rangeSnapshotBuffer = null
@@ -609,6 +621,10 @@ fun CaptureScreen(
                         onStatus = { saveStatus = it },
                         onError = { errorMessage = it },
                         onSaved = onRecordingSaved,
+                        onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
+                        onReceiverTerminal = { receiver ->
+                            if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
+                        },
                     )
                 },
                 onDismiss = {
@@ -697,6 +713,10 @@ fun CaptureScreen(
                                     onStatus = { saveStatus = it },
                                     onError = { errorMessage = it },
                                     onSaved = onRecordingSaved,
+                                    onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
+                                    onReceiverTerminal = { receiver ->
+                                        if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
+                                    },
                                 )
                             }
                         }
@@ -814,6 +834,10 @@ fun CaptureScreen(
                     onStatus = { saveStatus = it },
                     onError = { errorMessage = it },
                     onSaved = onRecordingSaved,
+                    onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
+                    onReceiverTerminal = { receiver ->
+                        if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
+                    },
                 )
             }
         }
@@ -2040,6 +2064,8 @@ private fun startExport(
     onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit = {},
     onSaved: () -> Unit = {},
+    onReceiverCreated: (SaveResultReceiver) -> Unit = {},
+    onReceiverTerminal: (SaveResultReceiver) -> Unit = {},
 ) {
     val recorder = service ?: run {
         snapshot?.close()
@@ -2050,24 +2076,27 @@ private fun startExport(
     }
     setSaving(true)
     onStatus(CaptureSaveStatus.Saving(cancellable = true))
+    val appContext = context.applicationContext
     val receiver = SaveResultReceiver(
-        context = context,
+        context = appContext,
         setSaving = setSaving,
         onStatus = onStatus,
         onError = onError,
-        onSaved = {
+        onSaved = onSaved,
+        onCommitted = {
             range.rememberOnSave?.let { memory ->
                 rememberSuccessfulRangeExport(
-                    context = context,
+                    context = appContext,
                     bufferSlot = memory.bufferSlot,
                     availableSeconds = memory.availableSeconds,
                     startSeconds = range.startSeconds,
                     endSeconds = range.endSeconds,
                 )
             }
-            onSaved()
         },
+        onTerminal = onReceiverTerminal,
     )
+    onReceiverCreated(receiver)
     try {
         if (snapshot != null) {
             recorder.dumpRecordingRange(snapshot, range.startSeconds, range.endSeconds, receiver, "")
@@ -2134,31 +2163,91 @@ private fun handleExport(
     }
 }
 
+internal class SaveUiCallbackGate(
+    setSaving: (Boolean) -> Unit,
+    onStatus: (CaptureSaveStatus?) -> Unit,
+    onError: (String) -> Unit,
+    onSaved: () -> Unit,
+) {
+    private var setSavingCallback: ((Boolean) -> Unit)? = setSaving
+    private var statusCallback: ((CaptureSaveStatus?) -> Unit)? = onStatus
+    private var errorCallback: ((String) -> Unit)? = onError
+    private var savedCallback: (() -> Unit)? = onSaved
+    var attached: Boolean = true
+        private set
+
+    fun detach() {
+        attached = false
+        setSavingCallback = null
+        statusCallback = null
+        errorCallback = null
+        savedCallback = null
+    }
+
+    fun saved(recording: RecordingEntity): Boolean {
+        if (!attached) return false
+        statusCallback?.invoke(CaptureSaveStatus.Saved(recording))
+        setSavingCallback?.invoke(false)
+        savedCallback?.invoke()
+        return true
+    }
+
+    fun failed(message: String): Boolean {
+        if (!attached) return false
+        setSavingCallback?.invoke(false)
+        statusCallback?.invoke(null)
+        errorCallback?.invoke(message)
+        return true
+    }
+
+    fun cancelled(): Boolean {
+        if (!attached) return false
+        setSavingCallback?.invoke(false)
+        statusCallback?.invoke(null)
+        return true
+    }
+}
+
 private class SaveResultReceiver(
     context: Context,
-    private val setSaving: (Boolean) -> Unit,
-    private val onStatus: (CaptureSaveStatus?) -> Unit,
-    private val onError: (String) -> Unit = {},
-    private val onSaved: () -> Unit = {},
+    setSaving: (Boolean) -> Unit,
+    onStatus: (CaptureSaveStatus?) -> Unit,
+    onError: (String) -> Unit = {},
+    onSaved: () -> Unit = {},
+    private val onCommitted: () -> Unit = {},
+    private val onTerminal: (SaveResultReceiver) -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
+    private val uiCallbacks = SaveUiCallbackGate(setSaving, onStatus, onError, onSaved)
+
+    fun detachUi() = uiCallbacks.detach()
 
     override fun fileReady(recording: RecordingEntity) {
-        onStatus(CaptureSaveStatus.Saved(recording))
-        setSaving(false)
-        onSaved()
+        // Range-memory bookkeeping is convenience state; it must never suppress terminal
+        // delivery for a recording that is already durably committed.
+        runCatching { onCommitted() }
+        if (!uiCallbacks.saved(recording)) {
+            NotifyFileReceiver(appContext).fileReady(recording)
+        }
+        finish()
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
-        setSaving(false)
-        onStatus(null)
         val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
-        onError(text)
+        if (!uiCallbacks.failed(text)) {
+            NotifyFileReceiver(appContext).fileFailed(message, error)
+        }
+        finish()
     }
 
     override fun fileCancelled() {
-        setSaving(false)
-        onStatus(null)
+        uiCallbacks.cancelled()
+        finish()
+    }
+
+    private fun finish() {
+        uiCallbacks.detach()
+        onTerminal(this)
     }
 }
 
