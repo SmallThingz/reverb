@@ -206,6 +206,13 @@ private class InlinePlayerBookkeeping {
     var initialAutoStartPending = true
 }
 
+internal fun inlinePlaybackShouldAutoStart(
+    prepared: Boolean,
+    initialAutoStartPending: Boolean,
+    lifecycleResumed: Boolean,
+    blocked: Boolean = false,
+): Boolean = prepared && initialAutoStartPending && lifecycleResumed && !blocked
+
 @Composable
 internal fun RecordingInlinePlayer(
     recording: RecordingEntity,
@@ -470,7 +477,12 @@ internal fun RecordingInlinePlayer(
             duration = preparedPlayer.duration.coerceAtLeast(1)
             if (!trimMode || trimEndMillis >= previousDuration - 1) trimEndMillis = duration
             currentPosition = currentPosition.coerceIn(0, duration)
-            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            if (inlinePlaybackShouldAutoStart(
+                    prepared = true,
+                    initialAutoStartPending = playbackBookkeeping.initialAutoStartPending,
+                    lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                )
+            ) {
                 runCatching { preparedPlayer.start() }
                     .onSuccess {
                         playbackBookkeeping.initialAutoStartPending = false
@@ -539,7 +551,13 @@ internal fun RecordingInlinePlayer(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
-                    if (prepared && playbackBookkeeping.initialAutoStartPending && !trimSaving) {
+                    if (inlinePlaybackShouldAutoStart(
+                            prepared = prepared,
+                            initialAutoStartPending = playbackBookkeeping.initialAutoStartPending,
+                            lifecycleResumed = true,
+                            blocked = trimSaving,
+                        )
+                    ) {
                         val player = mediaPlayer
                         runCatching { player?.start() }
                             .onSuccess {

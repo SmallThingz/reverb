@@ -725,6 +725,21 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun deferredInlinePlaybackStartsOnlyWhenPreparedAndResumed() {
+        assertTrue(
+            inlinePlaybackShouldAutoStart(
+                prepared = true,
+                initialAutoStartPending = true,
+                lifecycleResumed = true,
+            ),
+        )
+        assertFalse(inlinePlaybackShouldAutoStart(false, true, true))
+        assertFalse(inlinePlaybackShouldAutoStart(true, false, true))
+        assertFalse(inlinePlaybackShouldAutoStart(true, true, false))
+        assertFalse(inlinePlaybackShouldAutoStart(true, true, true, blocked = true))
+    }
+
+    @Test
     fun inFlightCaptureReadSurvivesOnlyContinuousSessionChanges() {
         assertTrue(
             captureReadMayCommit(
