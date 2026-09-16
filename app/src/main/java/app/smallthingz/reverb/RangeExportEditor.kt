@@ -1297,8 +1297,8 @@ private fun bubbleOffset(xPx: Float, fullWidthPx: Float, bubbleWidthPx: Float): 
 @Composable
 internal fun RangeTimelineBoundaryVisual(
     active: Boolean,
-    visualAlpha: Float = 1f,
     modifier: Modifier = Modifier,
+    visualAlpha: Float = 1f,
 ) {
     val colors = MaterialTheme.colorScheme
     val lineColor = if (active) colors.tertiary else colors.onSurface
@@ -1337,8 +1337,8 @@ internal fun RangeTimelineBoundaryVisual(
 @Composable
 internal fun RangeTimelineCursorVisual(
     active: Boolean,
-    visualAlpha: Float = 1f,
     modifier: Modifier = Modifier,
+    visualAlpha: Float = 1f,
 ) {
     val colors = MaterialTheme.colorScheme
     val lineColor = if (active) colors.tertiary else colors.onSurface

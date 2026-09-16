@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import androidx.core.content.edit
 
 internal data class RecordingTileSnapshot(
     val listening: Boolean,
@@ -161,16 +162,16 @@ internal object RecordingQuickTileStateCache {
     }
 
     private fun persistDurations(context: Context, snapshot: RecordingTileSnapshot) {
-        getRecorderPreferences(context).edit()
-            .putLong(
+        getRecorderPreferences(context).edit {
+            putLong(
                 PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS,
                 quickTileDurationMillis(snapshot.oneShotSeconds),
             )
-            .putLong(
+            putLong(
                 PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS,
                 quickTileDurationMillis(snapshot.loopingSeconds),
             )
-            .apply()
+        }
     }
 }
 

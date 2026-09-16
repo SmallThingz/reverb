@@ -50,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -188,7 +189,7 @@ private fun openInlinePlayerMediaSource(
         if (!recordingContentIdentityMatches(context, recording)) {
             throw IllegalStateException("Recording changed in provider")
         }
-        val descriptor = context.contentResolver.openFileDescriptor(android.net.Uri.parse(recording.id), "r")
+        val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
             ?: throw IllegalStateException("Recording unavailable in provider")
         if (!recordingContentIdentityMatches(context, recording)) {
             runCatching { descriptor.close() }

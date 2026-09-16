@@ -24,6 +24,7 @@ import android.util.Log
 
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileDescriptor
@@ -641,7 +642,7 @@ class ReverbService : Service() {
         if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
             // Tile fallback state is a cache, not capture intent. Never block the audio handler
             // on a filesystem-backed SharedPreferences commit for non-authoritative UI state.
-            prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false).apply()
+            prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) }
         }
     }
 
@@ -652,7 +653,7 @@ class ReverbService : Service() {
         if (prefs.getBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
             // apply() updates this process immediately; disk persistence can lag because the
             // authoritative value is recomputed from the chunk store whenever the service lives.
-            prefs.edit().putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full).apply()
+            prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full) }
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = refreshTiles)
     }

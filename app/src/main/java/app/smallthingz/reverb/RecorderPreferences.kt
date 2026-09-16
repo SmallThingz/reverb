@@ -235,7 +235,7 @@ private inline fun <T> readByteBackedPreference(
     val decoded = fromLegacyPrefValue(legacy)
     // SharedPreferences stores integral values as Ints. Keep enum payloads byte-sized and
     // migrate legacy strings in memory immediately; apply() persists the same semantics async.
-    prefs.edit().putInt(key, storageCode(decoded).toInt()).apply()
+    prefs.edit { putInt(key, storageCode(decoded).toInt()) }
     return decoded
 }
 
@@ -279,10 +279,10 @@ internal fun rememberSuccessfulRangeExport(
     val (selectionKey, offsetKey) = rememberedRangeExportKeys(bufferSlot)
     // This is UI convenience state, not audio durability state. SaveResultReceiver runs on
     // the main thread, so commit() would put a synchronous filesystem write on export success.
-    getRecorderPreferences(context).edit()
-        .putLong(selectionKey, remembered.selectionLengthMillis)
-        .putLong(offsetKey, remembered.endOffsetMillis)
-        .apply()
+    getRecorderPreferences(context).edit {
+        putLong(selectionKey, remembered.selectionLengthMillis)
+        putLong(offsetKey, remembered.endOffsetMillis)
+    }
 }
 
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
@@ -292,7 +292,7 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
     }
     val legacy = runCatching { prefs.getString(PrefKey.CAPTURE_BUFFER_SLOT, null) }.getOrNull() ?: return null
     val slot = ReverbService.BufferSlot.fromLegacyName(legacy) ?: return null
-    prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, slot.storageCode.toInt()).apply()
+    prefs.edit { putInt(PrefKey.CAPTURE_BUFFER_SLOT, slot.storageCode.toInt()) }
     return slot
 }
 
