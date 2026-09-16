@@ -473,7 +473,7 @@ fun getConfiguredInputRouteMode(context: Context): InputRouteMode = readByteBack
 fun getConfiguredChannelMode(context: Context): ChannelMode = readByteBackedPreference(
     prefs = getRecorderPreferences(context),
     key = PrefKey.CHANNEL_MODE,
-    default = ReverbConfig.DEFAULT_CHANNEL_MODE,
+    default = DEFAULT_CHANNEL_MODE,
     fromStorageCode = ChannelMode::fromStorageCode,
     fromLegacyPrefValue = ChannelMode::fromLegacyPrefValue,
     storageCode = ChannelMode::storageCode,
@@ -485,7 +485,7 @@ fun getConfiguredSampleRate(context: Context): Int {
         val requested = prefs.getInt(PrefKey.SAMPLE_RATE, 0)
         if (requested in STANDARD_SAMPLE_RATES) return requested
     }
-    return ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
+    return PREFERRED_DEFAULT_SAMPLE_RATE
 }
 
 fun getConfiguredMemorySizeBytes(

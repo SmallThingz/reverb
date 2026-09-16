@@ -103,7 +103,7 @@ internal class IdentityOwnerRegistry<T : Any> {
 @SuppressLint("ImplicitSamInstance")
 class ReverbService : Service() {
     @Volatile
-    private var sampleRate = ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE
+    private var sampleRate = PREFERRED_DEFAULT_SAMPLE_RATE
 
     @Volatile
     private var fillRate = 96_000L
@@ -214,17 +214,17 @@ class ReverbService : Service() {
         loopingAudioChunkStore = PersistentAudioChunkStore(this)
         oneShotAudioChunkStore = PersistentAudioChunkStore(
             this,
-            cacheFolderName = ReverbConfig.ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
+            cacheFolderName = ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
             legacyCacheFolderName = null,
             overwriteOldest = false,
         )
         createNotificationChannel()
         powerManager = getSystemService(PowerManager::class.java)
-        audioThread = HandlerThread(ReverbConfig.THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
+        audioThread = HandlerThread(THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
         exportWorkExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, ReverbConfig.THREAD_NAME_EXPORT_WORK).apply {
+            Thread(runnable, THREAD_NAME_EXPORT_WORK).apply {
                 priority = Thread.NORM_PRIORITY
                 isDaemon = true
             }
@@ -394,7 +394,7 @@ class ReverbService : Service() {
             "  oneShot filled=${oneShot?.filledBytes ?: 0} duration=${oneShot?.durationSeconds ?: 0.0} " +
                 "chunks=${oneShot?.chunkCount ?: 0}",
         )
-        writer.println("  rawHistoryDirectory=${ReverbConfig.BUFFER_CACHE_FOLDER_NAME}/${ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME}")
+        writer.println("  rawHistoryDirectory=${BUFFER_CACHE_FOLDER_NAME}/${BUFFER_CHUNKS_FOLDER_NAME}")
     }
 
     fun enableListening(bufferSlot: BufferSlot): ListeningCommandResult {
@@ -664,7 +664,7 @@ class ReverbService : Service() {
             codec = getConfiguredOutputCodec(this),
             sampleFormat = getConfiguredPcmSampleFormat(this),
             sampleRate = getConfiguredSampleRate(this).takeIf { it > 0 }
-                ?: ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE,
+                ?: PREFERRED_DEFAULT_SAMPLE_RATE,
             sourceMode = getConfiguredAudioSourceMode(this),
             channelMode = getConfiguredChannelMode(this),
             routeMode = getConfiguredInputRouteMode(this),
@@ -2172,7 +2172,7 @@ class ReverbService : Service() {
             format = ExportFormat.WAV,
             codec = ExportCodec.PCM_16,
             sampleFormat = PcmSampleFormat.PCM_16,
-            sampleRate = ReverbConfig.PREFERRED_DEFAULT_SAMPLE_RATE,
+            sampleRate = PREFERRED_DEFAULT_SAMPLE_RATE,
             sourceMode = AudioSourceMode.defaultMode(),
             channelMode = ChannelMode.MONO,
             routeMode = InputRouteMode.AUTO,
@@ -2805,7 +2805,7 @@ class ReverbService : Service() {
         const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 1_000L
         const val EMPTY_READ_RETRY_MILLIS = 20L
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
-        const val DEBUG_ACTION_PREFIX = ReverbConfig.DEBUG_ACTION_PREFIX
+        const val DEBUG_ACTION_PREFIX = "app.smallthingz.reverb.debug."
         val nextExportTokenId = AtomicLong(1L)
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
@@ -2820,7 +2820,7 @@ class ReverbService : Service() {
         const val ACTION_DEBUG_CHECKPOINT = "${DEBUG_ACTION_PREFIX}CHECKPOINT"
         const val ACTION_DEBUG_LOG_STATE = "${DEBUG_ACTION_PREFIX}LOG_STATE"
         const val ACTION_DEBUG_DUMP_REPORT = "${DEBUG_ACTION_PREFIX}DUMP_REPORT"
-        const val EXTRA_DEBUG_SECONDS = ReverbConfig.EXTRA_SECONDS
+        const val EXTRA_DEBUG_SECONDS = "seconds"
         const val DEBUG_REPORT_FILE_NAME = "debug-report.txt"
 
         const val WAKE_LOCK_TAG_SUFFIX = ":reverbBuffer"

@@ -68,10 +68,10 @@ internal fun persistRetentionTransaction(
 
 internal fun defaultRetentionConfiguration(): RetentionConfiguration = RetentionConfiguration(
     mode = RetentionMode.SIZE,
-    oneShotSeconds = ReverbConfig.DEFAULT_RETENTION_SECONDS,
-    oneShotSizeBytes = ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES,
-    loopingSeconds = ReverbConfig.DEFAULT_RETENTION_SECONDS,
-    loopingSizeBytes = ReverbConfig.DEFAULT_RETENTION_SIZE_BYTES,
+    oneShotSeconds = DEFAULT_RETENTION_SECONDS,
+    oneShotSizeBytes = DEFAULT_RETENTION_SIZE_BYTES,
+    loopingSeconds = DEFAULT_RETENTION_SECONDS,
+    loopingSizeBytes = DEFAULT_RETENTION_SIZE_BYTES,
 )
 
 internal fun readRetentionPreferenceValues(prefs: SharedPreferences): RetentionPreferenceValues =
@@ -209,11 +209,11 @@ internal fun retentionMutationIsSafe(context: Context): Boolean =
 
 internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
     val roots = listOf(
-        File(context.noBackupFilesDir, ReverbConfig.BUFFER_CACHE_FOLDER_NAME),
-        File(context.noBackupFilesDir, ReverbConfig.ONE_SHOT_BUFFER_CACHE_FOLDER_NAME),
+        File(context.noBackupFilesDir, BUFFER_CACHE_FOLDER_NAME),
+        File(context.noBackupFilesDir, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME),
     )
     return roots.any { root ->
-        val chunks = File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
+        val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME)
         when (val state = storagePathState(chunks)) {
             StoragePathState.MISSING -> false
             StoragePathState.UNAVAILABLE -> storagePathMayContainData(state)

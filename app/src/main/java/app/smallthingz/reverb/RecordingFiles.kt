@@ -73,7 +73,7 @@ internal data class StagingOutputMetadata(
     val finalDisplayName: String,
 )
 internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
-private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/"
+private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}/"
 
 
 enum class RecordingStorageType(val storageCode: Byte) {
@@ -112,12 +112,12 @@ data class RecordingOutputTarget(
 fun getSavedRecordingsDirectory(context: Context): File {
     val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         ?: File(context.filesDir, "recordings")
-    return File(baseDir, ReverbConfig.APP_STORAGE_FOLDER_NAME)
+    return File(baseDir, APP_STORAGE_FOLDER_NAME)
 }
 
 @Suppress("DEPRECATION")
 internal fun getSharedMusicRecordingsDirectory(): File =
-    File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), ReverbConfig.APP_STORAGE_FOLDER_NAME)
+    File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), APP_STORAGE_FOLDER_NAME)
 
 internal fun usesMediaStoreDefaultStorage(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
     sdkInt >= Build.VERSION_CODES.Q
@@ -168,7 +168,7 @@ fun describeOutputDirectory(
     treeUri: Uri?,
 ): String {
     if (treeUri == null) {
-        return "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}"
+        return "${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}"
     }
     val documentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
     return documentId
@@ -239,9 +239,9 @@ fun buildShareRecordingsIntent(
     val recordingList = recordings.toList()
     val uris = recordingList.map { buildRecordingUri(context, it) }
     val mimeTypes = recordingList
-        .map { it.mimeType.ifBlank { ReverbConfig.FALLBACK_MIME_TYPE_AUDIO } }
+        .map { it.mimeType.ifBlank { FALLBACK_MIME_TYPE_AUDIO } }
         .distinct()
-    val mimeType = mimeTypes.singleOrNull() ?: ReverbConfig.FALLBACK_MIME_TYPE_AUDIO
+    val mimeType = mimeTypes.singleOrNull() ?: FALLBACK_MIME_TYPE_AUDIO
     val action = if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE
 
     return Intent(action).apply {
@@ -363,11 +363,11 @@ private fun resolveRecordingCodecInfo(
     return buildString {
         append(ext)
         sampleRate?.takeIf { it > 0 }?.let {
-            append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
+            append(CODEC_SUMMARY_SEPARATOR)
             append(sampleRateLabel(it))
         }
         bitrate?.takeIf { it > 0 }?.let {
-            append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
+            append(CODEC_SUMMARY_SEPARATOR)
             append(it / 1000)
             append(" kbps")
         }
@@ -383,7 +383,7 @@ private fun describeFileRecordingLocation(
     if (normalizedPath == appStoragePath || normalizedPath.startsWith("$appStoragePath/")) {
         val relativePath = normalizedPath.removePrefix(appStoragePath).trimStart('/')
         return appendRelativePath(
-            "${context.getString(R.string.app_storage_label)}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}",
+            "${context.getString(R.string.app_storage_label)}/${APP_STORAGE_FOLDER_NAME}",
             relativePath.replace('\\', '/').trim('/'),
         )
     }
@@ -446,11 +446,11 @@ private fun describeAppStorageRelativePath(
 ): String? {
     val normalizedPath = relativePath.replace('\\', '/').trim('/')
     val appStorageRelativeRoot = "Android/data/${context.packageName}/files/" +
-        "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}"
+        "${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}"
     if (normalizedPath == appStorageRelativeRoot || normalizedPath.startsWith("$appStorageRelativeRoot/")) {
         val tail = normalizedPath.removePrefix(appStorageRelativeRoot).trimStart('/')
         return appendRelativePath(
-            "${context.getString(R.string.app_storage_label)}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}",
+            "${context.getString(R.string.app_storage_label)}/${APP_STORAGE_FOLDER_NAME}",
             tail.replace('\\', '/').trim('/'),
         )
     }
@@ -483,11 +483,11 @@ fun buildCodecSummary(
     }
     return buildString {
         append(context.getString(sampleFormat.labelRes))
-        append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
+        append(CODEC_SUMMARY_SEPARATOR)
         append(context.getString(format.labelRes))
-        append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
+        append(CODEC_SUMMARY_SEPARATOR)
         append(sampleRateLabel(sampleRate))
-        append(ReverbConfig.CODEC_SUMMARY_SEPARATOR)
+        append(CODEC_SUMMARY_SEPARATOR)
         append(channelLabel)
     }
 }
@@ -499,7 +499,7 @@ fun describeRecordingLocation(
     return when (recording.storageType) {
         RecordingStorageType.FILE -> describeFileRecordingLocation(context, File(recording.id))
         RecordingStorageType.DOCUMENT -> describeDocumentRecordingLocation(context, recording)
-        RecordingStorageType.MEDIASTORE -> "${Environment.DIRECTORY_MUSIC}/${ReverbConfig.APP_STORAGE_FOLDER_NAME}/${recording.displayName}"
+        RecordingStorageType.MEDIASTORE -> "${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}/${recording.displayName}"
     }
 }
 
@@ -2340,9 +2340,9 @@ private fun sanitizeBaseName(name: String): String {
             }
         }
     }.trim()
-    val nonEmpty = sanitized.ifEmpty { ReverbConfig.FALLBACK_DISPLAY_NAME }
+    val nonEmpty = sanitized.ifEmpty { FALLBACK_DISPLAY_NAME }
     return if (nonEmpty.startsWith(STAGING_OUTPUT_PREFIX, ignoreCase = true)) {
-        "${ReverbConfig.FALLBACK_DISPLAY_NAME} $nonEmpty"
+        "${FALLBACK_DISPLAY_NAME} $nonEmpty"
     } else {
         nonEmpty
     }
@@ -2351,7 +2351,7 @@ private fun sanitizeBaseName(name: String): String {
 private fun guessMimeType(displayName: String): String {
     val ext = displayName.substringAfterLast('.', "").lowercase()
     return ExportFormat.entries.firstOrNull { it.extension == ext }?.outputMimeType
-        ?: ReverbConfig.FALLBACK_MIME_TYPE_AUDIO
+        ?: FALLBACK_MIME_TYPE_AUDIO
 }
 
 private fun parseRecordingStartTimeMillis(value: String): Long? {

@@ -64,7 +64,7 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
     } ?: return null
     val mimeType = source.getStringExtra("recording_mime_type")
         ?.takeIf { it.isNotBlank() }
-        ?: ReverbConfig.FALLBACK_MIME_TYPE_AUDIO
+        ?: FALLBACK_MIME_TYPE_AUDIO
     val uri = when (storage) {
         RecordingStorageType.FILE -> {
             val expectedIdentity = source.getStringExtra("recording_file_identity").orEmpty()

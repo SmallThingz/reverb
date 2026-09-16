@@ -28,7 +28,7 @@ internal suspend fun saveTrimmedRecordingCopy(
 
 internal fun trimmedRecordingBaseName(displayName: String): String {
     val base = displayName.substringBeforeLast('.', displayName).trim()
-    return "${base.ifBlank { ReverbConfig.FALLBACK_DISPLAY_NAME }} trim"
+    return "${base.ifBlank { FALLBACK_DISPLAY_NAME }} trim"
 }
 
 private fun writeTrimmedRecordingCopy(

@@ -190,7 +190,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
     }
 
     companion object {
-        private const val DATABASE_NAME = ReverbConfig.DATABASE_FILE_NAME
+        private const val DATABASE_NAME = DATABASE_FILE_NAME
         internal const val DATABASE_VERSION = 5
         internal const val TABLE_RECORDINGS = "recordings"
         internal const val COLUMN_ID = "id"

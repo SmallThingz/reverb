@@ -8,7 +8,7 @@ import kotlin.math.floor
 
 private val sizeFormatter = object : ThreadLocal<DecimalFormat>() {
     override fun initialValue(): DecimalFormat =
-        DecimalFormat(ReverbConfig.FORMAT_SIZE_MIB, DecimalFormatSymbols(Locale.US))
+        DecimalFormat(FORMAT_SIZE_MIB, DecimalFormatSymbols(Locale.US))
 }
 
 
@@ -81,7 +81,7 @@ internal fun parseRangeTimeInput(value: String): Double? {
 fun formatShortFileSize(size: Long): String {
     val mebibytes = size.coerceAtLeast(0L) / (1024.0 * 1024.0)
     val formatter = sizeFormatter.get() ?: error("sizeFormatter not initialized")
-    return "${formatter.format(mebibytes)}${ReverbConfig.MIB_SUFFIX}"
+    return "${formatter.format(mebibytes)}${MIB_SUFFIX}"
 }
 
 fun formatSavedRecordingDuration(context: Context, durationMillis: Long): String {

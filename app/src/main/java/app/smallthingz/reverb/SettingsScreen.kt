@@ -93,7 +93,7 @@ import kotlin.math.roundToLong
 
 private val BYTES_IN_MEGABYTE = 1024L * 1024L
 private val retentionSizeFormatter =
-    DecimalFormat(ReverbConfig.FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
+    DecimalFormat(FORMAT_RETENTION_SIZE_MIB, DecimalFormatSymbols(Locale.US))
 data class SettingsSnapshot(
     var themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     var retentionMode: RetentionMode = RetentionMode.TIME,

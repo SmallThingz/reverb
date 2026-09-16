@@ -47,10 +47,10 @@ class PersistentAudioChunkStoreDurabilityTest {
             assertEquals(expected.size, store.append(expected, 0, expected.size))
             store.sealActiveChunk()
         }
-        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         val before = chunk.readBytes()
-        val firstIndex = File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
-        val secondIndex = File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
+        val firstIndex = File(root, BUFFER_INDEX_A_FILE_NAME)
+        val secondIndex = File(root, BUFFER_INDEX_B_FILE_NAME)
         firstIndex.deleteRecursively()
         secondIndex.deleteRecursively()
         assertTrue(firstIndex.mkdir())
@@ -72,8 +72,8 @@ class PersistentAudioChunkStoreDurabilityTest {
             assertEquals(expected.size, store.append(expected, 0, expected.size))
             store.sealActiveChunk()
         }
-        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(1, 2, 3))
-        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(4, 5, 6))
+        File(root, BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(1, 2, 3))
+        File(root, BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(4, 5, 6))
 
         PersistentAudioChunkStore(root).use { reopened ->
             configure(reopened, 512 * 1024L)
@@ -141,7 +141,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         assertEquals(expected.size, crashed.append(expected, 0, expected.size))
         simulateProcessDeath(crashed)
 
-        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         RandomAccessFile(chunk, "rw").use { file ->
             file.seek(file.length())
             file.write(0x7f)
@@ -161,7 +161,7 @@ class PersistentAudioChunkStoreDurabilityTest {
 
     @Test
     fun corruptAndUnrecognizedChunkArtifacts_areQuarantinedNotDeleted() = withStoreRoot { root ->
-        val chunks = File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME).apply { mkdirs() }
+        val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME).apply { mkdirs() }
         val unrecognizedBytes = byteArrayOf(9, 8, 7, 6, 5)
         val corruptBytes = ByteArray(256) { index -> (index * 13).toByte() }
         File(chunks, "mystery.partial").writeBytes(unrecognizedBytes)
@@ -274,8 +274,8 @@ class PersistentAudioChunkStoreDurabilityTest {
             expected.write(addition)
 
             if (iteration % 5 == 4) {
-                File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x55, iteration.toByte()))
-                File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, iteration.toByte()))
+                File(root, BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x55, iteration.toByte()))
+                File(root, BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, iteration.toByte()))
             }
 
             PersistentAudioChunkStore(root).use { reopened ->
@@ -356,7 +356,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         assertEquals(expected.size, store.append(expected, 0, expected.size))
         store.sealActiveChunk()
 
-        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         val marker = File(File(root, "retired"), "0")
         failRetiredDirectorySync = true
         assertThrows(IOException::class.java) { store.clear() }
@@ -393,8 +393,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         configure(store, 64 * 1024L)
         assertEquals(expected.size, store.append(expected, 0, expected.size))
 
-        val indexATemp = File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME + ".tmp")
-        val indexBTemp = File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME + ".tmp")
+        val indexATemp = File(root, BUFFER_INDEX_A_FILE_NAME + ".tmp")
+        val indexBTemp = File(root, BUFFER_INDEX_B_FILE_NAME + ".tmp")
         indexATemp.deleteRecursively()
         indexBTemp.deleteRecursively()
         assertTrue(indexATemp.mkdir())
@@ -418,7 +418,7 @@ class PersistentAudioChunkStoreDurabilityTest {
             rootDirectory = root,
             overwriteOldest = false,
             directorySync = { directory ->
-                if (failDirectorySync && directory.name == ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME) {
+                if (failDirectorySync && directory.name == BUFFER_CHUNKS_FOLDER_NAME) {
                     throw IOException("Injected post-replacement directory sync failure")
                 }
             },
@@ -472,12 +472,12 @@ class PersistentAudioChunkStoreDurabilityTest {
         assertTrue(retirementMarker.startsWith("v2|0|"))
         assertTrue(retirementMarker.endsWith("|${PcmSampleFormat.PCM_16.storageCode.toInt()}"))
         assertArrayEquals(expected, readLease(lease))
-        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         assertTrue(chunk.isFile)
         crashed.close()
 
-        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
-        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+        File(root, BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
 
         PersistentAudioChunkStore(root).use { reopened ->
             configure(reopened, 128 * 1024L)
@@ -499,14 +499,14 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
         val retired = File(root, "retired").apply { mkdirs() }
         File(retired, "0").writeText("v1|0|corrupt")
-        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
-        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+        File(root, BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
 
         PersistentAudioChunkStore(root).use { reopened ->
             configure(reopened, 128 * 1024L)
             assertFalse(reopened.hasData())
         }
-        assertFalse(File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0").exists())
+        assertFalse(File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0").exists())
         assertTrue(File(root, "preserved").listFiles().orEmpty().any { ".retired-ambiguous" in it.name })
     }
 
@@ -520,8 +520,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
         val retired = File(root, "retired").apply { mkdirs() }
         File(retired, "0").writeText("v1|0|corrupt")
-        File(root, ReverbConfig.BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
-        File(root, ReverbConfig.BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
+        File(root, BUFFER_INDEX_A_FILE_NAME).writeBytes(byteArrayOf(0x11, 0x22))
+        File(root, BUFFER_INDEX_B_FILE_NAME).writeBytes(byteArrayOf(0x33, 0x44))
         val preserved = File(root, "preserved").apply { mkdirs() }
         val sentinelBytes = byteArrayOf(9, 8, 7, 6)
         val sentinel = File(preserved, "0.retired-ambiguous").apply { writeBytes(sentinelBytes) }
@@ -739,7 +739,7 @@ class PersistentAudioChunkStoreDurabilityTest {
             store.append(expected, 0, expected.size)
             store.sealActiveChunk()
         }
-        val chunk = File(File(root, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         RandomAccessFile(chunk, "rw").use { file ->
             file.seek(file.length() - 1L)
             val original = file.read()

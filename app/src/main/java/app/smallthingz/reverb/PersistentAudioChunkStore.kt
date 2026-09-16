@@ -138,8 +138,8 @@ internal class PersistentAudioChunkStore internal constructor(
 ) : Closeable {
     constructor(
         context: Context,
-        cacheFolderName: String = ReverbConfig.BUFFER_CACHE_FOLDER_NAME,
-        legacyCacheFolderName: String? = ReverbConfig.LEGACY_BUFFER_CACHE_FOLDER_NAME,
+        cacheFolderName: String = BUFFER_CACHE_FOLDER_NAME,
+        legacyCacheFolderName: String? = LEGACY_BUFFER_CACHE_FOLDER_NAME,
         overwriteOldest: Boolean = true,
     ) : this(
         rootDirectory = File(context.noBackupFilesDir, cacheFolderName),
@@ -155,9 +155,9 @@ internal class PersistentAudioChunkStore internal constructor(
         rootDirectory, legacyDirectory = null, overwriteOldest = overwriteOldest, directorySync = directorySync,
     )
 
-    private val chunksDirectory = File(rootDirectory, ReverbConfig.BUFFER_CHUNKS_FOLDER_NAME)
-    private val indexA = File(rootDirectory, ReverbConfig.BUFFER_INDEX_A_FILE_NAME)
-    private val indexB = File(rootDirectory, ReverbConfig.BUFFER_INDEX_B_FILE_NAME)
+    private val chunksDirectory = File(rootDirectory, BUFFER_CHUNKS_FOLDER_NAME)
+    private val indexA = File(rootDirectory, BUFFER_INDEX_A_FILE_NAME)
+    private val indexB = File(rootDirectory, BUFFER_INDEX_B_FILE_NAME)
     private val quarantineDirectory = File(rootDirectory, "preserved")
     private val retiredDirectory = File(rootDirectory, "retired")
 
