@@ -2273,13 +2273,32 @@ private fun renameMediaStoreRecording(
     rebindRecordingWaveformCache(recording, renamed)
 }.onFailure { Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", it) }.getOrNull()
 
+internal fun documentRenameTransitionIsSafe(
+    sourceUriUnchanged: Boolean,
+    oldUriStateAfterRename: RecordingAssetState,
+    beforeIdentity: String,
+    afterIdentity: String,
+    beforeDigest: CopyDigest?,
+    afterDigest: CopyDigest?,
+): Boolean {
+    if (afterIdentity.isBlank()) return false
+    if (sourceUriUnchanged) {
+        return sameProviderObjectAcrossMutation(beforeIdentity, afterIdentity)
+    }
+    if (oldUriStateAfterRename != RecordingAssetState.MISSING) return false
+    val before = beforeDigest ?: return false
+    val after = afterDigest ?: return false
+    return copyDigestMatches(before, after)
+}
+
 private fun renameDocumentRecording(
     context: Context,
     recording: RecordingEntity,
     displayName: String,
 ): RecordingEntity? {
     return runCatching {
-        val document = DocumentFile.fromSingleUri(context, recording.id.toUri()) ?: return@runCatching null
+        val sourceUri = recording.id.toUri()
+        val document = DocumentFile.fromSingleUri(context, sourceUri) ?: return@runCatching null
         val tree = DocumentFile.fromTreeUri(context, recording.directoryId.toUri()) ?: return@runCatching null
         val uniqueName = findAvailableDisplayName(displayName) { candidate ->
             tree.findFile(candidate)?.uri?.let { it != document.uri } == true
@@ -2287,13 +2306,34 @@ private fun renameDocumentRecording(
         if (uniqueName == document.name) {
             return@runCatching recording
         }
-        val renamedUri = DocumentsContract.renameDocument(context.contentResolver, document.uri, uniqueName)
+        // A provider is allowed to return a new URI when rename changes its document ID.
+        // Pin the selected bytes before mutation so a URI-changing result can be proven to
+        // represent the same recording rather than an unrelated equal-looking document.
+        val beforeDigest = sha256StableRecording(context, recording) ?: return@runCatching null
+        val renamedUri = DocumentsContract.renameDocument(context.contentResolver, sourceUri, uniqueName)
             ?: return@runCatching null
+        val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri)
         val renamed = recording.copy(
             id = renamedUri.toString(),
             displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
-            fileIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri),
+            fileIdentity = renamedIdentity,
         )
+        val sourceUriUnchanged = renamedUri == sourceUri
+        val oldState = if (sourceUriUnchanged) RecordingAssetState.PRESENT
+        else recordingAssetState(context, recording)
+        val afterDigest = if (sourceUriUnchanged) null else sha256StableRecording(context, renamed)
+        if (!documentRenameTransitionIsSafe(
+                sourceUriUnchanged = sourceUriUnchanged,
+                oldUriStateAfterRename = oldState,
+                beforeIdentity = recording.fileIdentity,
+                afterIdentity = renamedIdentity,
+                beforeDigest = beforeDigest,
+                afterDigest = afterDigest,
+            )
+        ) {
+            Log.w(TAG, "Document recording identity changed during rename: ${recording.id} -> $renamedUri")
+            return@runCatching null
+        }
         rebindRecordingWaveformCache(recording, renamed)
     }.onFailure { Log.w(TAG, "Unable to rename recording ${recording.id}", it) }.getOrNull()
 }

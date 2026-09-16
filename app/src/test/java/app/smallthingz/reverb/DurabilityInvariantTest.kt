@@ -986,6 +986,58 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun documentRename_requiresSameObjectOrVerifiedUriHandoff() {
+        val before = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val changed = CopyDigest(4L, byteArrayOf(9, 8, 7, 6))
+        val oldIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/old", 4L, 10L,
+        )
+        val sameUriIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/old", 4L, 11L,
+        )
+        val newUriIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/new", 4L, 12L,
+        )
+
+        assertTrue(
+            documentRenameTransitionIsSafe(
+                true, RecordingAssetState.PRESENT, oldIdentity, sameUriIdentity, before, null,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                true, RecordingAssetState.PRESENT, oldIdentity, newUriIdentity, before, same,
+            ),
+        )
+        assertTrue(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.MISSING, oldIdentity, newUriIdentity, before, same,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.PRESENT, oldIdentity, newUriIdentity, before, same,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.UNAVAILABLE, oldIdentity, newUriIdentity, before, same,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.MISSING, oldIdentity, newUriIdentity, before, changed,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.MISSING, oldIdentity, "", before, same,
+            ),
+        )
+    }
+
+    @Test
     fun providerDeleteRequiresPositivePostDeleteAbsence() {
         assertTrue(providerDeletionCompleted(true, RecordingAssetState.MISSING))
         assertFalse(providerDeletionCompleted(true, RecordingAssetState.PRESENT))
