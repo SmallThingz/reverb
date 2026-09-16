@@ -76,6 +76,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collect
 
 private const val URI_SCHEME_PACKAGE = "package"
 private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
@@ -883,7 +884,11 @@ private fun MainScreen(
         scope.launch { loadIncidents() }
     }
 
-    LaunchedEffect(Unit) { loadIncidents() }
+    LaunchedEffect(Unit) {
+        // StateFlow emits immediately for the initial load, then refreshes again whenever
+        // recovery, resume-time completion, or acknowledgement changes durable history.
+        RecordingIncidentStore.historyRevision.collect { loadIncidents() }
+    }
 
     fun refreshLibrarySnapshot() {
         val generation = ++libraryRefreshGeneration[0]

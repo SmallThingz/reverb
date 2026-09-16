@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Reverb.Splash" parent="Theme.SplashScreen">
+        <!-- Set the platform starting-window attributes directly on Android 12+.
+             Do not rely on Theme.SplashScreen's attr indirection for the system-owned splash. -->
+        <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/reverb_splash_animated_icon</item>
+        <item name="android:windowSplashScreenAnimationDuration">960</item>
         <item name="windowSplashScreenBackground">@color/launcher_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/reverb_splash_animated_icon</item>
-        <item name="windowSplashScreenAnimationDuration">720</item>
+        <item name="windowSplashScreenAnimationDuration">960</item>
         <item name="postSplashScreenTheme">@style/Theme.Reverb</item>
     </style>
 </resources>

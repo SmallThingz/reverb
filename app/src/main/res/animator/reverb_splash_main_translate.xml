@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
-    android:duration="720"
-    android:interpolator="@interpolator/reverb_splash_ease_out"
+    android:duration="960"
+    android:interpolator="@interpolator/reverb_splash_reveal"
     android:propertyName="translateX"
     android:valueFrom="28"
     android:valueTo="0"

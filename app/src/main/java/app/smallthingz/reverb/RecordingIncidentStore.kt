@@ -8,6 +8,9 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.AtomicFile
 import androidx.annotation.RequiresApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -54,6 +57,11 @@ private data class ActiveRecordingSessionMarker(
     val packageLastUpdateTimeMillis: Long,
 )
 
+private data class PendingRecordingSession(
+    val marker: ActiveRecordingSessionMarker,
+    val resumedAtMillis: Long = 0L,
+)
+
 internal fun isSpuriousRecordingProcessExitReason(reason: Int): Boolean = when (reason) {
     EXIT_REASON_ANOMALY,
     ApplicationExitInfo.REASON_ANR,
@@ -81,6 +89,38 @@ internal fun isSpuriousRecordingProcessExitReason(reason: Int): Boolean = when (
     else -> false
 }
 
+internal enum class RecordingExitDisposition {
+    INCIDENT,
+    EXPECTED,
+    PENDING,
+}
+
+internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition = when {
+    reason == null -> RecordingExitDisposition.PENDING
+    isSpuriousRecordingProcessExitReason(reason) -> RecordingExitDisposition.INCIDENT
+    else -> RecordingExitDisposition.EXPECTED
+}
+
+
+internal fun completeRecordingIncidentDowntimes(
+    incidents: List<RecordingIncident>,
+    resumedAtMillis: Long,
+): List<RecordingIncident> {
+    var changed = false
+    val updated = incidents.map { incident ->
+        if (
+            incident.recoveryPending &&
+            resumedAtMillis >= incident.occurredAtMillis
+        ) {
+            changed = true
+            incident.copy(resumedAtMillis = resumedAtMillis)
+        } else {
+            incident
+        }
+    }
+    return if (changed) updated else incidents
+}
+
 internal object RecordingIncidentStore {
     private const val SESSION_MAGIC = 0x52495331 // RIS1
     private const val HISTORY_MAGIC = 0x52494831 // RIH1
@@ -88,13 +128,22 @@ internal object RecordingIncidentStore {
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val HISTORY_FORMAT_VERSION = 2
     private const val MAX_INCIDENTS = 128
+    private const val MAX_PENDING_SESSIONS = 16
     private const val MAX_DESCRIPTION_CHARS = 384
     private const val SESSION_FILE_NAME = "recording-session.bin"
+    private const val PENDING_SESSION_FILE_NAME = "recording-incident-pending.bin"
     private const val HISTORY_FILE_NAME = "recording-incidents.bin"
+    private const val PENDING_MAGIC = 0x52495031 // RIP1
+    private const val PENDING_FORMAT_VERSION = 1
+
+    private val mutableHistoryRevision = MutableStateFlow(0L)
+    val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
 
     @Synchronized
     fun recoverPriorSessionIfNeeded(context: Context) {
         val appContext = context.applicationContext
+        resolvePendingSessions(appContext)
+
         val markerFile = sessionFile(appContext)
         val marker = readSession(markerFile) ?: run {
             markerFile.delete()
@@ -123,20 +172,28 @@ internal object RecordingIncidentStore {
             return
         }
 
-        val sameProcess = marker.pid == Process.myPid() &&
-            marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
-        if (!sameProcess && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            historicalSpuriousExit(appContext, marker)?.let { exit ->
-                appendIncident(appContext, incidentFromExit(marker, exit))
-            }
+        if (markerBelongsToCurrentProcess(marker)) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            markerFile.delete()
+            return
         }
-        if (!sameProcess) markerFile.delete()
+
+        // Preserve the previous armed session before the restarted recorder can overwrite the
+        // active marker. ExitInfo can lag process startup, so absence of evidence is not evidence
+        // of a clean exit. The pending queue is retried on startup, capture start, and history read.
+        if (enqueuePendingSession(appContext, marker)) {
+            markerFile.delete()
+            resolvePendingSessions(appContext)
+        }
     }
 
     @Synchronized
-    fun markCaptureRunning(context: Context) {
+    fun recordCaptureStarted(context: Context) {
         val appContext = context.applicationContext
+        recoverPriorSessionIfNeeded(appContext)
         val resumedAtMillis = System.currentTimeMillis()
+        notePendingSessionsResumed(appContext, resumedAtMillis)
+        resolvePendingSessions(appContext)
         writeSession(
             sessionFile(appContext),
             ActiveRecordingSessionMarker(
@@ -152,7 +209,7 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun markCaptureStopped(context: Context) {
+    fun recordKnownCaptureStop(context: Context) {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)
         val existing = readSession(file) ?: return
@@ -167,8 +224,11 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun readIncidents(context: Context): List<RecordingIncident> =
-        readHistory(historyFile(context.applicationContext))
+    fun readIncidents(context: Context): List<RecordingIncident> {
+        val appContext = context.applicationContext
+        resolvePendingSessions(appContext)
+        return readHistory(historyFile(appContext))
+    }
 
     @Synchronized
     fun acknowledgeIncident(context: Context, incident: RecordingIncident): List<RecordingIncident> {
@@ -183,34 +243,109 @@ internal object RecordingIncidentStore {
             this[index] = this[index].copy(acknowledgedAtMillis = System.currentTimeMillis())
         }
         writeHistory(file, updated)
+        signalHistoryChanged()
         return updated
     }
 
     @Synchronized
     internal fun clearForTests(context: Context) {
-        sessionFile(context.applicationContext).delete()
-        historyFile(context.applicationContext).delete()
+        val appContext = context.applicationContext
+        sessionFile(appContext).delete()
+        pendingSessionFile(appContext).delete()
+        historyFile(appContext).delete()
+        signalHistoryChanged()
     }
 
-    private fun historicalSpuriousExit(
+    private fun markerBelongsToCurrentProcess(marker: ActiveRecordingSessionMarker): Boolean =
+        marker.pid == Process.myPid() &&
+            marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
+
+    private fun enqueuePendingSession(
+        context: Context,
+        marker: ActiveRecordingSessionMarker,
+    ): Boolean = runCatching {
+        val file = pendingSessionFile(context)
+        val existing = readPendingSessions(file)
+        if (existing.any { sameSession(it.marker, marker) }) return@runCatching true
+        val updated = (existing + PendingRecordingSession(marker)).takeLast(MAX_PENDING_SESSIONS)
+        writePendingSessions(file, updated)
+        true
+    }.getOrDefault(false)
+
+    private fun resolvePendingSessions(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val file = pendingSessionFile(context)
+        val pending = readPendingSessions(file)
+        if (pending.isEmpty()) {
+            file.delete()
+            return
+        }
+
+        val remaining = ArrayList<PendingRecordingSession>(pending.size)
+        var resolvedAny = false
+        pending.forEach { pendingSession ->
+            val marker = pendingSession.marker
+            val exit = historicalExit(context, marker)
+            when (recordingExitDisposition(exit?.reason)) {
+                RecordingExitDisposition.PENDING -> remaining += pendingSession
+                RecordingExitDisposition.EXPECTED -> resolvedAny = true
+                RecordingExitDisposition.INCIDENT -> {
+                    appendIncident(
+                        context,
+                        incidentFromExit(
+                            marker = marker,
+                            exit = requireNotNull(exit),
+                            resumedAtMillis = pendingSession.resumedAtMillis,
+                        ),
+                    )
+                    resolvedAny = true
+                }
+            }
+        }
+        if (resolvedAny || remaining.size != pending.size) {
+            writePendingSessions(file, remaining)
+        }
+    }
+
+    private fun notePendingSessionsResumed(context: Context, resumedAtMillis: Long) {
+        val file = pendingSessionFile(context)
+        val pending = readPendingSessions(file)
+        if (pending.none { it.resumedAtMillis <= 0L }) return
+        writePendingSessions(
+            file,
+            pending.map { session ->
+                if (session.resumedAtMillis > 0L) session
+                else session.copy(resumedAtMillis = resumedAtMillis)
+            },
+        )
+    }
+
+    private fun historicalExit(
         context: Context,
         marker: ActiveRecordingSessionMarker,
     ): ApplicationExitInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         val manager = context.getSystemService(ActivityManager::class.java) ?: return null
-        val exit = runCatching {
-            manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 8)
+        return runCatching {
+            manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
                 .firstOrNull { info ->
                     info.pid == marker.pid && info.timestamp >= marker.armedAtMillis
                 }
-        }.getOrNull() ?: return null
-        return exit.takeIf { isSpuriousRecordingProcessExitReason(it.reason) }
+        }.getOrNull()
     }
+
+    private fun sameSession(
+        left: ActiveRecordingSessionMarker,
+        right: ActiveRecordingSessionMarker,
+    ): Boolean = left.pid == right.pid &&
+        left.processStartElapsedRealtimeMillis == right.processStartElapsedRealtimeMillis &&
+        left.armedAtMillis == right.armedAtMillis
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun incidentFromExit(
         marker: ActiveRecordingSessionMarker,
         exit: ApplicationExitInfo,
+        resumedAtMillis: Long,
     ): RecordingIncident {
         val elapsedBeforeArmed = marker.armedElapsedRealtimeMillis - marker.processStartElapsedRealtimeMillis
         val processStartedAtMillis = if (elapsedBeforeArmed >= 0L && elapsedBeforeArmed <= marker.armedAtMillis) {
@@ -224,7 +359,7 @@ internal object RecordingIncidentStore {
             ?.take(MAX_DESCRIPTION_CHARS)
         return RecordingIncident(
             occurredAtMillis = exit.timestamp,
-            resumedAtMillis = 0L,
+            resumedAtMillis = resumedAtMillis,
             kind = RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
             exitReason = exit.reason,
             exitStatus = exit.status,
@@ -241,14 +376,10 @@ internal object RecordingIncidentStore {
     private fun completePendingDowntime(context: Context, resumedAtMillis: Long) {
         val file = historyFile(context)
         val existing = readHistory(file)
-        val index = existing.indexOfLast { it.recoveryPending }
-        if (index < 0) return
-        val incident = existing[index]
-        if (resumedAtMillis < incident.occurredAtMillis) return
-        val updated = existing.toMutableList().apply {
-            this[index] = incident.copy(resumedAtMillis = resumedAtMillis)
-        }
+        val updated = completeRecordingIncidentDowntimes(existing, resumedAtMillis)
+        if (updated === existing) return
         writeHistory(file, updated)
+        signalHistoryChanged()
     }
 
     private fun appendIncident(context: Context, incident: RecordingIncident) {
@@ -259,6 +390,11 @@ internal object RecordingIncidentStore {
             .sortedBy { it.occurredAtMillis }
             .takeLast(MAX_INCIDENTS)
         writeHistory(file, updated)
+        signalHistoryChanged()
+    }
+
+    private fun signalHistoryChanged() {
+        mutableHistoryRevision.value = mutableHistoryRevision.value + 1L
     }
 
     private fun packageLastUpdateTime(context: Context): Long = runCatching {
@@ -266,19 +402,14 @@ internal object RecordingIncidentStore {
     }.getOrDefault(0L)
 
     private fun sessionFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, SESSION_FILE_NAME))
+    private fun pendingSessionFile(context: Context) =
+        AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
 
     private fun readSession(file: AtomicFile): ActiveRecordingSessionMarker? = runCatching {
         DataInputStream(BufferedInputStream(file.openRead())).use { input ->
             if (input.readInt() != SESSION_MAGIC || input.readUnsignedByte() != SESSION_FORMAT_VERSION) return null
-            ActiveRecordingSessionMarker(
-                armed = input.readBoolean(),
-                pid = input.readInt(),
-                processStartElapsedRealtimeMillis = input.readLong(),
-                armedAtMillis = input.readLong(),
-                armedElapsedRealtimeMillis = input.readLong(),
-                packageLastUpdateTimeMillis = input.readLong(),
-            )
+            readSessionMarker(input)
         }
     }.getOrNull()
 
@@ -286,13 +417,67 @@ internal object RecordingIncidentStore {
         writeAtomic(file) { output ->
             output.writeInt(SESSION_MAGIC)
             output.writeByte(SESSION_FORMAT_VERSION)
-            output.writeBoolean(marker.armed)
-            output.writeInt(marker.pid)
-            output.writeLong(marker.processStartElapsedRealtimeMillis)
-            output.writeLong(marker.armedAtMillis)
-            output.writeLong(marker.armedElapsedRealtimeMillis)
-            output.writeLong(marker.packageLastUpdateTimeMillis)
+            writeSessionMarker(output, marker)
         }
+    }
+
+    private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> = runCatching {
+        DataInputStream(BufferedInputStream(file.openRead())).use { input ->
+            if (input.readInt() != PENDING_MAGIC || input.readUnsignedByte() != PENDING_FORMAT_VERSION) {
+                return emptyList()
+            }
+            val count = input.readUnsignedShort().coerceAtMost(MAX_PENDING_SESSIONS)
+            buildList(count) {
+                repeat(count) {
+                    add(
+                        PendingRecordingSession(
+                            marker = readSessionMarker(input),
+                            resumedAtMillis = input.readLong(),
+                        ),
+                    )
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    private fun writePendingSessions(
+        file: AtomicFile,
+        sessions: List<PendingRecordingSession>,
+    ) {
+        if (sessions.isEmpty()) {
+            file.delete()
+            return
+        }
+        writeAtomic(file) { output ->
+            output.writeInt(PENDING_MAGIC)
+            output.writeByte(PENDING_FORMAT_VERSION)
+            output.writeShort(sessions.size.coerceAtMost(MAX_PENDING_SESSIONS))
+            sessions.takeLast(MAX_PENDING_SESSIONS).forEach { session ->
+                writeSessionMarker(output, session.marker)
+                output.writeLong(session.resumedAtMillis)
+            }
+        }
+    }
+
+    private fun readSessionMarker(input: DataInputStream) = ActiveRecordingSessionMarker(
+        armed = input.readBoolean(),
+        pid = input.readInt(),
+        processStartElapsedRealtimeMillis = input.readLong(),
+        armedAtMillis = input.readLong(),
+        armedElapsedRealtimeMillis = input.readLong(),
+        packageLastUpdateTimeMillis = input.readLong(),
+    )
+
+    private fun writeSessionMarker(
+        output: DataOutputStream,
+        marker: ActiveRecordingSessionMarker,
+    ) {
+        output.writeBoolean(marker.armed)
+        output.writeInt(marker.pid)
+        output.writeLong(marker.processStartElapsedRealtimeMillis)
+        output.writeLong(marker.armedAtMillis)
+        output.writeLong(marker.armedElapsedRealtimeMillis)
+        output.writeLong(marker.packageLastUpdateTimeMillis)
     }
 
     private fun readHistory(file: AtomicFile): List<RecordingIncident> = runCatching {

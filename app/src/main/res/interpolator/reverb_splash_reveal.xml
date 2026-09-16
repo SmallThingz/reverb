@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Deliberately late-weighted: the system starts splash AVDs during launcher handoff,
+     so the visible split must not be consumed by that handoff. -->
+<pathInterpolator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:controlX1="0.62"
+    android:controlY1="0"
+    android:controlX2="0.84"
+    android:controlY2="0.30" />

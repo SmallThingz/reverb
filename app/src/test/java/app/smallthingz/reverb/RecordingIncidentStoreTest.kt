@@ -39,6 +39,27 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun exitDispositionRetainsMissingEvidenceAndSeparatesKnownOutcomes() {
+        assertTrue(recordingExitDisposition(null) == RecordingExitDisposition.PENDING)
+        assertTrue(
+            recordingExitDisposition(ApplicationExitInfo.REASON_CRASH) ==
+                RecordingExitDisposition.INCIDENT,
+        )
+        assertTrue(
+            recordingExitDisposition(ApplicationExitInfo.REASON_SIGNALED) ==
+                RecordingExitDisposition.INCIDENT,
+        )
+        assertTrue(
+            recordingExitDisposition(ApplicationExitInfo.REASON_PACKAGE_UPDATED) ==
+                RecordingExitDisposition.EXPECTED,
+        )
+        assertTrue(
+            recordingExitDisposition(ApplicationExitInfo.REASON_OTHER) ==
+                RecordingExitDisposition.EXPECTED,
+        )
+    }
+
+    @Test
     fun incidentKindUsesStableByteIdentity() {
         assertTrue(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
         assertTrue(
@@ -46,6 +67,30 @@ class RecordingIncidentStoreTest {
                 RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
         )
         assertTrue(RecordingIncidentKind.fromStorageCode(0x7f) == null)
+    }
+
+    @Test
+    fun pendingIncidentCanCarryAnAlreadyObservedResumeTime() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            resumedAtMillis = 12_500L,
+            exitReason = ApplicationExitInfo.REASON_CRASH,
+        )
+        assertFalse(incident.recoveryPending)
+        assertTrue(recordingIncidentDowntimeMillis(incident) == 2_500L)
+    }
+
+    @Test
+    fun oneCaptureResumeCompletesEveryStillOpenIncident() {
+        val incidents = listOf(
+            RecordingIncident(occurredAtMillis = 1_000L, resumedAtMillis = 0L),
+            RecordingIncident(occurredAtMillis = 2_000L, resumedAtMillis = 0L),
+            RecordingIncident(occurredAtMillis = 500L, resumedAtMillis = 900L),
+        )
+        val updated = completeRecordingIncidentDowntimes(incidents, 3_000L)
+        assertTrue(updated[0].resumedAtMillis == 3_000L)
+        assertTrue(updated[1].resumedAtMillis == 3_000L)
+        assertTrue(updated[2].resumedAtMillis == 900L)
     }
 
     @Test
