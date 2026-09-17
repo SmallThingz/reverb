@@ -994,6 +994,24 @@ class FormattingAndHistoryMathTest {
     fun queuedRuntimeReadFailsClosedOnceServiceTeardownOwnsLifetime() {
         assertTrue(serviceRuntimeReadMayExecute(serviceDestroying = false))
         assertFalse(serviceRuntimeReadMayExecute(serviceDestroying = true))
+
+        val live = RecordingTileSnapshot(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.LOOPING,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+            oneShotSeconds = 3f,
+            loopingSeconds = 7f,
+        )
+        assertEquals(
+            live,
+            runtimeRecordingTileSnapshotForDelivery(false, live, live),
+        )
+        assertEquals(
+            failClosedRecordingTileSnapshot(live),
+            runtimeRecordingTileSnapshotForDelivery(true, live, live),
+        )
     }
 
     @Test

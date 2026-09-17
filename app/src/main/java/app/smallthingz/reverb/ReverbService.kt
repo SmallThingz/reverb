@@ -2362,17 +2362,30 @@ class ReverbService : Service() {
 
     internal fun getRecordingTileSnapshot(callback: (RecordingTileSnapshot) -> Unit) {
         if (serviceDestroying) {
-            val fallback = failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking())
-            mainHandler.post { callback(fallback) }
+            postRecordingTileSnapshot(callback, failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking()))
             return
         }
         if (!audioHandler.post {
                 val snapshot = publishQuickTileSnapshotOnAudioThread(refreshTiles = false)
-                mainHandler.post { callback(snapshot) }
+                postRecordingTileSnapshot(callback, snapshot)
             }
         ) {
-            val fallback = failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking())
-            mainHandler.post { callback(fallback) }
+            postRecordingTileSnapshot(callback, failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking()))
+        }
+    }
+
+    private fun postRecordingTileSnapshot(
+        callback: (RecordingTileSnapshot) -> Unit,
+        snapshot: RecordingTileSnapshot,
+    ) {
+        mainHandler.post {
+            callback(
+                runtimeRecordingTileSnapshotForDelivery(
+                    serviceDestroying = serviceDestroying,
+                    sampledSnapshot = snapshot,
+                    cachedSnapshot = RecordingQuickTileStateCache.readCachedOrNull(),
+                ),
+            )
         }
     }
 
@@ -2400,6 +2413,10 @@ class ReverbService : Service() {
                 val exporting = hasActiveExport()
                 val activeBuffer = activeBufferSlot
                 mainHandler.post {
+                    if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
+                        deliverUnavailableState(callback)
+                        return@post
+                    }
                     callback.state(
                         commandGeneration,
                         listening,
@@ -2419,6 +2436,10 @@ class ReverbService : Service() {
                 reportPersistentStoreFailure("read recorder state", error)
                 val listening = isLogicalListeningState(state, isListeningEnabled())
                 mainHandler.post {
+                    if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
+                        deliverUnavailableState(callback)
+                        return@post
+                    }
                     callback.state(
                         commandGeneration,
                         listening,
@@ -2441,23 +2462,24 @@ class ReverbService : Service() {
     }
 
     private fun postUnavailableState(callback: StateCallback) {
-        val commandGeneration = listeningCommandGeneration.get()
-        mainHandler.post {
-            callback.state(
-                commandGeneration,
-                false,
-                activeBufferSlot,
-                0f,
-                0L,
-                0f,
-                0L,
-                false,
-                false,
-                false,
-                null,
-                hasActiveExport(),
-            )
-        }
+        mainHandler.post { deliverUnavailableState(callback) }
+    }
+
+    private fun deliverUnavailableState(callback: StateCallback) {
+        callback.state(
+            listeningCommandGeneration.get(),
+            false,
+            activeBufferSlot,
+            0f,
+            0L,
+            0f,
+            0L,
+            false,
+            false,
+            false,
+            null,
+            hasActiveExport(),
+        )
     }
 
     fun setAppUiForeground(owner: Any, foreground: Boolean) {
@@ -3408,6 +3430,16 @@ internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !service
 internal fun serviceAudioMutationMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun runtimeRecordingTileSnapshotForDelivery(
+    serviceDestroying: Boolean,
+    sampledSnapshot: RecordingTileSnapshot,
+    cachedSnapshot: RecordingTileSnapshot?,
+): RecordingTileSnapshot = if (serviceRuntimeReadMayExecute(serviceDestroying)) {
+    sampledSnapshot
+} else {
+    failClosedRecordingTileSnapshot(cachedSnapshot)
+}
 
 internal fun captureReadShouldReschedule(
     commandGenerationUnchanged: Boolean,
