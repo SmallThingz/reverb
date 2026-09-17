@@ -255,7 +255,10 @@ internal fun RecordingInlinePlayer(
     var trimMode by remember(recordingRevisionKey) { mutableStateOf(false) }
     var trimStartMillis by remember(recordingRevisionKey) { mutableIntStateOf(0) }
     var trimEndMillis by remember(recordingRevisionKey) { mutableIntStateOf(duration) }
-    var trimSaving by remember(recordingRevisionKey) { mutableStateOf(false) }
+    // The physical trim write is NonCancellable once started. A provider/path revision can
+    // change while that write is still running, so busy ownership must survive revision-key
+    // recreation and keep the row locked until the operation itself reaches terminal.
+    var trimSaving by remember(recording.id) { mutableStateOf(false) }
     var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
     var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
 

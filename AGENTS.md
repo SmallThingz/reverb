@@ -124,3 +124,5 @@
 - Blob-to-range source geometry is never screenshot/eyeball calibrated: measure the actual composed home blob/root bounds, derive base body diameter from AudioBlobView’s renderer equation (`0.095 + life * (0.235 + activity * 0.018)`), and align source/target centers from layout coordinates; zero-pass progress 0 is an analytic oval transformed into that exact source circle.
 - Blob-to-range interaction readiness is owned by the opening animation once the morph starts; later live source-geometry/activity updates must never cancel the readiness waiter and strand settled range controls disabled.
 - Blob-to-range source geometry is frozen at the renderer handoff for that range snapshot; later service/visualizer activity may not move the source endpoint during the in-flight morph.
+
+- Inline Trim Save locks the recording card until the non-cancellable physical save/catalog registration reaches terminal; close/refresh/revision changes must not re-enable rename/delete/share against the same row while that save is still running.
