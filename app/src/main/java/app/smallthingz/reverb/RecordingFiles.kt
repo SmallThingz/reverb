@@ -31,6 +31,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -1711,10 +1712,9 @@ private fun recoverStagedFileOutputs(
         }
         if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true) || file.length() <= 0L) return@forEach
-        val duration = runCatching { FileInputStream(file).use(::readRecoverableStagingWavDurationMillis) }
+        val observation = runCatching { FileInputStream(file).use(::readRecoverableStagingWav) }
             .onFailure { Log.w(TAG, "Unable to inspect staging recording $file", it) }
-            .getOrDefault(0L)
-        if (duration <= 0L) return@forEach
+            .getOrNull() ?: return@forEach
         val target = RecordingOutputTarget(
             id = file.absolutePath,
             displayName = metadata.finalDisplayName,
@@ -1726,6 +1726,7 @@ private fun recoverStagedFileOutputs(
             staging = true,
         )
         val publishFingerprint = trackedFingerprint ?: readStableFileOutputFingerprint(file) ?: return@forEach
+        if (!copyDigestMatches(observation.digest, publishFingerprint.digest)) return@forEach
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging recording $file", it) }
             .isSuccess
@@ -1805,11 +1806,10 @@ private fun recoverStagedDocumentOutputs(
         }
         if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
-        val duration = runCatching {
-            context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
+        val observation = runCatching {
+            context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWav)
         }.onFailure { Log.w(TAG, "Unable to inspect staging document ${file.uri}", it) }
-            .getOrDefault(0L)
-        if (duration <= 0L) return@forEach
+            .getOrNull() ?: return@forEach
         val target = RecordingOutputTarget(
             id = file.uri.toString(),
             displayName = metadata.finalDisplayName,
@@ -1825,6 +1825,7 @@ private fun recoverStagedDocumentOutputs(
             RecordingStorageType.DOCUMENT,
             file.uri.toString(),
         ) ?: return@forEach
+        if (!copyDigestMatches(observation.digest, publishFingerprint.digest)) return@forEach
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging document ${file.uri}", it) }
             .isSuccess
@@ -2014,11 +2015,11 @@ private fun listMediaStoreRecordings(
                             if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) {
                                 continue
                             }
-                            val strictDuration = runCatching {
-                                context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWavDurationMillis) ?: 0L
+                            val observation = runCatching {
+                                context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWav)
                             }.onFailure { Log.w(TAG, "Unable to inspect pending staged recording $uri", it) }
-                                .getOrDefault(0L)
-                            if (!canRecoverPendingMedia(size, strictDuration)) continue
+                                .getOrNull() ?: continue
+                            if (!canRecoverPendingMedia(size, observation.durationMillis)) continue
                             val stagedTarget = RecordingOutputTarget(
                                 id = uri.toString(),
                                 displayName = metadata.finalDisplayName,
@@ -2034,13 +2035,14 @@ private fun listMediaStoreRecordings(
                                 RecordingStorageType.MEDIASTORE,
                                 uri.toString(),
                             ) ?: continue
+                            if (!copyDigestMatches(observation.digest, publishFingerprint.digest)) continue
                             val finalized = runCatching {
                                 finalizeOutputTarget(context, stagedTarget, publishFingerprint)
                             }.onFailure { Log.w(TAG, "Unable to publish recovered pending recording $uri", it) }
                                 .getOrNull() ?: continue
                             removeVerifiedExportStaging(context, stagedTarget.storageType, stagedTarget.id)
                             name = finalized.displayName
-                            durationMillis = strictDuration
+                            durationMillis = observation.durationMillis
                             media = inspectRecordingMedia(context, uri, name)
                         } else {
                             // Older rows predate operation-kind/session staging, so they may
@@ -2697,14 +2699,24 @@ internal fun structurallyCompleteRecordingDurationMillis(
     else -> 0L
 }
 
-internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long = runCatching {
+internal data class RecoverableStagingWav(
+    val durationMillis: Long,
+    val digest: CopyDigest,
+)
+
+internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
+    readRecoverableStagingWav(input)?.durationMillis ?: 0L
+
+internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWav? = runCatching {
+    val messageDigest = MessageDigest.getInstance("SHA-256")
+    val source = DigestInputStream(input, messageDigest)
     val riffHeader = ByteArray(12)
-    if (!input.readFully(riffHeader)) return@runCatching 0L
+    if (!source.readFully(riffHeader)) return@runCatching null
     if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
-        return@runCatching 0L
+        return@runCatching null
     }
     val expectedTotalBytes = littleEndianUnsignedInt(riffHeader, 4) + 8L
-    if (expectedTotalBytes < 44L) return@runCatching 0L
+    if (expectedTotalBytes < 44L) return@runCatching null
 
     var consumedBytes = 12L
     var byteRate = 0L
@@ -2715,17 +2727,17 @@ internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
     val chunkHeader = ByteArray(8)
     val discardBuffer = ByteArray(FILE_COPY_BUFFER_BYTES)
     while (consumedBytes < expectedTotalBytes) {
-        if (expectedTotalBytes - consumedBytes < chunkHeader.size) return@runCatching 0L
-        if (!input.readFully(chunkHeader)) return@runCatching 0L
+        if (expectedTotalBytes - consumedBytes < chunkHeader.size) return@runCatching null
+        if (!source.readFully(chunkHeader)) return@runCatching null
         consumedBytes += chunkHeader.size
         val chunkSize = littleEndianUnsignedInt(chunkHeader, 4)
         val paddedChunkSize = chunkSize + (chunkSize and 1L)
-        if (paddedChunkSize > expectedTotalBytes - consumedBytes) return@runCatching 0L
+        if (paddedChunkSize > expectedTotalBytes - consumedBytes) return@runCatching null
 
         if (chunkHeader.regionMatchesAscii(0, "fmt ")) {
-            if (sawFormat || chunkSize < 16L) return@runCatching 0L
+            if (sawFormat || chunkSize < 16L) return@runCatching null
             val format = ByteArray(16)
-            if (!input.readFully(format)) return@runCatching 0L
+            if (!source.readFully(format)) return@runCatching null
             consumedBytes += format.size
             val formatTag = littleEndianUnsignedShort(format, 0)
             val channelCount = littleEndianUnsignedShort(format, 2)
@@ -2737,39 +2749,43 @@ internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
                 formatTag == 1 && bitsPerSample == 8 -> 1L
                 formatTag == 1 && bitsPerSample == 16 -> 2L
                 formatTag == 3 && bitsPerSample == 32 -> 4L
-                else -> return@runCatching 0L
+                else -> return@runCatching null
             }
-            if (channelCount !in 1..2 || sampleRate !in 1L..Int.MAX_VALUE.toLong()) return@runCatching 0L
+            if (channelCount !in 1..2 || sampleRate !in 1L..Int.MAX_VALUE.toLong()) return@runCatching null
             val expectedBlockAlign = channelCount.toLong() * sampleBytes
             val expectedByteRate = sampleRate * expectedBlockAlign
             if (declaredBlockAlign != expectedBlockAlign || declaredByteRate != expectedByteRate) {
-                return@runCatching 0L
+                return@runCatching null
             }
             byteRate = declaredByteRate
             blockAlign = declaredBlockAlign
             sawFormat = true
             val remainder = chunkSize - format.size.toLong()
-            if (!input.discardFully(remainder, discardBuffer)) return@runCatching 0L
+            if (!source.discardFully(remainder, discardBuffer)) return@runCatching null
             consumedBytes += remainder
         } else {
             if (chunkHeader.regionMatchesAscii(0, "data")) {
-                if (sawData) return@runCatching 0L
+                if (sawData) return@runCatching null
                 dataSize = chunkSize
                 sawData = true
             }
-            if (!input.discardFully(chunkSize, discardBuffer)) return@runCatching 0L
+            if (!source.discardFully(chunkSize, discardBuffer)) return@runCatching null
             consumedBytes += chunkSize
         }
         if ((chunkSize and 1L) != 0L) {
-            if (input.read() < 0) return@runCatching 0L
+            if (source.read() < 0) return@runCatching null
             consumedBytes++
         }
     }
-    if (consumedBytes != expectedTotalBytes || input.read() >= 0) return@runCatching 0L
-    if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return@runCatching 0L
-    if (dataSize % blockAlign != 0L) return@runCatching 0L
-    (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: 0L
-}.getOrDefault(0L)
+    if (consumedBytes != expectedTotalBytes || source.read() >= 0) return@runCatching null
+    if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return@runCatching null
+    if (dataSize % blockAlign != 0L) return@runCatching null
+    val durationMillis = (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: return@runCatching null
+    RecoverableStagingWav(
+        durationMillis = durationMillis,
+        digest = CopyDigest(expectedTotalBytes, messageDigest.digest()),
+    )
+}.getOrNull()
 
 private fun InputStream.discardFully(byteCount: Long, buffer: ByteArray): Boolean {
     var remaining = byteCount

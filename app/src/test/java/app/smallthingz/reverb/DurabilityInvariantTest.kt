@@ -827,6 +827,9 @@ class DurabilityInvariantTest {
         val header = buildWavHeaderBytes(44_100, 1, PcmSampleFormat.PCM_16, payload.size.toLong())
         val complete = header + payload
 
+        val observation = requireNotNull(readRecoverableStagingWav(ByteArrayInputStream(complete)))
+        assertEquals(100L, observation.durationMillis)
+        assertTrue(copyDigestMatches(sha256(ByteArrayInputStream(complete)), observation.digest))
         assertEquals(100L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete)))
         assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete.copyOf(complete.size - 1))))
         assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(complete + byteArrayOf(0))))
