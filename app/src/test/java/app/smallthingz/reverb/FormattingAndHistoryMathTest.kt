@@ -1090,6 +1090,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun settingsMoveAvailability_rejectsHiddenAndStaleResults() {
+        assertTrue(settingsMoveAvailabilityResultIsCurrent(active = true, requestGeneration = 3, currentGeneration = 3))
+        assertFalse(settingsMoveAvailabilityResultIsCurrent(active = false, requestGeneration = 3, currentGeneration = 3))
+        assertFalse(settingsMoveAvailabilityResultIsCurrent(active = true, requestGeneration = 2, currentGeneration = 3))
+    }
+
+    @Test
     fun recorderStateSnapshot_rejectsStaleCommandsAndPreviousServiceConnections() {
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 7L, 7L))
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 8L, 7L))

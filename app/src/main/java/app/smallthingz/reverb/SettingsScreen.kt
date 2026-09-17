@@ -161,6 +161,12 @@ internal fun settingsSnapshotHasUnsavedChanges(
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
+internal fun settingsMoveAvailabilityResultIsCurrent(
+    active: Boolean,
+    requestGeneration: Int,
+    currentGeneration: Int,
+): Boolean = active && requestGeneration == currentGeneration
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -187,6 +193,7 @@ fun SettingsScreen(
 
     val moveAvailabilityGeneration = remember { intArrayOf(0) }
     val settingsEditRevision = remember { longArrayOf(0L) }
+    val activeState = androidx.compose.runtime.rememberUpdatedState(active)
 
     // Selected values
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
@@ -243,6 +250,7 @@ fun SettingsScreen(
     fun refreshMoveRecordingsAvailability() {
         val gen = ++moveAvailabilityGeneration[0]
         canMove = false
+        if (!activeState.value) return
         scope.launch {
             val result = try {
                 RecordingRepository.hasMovableKnownRecordings(
@@ -254,7 +262,14 @@ fun SettingsScreen(
             } catch (_: Exception) {
                 false
             }
-            if (gen == moveAvailabilityGeneration[0]) canMove = result
+            if (settingsMoveAvailabilityResultIsCurrent(
+                    active = activeState.value,
+                    requestGeneration = gen,
+                    currentGeneration = moveAvailabilityGeneration[0],
+                )
+            ) {
+                canMove = result
+            }
         }
     }
 
@@ -894,6 +909,9 @@ fun SettingsScreen(
         }
     }
     LaunchedEffect(Unit) { bindUiFromPreferences() }
+    LaunchedEffect(active, selectedExportTreeUri) {
+        refreshMoveRecordingsAvailability()
+    }
     LaunchedEffect(focusRetentionBuffer, batteryOptimizationRestricted) {
         if (focusRetentionBuffer != null) {
             listState.scrollToItem(if (batteryOptimizationRestricted) 2 else 1)
@@ -1197,9 +1215,6 @@ fun SettingsScreen(
 
             item(key = "storage") {
                 Column {
-            LaunchedEffect(selectedExportTreeUri) {
-                refreshMoveRecordingsAvailability()
-            }
             SectionTitle(stringResource(R.string.storage_settings_title))
             Surface(
                 modifier = Modifier
