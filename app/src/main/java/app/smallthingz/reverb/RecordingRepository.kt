@@ -184,7 +184,7 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
-                if (!recordingRegistrationIdentityIsCurrent(
+                if (!recordingCatalogIdentityIsCurrent(
                         stableIdentityAvailable = stableIdentityAvailable,
                         currentIdentityMatches = stableIdentityAvailable &&
                             recordingContentIdentityMatches(context, recording),
@@ -438,6 +438,18 @@ object RecordingRepository {
                     val renamed = renameRecordingAsset(context, tracked, requestedBaseName) ?: return@withLock null
                     if (renamed == tracked) return@withLock tracked
                     try {
+                        // The storage-specific rename verified its result, but external writers are
+                        // outside Reverb's mutation lock. Recheck the exact renamed object at the
+                        // catalog boundary before carrying metadata/cache state into SQLite.
+                        val stableRenamedIdentityAvailable = renamed.fileIdentity.isNotBlank()
+                        if (!recordingCatalogIdentityIsCurrent(
+                                stableIdentityAvailable = stableRenamedIdentityAvailable,
+                                currentIdentityMatches = stableRenamedIdentityAvailable &&
+                                    recordingContentIdentityMatches(context, renamed),
+                            )
+                        ) {
+                            throw IOException("Recording changed before rename catalog commit")
+                        }
                         dao.applyChanges(
                             upserts = listOf(renamed),
                             deleteIds = if (renamed.id == tracked.id) emptyList() else listOf(tracked.id),
@@ -1135,7 +1147,7 @@ internal fun ByteArray.toHexString(): String = joinToString(separator = "") { by
 internal fun isRecordingEligibleForMove(id: String, pendingDeletionIds: Set<String>): Boolean =
     id !in pendingDeletionIds
 
-internal fun recordingRegistrationIdentityIsCurrent(
+internal fun recordingCatalogIdentityIsCurrent(
     stableIdentityAvailable: Boolean,
     currentIdentityMatches: Boolean,
 ): Boolean = stableIdentityAvailable && currentIdentityMatches

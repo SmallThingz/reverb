@@ -4,23 +4,23 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RecordingRegistrationPolicyTest {
+class RecordingCatalogIdentityPolicyTest {
     @Test
-    fun catalogRegistration_requiresKnownCurrentPhysicalIdentity() {
+    fun catalogMutation_requiresKnownCurrentPhysicalIdentity() {
         assertTrue(
-            recordingRegistrationIdentityIsCurrent(
+            recordingCatalogIdentityIsCurrent(
                 stableIdentityAvailable = true,
                 currentIdentityMatches = true,
             ),
         )
         assertFalse(
-            recordingRegistrationIdentityIsCurrent(
+            recordingCatalogIdentityIsCurrent(
                 stableIdentityAvailable = false,
                 currentIdentityMatches = true,
             ),
         )
         assertFalse(
-            recordingRegistrationIdentityIsCurrent(
+            recordingCatalogIdentityIsCurrent(
                 stableIdentityAvailable = true,
                 currentIdentityMatches = false,
             ),
