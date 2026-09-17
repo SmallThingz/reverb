@@ -780,6 +780,7 @@ fun FilesScreen(
                                         item = item,
                                         isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
+                                        screenActive = active,
                                         menuExpanded = contextMenuRecordingId == recording.id,
                                         expanded = expandedRecordingId == recording.id,
                                         trimRequested = trimRequestRecordingId == recording.id,
@@ -978,6 +979,7 @@ private fun RecordingItem(
     item: ListItem.Recording,
     isSelected: Boolean,
     selectionActive: Boolean,
+    screenActive: Boolean,
     menuExpanded: Boolean,
     expanded: Boolean,
     trimRequested: Boolean,
@@ -1019,6 +1021,7 @@ private fun RecordingItem(
                 RecordingInlinePlayer(
                     recording = item.recording,
                     trimRequested = trimRequested,
+                    screenActive = screenActive,
                     onTrimRequestConsumed = onTrimRequestConsumed,
                     onTrimSaved = onTrimSaved,
                     onTrimStateUncertain = onTrimStateUncertain,

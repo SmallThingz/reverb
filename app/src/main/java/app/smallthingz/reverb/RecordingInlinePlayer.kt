@@ -31,11 +31,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +58,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.Closeable
 import java.io.FileDescriptor
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -212,6 +215,84 @@ private class InlinePlayerBookkeeping {
     var initialAutoStartPending = true
 }
 
+internal class InlineTrimUiCallbackGate(
+    onSaved: (RecordingEntity) -> Unit,
+    onFailed: (Throwable) -> Unit,
+    visible: Boolean,
+) {
+    private var savedCallback: ((RecordingEntity) -> Unit)? = onSaved
+    private var failedCallback: ((Throwable) -> Unit)? = onFailed
+    var attached: Boolean = true
+        private set
+    var visible: Boolean = visible
+        private set
+
+    fun setVisible(visible: Boolean) {
+        if (attached) this.visible = visible
+    }
+
+    fun detach() {
+        attached = false
+        visible = false
+        savedCallback = null
+        failedCallback = null
+    }
+
+    fun saved(recording: RecordingEntity): Boolean {
+        if (!attached) return false
+        savedCallback?.invoke(recording)
+        return visible
+    }
+
+    fun failed(error: Throwable): Boolean {
+        if (!attached) return false
+        failedCallback?.invoke(error)
+        return visible
+    }
+}
+
+private class InlineTrimResultReceiver(
+    context: Context,
+    onSaved: (RecordingEntity) -> Unit,
+    onFailed: (Throwable) -> Unit,
+    uiVisible: Boolean,
+    private val onTerminal: (InlineTrimResultReceiver) -> Unit,
+) {
+    private val appContext = context.applicationContext
+    private val uiCallbacks = InlineTrimUiCallbackGate(onSaved, onFailed, uiVisible)
+    private val terminalDelivered = AtomicBoolean(false)
+
+    fun setUiVisible(visible: Boolean) = uiCallbacks.setVisible(visible)
+
+    fun detachUi() = uiCallbacks.detach()
+
+    fun terminal(result: Result<RecordingEntity>) {
+        if (!terminalDelivered.compareAndSet(false, true)) return
+        try {
+            result.fold(
+                onSuccess = { recording ->
+                    val delivered = runCatching { uiCallbacks.saved(recording) }.getOrDefault(false)
+                    if (!delivered) {
+                        NotifyFileReceiver(appContext).fileReady(recording)
+                    }
+                },
+                onFailure = { error ->
+                    val delivered = runCatching { uiCallbacks.failed(error) }.getOrDefault(false)
+                    if (!delivered) {
+                        NotifyFileReceiver(appContext).fileFailed(
+                            appContext.getString(R.string.trim_failed),
+                            error,
+                        )
+                    }
+                },
+            )
+        } finally {
+            uiCallbacks.detach()
+            onTerminal(this)
+        }
+    }
+}
+
 internal fun inlinePlaybackShouldAutoStart(
     prepared: Boolean,
     initialAutoStartPending: Boolean,
@@ -223,6 +304,7 @@ internal fun inlinePlaybackShouldAutoStart(
 internal fun RecordingInlinePlayer(
     recording: RecordingEntity,
     trimRequested: Boolean,
+    screenActive: Boolean,
     onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
     onTrimStateUncertain: () -> Unit,
@@ -237,6 +319,7 @@ internal fun RecordingInlinePlayer(
     val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+    val screenActiveState = rememberUpdatedState(screenActive)
     val chrome = appChrome()
     val recordingRevisionKey = remember(
         recording.id,
@@ -268,9 +351,20 @@ internal fun RecordingInlinePlayer(
     var trimSaving by remember(recording.id) { mutableStateOf(false) }
     var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
     var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
+    val activeTrimReceiver = remember(recording.id) { AtomicReference<InlineTrimResultReceiver?>(null) }
 
     LaunchedEffect(trimSaving) { onBusyChange(trimSaving) }
-    DisposableEffect(Unit) { onDispose { onBusyChange(false) } }
+    SideEffect {
+        activeTrimReceiver.get()?.setUiVisible(
+            screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            activeTrimReceiver.getAndSet(null)?.detachUi()
+            onBusyChange(false)
+        }
+    }
 
     var coarseWaveform by remember(recordingRevisionKey) { mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)) }
     var coarseBuiltCount by remember(recordingRevisionKey) { mutableIntStateOf(0) }
@@ -579,6 +673,7 @@ internal fun RecordingInlinePlayer(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
+                    activeTrimReceiver.get()?.setUiVisible(screenActiveState.value)
                     if (inlinePlaybackShouldAutoStart(
                             prepared = prepared,
                             initialAutoStartPending = playbackBookkeeping.initialAutoStartPending,
@@ -601,6 +696,7 @@ internal fun RecordingInlinePlayer(
                     }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
+                    activeTrimReceiver.get()?.setUiVisible(false)
                     if (playbackBookkeeping.fineSeekShuttleActive) {
                         fineSeekPreviewController.stopShuttle()
                         playbackBookkeeping.fineSeekShuttleActive = false
@@ -1023,28 +1119,51 @@ internal fun RecordingInlinePlayer(
                             trimSaving = true
                             trimError = false
                             onBusyChange(true)
-                            scope.launch {
-                                try {
-                                    val trimmed = saveTrimmedRecordingCopy(
-                                        context = appContext,
-                                        recording = recording,
-                                        startMillis = trimStartMillis,
-                                        endMillis = trimEndMillis,
-                                    )
+                            lateinit var receiver: InlineTrimResultReceiver
+                            receiver = InlineTrimResultReceiver(
+                                context = appContext,
+                                onSaved = { trimmed ->
                                     trimSaving = false
                                     onBusyChange(false)
                                     trimMode = false
-                                    onTrimSaved(trimmed)
-                                } catch (cancelled: CancellationException) {
-                                    throw cancelled
-                                } catch (error: Exception) {
+                                    if (
+                                        screenActiveState.value &&
+                                        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                                    ) {
+                                        onTrimSaved(trimmed)
+                                    }
+                                },
+                                onFailed = { error ->
                                     trimSaving = false
                                     onBusyChange(false)
                                     trimError = true
-                                    if (error is RecordingCatalogIdentityChangedException) {
+                                    if (
+                                        error is RecordingCatalogIdentityChangedException &&
+                                        screenActiveState.value &&
+                                        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                                    ) {
                                         onTrimStateUncertain()
                                     }
-                                }
+                                },
+                                uiVisible = screenActive &&
+                                    lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                                onTerminal = { completed ->
+                                    activeTrimReceiver.compareAndSet(completed, null)
+                                },
+                            )
+                            activeTrimReceiver.set(receiver)
+                            scope.launch {
+                                runCommittedInlineTrim(
+                                    save = {
+                                        saveTrimmedRecordingCopy(
+                                            context = appContext,
+                                            recording = recording,
+                                            startMillis = trimStartMillis,
+                                            endMillis = trimEndMillis,
+                                        )
+                                    },
+                                    onTerminal = receiver::terminal,
+                                )
                             }
                         }
                     },

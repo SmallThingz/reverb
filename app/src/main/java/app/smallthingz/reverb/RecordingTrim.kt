@@ -14,6 +14,18 @@ private const val TRIM_TAG = "RecordingTrim"
 internal fun recordingHasStableTrimIdentity(recording: RecordingEntity): Boolean =
     recording.fileIdentity.isNotBlank()
 
+internal suspend fun runCommittedInlineTrim(
+    save: suspend () -> RecordingEntity,
+    onTerminal: (Result<RecordingEntity>) -> Unit,
+) = withContext(NonCancellable) {
+    val result = try {
+        Result.success(save())
+    } catch (error: Exception) {
+        Result.failure(error)
+    }
+    onTerminal(result)
+}
+
 internal suspend fun saveTrimmedRecordingCopy(
     context: Context,
     recording: RecordingEntity,
