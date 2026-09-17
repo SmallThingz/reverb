@@ -492,7 +492,7 @@ class ReverbService : Service() {
             if (serviceDestroying) return rejectedListeningCommand()
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             previousActiveBuffer = activeBufferSlot
-            if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
+            val resolvedGeneration = if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
             } else if (!captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
                 activeBufferSlot = bufferSlot
@@ -519,6 +519,12 @@ class ReverbService : Service() {
                 // cancelled by an unrelated target version change.
                 listeningCommandGeneration.incrementAndGet()
             }
+            if (resolvedGeneration != null && targetChanged && switchingWhileRecording) {
+                // Keep the QS handoff marker ordered with the slot transaction. A later automatic
+                // or user switch must be able to replace this marker before either snapshot emits.
+                RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
+            }
+            resolvedGeneration
         }
         if (generation == null) {
             reportError(getString(R.string.recorder_state_persist_failed))
@@ -526,7 +532,6 @@ class ReverbService : Service() {
         }
         if (targetChanged) {
             if (switchingWhileRecording) {
-                RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
                 audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
             } else {
                 audioHandler.post { publishQuickTileSnapshotOnAudioThread(refreshTiles = true) }
@@ -734,7 +739,6 @@ class ReverbService : Service() {
         resolveTargetLocked: () -> BufferSlot?,
     ): Boolean {
         check(audioHandler.looper == Looper.myLooper())
-        var targetBuffer = activeBufferSlot
         var previousActiveBuffer = activeBufferSlot
         var switchingWhileRecording = false
         var switchGeneration = Long.MIN_VALUE
@@ -745,7 +749,6 @@ class ReverbService : Service() {
         val accepted = synchronized(listeningIntentLock) {
             if (serviceDestroying) return@synchronized false
             val resolved = resolveTargetLocked() ?: return@synchronized false
-            targetBuffer = resolved
             if (activeBufferSlot == resolved) return@synchronized true
 
             val prefs = getRecorderPreferences(this)
@@ -767,6 +770,9 @@ class ReverbService : Service() {
             activeBufferSlot = resolved
             if (switchingWhileRecording) {
                 switchGeneration = listeningCommandGeneration.incrementAndGet()
+                // This marker is tiny in-memory state only. Keep it inside the destination lock
+                // so older handoff callbacks cannot overwrite a newer winning slot transaction.
+                RecordingQuickTiles.beginHandoff(previousActiveBuffer, resolved)
             }
             changed = true
             true
@@ -788,7 +794,6 @@ class ReverbService : Service() {
         if (!changed) return true
 
         if (switchingWhileRecording) {
-            RecordingQuickTiles.beginHandoff(previousActiveBuffer, targetBuffer)
             if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = switchGeneration
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = notifyTiles)
