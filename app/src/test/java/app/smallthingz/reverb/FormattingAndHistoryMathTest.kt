@@ -1186,37 +1186,43 @@ class FormattingAndHistoryMathTest {
     fun suspendedDurableIntent_retriesOnlyWithActualForegroundUi() {
         assertTrue(
             shouldRetrySuspendedListeningWithForegroundUi(
-                true, appUiForeground = true, foregroundStartBlocked = true,
+                true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
             ),
         )
         assertTrue(
             shouldRetrySuspendedListeningWithForegroundUi(
-                true, appUiForeground = true, foregroundStartBlocked = false,
+                true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = false,
             ),
         )
         assertTrue(
             shouldRetrySuspendedListeningWithForegroundUi(
-                true, appUiForeground = true, foregroundStartBlocked = false,
+                true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
-                true, appUiForeground = false, foregroundStartBlocked = true,
+                true, serviceDestroying = false, appUiForeground = false, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
-                true, appUiForeground = true, foregroundStartBlocked = false,
+                true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
-                false, appUiForeground = true, foregroundStartBlocked = true,
+                false, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = true,
+                foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+            ),
+        )
+        assertFalse(
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, serviceDestroying = true, appUiForeground = true, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
             ),
         )

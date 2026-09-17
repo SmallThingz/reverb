@@ -360,6 +360,7 @@ class ReverbService : Service() {
             if (
                 shouldRetrySuspendedListeningWithForegroundUi(
                     listeningIntentEnabled = isListeningEnabled(),
+                    serviceDestroying = serviceDestroying,
                     appUiForeground = appUiForeground,
                     foregroundStartBlocked = foregroundStartBlocked,
                     foregroundServiceTimedOut = foregroundServiceTimedOut,
@@ -3286,11 +3287,12 @@ internal fun shouldEnsureRuntimeCaptureAfterInitialization(
 
 internal fun shouldRetrySuspendedListeningWithForegroundUi(
     listeningIntentEnabled: Boolean,
+    serviceDestroying: Boolean,
     appUiForeground: Boolean,
     foregroundStartBlocked: Boolean,
     foregroundServiceTimedOut: Boolean,
     persistenceFailureBlocked: Boolean,
-): Boolean = listeningIntentEnabled && appUiForeground &&
+): Boolean = listeningIntentEnabled && !serviceDestroying && appUiForeground &&
     (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
 
 internal enum class AudioThreadShutdownWaitResult {
