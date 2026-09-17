@@ -2334,6 +2334,15 @@ private fun handleExport(
     }
 }
 
+internal inline fun <T> deliverTerminalSaveResult(
+    deliver: () -> T,
+    finish: () -> Unit,
+): T = try {
+    deliver()
+} finally {
+    finish()
+}
+
 internal class SaveUiCallbackGate(
     setSaving: (Boolean) -> Unit,
     onStatus: (CaptureSaveStatus?) -> Unit,
@@ -2396,28 +2405,38 @@ private class SaveResultReceiver(
 
     override fun fileReady(recording: RecordingEntity) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        // Range-memory bookkeeping is convenience state; it must never suppress terminal
-        // delivery for a recording that is already durably committed.
-        runCatching { onCommitted(recording) }
-        if (!uiCallbacks.saved(recording)) {
-            NotifyFileReceiver(appContext).fileReady(recording)
-        }
-        finish()
+        deliverTerminalSaveResult(
+            deliver = {
+                // Range-memory bookkeeping is convenience state; it must never suppress terminal
+                // delivery for a recording that is already durably committed.
+                runCatching { onCommitted(recording) }
+                if (!uiCallbacks.saved(recording)) {
+                    NotifyFileReceiver(appContext).fileReady(recording)
+                }
+            },
+            finish = ::finish,
+        )
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
-        if (!uiCallbacks.failed(text)) {
-            NotifyFileReceiver(appContext).fileFailed(message, error)
-        }
-        finish()
+        deliverTerminalSaveResult(
+            deliver = {
+                val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
+                if (!uiCallbacks.failed(text)) {
+                    NotifyFileReceiver(appContext).fileFailed(message, error)
+                }
+            },
+            finish = ::finish,
+        )
     }
 
     override fun fileCancelled() {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        uiCallbacks.cancelled()
-        finish()
+        deliverTerminalSaveResult(
+            deliver = { uiCallbacks.cancelled() },
+            finish = ::finish,
+        )
     }
 
     private fun finish() {
