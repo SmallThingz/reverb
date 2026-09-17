@@ -149,6 +149,15 @@ internal fun settingsServiceBindingCallbackIsCurrent(
 internal fun settingsShouldOwnServiceBinding(active: Boolean, persisting: Boolean): Boolean =
     active || persisting
 
+internal fun settingsEditedDuringPersistence(submittedRevision: Long, currentRevision: Long): Boolean =
+    submittedRevision != currentRevision
+
+internal fun settingsSnapshotHasUnsavedChanges(
+    durableSnapshot: SettingsSnapshot,
+    currentSnapshot: SettingsSnapshot,
+    invalidRetentionInput: Boolean,
+): Boolean = durableSnapshot != currentSnapshot || invalidRetentionInput
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -174,6 +183,7 @@ fun SettingsScreen(
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
     val moveAvailabilityGeneration = remember { intArrayOf(0) }
+    val settingsEditRevision = remember { longArrayOf(0L) }
 
     // Selected values
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
@@ -309,7 +319,7 @@ fun SettingsScreen(
         wakeLockEnabled = wakeLockEnabled,
     )
 
-    fun pushUndoState() {
+    fun recomputeUnsavedState() {
         val invalidRetentionInput = when (activeRetentionMode) {
             RetentionMode.TIME ->
                 parseRetentionTimeSeconds(oneShotRetentionTimeText) == null ||
@@ -318,7 +328,16 @@ fun SettingsScreen(
                 parseRetentionSizeMib(oneShotRetentionSizeText)?.takeIf { it >= 0.0 } == null ||
                     parseRetentionSizeMib(loopingRetentionSizeText)?.takeIf { it >= 0.0 } == null
         }
-        hasUnsavedChanges = originalSnapshot != currentSnapshot || invalidRetentionInput
+        hasUnsavedChanges = settingsSnapshotHasUnsavedChanges(
+            durableSnapshot = originalSnapshot,
+            currentSnapshot = currentSnapshot,
+            invalidRetentionInput = invalidRetentionInput,
+        )
+    }
+
+    fun pushUndoState() {
+        settingsEditRevision[0]++
+        recomputeUnsavedState()
     }
 
     fun refreshRetentionFields(preserveActiveInputs: Boolean = false) {
@@ -370,6 +389,7 @@ fun SettingsScreen(
 
     fun restorePreviousSettings() {
         if (!hasUnsavedChanges) return
+        settingsEditRevision[0]++
         val prev = originalSnapshot
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
@@ -511,6 +531,11 @@ fun SettingsScreen(
             loopingSeconds = loopingRetentionTime.toLong(),
             loopingSizeBytes = requestedLoopingSizeBytes,
         )
+        // Capture the exact UI state owned by this transaction before the first suspension.
+        // Later edits may continue in the retained Settings composition, but they are a new
+        // unsaved revision and must never be promoted to the durable baseline by this save.
+        val submittedSnapshot = currentSettingsSnapshot()
+        val submittedEditRevision = settingsEditRevision[0]
 
         val preferences = getRecorderPreferences(context)
         val previous = originalSnapshot
@@ -633,12 +658,23 @@ fun SettingsScreen(
             RecordingQuickTileStateCache.invalidateRuntimeSnapshot()
             RecordingQuickTiles.requestRefresh(context)
         }
-        // Re-render from the precise backing values after commit. This keeps the large
-        // fields intentionally rounded without feeding that rounding back into storage.
-        refreshRetentionFields(preserveActiveInputs = false)
-        currentSnapshot = currentSettingsSnapshot()
-        originalSnapshot = currentSnapshot
-        hasUnsavedChanges = false
+        val editedWhileSaving = settingsEditedDuringPersistence(
+            submittedRevision = submittedEditRevision,
+            currentRevision = settingsEditRevision[0],
+        )
+        // Only the submitted snapshot became durable. If the user edited retained Settings
+        // while IO was in flight, preserve those live inputs and keep them visibly unsaved.
+        // Otherwise normalize presentation from the exact committed backing values.
+        originalSnapshot = submittedSnapshot
+        if (editedWhileSaving) {
+            refreshRetentionFields(preserveActiveInputs = true)
+            currentSnapshot = currentSettingsSnapshot()
+            recomputeUnsavedState()
+        } else {
+            refreshRetentionFields(preserveActiveInputs = false)
+            currentSnapshot = submittedSnapshot
+            hasUnsavedChanges = false
+        }
         return true
         } finally {
             settingsPersisting = false

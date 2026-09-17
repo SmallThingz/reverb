@@ -1076,6 +1076,18 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun settingsSave_keepsEditsMadeDuringPersistenceUnsaved() {
+        val submitted = SettingsSnapshot(sampleRate = 48_000, themeMode = AppThemeMode.SYSTEM)
+        val newer = submitted.copy(sampleRate = 44_100)
+
+        assertFalse(settingsEditedDuringPersistence(7L, 7L))
+        assertTrue(settingsEditedDuringPersistence(7L, 8L))
+        assertFalse(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = false))
+        assertTrue(settingsSnapshotHasUnsavedChanges(submitted, newer, invalidRetentionInput = false))
+        assertTrue(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = true))
+    }
+
+    @Test
     fun recorderStateSnapshot_rejectsStaleCommandsAndPreviousServiceConnections() {
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 7L, 7L))
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 8L, 7L))
