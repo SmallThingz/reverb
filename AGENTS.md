@@ -23,7 +23,7 @@
 - The stationary home `AndroidView` is reused across One-shot/Looping flips; when the displayed buffer controller changes, transfer that existing `AudioBlobView` attachment in the `update` path. Never rely on `factory` running again after a buffer flip, or the visible blob stops receiving audio frames.
 - Sticky-service restart initialization must ensure actual microphone capture with the latest listening generation after resolving the persisted buffer. Logical `STATE_LISTENING` alone is not proof that PCM is flowing; buffer resolution may advance the generation and stale queued starts must be replaced.
 - The Library action is always visible and must open even when the library is empty.
-- Both buffer readouts use the configured retention mode for their primary metric.
+- Both buffer readouts use the retention mode resolved and actually applied by `ReverbService` for their primary metric. Capture Compose must not synchronously read retention recovery/preferences to choose readout order; before the first hydrated Service snapshot, show a neutral readout and keep capture actions locked.
 - Export-limit warnings appear only inside export flows; never place them on the capture blob.
 - Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
 

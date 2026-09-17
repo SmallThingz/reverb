@@ -298,9 +298,6 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
     return slot
 }
 
-fun getConfiguredRetentionMode(context: Context): RetentionMode =
-    retentionConfigurationForRead(context).mode
-
 fun isWakeLockEnabled(context: Context): Boolean {
     return getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
 }

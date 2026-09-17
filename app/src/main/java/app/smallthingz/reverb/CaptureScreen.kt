@@ -206,6 +206,50 @@ internal fun captureServiceInteractionReady(
     stateHydrated: Boolean,
 ): Boolean = serviceConnected && stateHydrated
 
+internal data class CaptureBufferReadout(
+    val primary: String,
+    val secondary: String?,
+)
+
+internal data class CaptureResolvedBufferState(
+    val oneShotEnabled: Boolean,
+    val oneShotFull: Boolean,
+    val loopingEnabled: Boolean,
+)
+
+internal fun captureResolvedBufferState(
+    retentionMode: RetentionMode?,
+    oneShotEnabled: Boolean,
+    oneShotFull: Boolean,
+    loopingEnabled: Boolean,
+): CaptureResolvedBufferState {
+    val resolved = retentionMode != null
+    val resolvedOneShotEnabled = resolved && oneShotEnabled
+    return CaptureResolvedBufferState(
+        oneShotEnabled = resolvedOneShotEnabled,
+        oneShotFull = resolvedOneShotEnabled && oneShotFull,
+        loopingEnabled = resolved && loopingEnabled,
+    )
+}
+
+internal fun captureBufferReadout(
+    retentionMode: RetentionMode?,
+    disabled: Boolean,
+    seconds: Float,
+    bytes: Long,
+    disabledLabel: String,
+): CaptureBufferReadout {
+    if (disabled) return CaptureBufferReadout(disabledLabel, null)
+    if (retentionMode == null) return CaptureBufferReadout("—", null)
+    val time = formatShortTimer(seconds.coerceAtLeast(0f))
+    val size = formatShortFileSize(bytes.coerceAtLeast(0L))
+    return if (retentionMode == RetentionMode.TIME) {
+        CaptureBufferReadout(time, size)
+    } else {
+        CaptureBufferReadout(size, time)
+    }
+}
+
 internal fun captureServiceBindingCallbackIsCurrent(
     callbackBindingGeneration: Long,
     currentBindingGeneration: Long,
@@ -234,7 +278,6 @@ fun CaptureScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    val initialBufferAvailability = remember(context) { getConfiguredBufferAvailability(context) }
     var service by remember { mutableStateOf<ReverbService?>(null) }
     var serviceStateHydrated by remember { mutableStateOf(false) }
     var isListening by remember { mutableStateOf(false) }
@@ -244,9 +287,12 @@ fun CaptureScreen(
     var oneShotPayloadBytes by remember { mutableLongStateOf(0L) }
     var loopingDurationSeconds by remember { mutableFloatStateOf(0f) }
     var loopingPayloadBytes by remember { mutableLongStateOf(0L) }
-    var oneShotEnabled by remember { mutableStateOf(initialBufferAvailability.oneShotEnabled) }
+    // Until the Service publishes its resolved retention state, controls stay locked and the
+    // readout is neutral. Do not synchronously inspect recovery files from Compose startup.
+    var oneShotEnabled by remember { mutableStateOf(true) }
     var oneShotFull by remember { mutableStateOf(false) }
-    var loopingEnabled by remember { mutableStateOf(initialBufferAvailability.loopingEnabled) }
+    var loopingEnabled by remember { mutableStateOf(true) }
+    var resolvedRetentionMode by remember { mutableStateOf<RetentionMode?>(null) }
     var selectedBuffer by rememberSaveable {
         mutableStateOf(
             if (oneShotEnabled) ReverbService.BufferSlot.ONE_SHOT else ReverbService.BufferSlot.LOOPING,
@@ -302,6 +348,7 @@ fun CaptureScreen(
                     oneShotIsEnabled: Boolean,
                     oneShotIsFull: Boolean,
                     loopingIsEnabled: Boolean,
+                    retentionMode: RetentionMode?,
                     exporting: Boolean,
                 ) {
                     if (!shouldApplyRecorderStateSnapshot(
@@ -319,9 +366,16 @@ fun CaptureScreen(
                     oneShotPayloadBytes = oneShotBytes
                     loopingDurationSeconds = loopingSeconds
                     loopingPayloadBytes = loopingBytes
-                    oneShotEnabled = oneShotIsEnabled
-                    oneShotFull = oneShotIsFull
-                    loopingEnabled = loopingIsEnabled
+                    val resolvedBuffers = captureResolvedBufferState(
+                        retentionMode = retentionMode,
+                        oneShotEnabled = oneShotIsEnabled,
+                        oneShotFull = oneShotIsFull,
+                        loopingEnabled = loopingIsEnabled,
+                    )
+                    oneShotEnabled = resolvedBuffers.oneShotEnabled
+                    oneShotFull = resolvedBuffers.oneShotFull
+                    loopingEnabled = resolvedBuffers.loopingEnabled
+                    resolvedRetentionMode = retentionMode
                     val receiverAttached = bookkeeping.activeSaveReceiver != null
                     saveStatus = reconcileCaptureExportStatus(
                         exporting = exporting,
@@ -337,9 +391,9 @@ fun CaptureScreen(
 
                     if (!bookkeeping.startupBufferChosen) {
                         selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
-                            oneShotEnabled = oneShotIsEnabled,
-                            oneShotFull = oneShotIsFull,
-                            loopingEnabled = loopingIsEnabled,
+                            oneShotEnabled = resolvedBuffers.oneShotEnabled,
+                            oneShotFull = resolvedBuffers.oneShotFull,
+                            loopingEnabled = resolvedBuffers.loopingEnabled,
                         )
                         bookkeeping.startupBufferChosen = true
                     } else if (
@@ -905,6 +959,7 @@ fun CaptureScreen(
             oneShotEnabled = oneShotEnabled,
             oneShotFull = oneShotFull,
             loopingEnabled = loopingEnabled,
+            retentionMode = resolvedRetentionMode,
             isListening = isListening,
             isSaving = isSaving,
             service = service,
@@ -1119,6 +1174,7 @@ private fun MainCaptureContent(
     oneShotEnabled: Boolean,
     oneShotFull: Boolean,
     loopingEnabled: Boolean,
+    retentionMode: RetentionMode?,
     isListening: Boolean,
     isSaving: Boolean,
     service: ReverbService?,
@@ -1364,6 +1420,7 @@ private fun MainCaptureContent(
                 bufferSlot = renderedBuffer,
                 activeBuffer = activeBuffer,
                 metrics = displayedMetrics,
+                retentionMode = retentionMode,
                 bufferEnabled = displayedEnabled,
                 oneShotFull = oneShotFull,
                 isListening = isListening,
@@ -1692,27 +1749,11 @@ private fun BufferSegment(
 }
 
 @Composable
-private fun rememberConfiguredRetentionMode(context: Context): RetentionMode {
-    val appContext = context.applicationContext
-    var mode by remember(appContext) { mutableStateOf(getConfiguredRetentionMode(appContext)) }
-    DisposableEffect(appContext) {
-        val prefs = getRecorderPreferences(appContext)
-        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PrefKey.RETENTION_MODE.name) {
-                mode = getConfiguredRetentionMode(appContext)
-            }
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }
-    return mode
-}
-
-@Composable
 internal fun BufferBlobPage(
     bufferSlot: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
     metrics: BufferMetrics,
+    retentionMode: RetentionMode?,
     bufferEnabled: Boolean,
     oneShotFull: Boolean,
     isListening: Boolean,
@@ -1730,9 +1771,7 @@ internal fun BufferBlobPage(
     contentAlpha: Float = 1f,
     onBlobBoundsInRoot: ((Rect) -> Unit)? = null,
 ) {
-    val context = LocalContext.current
     val resources = LocalResources.current
-    val retentionMode = rememberConfiguredRetentionMode(context)
     val uiState = captureBufferUiState(
         bufferSlot = bufferSlot,
         enabled = bufferEnabled,
@@ -1745,29 +1784,18 @@ internal fun BufferBlobPage(
     val filled = uiState == CaptureBufferUiState.FILLED
     val disabled = uiState == CaptureBufferUiState.DISABLED
     val serviceReady = service != null
-    val captureEnabled = serviceReady &&
+    val captureEnabled = interactionEnabled && serviceReady &&
         (uiState == CaptureBufferUiState.READY || recordingThisBuffer)
     val clickEnabled = interactionEnabled && !isSaving && (disabled || captureEnabled)
 
-    val displayedCurrentSeconds = metrics.seconds.coerceAtLeast(0f).toInt()
-    val currentBytes = metrics.bytes.coerceAtLeast(0L)
-    val timerText = remember(retentionMode, displayedCurrentSeconds, currentBytes, disabled, resources) {
-        when {
-            disabled -> resources.getString(R.string.buffer_disabled)
-            retentionMode == RetentionMode.TIME -> formatShortTimer(displayedCurrentSeconds.toFloat())
-            else -> formatShortFileSize(currentBytes)
-        }
-    }
-    val summaryText: String? = remember(
-        retentionMode, currentBytes, disabled, displayedCurrentSeconds,
-    ) {
-        if (disabled) {
-            null
-        } else if (retentionMode == RetentionMode.TIME) {
-            formatShortFileSize(currentBytes)
-        } else {
-            formatShortTimer(displayedCurrentSeconds.toFloat())
-        }
+    val readout = remember(retentionMode, metrics.seconds, metrics.bytes, disabled, resources) {
+        captureBufferReadout(
+            retentionMode = retentionMode,
+            disabled = disabled,
+            seconds = metrics.seconds,
+            bytes = metrics.bytes,
+            disabledLabel = resources.getString(R.string.buffer_disabled),
+        )
     }
 
     BoxWithConstraints(
@@ -1783,8 +1811,8 @@ internal fun BufferBlobPage(
             filled = filled,
             dimmed = blockedByOther || disabled,
             blobController = blobController,
-            primaryText = timerText,
-            secondaryText = summaryText,
+            primaryText = readout.primary,
+            secondaryText = readout.secondary,
             visualizerVisible = visualizerVisible,
             flipDegrees = flipDegrees,
             flipPivotX = flipPivotX,

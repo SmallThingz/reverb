@@ -11,6 +11,44 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun captureResolvedBufferState_failsClosedUntilRetentionResolves() {
+        assertEquals(
+            CaptureResolvedBufferState(false, false, false),
+            captureResolvedBufferState(null, oneShotEnabled = true, oneShotFull = true, loopingEnabled = true),
+        )
+        assertEquals(
+            CaptureResolvedBufferState(true, true, false),
+            captureResolvedBufferState(
+                RetentionMode.TIME,
+                oneShotEnabled = true,
+                oneShotFull = true,
+                loopingEnabled = false,
+            ),
+        )
+    }
+
+    @Test
+    fun captureBufferReadout_staysNeutralUntilResolvedModeArrives() {
+        val loading = captureBufferReadout(
+            retentionMode = null,
+            disabled = false,
+            seconds = 61f,
+            bytes = 1_048_576L,
+            disabledLabel = "Off",
+        )
+        assertEquals("—", loading.primary)
+        assertEquals(null, loading.secondary)
+
+        val time = captureBufferReadout(RetentionMode.TIME, false, 61f, 1_048_576L, "Off")
+        val size = captureBufferReadout(RetentionMode.SIZE, false, 61f, 1_048_576L, "Off")
+        assertEquals(formatShortTimer(61f), time.primary)
+        assertEquals(formatShortFileSize(1_048_576L), time.secondary)
+        assertEquals(formatShortFileSize(1_048_576L), size.primary)
+        assertEquals(formatShortTimer(61f), size.secondary)
+        assertEquals(CaptureBufferReadout("Off", null), captureBufferReadout(null, true, 61f, 1_048_576L, "Off"))
+    }
+
+    @Test
     fun operationalBufferAvailabilityFailsClosedAndRespectsFrameSize() {
         val unavailable = configuredBufferAvailability(
             retention = null,

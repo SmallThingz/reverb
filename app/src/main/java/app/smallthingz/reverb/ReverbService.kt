@@ -182,6 +182,9 @@ class ReverbService : Service() {
     private var loopingBufferEnabled = true
 
     @Volatile
+    private var configuredRetentionMode: RetentionMode? = null
+
+    @Volatile
     private var cachedConfigSnapshot: RecorderConfigurationSnapshot? = null
 
     @Volatile
@@ -2191,6 +2194,7 @@ class ReverbService : Service() {
                         oneShotBufferEnabled,
                         oneShotFull,
                         loopingBufferEnabled,
+                        configuredRetentionMode,
                         exporting,
                     )
                 }
@@ -2209,6 +2213,7 @@ class ReverbService : Service() {
                         oneShotBufferEnabled,
                         false,
                         loopingBufferEnabled,
+                        configuredRetentionMode,
                         hasActiveExport(),
                     )
                 }
@@ -2483,6 +2488,10 @@ class ReverbService : Service() {
     }
 
     private fun configurePersistentBuffer() {
+        // A failed reconfiguration must not leave the previous mode looking authoritative to
+        // Capture. This runs on the serialized audio thread; publish a mode again only after
+        // both stores accept the resolved durable configuration below.
+        configuredRetentionMode = null
         val configuration = withRetentionPersistenceLock {
             val historyExists = loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()
             val prefs = getRecorderPreferences(this)
@@ -2556,6 +2565,7 @@ class ReverbService : Service() {
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
         )
+        configuredRetentionMode = mode
         if (
             (loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()) &&
             !isListeningEnabled() &&
@@ -2885,6 +2895,7 @@ class ReverbService : Service() {
             oneShotIsEnabled: Boolean,
             oneShotIsFull: Boolean,
             loopingIsEnabled: Boolean,
+            retentionMode: RetentionMode?,
             exporting: Boolean,
         )
     }
