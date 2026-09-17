@@ -158,6 +158,9 @@ internal fun settingsSnapshotHasUnsavedChanges(
     invalidRetentionInput: Boolean,
 ): Boolean = durableSnapshot != currentSnapshot || invalidRetentionInput
 
+internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
+    !hasUnsavedChanges
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -675,7 +678,7 @@ fun SettingsScreen(
             currentSnapshot = submittedSnapshot
             hasUnsavedChanges = false
         }
-        return true
+        return settingsSaveMayContinueAfterCommit(hasUnsavedChanges)
         } finally {
             settingsPersisting = false
         }

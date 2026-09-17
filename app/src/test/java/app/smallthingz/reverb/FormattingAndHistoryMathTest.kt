@@ -1085,6 +1085,8 @@ class FormattingAndHistoryMathTest {
         assertFalse(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = false))
         assertTrue(settingsSnapshotHasUnsavedChanges(submitted, newer, invalidRetentionInput = false))
         assertTrue(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = true))
+        assertTrue(settingsSaveMayContinueAfterCommit(hasUnsavedChanges = false))
+        assertFalse(settingsSaveMayContinueAfterCommit(hasUnsavedChanges = true))
     }
 
     @Test
