@@ -77,7 +77,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 
 private const val URI_SCHEME_PACKAGE = "package"
 private const val STATE_MICROPHONE_PERMISSION_REQUESTED = "microphone_permission_requested"
@@ -904,9 +904,9 @@ private fun MainScreen(
 
     LaunchedEffect(Unit) {
         // StateFlow emits immediately for the initial load, then refreshes again whenever
-        // recovery, resume-time completion, or checked-state changes durable history. A
-        // transient read failure must not strand the alert on this revision forever.
-        RecordingIncidentStore.historyRevision.collect {
+        // recovery, resume-time completion, or checked-state changes durable history. Latest-only
+        // collection cancels an obsolete read/retry when a newer durable revision arrives.
+        RecordingIncidentStore.historyRevision.collectLatest {
             var retryDelayMillis = 500L
             while (!loadIncidents()) {
                 delay(retryDelayMillis)
