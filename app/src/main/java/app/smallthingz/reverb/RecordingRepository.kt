@@ -183,6 +183,15 @@ object RecordingRepository {
     suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
+                val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
+                if (!recordingRegistrationIdentityIsCurrent(
+                        stableIdentityAvailable = stableIdentityAvailable,
+                        currentIdentityMatches = stableIdentityAvailable &&
+                            recordingContentIdentityMatches(context, recording),
+                    )
+                ) {
+                    throw IOException("Recording changed before catalog registration")
+                }
                 val dao = dao(context)
                 val existing = dao.findById(recording.id)
                 val presentRecording = mergeObservedRecording(
@@ -1125,6 +1134,11 @@ internal fun ByteArray.toHexString(): String = joinToString(separator = "") { by
 
 internal fun isRecordingEligibleForMove(id: String, pendingDeletionIds: Set<String>): Boolean =
     id !in pendingDeletionIds
+
+internal fun recordingRegistrationIdentityIsCurrent(
+    stableIdentityAvailable: Boolean,
+    currentIdentityMatches: Boolean,
+): Boolean = stableIdentityAvailable && currentIdentityMatches
 
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,
