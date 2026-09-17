@@ -1892,6 +1892,30 @@ internal fun fileDirectoryListingFailureIsAuthoritativeEmpty(
     directoryState: StoragePathState,
 ): Boolean = directoryState == StoragePathState.MISSING
 
+internal enum class FileDirectoryEntryScanAction { SCAN, SKIP, FAIL_SCOPE }
+
+internal fun fileDirectoryEntryScanAction(
+    observation: StoragePathObservation,
+): FileDirectoryEntryScanAction = when (observation.state) {
+    StoragePathState.MISSING -> FileDirectoryEntryScanAction.SKIP
+    StoragePathState.UNAVAILABLE -> FileDirectoryEntryScanAction.FAIL_SCOPE
+    StoragePathState.PRESENT -> if (observation.isRegularFile) {
+        FileDirectoryEntryScanAction.SCAN
+    } else {
+        FileDirectoryEntryScanAction.SKIP
+    }
+}
+
+private fun listedRecordingFileSize(file: File): Long? = try {
+    Files.size(file.toPath())
+} catch (_: NoSuchFileException) {
+    null
+} catch (error: IOException) {
+    throw IOException("Unable to inspect listed recording ${file.absolutePath}", error)
+} catch (error: SecurityException) {
+    throw IOException("Unable to inspect listed recording ${file.absolutePath}", error)
+}
+
 private fun listFileDirectoryRecordings(
     context: Context,
     directory: File,
@@ -1911,12 +1935,20 @@ private fun listFileDirectoryRecordings(
         files = directory.listFiles() ?: throw IOException("Unable to relist recordings directory: ${directory.absolutePath}")
     }
     return files.asSequence()
-        .filter { it.isFile && it.length() > 0L && !it.isHidden }
+        .filter { !it.isHidden }
         .filter { it.absolutePath !in suppressedIds }
         .filter { isSupportedRecordingName(it.name) }
         .mapNotNull { file ->
+            when (fileDirectoryEntryScanAction(observeStoragePath(file))) {
+                FileDirectoryEntryScanAction.SKIP -> return@mapNotNull null
+                FileDirectoryEntryScanAction.FAIL_SCOPE -> throw IOException(
+                    "Unable to inspect listed recording: ${file.absolutePath}",
+                )
+                FileDirectoryEntryScanAction.SCAN -> Unit
+            }
             val id = file.absolutePath
-            val size = file.length()
+            val size = listedRecordingFileSize(file) ?: return@mapNotNull null
+            if (size <= 0L) return@mapNotNull null
             val identity = resolveFileIdentity(file)
             val existing = knownRecordings[id]
             if (
@@ -1926,12 +1958,15 @@ private fun listFileDirectoryRecordings(
             ) {
                 existing
             } else {
-                val strictDuration = runCatching {
+                val strictDuration = try {
                     FileInputStream(file).use { input ->
                         structurallyCompleteRecordingDurationMillis(file.name, input)
                     }
-                }.onFailure { Log.w(TAG, "Unable to validate discovered recording $file", it) }
-                    .getOrDefault(0L)
+                } catch (_: NoSuchFileException) {
+                    return@mapNotNull null
+                } catch (error: Exception) {
+                    throw IOException("Unable to validate discovered recording $file", error)
+                }
                 if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(file)
                 RecordingEntity(
@@ -1981,12 +2016,13 @@ private fun listDocumentTreeRecordings(
             ) {
                 existing
             } else {
-                val strictDuration = runCatching {
+                val strictDuration = try {
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         structurallyCompleteRecordingDurationMillis(name, input)
-                    } ?: 0L
-                }.onFailure { Log.w(TAG, "Unable to validate discovered recording $uri", it) }
-                    .getOrDefault(0L)
+                    } ?: throw IOException("Unable to open discovered recording $uri")
+                } catch (error: Exception) {
+                    throw IOException("Unable to validate discovered recording $uri", error)
+                }
                 if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(context, uri, name)
                 RecordingEntity(
@@ -2801,16 +2837,16 @@ internal data class RecoverableStagingWav(
 internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
     readRecoverableStagingWav(input)?.durationMillis ?: 0L
 
-internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWav? = runCatching {
+internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWav? {
     val messageDigest = MessageDigest.getInstance("SHA-256")
     val source = DigestInputStream(input, messageDigest)
     val riffHeader = ByteArray(12)
-    if (!source.readFully(riffHeader)) return@runCatching null
+    if (!source.readFully(riffHeader)) return null
     if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
-        return@runCatching null
+        return null
     }
     val expectedTotalBytes = littleEndianUnsignedInt(riffHeader, 4) + 8L
-    if (expectedTotalBytes < 44L) return@runCatching null
+    if (expectedTotalBytes < 44L) return null
 
     var consumedBytes = 12L
     var byteRate = 0L
@@ -2821,17 +2857,17 @@ internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWa
     val chunkHeader = ByteArray(8)
     val discardBuffer = ByteArray(FILE_COPY_BUFFER_BYTES)
     while (consumedBytes < expectedTotalBytes) {
-        if (expectedTotalBytes - consumedBytes < chunkHeader.size) return@runCatching null
-        if (!source.readFully(chunkHeader)) return@runCatching null
+        if (expectedTotalBytes - consumedBytes < chunkHeader.size) return null
+        if (!source.readFully(chunkHeader)) return null
         consumedBytes += chunkHeader.size
         val chunkSize = littleEndianUnsignedInt(chunkHeader, 4)
         val paddedChunkSize = chunkSize + (chunkSize and 1L)
-        if (paddedChunkSize > expectedTotalBytes - consumedBytes) return@runCatching null
+        if (paddedChunkSize > expectedTotalBytes - consumedBytes) return null
 
         if (chunkHeader.regionMatchesAscii(0, "fmt ")) {
-            if (sawFormat || chunkSize < 16L) return@runCatching null
+            if (sawFormat || chunkSize < 16L) return null
             val format = ByteArray(16)
-            if (!source.readFully(format)) return@runCatching null
+            if (!source.readFully(format)) return null
             consumedBytes += format.size
             val formatTag = littleEndianUnsignedShort(format, 0)
             val channelCount = littleEndianUnsignedShort(format, 2)
@@ -2843,43 +2879,43 @@ internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWa
                 formatTag == 1 && bitsPerSample == 8 -> 1L
                 formatTag == 1 && bitsPerSample == 16 -> 2L
                 formatTag == 3 && bitsPerSample == 32 -> 4L
-                else -> return@runCatching null
+                else -> return null
             }
-            if (channelCount !in 1..2 || sampleRate !in 1L..Int.MAX_VALUE.toLong()) return@runCatching null
+            if (channelCount !in 1..2 || sampleRate !in 1L..Int.MAX_VALUE.toLong()) return null
             val expectedBlockAlign = channelCount.toLong() * sampleBytes
             val expectedByteRate = sampleRate * expectedBlockAlign
             if (declaredBlockAlign != expectedBlockAlign || declaredByteRate != expectedByteRate) {
-                return@runCatching null
+                return null
             }
             byteRate = declaredByteRate
             blockAlign = declaredBlockAlign
             sawFormat = true
             val remainder = chunkSize - format.size.toLong()
-            if (!source.discardFully(remainder, discardBuffer)) return@runCatching null
+            if (!source.discardFully(remainder, discardBuffer)) return null
             consumedBytes += remainder
         } else {
             if (chunkHeader.regionMatchesAscii(0, "data")) {
-                if (sawData) return@runCatching null
+                if (sawData) return null
                 dataSize = chunkSize
                 sawData = true
             }
-            if (!source.discardFully(chunkSize, discardBuffer)) return@runCatching null
+            if (!source.discardFully(chunkSize, discardBuffer)) return null
             consumedBytes += chunkSize
         }
         if ((chunkSize and 1L) != 0L) {
-            if (source.read() < 0) return@runCatching null
+            if (source.read() < 0) return null
             consumedBytes++
         }
     }
-    if (consumedBytes != expectedTotalBytes || source.read() >= 0) return@runCatching null
-    if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return@runCatching null
-    if (dataSize % blockAlign != 0L) return@runCatching null
-    val durationMillis = (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: return@runCatching null
-    RecoverableStagingWav(
+    if (consumedBytes != expectedTotalBytes || source.read() >= 0) return null
+    if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return null
+    if (dataSize % blockAlign != 0L) return null
+    val durationMillis = (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: return null
+    return RecoverableStagingWav(
         durationMillis = durationMillis,
         digest = CopyDigest(expectedTotalBytes, messageDigest.digest()),
     )
-}.getOrNull()
+}
 
 private fun InputStream.discardFully(byteCount: Long, buffer: ByteArray): Boolean {
     var remaining = byteCount
