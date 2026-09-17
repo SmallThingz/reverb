@@ -1050,6 +1050,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun settingsServiceBindingCallback_rejectsRetiredBindLifetime() {
+        assertTrue(settingsServiceBindingCallbackIsCurrent(4L, 4L, bindingOwned = true))
+        assertFalse(settingsServiceBindingCallbackIsCurrent(3L, 4L, bindingOwned = true))
+        assertFalse(settingsServiceBindingCallbackIsCurrent(4L, 4L, bindingOwned = false))
+    }
+
+    @Test
     fun recorderStateSnapshot_rejectsStaleCommandsAndPreviousServiceConnections() {
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 7L, 7L))
         assertTrue(shouldApplyRecorderStateSnapshot(3L, 3L, 8L, 7L))

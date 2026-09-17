@@ -347,7 +347,10 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun readIncidents(context: Context): List<RecordingIncident> {
         val appContext = context.applicationContext
-        resolvePendingSessions(appContext)
+        // Application startup recovery is best-effort. Every history read is retried by the UI,
+        // so retry the complete prior-session recovery here too; otherwise one transient startup
+        // failure can leave an armed previous-process marker invisible until capture starts again.
+        recoverPriorSessionIfNeeded(appContext)
         return readHistory(historyFile(appContext))
     }
 

@@ -140,6 +140,12 @@ internal fun shouldInvalidateCachedOneShotFull(
 
 private val RETENTION_MODE_OPTIONS = listOf(RetentionMode.TIME, RetentionMode.SIZE)
 
+internal fun settingsServiceBindingCallbackIsCurrent(
+    callbackGeneration: Long,
+    currentGeneration: Long,
+    bindingOwned: Boolean,
+): Boolean = bindingOwned && callbackGeneration == currentGeneration
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -709,33 +715,69 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
     }
 
-    val connection = remember {
-        object : android.content.ServiceConnection {
-            override fun onServiceConnected(className: ComponentName, binder: IBinder) {
-                val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
-                    ?: run {
-                        service = null
-                        return
-                    }
-                service = typedBinder.service
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val serviceBindingGeneration = remember { longArrayOf(0L) }
+    DisposableEffect(active, lifecycleOwner) {
+        var boundConnection: android.content.ServiceConnection? = null
+
+        fun unbindCurrentConnection() {
+            val current = boundConnection ?: return
+            boundConnection = null
+            serviceBindingGeneration[0]++
+            service = null
+            runCatching { context.unbindService(current) }
+        }
+
+        fun bindIfNeeded() {
+            if (!active ||
+                boundConnection != null ||
+                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            ) return
+
+            val bindingGeneration = ++serviceBindingGeneration[0]
+            val candidate = object : android.content.ServiceConnection {
+                private fun isCurrent(): Boolean = settingsServiceBindingCallbackIsCurrent(
+                    callbackGeneration = bindingGeneration,
+                    currentGeneration = serviceBindingGeneration[0],
+                    bindingOwned = boundConnection === this,
+                )
+
+                override fun onServiceConnected(className: ComponentName, binder: IBinder) {
+                    if (!isCurrent()) return
+                    service = (binder as? ReverbService.BackgroundRecorderBinder)?.service
+                }
+
+                override fun onServiceDisconnected(arg0: ComponentName) {
+                    if (!isCurrent()) return
+                    service = null
+                }
             }
-            override fun onServiceDisconnected(arg0: ComponentName) {
+            boundConnection = candidate
+            val bound = runCatching {
+                context.bindService(Intent(context, ReverbService::class.java), candidate, 0)
+            }.getOrDefault(false)
+            if (!bound && boundConnection === candidate) {
+                boundConnection = null
+                serviceBindingGeneration[0]++
                 service = null
             }
         }
-    }
 
-    DisposableEffect(Unit) {
-        val intent = Intent(context, ReverbService::class.java)
-        val bound = context.bindService(intent, connection, 0)
-        onDispose {
-            if (bound) {
-                context.unbindService(connection)
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> bindIfNeeded()
+                Lifecycle.Event.ON_STOP -> unbindCurrentConnection()
+                else -> Unit
             }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        bindIfNeeded()
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            unbindCurrentConnection()
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         // The initial value was read above during composition. Ignore LifecycleRegistry's
         // synchronous catch-up ON_RESUME and refresh only on later real resumes.
