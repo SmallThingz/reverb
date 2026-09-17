@@ -991,6 +991,48 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun clearBufferCommand_isBoundToConfirmedCaptureGenerationAndInactiveTarget() {
+        val looping = ReverbService.BufferSlot.LOOPING
+        val oneShot = ReverbService.BufferSlot.ONE_SHOT
+        assertTrue(
+            clearBufferCommandMayExecute(
+                requestedBuffer = looping,
+                activeBuffer = oneShot,
+                listeningIntentEnabled = true,
+                acceptedGeneration = 7L,
+                currentGeneration = 7L,
+            ),
+        )
+        assertTrue(
+            clearBufferCommandMayExecute(
+                requestedBuffer = looping,
+                activeBuffer = looping,
+                listeningIntentEnabled = false,
+                acceptedGeneration = 7L,
+                currentGeneration = 7L,
+            ),
+        )
+        assertFalse(
+            clearBufferCommandMayExecute(
+                requestedBuffer = looping,
+                activeBuffer = looping,
+                listeningIntentEnabled = true,
+                acceptedGeneration = 7L,
+                currentGeneration = 7L,
+            ),
+        )
+        assertFalse(
+            clearBufferCommandMayExecute(
+                requestedBuffer = looping,
+                activeBuffer = oneShot,
+                listeningIntentEnabled = true,
+                acceptedGeneration = 7L,
+                currentGeneration = 8L,
+            ),
+        )
+    }
+
+    @Test
     fun committedSettingsReloadIsRejectedOnceServiceTeardownOwnsLifetime() {
         assertTrue(serviceCommandMayQueue(serviceDestroying = false))
         assertFalse(serviceCommandMayQueue(serviceDestroying = true))

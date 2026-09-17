@@ -2660,7 +2660,33 @@ class ReverbService : Service() {
             // this post succeeds before teardown flips serviceDestroying, MessageQueue ordering
             // puts Clear ahead of the later terminal store-close task. Otherwise reject it.
             if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
+            val acceptedGeneration = listeningCommandGeneration.get()
+            if (!clearBufferCommandMayExecute(
+                    requestedBuffer = bufferSlot,
+                    activeBuffer = activeBufferSlot,
+                    listeningIntentEnabled = isListeningEnabled(),
+                    acceptedGeneration = acceptedGeneration,
+                    currentGeneration = acceptedGeneration,
+                )
+            ) return@synchronized false
             audioHandler.post {
+                // A confirmation can stay open while One-shot fills and automatically hands
+                // capture to this buffer. Revalidate on the serialized audio thread before the
+                // destructive clear: commands accepted against an older capture generation or a
+                // buffer that has since become the durable capture target must fail closed.
+                val stillOwnsConfirmedState = synchronized(listeningIntentLock) {
+                    clearBufferCommandMayExecute(
+                        requestedBuffer = bufferSlot,
+                        activeBuffer = activeBufferSlot,
+                        listeningIntentEnabled = isListeningEnabled(),
+                        acceptedGeneration = acceptedGeneration,
+                        currentGeneration = listeningCommandGeneration.get(),
+                    )
+                }
+                if (!stillOwnsConfirmedState) {
+                    if (!serviceDestroying) reportError(getString(R.string.recorder_state_persist_failed))
+                    return@post
+                }
                 var cleared = false
                 try {
                     chunkStore(bufferSlot).clear()
@@ -3499,6 +3525,15 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceCommandMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun clearBufferCommandMayExecute(
+    requestedBuffer: ReverbService.BufferSlot,
+    activeBuffer: ReverbService.BufferSlot,
+    listeningIntentEnabled: Boolean,
+    acceptedGeneration: Long,
+    currentGeneration: Long,
+): Boolean = acceptedGeneration == currentGeneration &&
+    !(listeningIntentEnabled && activeBuffer == requestedBuffer)
 
 internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
