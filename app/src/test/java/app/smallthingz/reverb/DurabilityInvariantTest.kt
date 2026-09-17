@@ -1351,6 +1351,36 @@ class DurabilityInvariantTest {
             providerIdentity = providerIdentity,
         )
         val providerFingerprint = StableOutputFingerprint(digest, null, providerIdentity)
+        val providerPublished = providerFingerprint.copy(
+            providerIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:4:8",
+        )
+        assertTrue(verifiedProviderPublicationMatches(providerFingerprint, providerPublished))
+        assertFalse(
+            verifiedProviderPublicationMatches(
+                providerFingerprint,
+                providerPublished.copy(providerIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:other:4:8"),
+            ),
+        )
+        assertFalse(
+            verifiedProviderPublicationMatches(
+                providerFingerprint,
+                providerPublished.copy(digest = CopyDigest(4L, ByteArray(32) { 0x02 })),
+            ),
+        )
+        val reboundProvider = outputCleanupFingerprintForTarget(
+            RecordingOutputTarget(
+                id = providerRecord.id,
+                displayName = "clip.wav",
+                mimeType = "audio/wav",
+                storageType = RecordingStorageType.MEDIASTORE,
+                directoryId = MEDIA_STORE_DIRECTORY_ID,
+                startedAtMillis = 1L,
+                publishedIdentity = requireNotNull(providerPublished.providerIdentity),
+            ),
+            providerFingerprint,
+        )
+        assertEquals(providerPublished.providerIdentity, reboundProvider.providerIdentity)
+        assertEquals(null, reboundProvider.fileKey)
         assertTrue(verifiedExportStagingRecordMatches(providerRecord, providerFingerprint))
         assertFalse(
             verifiedExportStagingRecordMatches(
@@ -1400,33 +1430,48 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun pendingOutputCleanup_expectedDigestMustMatchCopiedBytes() {
+    fun pendingOutputCleanup_requiresTheOriginallyVerifiedObject() {
         val digest = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val changed = CopyDigest(4L, byteArrayOf(1, 2, 3, 5))
+        val fileKey = "stat:1:2:100:5:77"
         val record = PendingOutputCleanupRecord(
             storageType = RecordingStorageType.FILE,
             id = "recordings/copied.wav",
             byteCount = digest.byteCount,
             sha256Hex = digest.sha256.toHexString(),
-            fileKey = "stat:1:2:100:5:77",
+            fileKey = fileKey,
         )
+        val verified = StableOutputFingerprint(digest, fileKey, null)
 
         assertTrue(copyDigestMatches(digest, same))
         assertFalse(copyDigestMatches(digest, changed))
-        assertTrue(pendingOutputCleanupRecordMatchesDigest(record, digest))
-        assertFalse(pendingOutputCleanupRecordMatchesDigest(record, CopyDigest(5L, digest.sha256)))
+        assertTrue(pendingOutputCleanupRecordMatchesFingerprint(record, RecordingStorageType.FILE, verified))
+        assertFalse(
+            pendingOutputCleanupRecordMatchesFingerprint(
+                record,
+                RecordingStorageType.FILE,
+                verified.copy(fileKey = "stat:1:3:100:5:77"),
+            ),
+        )
+        assertFalse(
+            pendingOutputCleanupRecordMatchesFingerprint(
+                record.copy(fileKey = null),
+                RecordingStorageType.FILE,
+                verified,
+            ),
+        )
     }
 
     @Test
-    fun completedCopy_sourceChangePreservesVerifiedBytesInsteadOfAuthorizingCleanup() {
+    fun completedCopy_sourceChangeOrUnavailabilityPreservesVerifiedBytes() {
         val copied = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val changed = CopyDigest(4L, byteArrayOf(1, 2, 3, 5))
 
-        assertFalse(completedCopySourceChanged(copied, same))
-        assertFalse(completedCopySourceChanged(copied, null))
-        assertTrue(completedCopySourceChanged(copied, changed))
+        assertFalse(completedCopySourcePreservationRequired(copied, same))
+        assertTrue(completedCopySourcePreservationRequired(copied, null))
+        assertTrue(completedCopySourcePreservationRequired(copied, changed))
     }
 
     @Test

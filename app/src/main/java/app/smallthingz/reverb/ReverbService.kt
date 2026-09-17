@@ -1375,7 +1375,7 @@ class ReverbService : Service() {
                     exportToken.started.set(true)
                     var outTarget: RecordingOutputTarget? = null
                     var verifiedComplete = false
-                    var cleanupDigest: CopyDigest? = null
+                    var cleanupFingerprint: StableOutputFingerprint? = null
                     var committed = false
                     try {
                         ensureExportNotCancelled(exportToken)
@@ -1434,7 +1434,7 @@ class ReverbService : Service() {
                             payloadBytes = writer.totalSampleBytesWritten,
                             expectedPayloadSha256 = writer.payloadSha256,
                         )
-                        cleanupDigest = verifiedOutput.digest
+                        cleanupFingerprint = verifiedOutput
                         val recoveryMarkerPersisted =
                             putVerifiedExportStaging(this@ReverbService, target, verifiedOutput)
                         requireVerifiedOutputRecoveryMarker(recoveryMarkerPersisted, target.id)
@@ -1445,6 +1445,7 @@ class ReverbService : Service() {
                         }
                         val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
                         outTarget = finalizedTarget
+                        cleanupFingerprint = outputCleanupFingerprintForTarget(finalizedTarget, verifiedOutput)
                         if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId)) {
                             Log.w(TAG, "Unable to clear verified export recovery marker: $stagingId")
                         }
@@ -1502,7 +1503,7 @@ class ReverbService : Service() {
                                     preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
                                 )
                             ) {
-                                deleteOutputTarget(outTarget, cleanupDigest)
+                                deleteOutputTarget(outTarget, cleanupFingerprint)
                             }
                         } finally {
                             clearExportState(exportToken)
@@ -1694,14 +1695,14 @@ class ReverbService : Service() {
 
     private fun deleteOutputTarget(
         target: RecordingOutputTarget?,
-        expectedDigest: CopyDigest?,
+        expectedFingerprint: StableOutputFingerprint?,
     ) {
         if (target == null) return
-        if (expectedDigest == null) {
+        if (expectedFingerprint == null) {
             Log.w(TAG, "Retaining unverified export staging because cleanup identity is uncertain: ${target.id}")
             return
         }
-        if (!suppressAndDeleteOutputTarget(this, target, expectedDigest = expectedDigest)) {
+        if (!suppressAndDeleteOutputTarget(this, target, expectedFingerprint = expectedFingerprint)) {
             Log.w(TAG, "Deferred cleanup for export target ${target.id}")
         }
     }

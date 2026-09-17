@@ -236,6 +236,32 @@ internal fun verifiedExportStagingRecordMatches(
     }
 }
 
+internal fun verifiedProviderPublicationMatches(
+    expected: StableOutputFingerprint,
+    published: StableOutputFingerprint,
+): Boolean = copyDigestMatches(expected.digest, published.digest) &&
+    sameProviderObjectAcrossMutation(expected.providerIdentity, published.providerIdentity)
+
+internal fun outputCleanupFingerprintForTarget(
+    target: RecordingOutputTarget,
+    verifiedFingerprint: StableOutputFingerprint,
+): StableOutputFingerprint {
+    val publishedIdentity = target.publishedIdentity.takeIf { it.isNotBlank() }
+        ?: return verifiedFingerprint
+    return when (target.storageType) {
+        RecordingStorageType.FILE -> verifiedFingerprint.copy(
+            fileKey = publishedIdentity,
+            providerIdentity = null,
+        )
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> verifiedFingerprint.copy(
+            fileKey = null,
+            providerIdentity = publishedIdentity,
+        )
+    }
+}
+
 internal fun stableOutputFingerprintMatches(
     storageType: RecordingStorageType,
     expected: StableOutputFingerprint,
@@ -347,19 +373,10 @@ internal inline fun runOutputCleanupFailClosed(block: () -> Boolean): Boolean =
 internal fun suppressAndDeleteOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
-    expectedDigest: CopyDigest,
+    expectedFingerprint: StableOutputFingerprint,
 ): Boolean = runOutputCleanupFailClosed {
     val id = target.id
-    // Cleanup revokes crash-recovery authority before any destructive attempt. If that
-    // synchronous preference update cannot be made durable, fail closed and keep the bytes.
-    if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
     val existing = pendingOutputCleanupRecord(context, id)
-    if (existing != null) {
-        if (!pendingOutputCleanupRecordMatchesDigest(existing, expectedDigest)) return false
-        val cleaned = deletePendingOutputAsset(context, existing)
-        if (cleaned) removePendingOutputCleanup(context, id)
-        return cleaned
-    }
     when (outputCleanupAssetState(context, target.storageType, id)) {
         OutputCleanupAssetState.MISSING -> {
             if (target.storageType == RecordingStorageType.FILE &&
@@ -367,23 +384,43 @@ internal fun suppressAndDeleteOutputTarget(
             ) {
                 return false
             }
+            // Positive absence needs no destructive authority. Revoke any recovery/suppression
+            // metadata only after that absence is proven durable.
+            if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
             removePendingOutputCleanup(context, id)
             return true
         }
         OutputCleanupAssetState.UNAVAILABLE -> return false
         OutputCleanupAssetState.PRESENT -> Unit
     }
-    val fingerprint = readStableOutputFingerprint(context, target.storageType, id) ?: return false
-    if (!copyDigestMatches(expectedDigest, fingerprint.digest)) return false
-    val record = PendingOutputCleanupRecord(
-        storageType = target.storageType,
-        id = id,
-        byteCount = fingerprint.digest.byteCount,
-        sha256Hex = fingerprint.digest.sha256.toHexString(),
-        fileKey = fingerprint.fileKey,
-        providerIdentity = fingerprint.providerIdentity,
-    )
-    if (!putPendingOutputCleanup(context, record)) return false
+
+    val current = readStableOutputFingerprint(context, target.storageType, id) ?: return false
+    if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) return false
+
+    val record = if (existing != null) {
+        existing
+    } else {
+        val newRecord = PendingOutputCleanupRecord(
+            storageType = target.storageType,
+            id = id,
+            byteCount = current.digest.byteCount,
+            sha256Hex = current.digest.sha256.toHexString(),
+            fileKey = current.fileKey,
+            providerIdentity = current.providerIdentity,
+        )
+        // Install suppression before revoking recovery authority. A crash between these two
+        // commits therefore keeps the exact object hidden rather than making it visible.
+        if (!putPendingOutputCleanup(context, newRecord)) return false
+        newRecord
+    }
+
+    if (!pendingOutputCleanupRecordMatchesFingerprint(record, target.storageType, expectedFingerprint)) {
+        return false
+    }
+    // The cleanup journal now owns the exact verified object. Recovery authority may be revoked;
+    // if that commit fails, leave both records in place and keep the bytes.
+    if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
+
     val cleaned = deletePendingOutputAsset(context, record)
     if (cleaned) removePendingOutputCleanup(context, id)
     cleaned
@@ -392,11 +429,17 @@ internal fun suppressAndDeleteOutputTarget(
 internal fun copyDigestMatches(expected: CopyDigest, actual: CopyDigest): Boolean =
     expected.byteCount == actual.byteCount && expected.sha256.contentEquals(actual.sha256)
 
-internal fun pendingOutputCleanupRecordMatchesDigest(
+internal fun pendingOutputCleanupRecordMatchesFingerprint(
     record: PendingOutputCleanupRecord,
-    digest: CopyDigest,
-): Boolean = record.byteCount == digest.byteCount &&
-    record.sha256Hex.equals(digest.sha256.toHexString(), ignoreCase = true)
+    storageType: RecordingStorageType,
+    fingerprint: StableOutputFingerprint,
+): Boolean = record.storageType == storageType && pendingOutputCleanupMatches(
+    record = record,
+    byteCount = fingerprint.digest.byteCount,
+    sha256Hex = fingerprint.digest.sha256.toHexString(),
+    fileKey = fingerprint.fileKey,
+    providerIdentity = fingerprint.providerIdentity,
+)
 
 internal fun retryPendingOutputCleanup(context: Context) {
     val rawEntries = synchronized(outputCleanupJournalLock) { pendingOutputCleanupEntriesLocked(context) }

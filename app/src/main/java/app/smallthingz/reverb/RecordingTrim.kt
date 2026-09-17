@@ -60,7 +60,7 @@ private fun writeTrimmedRecordingCopy(
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
     var target: RecordingOutputTarget? = null
     var verifiedComplete = false
-    var cleanupDigest: CopyDigest? = null
+    var cleanupFingerprint: StableOutputFingerprint? = null
     try {
         return withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
             val layout = readWavPcmLayout(source)
@@ -108,7 +108,7 @@ private fun writeTrimmedRecordingCopy(
                 payloadBytes = writer.totalSampleBytesWritten,
                 expectedPayloadSha256 = writer.payloadSha256,
             )
-            cleanupDigest = verifiedOutput.digest
+            cleanupFingerprint = verifiedOutput
             // The source bytes are complete now, but the target is still hidden. Provider-backed
             // recordings can change while their descriptor remains open, so revalidate the
             // selected source before granting recovery authority or publishing a final name.
@@ -139,7 +139,7 @@ private fun writeTrimmedRecordingCopy(
             )
         }
     } catch (error: Exception) {
-        if (!verifiedComplete) cleanupTrimTarget(context, target, cleanupDigest)
+        if (!verifiedComplete) cleanupTrimTarget(context, target, cleanupFingerprint)
         throw error
     }
 }
@@ -175,14 +175,14 @@ private fun copyFrameRange(
 private fun cleanupTrimTarget(
     context: Context,
     target: RecordingOutputTarget?,
-    expectedDigest: CopyDigest?,
+    expectedFingerprint: StableOutputFingerprint?,
 ) {
     val current = target ?: return
-    if (expectedDigest == null) {
+    if (expectedFingerprint == null) {
         Log.w(TRIM_TAG, "Retaining unverified trim staging because cleanup identity is uncertain: ${current.id}")
         return
     }
-    if (!suppressAndDeleteOutputTarget(context, current, expectedDigest = expectedDigest)) {
+    if (!suppressAndDeleteOutputTarget(context, current, expectedFingerprint = expectedFingerprint)) {
         Log.w(TRIM_TAG, "Deferred cleanup for failed trim ${current.displayName}")
     }
 }
