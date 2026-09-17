@@ -726,7 +726,18 @@ private fun finalizeFileOutputTarget(
     if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
         throw IOException("Output staging file changed after verification")
     }
-    val published = publishStagedFileResult(source, target.displayName, expectedFingerprint)
+    val published = publishStagedFileResult(
+        source = source,
+        finalDisplayName = target.displayName,
+        expectedFingerprint = expectedFingerprint,
+        onUnexpectedPublishedFile = { unexpected, digest ->
+            suppressFileOutputWithoutDeletion(
+                context = context,
+                id = unexpected.absolutePath,
+                digest = digest,
+            )
+        },
+    )
     val destination = published.file
     if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
         MediaScannerConnection.scanFile(context, arrayOf(destination.absolutePath), arrayOf(target.mimeType), null)
@@ -750,13 +761,20 @@ internal fun publishStagedFile(
     source: File,
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
-): File = publishStagedFileResult(source, finalDisplayName, expectedFingerprint).file
+    onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
+): File = publishStagedFileResult(
+    source = source,
+    finalDisplayName = finalDisplayName,
+    expectedFingerprint = expectedFingerprint,
+    onUnexpectedPublishedFile = onUnexpectedPublishedFile,
+).file
 
 @Throws(IOException::class)
 private fun publishStagedFileResult(
     source: File,
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
+    onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
 ): PublishedStagedFile {
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
     if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
@@ -772,7 +790,22 @@ private fun publishStagedFileResult(
             val publishedIdentity = if (expectedFingerprint != null) {
                 val published = readStableFileOutputFingerprint(destination)
                 if (published == null || !verifiedFilePublishMatches(expectedFingerprint, published)) {
-                    preserveUnexpectedPublishedFile(source, destination, finalDisplayName)
+                    val suppressionDigest = published?.digest ?: runCatching {
+                        FileInputStream(destination).use(::sha256)
+                    }.getOrNull()
+                    val cleanupSuppressed = suppressionDigest != null && onUnexpectedPublishedFile != null &&
+                        runCatching { onUnexpectedPublishedFile(destination, suppressionDigest) }.getOrDefault(false)
+                    val hiddenStateDurable = preserveUnexpectedPublishedFile(
+                        source = source,
+                        moved = destination,
+                        finalDisplayName = finalDisplayName,
+                    )
+                    if (!cleanupSuppressed && !hiddenStateDurable) {
+                        Log.e(
+                            TAG,
+                            "Unexpected published file could not be durably suppressed or hidden: $destination",
+                        )
+                    }
                     throw IOException("Published file was not the verified staging object")
                 }
                 published.fileKey?.takeIf { it.isNotBlank() }
@@ -798,13 +831,14 @@ internal fun verifiedFilePublishMatches(
         sameFileObjectAcrossRename(expectedIdentity, publishedIdentity)
 }
 
-private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisplayName: String) {
+private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisplayName: String): Boolean {
+    val parent = moved.parentFile ?: return false
     try {
         Files.move(moved.toPath(), source.toPath())
-        source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
-            runCatching { forceRecordingDirectoryDurable(parent) }
-        }
-        return
+        return runCatching {
+            forceRecordingDirectoryDurable(parent)
+            true
+        }.getOrDefault(false)
     } catch (_: FileAlreadyExistsException) {
         // A new object owns the original staging path. Keep the moved object hidden too.
     } catch (_: IOException) {
@@ -813,20 +847,22 @@ private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisp
         // Fall through to a hidden COPY staging name.
     }
 
-    val parent = moved.parentFile ?: return
     for (index in 0 until 10_000) {
         val token = "publish-race-${UUID.randomUUID()}-$index"
         val hidden = File(parent, stagingOutputName(finalDisplayName, token, kind = StagingOutputKind.COPY))
         try {
             Files.move(moved.toPath(), hidden.toPath())
-            runCatching { forceRecordingDirectoryDurable(parent) }
-            return
+            return runCatching {
+                forceRecordingDirectoryDurable(parent)
+                true
+            }.getOrDefault(false)
         } catch (_: FileAlreadyExistsException) {
             continue
         } catch (_: Exception) {
-            return
+            return false
         }
     }
+    return false
 }
 
 @Throws(IOException::class)

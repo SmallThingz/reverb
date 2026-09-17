@@ -951,10 +951,34 @@ class DurabilityInvariantTest {
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
             )
 
+            var cleanupRecord: PendingOutputCleanupRecord? = null
             assertThrows(IOException::class.java) {
-                publishStagedFile(staged, "clip.wav", expected)
+                publishStagedFile(
+                    source = staged,
+                    finalDisplayName = "clip.wav",
+                    expectedFingerprint = expected,
+                    onUnexpectedPublishedFile = { published, digest ->
+                        suppressionOnlyFileOutputRecord(published.absolutePath, digest)
+                            ?.also { cleanupRecord = it } != null
+                    },
+                )
             }
 
+            val protected = requireNotNull(cleanupRecord)
+            assertEquals(RecordingStorageType.FILE, protected.storageType)
+            assertEquals(File(directory, "clip.wav").absolutePath, protected.id)
+            assertEquals(replacementBytes.size.toLong(), protected.byteCount)
+            assertEquals(sha256(ByteArrayInputStream(replacementBytes)).sha256.toHexString(), protected.sha256Hex)
+            assertEquals(null, protected.fileKey)
+            assertEquals(
+                PendingOutputCleanupMatch.UNPROVEN,
+                classifyPendingOutputCleanup(
+                    protected,
+                    protected.byteCount,
+                    protected.sha256Hex,
+                    fileKey = "stat:different-object",
+                ),
+            )
             assertFalse(File(directory, "clip.wav").exists())
             assertTrue(staged.isFile)
             assertArrayEquals(replacementBytes, staged.readBytes())

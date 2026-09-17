@@ -184,6 +184,33 @@ internal fun pendingOutputCleanupIds(context: Context): Set<String> = synchroniz
     pendingOutputCleanupEntriesLocked(context).mapNotNullTo(mutableSetOf(), ::pendingOutputCleanupSuppressedId)
 }
 
+internal fun suppressionOnlyFileOutputRecord(
+    id: String,
+    digest: CopyDigest,
+): PendingOutputCleanupRecord? {
+    if (id.isBlank() || digest.byteCount <= 0L) return null
+    return PendingOutputCleanupRecord(
+        storageType = RecordingStorageType.FILE,
+        id = id,
+        byteCount = digest.byteCount,
+        sha256Hex = digest.sha256.toHexString(),
+        fileKey = null,
+        providerIdentity = null,
+    )
+}
+
+internal fun suppressFileOutputWithoutDeletion(
+    context: Context,
+    id: String,
+    digest: CopyDigest,
+): Boolean = runOutputCleanupFailClosed {
+    val record = suppressionOnlyFileOutputRecord(id, digest)
+        ?: return@runOutputCleanupFailClosed false
+    // The current bytes are enough to keep this failed publication hidden, but the
+    // unexpected object identity was never verified and therefore gains no delete authority.
+    putPendingOutputCleanup(context, record)
+}
+
 internal fun suppressionOnlyProviderOutputRecord(
     storageType: RecordingStorageType,
     id: String,
