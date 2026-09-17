@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -179,7 +180,7 @@ internal fun settingsSnapshotHasUnsavedChanges(
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
-internal suspend fun runSettingsPersistenceAttempt(
+internal suspend fun runSettingsDurableIoAttempt(
     block: suspend () -> Boolean,
 ): Boolean = try {
     block()
@@ -188,6 +189,12 @@ internal suspend fun runSettingsPersistenceAttempt(
 } catch (_: Exception) {
     false
 }
+
+private const val SETTINGS_HYDRATION_RETRY_INITIAL_MILLIS = 500L
+private const val SETTINGS_HYDRATION_RETRY_MAX_MILLIS = 30_000L
+
+internal fun nextSettingsHydrationRetryDelayMillis(currentMillis: Long): Long =
+    (currentMillis * 2L).coerceAtMost(SETTINGS_HYDRATION_RETRY_MAX_MILLIS)
 
 internal fun settingsShouldRehydrate(
     active: Boolean,
@@ -674,7 +681,7 @@ fun SettingsScreen(
         // Once the recovery/preferences transaction starts, a configuration change or Activity
         // disposal may cancel only the UI tail. A successful durable commit must still reach the
         // surviving recorder (or stopped tile fallback) before this section can terminate.
-        val persisted = runSettingsPersistenceAttempt {
+        val persisted = runSettingsDurableIoAttempt {
             withContext(NonCancellable) {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
@@ -993,7 +1000,25 @@ fun SettingsScreen(
     }
     LaunchedEffect(active, settingsPersisting) {
         if (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
-            bindUiFromPreferences()
+            settingsInteractionReady = false
+            var retryDelayMillis = SETTINGS_HYDRATION_RETRY_INITIAL_MILLIS
+            var failureReported = false
+            while (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
+                val hydrated = runSettingsDurableIoAttempt {
+                    bindUiFromPreferences()
+                    true
+                }
+                if (hydrated) break
+                if (!failureReported) {
+                    AppFeedbackCenter.post(
+                        resources.getString(R.string.recorder_state_persist_failed),
+                        FeedbackTone.ERROR,
+                    )
+                    failureReported = true
+                }
+                delay(retryDelayMillis)
+                retryDelayMillis = nextSettingsHydrationRetryDelayMillis(retryDelayMillis)
+            }
         }
     }
     if (!settingsHydrated) {
