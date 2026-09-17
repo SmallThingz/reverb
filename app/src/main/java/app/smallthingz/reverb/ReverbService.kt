@@ -1982,11 +1982,10 @@ class ReverbService : Service() {
                 if (oneShotFull) {
                     syncOneShotFullQuickTileOnAudioThread(refreshTiles = false)
                     if (loopingBufferEnabled) {
-                        if (activeBufferSlot != BufferSlot.LOOPING) {
-                            switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
-                        }
+                        val alreadyOnLooping = activeBufferSlot == BufferSlot.LOOPING
+                        val handoffAccepted = !alreadyOnLooping && switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
                         val overflow = count - writtenToOneShot
-                        if (overflow > 0) {
+                        if (overflow > 0 && oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted)) {
                             loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
                         }
                     } else {
@@ -3571,6 +3570,11 @@ internal fun captureReadShouldReschedule(
     recorderListening: Boolean,
     recordStillOwned: Boolean,
 ): Boolean = commandGenerationUnchanged && !serviceDestroying && recorderListening && recordStillOwned
+
+internal fun oneShotOverflowMayUseLoopingFallback(
+    alreadyOnLooping: Boolean,
+    handoffAccepted: Boolean,
+): Boolean = alreadyOnLooping || handoffAccepted
 
 internal fun captureReadMayCommit(
     readContinuityGeneration: Long,

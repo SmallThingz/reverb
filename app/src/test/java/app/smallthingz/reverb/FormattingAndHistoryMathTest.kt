@@ -1129,6 +1129,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun oneShotOverflow_neverCrossesFailedFallbackHandoffBoundary() {
+        assertTrue(oneShotOverflowMayUseLoopingFallback(alreadyOnLooping = true, handoffAccepted = false))
+        assertTrue(oneShotOverflowMayUseLoopingFallback(alreadyOnLooping = false, handoffAccepted = true))
+        assertFalse(oneShotOverflowMayUseLoopingFallback(alreadyOnLooping = false, handoffAccepted = false))
+    }
+
+    @Test
     fun inFlightCaptureReadSurvivesOnlyContinuousSessionChanges() {
         assertTrue(
             captureReadMayCommit(
