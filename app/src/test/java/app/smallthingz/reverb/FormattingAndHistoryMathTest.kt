@@ -11,6 +11,18 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun feedbackQueue_isBoundedOrderedAndStaleAcknowledgeSafe() {
+        val first = FeedbackEvent(1L, "first", FeedbackTone.INFO)
+        val second = FeedbackEvent(2L, "second", FeedbackTone.ERROR)
+        val third = FeedbackEvent(3L, "third", FeedbackTone.SUCCESS)
+
+        val bounded = enqueueFeedbackEvent(listOf(first, second), third, maxEvents = 2)
+        assertEquals(listOf(second, third), bounded)
+        assertEquals(bounded, acknowledgeFeedbackEvent(bounded, third.id))
+        assertEquals(listOf(third), acknowledgeFeedbackEvent(bounded, second.id))
+    }
+
+    @Test
     fun libraryEmptyState_waitsForAuthoritativeFirstLoad() {
         assertFalse(libraryEmptyStateVisible(hasLoaded = false, listEmpty = true, isRefreshing = false))
         assertFalse(libraryEmptyStateVisible(hasLoaded = true, listEmpty = true, isRefreshing = true))
