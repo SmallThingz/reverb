@@ -2727,6 +2727,17 @@ class ReverbService : Service() {
             if (!hasActiveExport()) requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
+        val debugActionRunsStopped = debugCommandRunsWithoutListening(
+            action = intent?.action,
+            debuggable = isDebuggableBuild(),
+        )
+        if (debugActionRunsStopped) {
+            // Debug QA commands are intentionally usable against a stopped recorder. They queue
+            // behind onCreate's audio-thread initialization and retain this started lifetime until
+            // the command starts any export work or reaches terminal.
+            handleDebugCommand(intent)
+            return START_NOT_STICKY
+        }
         if (isDebuggableBuild() && intent?.action == ACTION_DEBUG_ENABLE_LISTENING && !isListeningEnabled()) {
             setListeningEnabled(true)
         }
@@ -3072,6 +3083,12 @@ class ReverbService : Service() {
                 Log.w(TAG, "Debug action failed: $action", error)
                 reportPersistentStoreFailure("debug action $action", error)
                 runCatching { writeDebugReport("debug-action:error:${error.javaClass.simpleName}") }
+            } finally {
+                if (action != ACTION_DEBUG_ENABLE_LISTENING && action != ACTION_DEBUG_DISABLE_LISTENING) {
+                    mainHandler.post {
+                        if (!isListeningEnabled()) requestServiceStopWhenExportIdle()
+                    }
+                }
             }
         }
     }
@@ -3461,6 +3478,13 @@ internal fun automaticCaptureStopDisposition(
     !incidentStopPersisted -> AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE
     else -> AutomaticCaptureStopDisposition.KNOWN_STOP
 }
+
+internal fun debugCommandRunsWithoutListening(
+    action: String?,
+    debuggable: Boolean,
+): Boolean = debuggable &&
+    action?.startsWith(ReverbService.DEBUG_ACTION_PREFIX) == true &&
+    action != ReverbService.ACTION_DEBUG_ENABLE_LISTENING
 
 internal fun captureSlotNeedsPersistence(
     previousStoredSlot: ReverbService.BufferSlot?,
