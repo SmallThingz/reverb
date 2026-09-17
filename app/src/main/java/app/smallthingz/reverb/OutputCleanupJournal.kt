@@ -348,15 +348,17 @@ internal fun putVerifiedExportStaging(
     )
     return synchronized(verifiedExportStagingLock) {
         val current = verifiedExportStagingEntriesLocked(context)
-        val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            decodeVerifiedExportStagingRecord(raw)?.let { record ->
-                record.storageType == target.storageType && record.id == target.id
-            } == true
-        }
-        updated += encodeVerifiedExportStagingRecord(record)
-        writeVerifiedExportStagingEntriesLocked(context, updated)
+        writeVerifiedExportStagingEntriesLocked(
+            context,
+            verifiedExportStagingEntriesAfterAppend(current, encodeVerifiedExportStagingRecord(record)),
+        )
     }
 }
+
+internal fun verifiedExportStagingEntriesAfterAppend(
+    entries: Set<String>,
+    raw: String,
+): Set<String> = entries + raw
 
 internal fun verifiedExportStagingEntriesAfterFingerprintRemoval(
     entries: Set<String>,
@@ -401,13 +403,24 @@ internal fun verifiedExportStagingFingerprint(
     storageType: RecordingStorageType,
     id: String,
 ): StableOutputFingerprint? {
-    val record = synchronized(verifiedExportStagingLock) {
-        verifiedExportStagingEntriesLocked(context).firstNotNullOfOrNull { raw ->
-            decodeVerifiedExportStagingRecord(raw)?.takeIf { it.id == id && it.storageType == storageType }
-        }
-    } ?: return null
+    val rawEntries = synchronized(verifiedExportStagingLock) { verifiedExportStagingEntriesLocked(context) }
     val fingerprint = readStableOutputFingerprint(context, storageType, id) ?: return null
-    return fingerprint.takeIf { verifiedExportStagingRecordMatches(record, it) }
+    return fingerprint.takeIf {
+        verifiedExportStagingHasFingerprint(rawEntries, storageType, id, fingerprint)
+    }
+}
+
+internal fun verifiedExportStagingHasFingerprint(
+    entries: Set<String>,
+    storageType: RecordingStorageType,
+    id: String,
+    fingerprint: StableOutputFingerprint,
+): Boolean = entries.any { raw ->
+    decodeVerifiedExportStagingRecord(raw)?.let { record ->
+        record.storageType == storageType &&
+            record.id == id &&
+            verifiedExportStagingRecordMatches(record, fingerprint)
+    } == true
 }
 
 private fun verifiedExportStagingEntriesLocked(context: Context): Set<String> =
@@ -426,7 +439,13 @@ internal fun suppressAndDeleteOutputTarget(
     expectedFingerprint: StableOutputFingerprint,
 ): Boolean = runOutputCleanupFailClosed {
     val id = target.id
-    val existing = pendingOutputCleanupEntry(context, id)
+    val existingRawEntries = pendingOutputCleanupRawEntries(context, id)
+    var exactEntry = pendingOutputCleanupRawMatchingFingerprint(
+        entries = existingRawEntries,
+        id = id,
+        storageType = target.storageType,
+        expectedFingerprint = expectedFingerprint,
+    )?.let { raw -> PendingOutputCleanupEntry(raw, requireNotNull(decodePendingOutputCleanupRecord(raw))) }
     when (outputCleanupAssetState(context, target.storageType, id)) {
         OutputCleanupAssetState.MISSING -> {
             if (target.storageType == RecordingStorageType.FILE &&
@@ -437,7 +456,10 @@ internal fun suppressAndDeleteOutputTarget(
             // Positive absence needs no destructive authority. Revoke any recovery/suppression
             // metadata only after that absence is proven durable.
             if (!removeVerifiedExportStaging(context, target.storageType, id, expectedFingerprint)) return false
-            existing?.let { removePendingOutputCleanupEntry(context, it.raw) }
+            // Positive durable absence invalidates only the same-ID cleanup entries observed at
+            // the start of this operation. A newer concurrent failure may already have appended
+            // a fresh record for a newly reused path/URI, and must remain suppressed.
+            if (!removePendingOutputCleanupEntries(context, existingRawEntries)) return false
             return true
         }
         OutputCleanupAssetState.UNAVAILABLE -> return false
@@ -447,9 +469,7 @@ internal fun suppressAndDeleteOutputTarget(
     val current = readStableOutputFingerprint(context, target.storageType, id) ?: return false
     if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) return false
 
-    val entry = if (existing != null) {
-        existing
-    } else {
+    if (exactEntry == null) {
         val newRecord = PendingOutputCleanupRecord(
             storageType = target.storageType,
             id = id,
@@ -458,23 +478,20 @@ internal fun suppressAndDeleteOutputTarget(
             fileKey = current.fileKey,
             providerIdentity = current.providerIdentity,
         )
-        // Install suppression before revoking recovery authority. A crash between these two
-        // commits therefore keeps the exact object hidden rather than making it visible.
+        // Install this exact authority alongside any older same-ID records. Replacing them here
+        // lets a stale producer erase a newer failure record; replay removes obsolete records
+        // independently once current content/identity proves they are stale.
         if (!putPendingOutputCleanup(context, newRecord)) return false
-        PendingOutputCleanupEntry(encodePendingOutputCleanupRecord(newRecord), newRecord)
+        exactEntry = PendingOutputCleanupEntry(encodePendingOutputCleanupRecord(newRecord), newRecord)
     }
+    val entry = requireNotNull(exactEntry)
     val record = entry.record
-
-    if (!pendingOutputCleanupRecordMatchesFingerprint(record, target.storageType, expectedFingerprint)) {
-        return false
-    }
     // The cleanup journal now owns the exact verified object. Recovery authority may be revoked;
     // if that commit fails, leave both records in place and keep the bytes.
     if (!removeVerifiedExportStaging(context, target.storageType, id, expectedFingerprint)) return false
 
     val cleaned = deletePendingOutputAsset(context, record)
-    if (cleaned) removePendingOutputCleanupEntry(context, entry.raw)
-    cleaned
+    cleaned && removePendingOutputCleanupEntry(context, entry.raw)
 }
 
 internal fun copyDigestMatches(expected: CopyDigest, actual: CopyDigest): Boolean =
@@ -561,44 +578,71 @@ internal fun retryPendingOutputCleanup(context: Context) {
 private fun pendingOutputCleanupEntriesLocked(context: Context): Set<String> =
     getRecorderPreferences(context).requireDurableStringSet(PrefKey.PENDING_OUTPUT_CLEANUP)
 
-private fun pendingOutputCleanupEntry(context: Context, id: String): PendingOutputCleanupEntry? =
+internal fun pendingOutputCleanupRawEntriesForId(
+    entries: Set<String>,
+    id: String,
+): Set<String> = entries.filterTo(mutableSetOf()) { raw ->
+    pendingOutputCleanupSuppressedId(raw) == id
+}
+
+private fun pendingOutputCleanupRawEntries(context: Context, id: String): Set<String> =
     synchronized(outputCleanupJournalLock) {
-        pendingOutputCleanupEntriesLocked(context).firstNotNullOfOrNull { raw ->
-            decodePendingOutputCleanupRecord(raw)?.takeIf { it.id == id }?.let { record ->
-                PendingOutputCleanupEntry(raw, record)
-            }
-        }
+        pendingOutputCleanupRawEntriesForId(pendingOutputCleanupEntriesLocked(context), id)
     }
+
+internal fun pendingOutputCleanupRawMatchingFingerprint(
+    entries: Collection<String>,
+    id: String,
+    storageType: RecordingStorageType,
+    expectedFingerprint: StableOutputFingerprint,
+): String? = entries.firstOrNull { raw ->
+    decodePendingOutputCleanupRecord(raw)?.let { record ->
+        record.id == id && pendingOutputCleanupRecordMatchesFingerprint(
+            record, storageType, expectedFingerprint,
+        )
+    } == true
+}
+
+internal fun pendingOutputCleanupEntriesAfterAppend(
+    entries: Set<String>,
+    raw: String,
+): Set<String> = entries + raw
 
 private fun putPendingOutputCleanup(context: Context, record: PendingOutputCleanupRecord): Boolean =
     synchronized(outputCleanupJournalLock) {
         val current = pendingOutputCleanupEntriesLocked(context)
-        val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            pendingOutputCleanupSuppressedId(raw) == record.id
-        }
-        updated += encodePendingOutputCleanupRecord(record)
+        val raw = encodePendingOutputCleanupRecord(record)
         getRecorderPreferences(context).edit()
-            .putStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, updated)
+            .putStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, pendingOutputCleanupEntriesAfterAppend(current, raw))
             .commit()
     }
 
 // Cleanup replay snapshots journal entries before doing slow filesystem/provider work. A newer
 // failure may replace the same target ID while that work is in flight, so terminal cleanup may
 // remove only the exact raw entry it started from, never "whatever currently owns this ID".
+internal fun pendingOutputCleanupEntriesAfterExactRemovals(
+    entries: Set<String>,
+    expectedRaws: Set<String>,
+): Set<String> = if (expectedRaws.none { it in entries }) entries else entries - expectedRaws
+
 internal fun pendingOutputCleanupEntriesAfterExactRemoval(
     entries: Set<String>,
     expectedRaw: String,
-): Set<String> = if (expectedRaw in entries) entries - expectedRaw else entries
+): Set<String> = pendingOutputCleanupEntriesAfterExactRemovals(entries, setOf(expectedRaw))
+
+private fun removePendingOutputCleanupEntries(
+    context: Context,
+    expectedRaws: Set<String>,
+): Boolean = synchronized(outputCleanupJournalLock) {
+    if (expectedRaws.isEmpty()) return@synchronized true
+    val current = pendingOutputCleanupEntriesLocked(context)
+    val updated = pendingOutputCleanupEntriesAfterExactRemovals(current, expectedRaws)
+    if (updated.size == current.size) return@synchronized true
+    writePendingOutputCleanupEntriesLocked(context, updated)
+}
 
 private fun removePendingOutputCleanupEntry(context: Context, expectedRaw: String): Boolean =
-    synchronized(outputCleanupJournalLock) {
-        val current = pendingOutputCleanupEntriesLocked(context)
-        if (expectedRaw !in current) return@synchronized true
-        writePendingOutputCleanupEntriesLocked(
-            context,
-            pendingOutputCleanupEntriesAfterExactRemoval(current, expectedRaw),
-        )
-    }
+    removePendingOutputCleanupEntries(context, setOf(expectedRaw))
 
 private fun writePendingOutputCleanupEntriesLocked(context: Context, entries: Set<String>): Boolean {
     val editor = getRecorderPreferences(context).edit()
