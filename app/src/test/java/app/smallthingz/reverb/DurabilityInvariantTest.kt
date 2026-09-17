@@ -1902,6 +1902,12 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun exportCancellationDistinguishesUserCancelFromSystemFailure() {
+        assertEquals(ExportCancellationTerminal.CANCELLED, exportCancellationTerminal(reportFailure = false))
+        assertEquals(ExportCancellationTerminal.FAILED, exportCancellationTerminal(reportFailure = true))
+    }
+
+    @Test
     fun exportCancellationStopsAtVerifiedPublicationBoundary() {
         assertTrue(exportCancellationAllowed(publicationStarted = false, committed = false))
         assertFalse(exportCancellationAllowed(publicationStarted = true, committed = false))

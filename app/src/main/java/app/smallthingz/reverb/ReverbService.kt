@@ -1503,20 +1503,26 @@ class ReverbService : Service() {
         // Serialize acceptance with onDestroy(); cancellations accepted before that boundary
         // still own the export token, while later calls fail closed.
         if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
-        requestExportCancellation(preserveVerifiedOutput = false)
+        requestExportCancellation(preserveVerifiedOutput = false, reportFailure = false)
     }
 
-    private fun requestExportCancellation(preserveVerifiedOutput: Boolean): Boolean {
+    private fun requestExportCancellation(
+        preserveVerifiedOutput: Boolean,
+        reportFailure: Boolean,
+    ): Boolean {
         var receiverToNotify: AudioFileReceiver? = null
         var tokenToNotify: ExportCancellationToken? = null
         var clearedImmediately = false
         val cancelled = synchronized(exportStateLock) {
             val token = activeExportToken ?: return@synchronized false
-            if (!exportCancellationAllowed(token.publicationStarted.get(), token.committed.get())) {
+            if (token.cancelled.get() ||
+                !exportCancellationAllowed(token.publicationStarted.get(), token.committed.get())
+            ) {
                 return@synchronized false
             }
 
             if (preserveVerifiedOutput) token.preserveVerifiedOutput.set(true)
+            if (reportFailure) token.cancellationReportsFailure.set(true)
             token.cancelled.set(true)
             val future = activeExportFuture
             if (!token.started.get() && (future == null || future.cancel(true))) {
@@ -1530,7 +1536,7 @@ class ReverbService : Service() {
         }
         if (clearedImmediately) refreshForegroundAfterExport()
         if (cancelled && receiverToNotify != null) {
-            finishExportCancelled(tokenToNotify ?: return cancelled, receiverToNotify)
+            finishExportCancellation(tokenToNotify ?: return cancelled, receiverToNotify)
         }
         return cancelled
     }
@@ -1669,11 +1675,11 @@ class ReverbService : Service() {
                         finishExportSuccess(exportToken, receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        finishExportCancelled(exportToken, receiver)
+                        finishExportCancellation(exportToken, receiver)
                     } catch (e: Exception) {
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                            finishExportCancelled(exportToken, receiver)
+                            finishExportCancellation(exportToken, receiver)
                             return@Callable Unit
                         }
                         Log.e(TAG, "Error while exporting audio history into ${outTarget?.displayName ?: newFileName}", e)
@@ -1872,7 +1878,7 @@ class ReverbService : Service() {
         error: Throwable? = null,
     ) {
         if (token.cancelled.get()) {
-            finishExportCancelled(token, receiver)
+            finishExportCancellation(token, receiver)
             return
         }
         if (token.terminalDelivered.compareAndSet(false, true)) {
@@ -1880,12 +1886,15 @@ class ReverbService : Service() {
         }
     }
 
-    private fun finishExportCancelled(
+    private fun finishExportCancellation(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,
     ) {
-        if (token.terminalDelivered.compareAndSet(false, true)) {
-            notifyReceiverCancelled(receiver)
+        if (!token.terminalDelivered.compareAndSet(false, true)) return
+        when (exportCancellationTerminal(token.cancellationReportsFailure.get())) {
+            ExportCancellationTerminal.FAILED ->
+                notifyReceiverFailure(receiver, getString(R.string.save_failed))
+            ExportCancellationTerminal.CANCELLED -> notifyReceiverCancelled(receiver)
         }
     }
 
@@ -2726,7 +2735,10 @@ class ReverbService : Service() {
         )
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
             Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
-            requestExportCancellation(preserveVerifiedOutput = true)
+            requestExportCancellation(
+                preserveVerifiedOutput = true,
+                reportFailure = true,
+            )
         }
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
@@ -3277,6 +3289,9 @@ class ReverbService : Service() {
         val publicationStarted: AtomicBoolean = AtomicBoolean(false),
         val committed: AtomicBoolean = AtomicBoolean(false),
         val preserveVerifiedOutput: AtomicBoolean = AtomicBoolean(false),
+        // User Cancel is a neutral terminal state. Platform/system cancellation is a failed save
+        // and must remain visible through the receiver's UI/notification fallback.
+        val cancellationReportsFailure: AtomicBoolean = AtomicBoolean(false),
         val terminalDelivered: AtomicBoolean = AtomicBoolean(false),
     )
 
@@ -3521,6 +3536,11 @@ internal fun exportCancellationAllowed(
     publicationStarted: Boolean,
     committed: Boolean,
 ): Boolean = !publicationStarted && !committed
+
+internal enum class ExportCancellationTerminal { CANCELLED, FAILED }
+
+internal fun exportCancellationTerminal(reportFailure: Boolean): ExportCancellationTerminal =
+    if (reportFailure) ExportCancellationTerminal.FAILED else ExportCancellationTerminal.CANCELLED
 
 internal fun shouldDeleteExportTarget(
     cancelled: Boolean,
