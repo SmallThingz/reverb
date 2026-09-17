@@ -1121,7 +1121,10 @@ class ReverbService : Service() {
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
     ) {
         val exportToken = beginExport(receiver) ?: run {
-            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
+            notifyReceiverFailure(
+                receiver,
+                getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
+            )
             return
         }
         if (!ensureExportForegroundLifetime(exportToken, receiver)) return
@@ -1163,7 +1166,10 @@ class ReverbService : Service() {
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
     ) {
         val exportToken = beginExport(receiver) ?: run {
-            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
+            notifyReceiverFailure(
+                receiver,
+                getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
+            )
             return
         }
         if (!ensureExportForegroundLifetime(exportToken, receiver)) return
@@ -1200,7 +1206,15 @@ class ReverbService : Service() {
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
         callback: (TimelineSnapshot?) -> Unit,
     ) {
+        if (serviceDestroying) {
+            mainHandler.post { callback(null) }
+            return
+        }
         if (!audioHandler.post {
+            if (serviceDestroying) {
+                mainHandler.post { callback(null) }
+                return@post
+            }
             val snapshot = try {
                 flushAudioRecord()
                 val duration = availableBufferedDurationSeconds(bufferSlot)
@@ -1230,7 +1244,10 @@ class ReverbService : Service() {
         val exportToken = beginExport(receiver)
         if (exportToken == null) {
             snapshot.close()
-            notifyReceiverFailure(receiver, getString(R.string.export_in_progress))
+            notifyReceiverFailure(
+                receiver,
+                getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
+            )
             return
         }
         if (!ensureExportForegroundLifetime(exportToken, receiver)) {
@@ -1598,7 +1615,7 @@ class ReverbService : Service() {
 
     private fun beginExport(receiver: AudioFileReceiver): ExportCancellationToken? =
         synchronized(exportStateLock) {
-            if (activeExportToken != null) {
+            if (serviceDestroying || activeExportToken != null) {
                 null
             } else {
                 ExportCancellationToken(nextExportTokenId.getAndIncrement()).also { token ->
