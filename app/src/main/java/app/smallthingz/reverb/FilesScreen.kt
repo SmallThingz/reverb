@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -90,6 +91,12 @@ private sealed class ListItem {
 
 internal fun deletionBatchFailed(requestedCount: Int, deletedCount: Int, hadError: Boolean): Boolean =
     hadError || deletedCount < requestedCount
+
+internal fun libraryEmptyStateVisible(
+    hasLoaded: Boolean,
+    listEmpty: Boolean,
+    isRefreshing: Boolean,
+): Boolean = hasLoaded && listEmpty && !isRefreshing
 
 private data class LibraryNotice(
     val message: String,
@@ -645,7 +652,19 @@ fun FilesScreen(
                 onRefresh = { refresh(showSpinner = true) },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (listItems.isEmpty() && !isRefreshing) {
+                if (!hasLoaded) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (libraryEmptyStateVisible(
+                        hasLoaded = hasLoaded,
+                        listEmpty = listItems.isEmpty(),
+                        isRefreshing = isRefreshing,
+                    )
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()

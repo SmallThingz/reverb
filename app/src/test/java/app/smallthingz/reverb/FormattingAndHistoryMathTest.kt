@@ -11,6 +11,14 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun libraryEmptyState_waitsForAuthoritativeFirstLoad() {
+        assertFalse(libraryEmptyStateVisible(hasLoaded = false, listEmpty = true, isRefreshing = false))
+        assertFalse(libraryEmptyStateVisible(hasLoaded = true, listEmpty = true, isRefreshing = true))
+        assertFalse(libraryEmptyStateVisible(hasLoaded = true, listEmpty = false, isRefreshing = false))
+        assertTrue(libraryEmptyStateVisible(hasLoaded = true, listEmpty = true, isRefreshing = false))
+    }
+
+    @Test
     fun recordingOperationRegistry_keepsIdentityBusyUntilMatchingTerminal() {
         val registry = RecordingOperationRegistry()
         val first = requireNotNull(registry.tryBegin("recording-a"))
