@@ -24,14 +24,31 @@ class RecordingOpenActivity : ComponentActivity() {
                 try {
                     startActivity(openIntent)
                 } catch (_: ActivityNotFoundException) {
-                    AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
+                    returnToReverbWithFailure(getString(R.string.no_app_available))
                 } catch (_: RuntimeException) {
-                    AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+                    returnToReverbWithFailure(getString(R.string.recording_unavailable))
                 }
             } else {
-                AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+                returnToReverbWithFailure(getString(R.string.recording_unavailable))
             }
             finish()
+        }
+    }
+
+    private fun returnToReverbWithFailure(message: String) {
+        AppFeedbackCenter.post(message, FeedbackTone.ERROR)
+        // This activity is only a notification trampoline and has no feedback host of its own.
+        // Bring the app forward so the queued error is visible instead of finishing to nowhere.
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    )
+                },
+            )
         }
     }
 
