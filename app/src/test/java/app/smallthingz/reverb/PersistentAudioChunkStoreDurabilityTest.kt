@@ -306,6 +306,39 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun rangeLeaseClose_releasesEveryChunkAfterRetentionCleanupFailure() = withStoreRoot { root ->
+        val first = pcmBytes(8_192)
+        val second = pcmBytes(8_192).map { byte -> (byte.toInt() xor 0x55).toByte() }.toByteArray()
+        var failChunkDirectorySync = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            directorySync = { directory ->
+                if (failChunkDirectorySync && directory.name == BUFFER_CHUNKS_FOLDER_NAME) {
+                    throw IOException("Injected lease-close retention sync failure")
+                }
+            },
+        )
+        configure(store, 131_072L)
+        assertEquals(first.size, store.append(first, 0, first.size))
+        store.sealActiveChunk()
+        assertEquals(second.size, store.append(second, 0, second.size))
+        store.sealActiveChunk()
+        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+
+        configure(store, 4_096L)
+        failChunkDirectorySync = true
+        assertThrows(IOException::class.java) { lease.close() }
+        failChunkDirectorySync = false
+
+        // Retrying retention after the close failure must not find any record still pinned by
+        // the already-closed lease. Otherwise the retired second chunk survives until restart.
+        configure(store, 4_096L)
+        store.close()
+        assertFalse(File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "1").exists())
+    }
+
+    @Test
     fun repeatedRestartsAndIndexLoss_preserveTheEntireObservableTimeline() = withStoreRoot { root ->
         val expected = ByteArrayOutputStream()
         repeat(24) { iteration ->

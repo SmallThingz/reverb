@@ -769,9 +769,16 @@ internal class PersistentAudioChunkStore internal constructor(
             synchronized(store) {
                 if (closedLease) return
                 closedLease = true
+                var failure: Exception? = null
                 for (segment in segments) {
-                    store.releaseRecordLocked(segment.record)
+                    try {
+                        store.releaseRecordLocked(segment.record)
+                    } catch (error: Exception) {
+                        val previous = failure
+                        if (previous == null) failure = error else previous.addSuppressed(error)
+                    }
                 }
+                failure?.let { throw it }
             }
         }
     }
