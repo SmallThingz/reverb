@@ -252,13 +252,18 @@ class ReverbService : Service() {
                 switchActiveBufferOnAudioThread(resolveConfiguredCaptureBufferSlot(), notifyTiles = false)
                 syncOneShotFullQuickTileOnAudioThread()
             } catch (error: Exception) {
-                pauseListeningAfterPersistenceFailure("initialize", error)
+                if (!serviceDestroying) {
+                    pauseListeningAfterPersistenceFailure("initialize", error)
+                }
                 return@post
             }
+            if (serviceDestroying) return@post
             mainHandler.post {
+                if (serviceDestroying) return@post
                 val listeningIntentEnabled = isListeningEnabled()
                 if (!shouldAttemptAutomaticListeningStart(
                         listeningIntentEnabled = listeningIntentEnabled,
+                        serviceDestroying = serviceDestroying,
                         foregroundStartBlocked = foregroundStartBlocked,
                         persistenceFailureBlocked = persistenceFailureBlocked,
                     )
@@ -268,6 +273,7 @@ class ReverbService : Service() {
                 if (shouldEnsureRuntimeCaptureAfterInitialization(
                         listeningIntentEnabled = listeningIntentEnabled,
                         recorderState = state,
+                        serviceDestroying = serviceDestroying,
                         foregroundStartBlocked = foregroundStartBlocked,
                         persistenceFailureBlocked = persistenceFailureBlocked,
                     )
@@ -287,7 +293,9 @@ class ReverbService : Service() {
         // Generic service teardown is not a user Stop. Preserve the AudioRecord read that already
         // owns the microphone, but prevent any later queued/read-reschedule from starting once
         // teardown begins. Explicit Stop/failure paths already invalidate continuity themselves.
-        serviceDestroying = true
+        synchronized(listeningIntentLock) {
+            serviceDestroying = true
+        }
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
@@ -297,6 +305,9 @@ class ReverbService : Service() {
         }
         // Service teardown is not a user cancellation. Keep any in-flight export recoverable.
         flushAndPersistBeforeShutdown()
+        // The terminal store-close task is now queued (or complete). Reject any later audio work
+        // before doing main-thread incident/tile bookkeeping so nothing can queue behind close.
+        audioThread.quitSafely()
         // Timestamp the outage after microphone teardown so incident duration does not include
         // the final in-flight batch that was still successfully persisted. Keep the marker armed
         // so later process-exit evidence can enrich this provisional same-session incident.
@@ -317,7 +328,6 @@ class ReverbService : Service() {
             // adds UI/service teardown latency without strengthening durability.
             exportWorkExecutor.shutdown()
         }
-        audioThread.quitSafely()
         super.onDestroy()
     }
 
@@ -673,6 +683,7 @@ class ReverbService : Service() {
 
     private fun clearOneShotFullQuickTileCacheOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
+        if (serviceDestroying) return
         val prefs = getRecorderPreferences(this)
         if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
             // Tile fallback state is a cache, not capture intent. Never block the audio handler
@@ -683,6 +694,7 @@ class ReverbService : Service() {
 
     private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
         check(audioHandler.looper == Looper.myLooper())
+        if (serviceDestroying) return
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         val prefs = getRecorderPreferences(this)
         if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
@@ -854,6 +866,7 @@ class ReverbService : Service() {
 
     private fun innerStartListening(generation: Long = listeningCommandGeneration.get()) {
         if (
+            serviceDestroying ||
             generation != listeningCommandGeneration.get() ||
             !isListeningEnabled() ||
             foregroundStartBlocked ||
@@ -875,7 +888,7 @@ class ReverbService : Service() {
         error: RuntimeException,
     ) {
         synchronized(listeningIntentLock) {
-            if (generation != listeningCommandGeneration.get()) return
+            if (serviceDestroying || generation != listeningCommandGeneration.get()) return
             // Android 14+ can reject microphone-FGS promotion while the app is in the
             // background even though the user's durable capture intent is still valid.
             // Preserve that intent and retry only after a fresh service instance or an
@@ -891,6 +904,7 @@ class ReverbService : Service() {
             "Capture stopped after foreground service start restriction",
         )
         audioHandler.post {
+            if (serviceDestroying) return@post
             audioHandler.removeCallbacks(audioReader)
             try {
                 sealActiveChunks()
@@ -912,11 +926,11 @@ class ReverbService : Service() {
         continuousRestart: Boolean = false,
     ) {
         check(audioHandler.looper == Looper.myLooper())
-        if (generation != listeningCommandGeneration.get()) return
+        if (serviceDestroying || generation != listeningCommandGeneration.get()) return
         if (audioRecordGeneration == generation && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
         audioHandler.removeCallbacks(audioReader)
         releaseAudioRecord()
-        if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
+        if (serviceDestroying || generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         // Binding the paused UI should not probe microphone hardware. Resolve the
         // requested configuration only when capture is actually about to start.
         try {
@@ -927,14 +941,15 @@ class ReverbService : Service() {
             return
         }
 
-        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
+        if (serviceDestroying || generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
         if (!ensureActiveCaptureTargetOnAudioThread() || !hasWritableCaptureTarget()) {
             pauseListeningForNoWritableBufferOnAudioThread(generation)
             return
         }
         val currentGeneration = listeningCommandGeneration.get()
+        if (serviceDestroying) return
         if (generation != currentGeneration) {
-            if (state == STATE_LISTENING && isListeningEnabled()) {
+            if (!serviceDestroying && state == STATE_LISTENING && isListeningEnabled()) {
                 audioHandler.post { startAudioInputOnAudioThread(currentGeneration) }
             }
             return
@@ -942,7 +957,7 @@ class ReverbService : Service() {
         val record = createAudioRecord()
         audioRecord = record
         audioRecordGeneration = generation
-        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+        if (serviceDestroying || generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
             releaseAudioRecord()
             return
         }
@@ -958,7 +973,7 @@ class ReverbService : Service() {
             failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error, generation)
             return
         }
-        if (generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
+        if (serviceDestroying || generation != listeningCommandGeneration.get() || !isListeningEnabled()) {
             releaseAudioRecord()
             return
         }
@@ -967,7 +982,7 @@ class ReverbService : Service() {
             return
         }
         if (!armCaptureIncidentTrackingOnAudioThread(continuousRestart = continuousRestart)) return
-        if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
+        if (serviceDestroying || generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         audioHandler.post(audioReader)
@@ -975,12 +990,15 @@ class ReverbService : Service() {
 
     private fun armCaptureIncidentTrackingOnAudioThread(continuousRestart: Boolean = false): Boolean {
         check(audioHandler.looper == Looper.myLooper())
-        return try {
-            RecordingIncidentStore.recordCaptureStarted(this, continuousRestart = continuousRestart)
-            true
-        } catch (error: Exception) {
-            pauseListeningAfterPersistenceFailure("arm capture incident tracking", error)
-            false
+        return synchronized(listeningIntentLock) {
+            if (serviceDestroying) return@synchronized false
+            try {
+                RecordingIncidentStore.recordCaptureStarted(this, continuousRestart = continuousRestart)
+                true
+            } catch (error: Exception) {
+                pauseListeningAfterPersistenceFailure("arm capture incident tracking", error)
+                false
+            }
         }
     }
 
@@ -993,7 +1011,7 @@ class ReverbService : Service() {
         audioHandler.post {
             // A target switch may legitimately advance the state generation after Stop was
             // requested. Only a newer durable Start intent should cancel teardown.
-            if (isListeningEnabled()) return@post
+            if (serviceDestroying || isListeningEnabled()) return@post
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             updateWakeLockState()
@@ -1599,6 +1617,7 @@ class ReverbService : Service() {
     fun applyUpdatedPreferences(): Boolean {
         if (serviceDestroying) return false
         return audioHandler.post {
+            if (serviceDestroying) return@post
             try {
                 applyConfiguredPreferencesOnAudioThread()
             } catch (error: Exception) {
@@ -1891,6 +1910,7 @@ class ReverbService : Service() {
 
     private fun pauseListeningAfterPersistenceFailure(operation: String, error: Exception) {
         val generation = synchronized(listeningIntentLock) {
+            if (serviceDestroying) return
             persistenceFailureBlocked = true
             val nextGeneration = listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
@@ -1903,7 +1923,9 @@ class ReverbService : Service() {
             "Capture stopped after persistence failure: $operation",
         )
         audioHandler.post {
-            if (generation != listeningCommandGeneration.get() || state == STATE_LISTENING) return@post
+            if (serviceDestroying || generation != listeningCommandGeneration.get() || state == STATE_LISTENING) {
+                return@post
+            }
             audioHandler.removeCallbacks(audioReader)
             runCatching { sealActiveChunks() }
                 .onFailure { sealError -> reportPersistentStoreFailure("seal after persistence failure", sealError) }
@@ -2086,7 +2108,7 @@ class ReverbService : Service() {
     ) {
         check(audioHandler.looper == Looper.myLooper())
         val persisted = synchronized(listeningIntentLock) {
-            if (generation != listeningCommandGeneration.get()) return
+            if (serviceDestroying || generation != listeningCommandGeneration.get()) return
             val prefs = getRecorderPreferences(this)
             val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
             // A fatal recorder failure must invalidate the active capture even if the
@@ -2149,6 +2171,14 @@ class ReverbService : Service() {
         persistDurations: Boolean = false,
     ): RecordingTileSnapshot {
         check(audioHandler.looper == Looper.myLooper())
+        if (serviceDestroying) {
+            return runtimeRecordingTileFallbackSnapshot(
+                cached = RecordingQuickTileStateCache.readCachedOrNull(),
+                activeBuffer = activeBufferSlot,
+                oneShotEnabled = oneShotBufferEnabled,
+                loopingEnabled = loopingBufferEnabled,
+            )
+        }
         val snapshot = try {
             buildRecordingTileSnapshotOnAudioThread()
         } catch (error: Exception) {
@@ -2585,7 +2615,18 @@ class ReverbService : Service() {
                 .onFailure { reportPersistentStoreFailure("close one-shot store during early shutdown", it) }
             return
         }
-        val storeCloseOwnedByAudioThread = runOnAudioThreadAndWait {
+        val waitForCompletion = shouldWaitForAudioThreadShutdown(
+            recorderState = state,
+            audioRecordPresent = audioRecord != null,
+        )
+        val waitResult = runOnAudioThreadAndWait(
+            waitForCompletion = waitForCompletion,
+            unblockAfterTimeout = {
+                state = STATE_READY
+                audioHandler.removeCallbacks(audioReader)
+                releaseAudioRecord()
+            },
+        ) {
             audioHandler.removeCallbacks(audioReader)
             state = STATE_READY
             try {
@@ -2601,28 +2642,30 @@ class ReverbService : Service() {
                 }
             }
         }
-        if (!storeCloseOwnedByAudioThread) {
-            // A blocking AudioRecord.read() can prevent the audio-thread shutdown
-            // work from running. Release capture here so the read is forced to
-            // return instead of leaving the microphone/thread alive past onDestroy.
+        if (shouldCloseAudioStoresOffThread(waitResult)) {
+            // Rejection means store-close ownership never transferred to the audio thread.
             state = STATE_READY
             audioHandler.removeCallbacks(audioReader)
             releaseAudioRecord()
             runCatching { loopingAudioChunkStore.close() }
-                .onFailure { reportPersistentStoreFailure("close looping store after shutdown timeout", it) }
+                .onFailure { reportPersistentStoreFailure("close looping store after rejected shutdown", it) }
             runCatching { oneShotAudioChunkStore.close() }
-                .onFailure { reportPersistentStoreFailure("close one-shot store after shutdown timeout", it) }
+                .onFailure { reportPersistentStoreFailure("close one-shot store after rejected shutdown", it) }
         }
     }
 
-    private fun runOnAudioThreadAndWait(block: () -> Unit): Boolean {
+    private fun runOnAudioThreadAndWait(
+        waitForCompletion: Boolean,
+        unblockAfterTimeout: () -> Unit,
+        block: () -> Unit,
+    ): AudioThreadShutdownWaitResult {
         if (!::audioHandler.isInitialized) {
             block()
-            return true
+            return AudioThreadShutdownWaitResult.COMPLETED
         }
         if (Looper.myLooper() == audioHandler.looper) {
             block()
-            return true
+            return AudioThreadShutdownWaitResult.COMPLETED
         }
 
         val latch = CountDownLatch(1)
@@ -2635,16 +2678,27 @@ class ReverbService : Service() {
         }
         if (!posted) {
             Log.w(TAG, "Audio thread rejected shutdown work")
-            return false
+            return AudioThreadShutdownWaitResult.REJECTED
         }
+        if (!waitForCompletion) return AudioThreadShutdownWaitResult.QUEUED_PENDING
         return try {
-            latch.await(3, TimeUnit.SECONDS).also { completed ->
-                if (!completed) Log.w(TAG, "Timed out waiting for audio-thread shutdown work")
+            if (latch.await(3, TimeUnit.SECONDS)) {
+                AudioThreadShutdownWaitResult.COMPLETED
+            } else {
+                Log.w(TAG, "Timed out waiting for audio-thread shutdown work; unblocking capture")
+                unblockAfterTimeout()
+                if (latch.await(1, TimeUnit.SECONDS)) {
+                    AudioThreadShutdownWaitResult.COMPLETED
+                } else {
+                    Log.w(TAG, "Audio-thread shutdown work is still pending after capture release")
+                    AudioThreadShutdownWaitResult.QUEUED_PENDING
+                }
             }
         } catch (_: InterruptedException) {
+            unblockAfterTimeout()
             Thread.currentThread().interrupt()
             Log.w(TAG, "Interrupted while waiting for audio-thread shutdown work")
-            false
+            AudioThreadShutdownWaitResult.QUEUED_PENDING
         }
     }
 
@@ -3054,18 +3108,22 @@ internal fun captureIntentNeedsPersistence(
 
 internal fun shouldAttemptAutomaticListeningStart(
     listeningIntentEnabled: Boolean,
+    serviceDestroying: Boolean,
     foregroundStartBlocked: Boolean,
     persistenceFailureBlocked: Boolean,
-): Boolean = listeningIntentEnabled && !foregroundStartBlocked && !persistenceFailureBlocked
+): Boolean = listeningIntentEnabled && !serviceDestroying &&
+    !foregroundStartBlocked && !persistenceFailureBlocked
 
 internal fun shouldEnsureRuntimeCaptureAfterInitialization(
     listeningIntentEnabled: Boolean,
     recorderState: Int,
+    serviceDestroying: Boolean,
     foregroundStartBlocked: Boolean,
     persistenceFailureBlocked: Boolean,
 ): Boolean = recorderState == ReverbService.STATE_LISTENING &&
     shouldAttemptAutomaticListeningStart(
         listeningIntentEnabled = listeningIntentEnabled,
+        serviceDestroying = serviceDestroying,
         foregroundStartBlocked = foregroundStartBlocked,
         persistenceFailureBlocked = persistenceFailureBlocked,
     )
@@ -3078,6 +3136,20 @@ internal fun shouldRetrySuspendedListeningWithForegroundUi(
     persistenceFailureBlocked: Boolean,
 ): Boolean = listeningIntentEnabled && appUiForeground &&
     (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
+
+internal enum class AudioThreadShutdownWaitResult {
+    COMPLETED,
+    QUEUED_PENDING,
+    REJECTED,
+}
+
+internal fun shouldWaitForAudioThreadShutdown(
+    recorderState: Int,
+    audioRecordPresent: Boolean,
+): Boolean = audioRecordPresent || recorderState == ReverbService.STATE_LISTENING
+
+internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResult): Boolean =
+    result == AudioThreadShutdownWaitResult.REJECTED
 
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 

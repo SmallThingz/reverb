@@ -811,6 +811,41 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun serviceShutdown_waitsOnlyWhenCaptureMayOwnTheMicrophone() {
+        assertFalse(
+            shouldWaitForAudioThreadShutdown(
+                recorderState = ReverbService.STATE_READY,
+                audioRecordPresent = false,
+            ),
+        )
+        assertFalse(
+            shouldWaitForAudioThreadShutdown(
+                recorderState = ReverbService.STATE_PAUSED,
+                audioRecordPresent = false,
+            ),
+        )
+        assertTrue(
+            shouldWaitForAudioThreadShutdown(
+                recorderState = ReverbService.STATE_LISTENING,
+                audioRecordPresent = false,
+            ),
+        )
+        assertTrue(
+            shouldWaitForAudioThreadShutdown(
+                recorderState = ReverbService.STATE_READY,
+                audioRecordPresent = true,
+            ),
+        )
+    }
+
+    @Test
+    fun serviceShutdown_keepsQueuedAudioThreadAsStoreCloseOwner() {
+        assertFalse(shouldCloseAudioStoresOffThread(AudioThreadShutdownWaitResult.COMPLETED))
+        assertFalse(shouldCloseAudioStoresOffThread(AudioThreadShutdownWaitResult.QUEUED_PENDING))
+        assertTrue(shouldCloseAudioStoresOffThread(AudioThreadShutdownWaitResult.REJECTED))
+    }
+
+    @Test
     fun serviceDestroyKeepsOnlyTheReadAlreadyInFlight() {
         assertTrue(captureReadMayStart(serviceDestroying = false))
         assertFalse(captureReadMayStart(serviceDestroying = true))
@@ -1015,6 +1050,7 @@ class FormattingAndHistoryMathTest {
         assertTrue(
             shouldAttemptAutomaticListeningStart(
                 listeningIntentEnabled = true,
+                serviceDestroying = false,
                 foregroundStartBlocked = false,
                 persistenceFailureBlocked = false,
             ),
@@ -1022,6 +1058,7 @@ class FormattingAndHistoryMathTest {
         assertFalse(
             shouldAttemptAutomaticListeningStart(
                 listeningIntentEnabled = true,
+                serviceDestroying = false,
                 foregroundStartBlocked = true,
                 persistenceFailureBlocked = false,
             ),
@@ -1029,6 +1066,7 @@ class FormattingAndHistoryMathTest {
         assertFalse(
             shouldAttemptAutomaticListeningStart(
                 listeningIntentEnabled = true,
+                serviceDestroying = false,
                 foregroundStartBlocked = false,
                 persistenceFailureBlocked = true,
             ),
@@ -1036,6 +1074,15 @@ class FormattingAndHistoryMathTest {
         assertFalse(
             shouldAttemptAutomaticListeningStart(
                 listeningIntentEnabled = false,
+                serviceDestroying = false,
+                foregroundStartBlocked = false,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldAttemptAutomaticListeningStart(
+                listeningIntentEnabled = true,
+                serviceDestroying = true,
                 foregroundStartBlocked = false,
                 persistenceFailureBlocked = false,
             ),
@@ -1048,6 +1095,7 @@ class FormattingAndHistoryMathTest {
             shouldEnsureRuntimeCaptureAfterInitialization(
                 listeningIntentEnabled = true,
                 recorderState = ReverbService.STATE_LISTENING,
+                serviceDestroying = false,
                 foregroundStartBlocked = false,
                 persistenceFailureBlocked = false,
             ),
@@ -1056,6 +1104,7 @@ class FormattingAndHistoryMathTest {
             shouldEnsureRuntimeCaptureAfterInitialization(
                 listeningIntentEnabled = true,
                 recorderState = ReverbService.STATE_PAUSED,
+                serviceDestroying = false,
                 foregroundStartBlocked = false,
                 persistenceFailureBlocked = false,
             ),
@@ -1064,7 +1113,17 @@ class FormattingAndHistoryMathTest {
             shouldEnsureRuntimeCaptureAfterInitialization(
                 listeningIntentEnabled = true,
                 recorderState = ReverbService.STATE_LISTENING,
+                serviceDestroying = false,
                 foregroundStartBlocked = true,
+                persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldEnsureRuntimeCaptureAfterInitialization(
+                listeningIntentEnabled = true,
+                recorderState = ReverbService.STATE_LISTENING,
+                serviceDestroying = true,
+                foregroundStartBlocked = false,
                 persistenceFailureBlocked = false,
             ),
         )
