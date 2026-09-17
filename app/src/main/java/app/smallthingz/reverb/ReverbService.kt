@@ -70,6 +70,15 @@ internal fun serviceOwnerRegistrationMayApply(
     registering: Boolean,
 ): Boolean = !registering || !serviceDestroying
 
+internal fun quickTileCommandBufferSlot(
+    action: String?,
+    storageCode: Int?,
+): ReverbService.BufferSlot? = if (action == ReverbService.ACTION_QUICK_TILE_COMMAND && storageCode != null) {
+    ReverbService.BufferSlot.fromStorageCode(storageCode)
+} else {
+    null
+}
+
 internal class IdentityOwnerRegistry<T : Any> {
     private val owners = ArrayList<T>()
 
@@ -2409,6 +2418,74 @@ class ReverbService : Service() {
         return snapshot
     }
 
+    private fun acceptQuickTileCommand(
+        bufferSlot: BufferSlot,
+        startId: Int,
+    ): Boolean {
+        if (serviceDestroying) return false
+        if (foregroundServiceTypes == 0) {
+            try {
+                foregroundServiceTimedOut = false
+                val exporting = hasActiveExport()
+                promoteForeground(
+                    foregroundServiceTypesForWork(listening = true, exporting = exporting),
+                    exporting = exporting,
+                )
+            } catch (error: RuntimeException) {
+                Log.e(TAG, "Unable to accept Quick Settings capture command", error)
+                val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+                RecordingQuickTiles.refreshCachedSnapshot(this, fallback, requestSystemRefresh = true)
+                releaseQuickTileStartedLifetimeIfIdle(startId)
+                return false
+            }
+        }
+        val accepted = audioHandler.post {
+            executeQuickTileCommandOnAudioThread(bufferSlot, startId)
+        }
+        if (!accepted) {
+            val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+            RecordingQuickTiles.refreshCachedSnapshot(this, fallback, requestSystemRefresh = true)
+            releaseQuickTileStartedLifetimeIfIdle(startId)
+        }
+        return accepted
+    }
+
+    private fun executeQuickTileCommandOnAudioThread(
+        bufferSlot: BufferSlot,
+        startId: Int,
+    ) {
+        check(audioHandler.looper == Looper.myLooper())
+        if (serviceDestroying) {
+            mainHandler.post { releaseQuickTileStartedLifetimeIfIdle(startId) }
+            return
+        }
+        val snapshot = try {
+            buildRecordingTileSnapshotOnAudioThread()
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to resolve Quick Settings capture command", error)
+            publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
+            mainHandler.post { releaseQuickTileStartedLifetimeIfIdle(startId) }
+            return
+        }
+        val action = recordingTileClickAction(bufferSlot, snapshot)
+        val result = when (action) {
+            RecordingTileClickAction.START -> enableListening(bufferSlot)
+            RecordingTileClickAction.SWITCH -> selectCaptureBuffer(bufferSlot)
+            RecordingTileClickAction.STOP -> disableListening()
+            RecordingTileClickAction.NONE -> null
+        }
+        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
+        if (action == RecordingTileClickAction.NONE || result?.accepted != true) {
+            mainHandler.post { releaseQuickTileStartedLifetimeIfIdle(startId) }
+        }
+    }
+
+    private fun releaseQuickTileStartedLifetimeIfIdle(startId: Int) {
+        if (serviceDestroying || isListeningEnabled() || state == STATE_LISTENING || hasActiveExport()) return
+        stopForegroundTracked()
+        stopSelfResult(startId)
+    }
+
     internal fun getRecordingTileSnapshot(callback: (RecordingTileSnapshot) -> Unit) {
         if (serviceDestroying) {
             postRecordingTileSnapshot(callback, failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking()))
@@ -2725,6 +2802,18 @@ class ReverbService : Service() {
         }
         if (intent?.action == ACTION_EXPORT_KEEPALIVE) {
             if (!hasActiveExport()) requestServiceStopWhenExportIdle()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_QUICK_TILE_COMMAND) {
+            val storageCode = if (intent.hasExtra(EXTRA_QUICK_TILE_BUFFER_SLOT)) {
+                intent.getIntExtra(EXTRA_QUICK_TILE_BUFFER_SLOT, -1)
+            } else {
+                null
+            }
+            val bufferSlot = quickTileCommandBufferSlot(intent.action, storageCode)
+            if (bufferSlot == null || !acceptQuickTileCommand(bufferSlot, startId)) {
+                releaseQuickTileStartedLifetimeIfIdle(startId)
+            }
             return START_NOT_STICKY
         }
         val debugActionRunsStopped = debugCommandRunsWithoutListening(
@@ -3380,6 +3469,8 @@ class ReverbService : Service() {
         val nextExportTokenId = AtomicLong(1L)
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
+        const val ACTION_QUICK_TILE_COMMAND = "app.smallthingz.reverb.QUICK_TILE_COMMAND"
+        const val EXTRA_QUICK_TILE_BUFFER_SLOT = "bufferSlot"
         const val ACTION_DEBUG_ENABLE_LISTENING = "${DEBUG_ACTION_PREFIX}ENABLE_LISTENING"
         const val ACTION_DEBUG_DISABLE_LISTENING = "${DEBUG_ACTION_PREFIX}DISABLE_LISTENING"
         const val ACTION_DEBUG_CLEAR_BUFFER = "${DEBUG_ACTION_PREFIX}CLEAR_BUFFER"

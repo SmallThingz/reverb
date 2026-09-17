@@ -1799,19 +1799,19 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun destroyedTileRejectsDeferredUnlockActionBeforeRecorderBind() {
-        assertTrue(tileActionMayBegin(actionInFlight = false, tileDestroyed = false))
-        assertFalse(tileActionMayBegin(actionInFlight = true, tileDestroyed = false))
-        assertFalse(tileActionMayBegin(actionInFlight = false, tileDestroyed = true))
-        assertFalse(tileActionMayBegin(actionInFlight = true, tileDestroyed = true))
-    }
-
-    @Test
-    fun destroyedTileRejectsAlreadyQueuedActionCallbacks() {
-        assertTrue(tileActionCallbackIsCurrent(true, 7L, 7L))
-        assertFalse(tileActionCallbackIsCurrent(false, 7L, 7L))
-        assertFalse(tileActionCallbackIsCurrent(true, 6L, 7L))
-        assertFalse(tileActionCallbackIsCurrent(false, 6L, 7L))
+    fun quickTileCommandRouting_acceptsOnlyExactActionAndKnownBufferCodes() {
+        val action = ReverbService.ACTION_QUICK_TILE_COMMAND
+        assertEquals(
+            ReverbService.BufferSlot.ONE_SHOT,
+            quickTileCommandBufferSlot(action, ReverbService.BufferSlot.ONE_SHOT.storageCode.toInt()),
+        )
+        assertEquals(
+            ReverbService.BufferSlot.LOOPING,
+            quickTileCommandBufferSlot(action, ReverbService.BufferSlot.LOOPING.storageCode.toInt()),
+        )
+        assertEquals(null, quickTileCommandBufferSlot(action, 99))
+        assertEquals(null, quickTileCommandBufferSlot(action, null))
+        assertEquals(null, quickTileCommandBufferSlot("other", ReverbService.BufferSlot.LOOPING.storageCode.toInt()))
     }
 
     @Test
@@ -1921,29 +1921,6 @@ class FormattingAndHistoryMathTest {
         assertEquals(65_900L, quickTileDurationMillis(65.9f))
         assertEquals(65.9f, cachedTileDurationSeconds(65_900L), 0.001f)
         assertEquals(0f, cachedTileDurationSeconds(-1L), 0f)
-    }
-
-    @Test
-    fun quickTileActionCompletion_waitsForLiveRuntimeState() {
-        val oneShot = ReverbService.BufferSlot.ONE_SHOT
-        val looping = ReverbService.BufferSlot.LOOPING
-        val idle = RecordingTileSnapshot(
-            listening = false,
-            activeBuffer = oneShot,
-            oneShotEnabled = true,
-            oneShotFull = false,
-            loopingEnabled = true,
-        )
-        val oneShotRunning = idle.copy(listening = true)
-        val loopingRunning = oneShotRunning.copy(activeBuffer = looping)
-
-        assertFalse(recordingTileActionSatisfied(RecordingTileClickAction.START, oneShot, idle))
-        assertTrue(recordingTileActionSatisfied(RecordingTileClickAction.START, oneShot, oneShotRunning))
-        assertFalse(recordingTileActionSatisfied(RecordingTileClickAction.SWITCH, looping, oneShotRunning))
-        assertTrue(recordingTileActionSatisfied(RecordingTileClickAction.SWITCH, looping, loopingRunning))
-        assertFalse(recordingTileActionSatisfied(RecordingTileClickAction.STOP, oneShot, oneShotRunning))
-        assertTrue(recordingTileActionSatisfied(RecordingTileClickAction.STOP, oneShot, idle))
-        assertTrue(recordingTileActionSatisfied(RecordingTileClickAction.NONE, oneShot, oneShotRunning))
     }
 
     @Test
