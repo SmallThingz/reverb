@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
@@ -455,6 +456,30 @@ fun SettingsScreen(
         )
     }
 
+    fun applyCommittedSettingsToRuntime(transactionService: ReverbService?) {
+        val currentService = service ?: transactionService
+        if (currentService?.applyUpdatedPreferences() == true) return
+        val appContext = context.applicationContext
+        if (getRecorderPreferences(appContext).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
+            runCatching {
+                appContext.startService(
+                    Intent(appContext, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
+                )
+            }.onFailure {
+                // Durable settings changed but no recorder accepted the reload. Replace stale
+                // runtime tile state immediately with a fail-closed snapshot, then hydrate the
+                // committed stopped settings on the tile IO worker.
+                refreshStoppedQuickTileFallback()
+                AppFeedbackCenter.post(
+                    resources.getString(R.string.settings_apply_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
+        } else {
+            refreshStoppedQuickTileFallback()
+        }
+    }
+
     @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
     suspend fun persistSettings(): Boolean {
         if (settingsPersisting) return false
@@ -605,56 +630,64 @@ fun SettingsScreen(
         } else {
             settingsEditor.remove(PrefKey.EXPORT_DIRECTORY_URI)
         }
-        val persisted = withContext(Dispatchers.IO) {
-            withRetentionPersistenceLock {
-            // Roll back to the state that was actually durable when this transaction started,
-            // not to the UI's older edit snapshot. Another writer may have committed since
-            // Settings opened.
-            val rollbackRetention = retentionConfigurationForRead(context)
-            val rollbackFormat = getConfiguredOutputFormat(context)
-            val rollbackCodec = getConfiguredOutputCodec(context)
-            val rollbackSampleFormat = getConfiguredPcmSampleFormat(context)
-            val rollbackSource = getConfiguredAudioSourceMode(context)
-            val rollbackChannelMode = getConfiguredChannelMode(context)
-            val rollbackRoute = getConfiguredInputRouteMode(context)
-            val rollbackSampleRate = getConfiguredSampleRate(context)
-            val rollbackWakeLock = isWakeLockEnabled(context)
-            val rollbackTheme = getConfiguredThemeMode(context)
-            val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
-            val rollbackExportDirectoryUri = getConfiguredExportTreeUri(context)?.toString()
+        val transactionService = service
+        // Once the recovery/preferences transaction starts, a configuration change or Activity
+        // disposal may cancel only the UI tail. A successful durable commit must still reach the
+        // surviving recorder (or stopped tile fallback) before this section can terminate.
+        val persisted = withContext(NonCancellable) {
+            val committed = withContext(Dispatchers.IO) {
+                withRetentionPersistenceLock {
+                    // Roll back to the state that was actually durable when this transaction started,
+                    // not to the UI's older edit snapshot. Another writer may have committed since
+                    // Settings opened.
+                    val rollbackRetention = retentionConfigurationForRead(context)
+                    val rollbackFormat = getConfiguredOutputFormat(context)
+                    val rollbackCodec = getConfiguredOutputCodec(context)
+                    val rollbackSampleFormat = getConfiguredPcmSampleFormat(context)
+                    val rollbackSource = getConfiguredAudioSourceMode(context)
+                    val rollbackChannelMode = getConfiguredChannelMode(context)
+                    val rollbackRoute = getConfiguredInputRouteMode(context)
+                    val rollbackSampleRate = getConfiguredSampleRate(context)
+                    val rollbackWakeLock = isWakeLockEnabled(context)
+                    val rollbackTheme = getConfiguredThemeMode(context)
+                    val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
+                    val rollbackExportDirectoryUri = getConfiguredExportTreeUri(context)?.toString()
 
-            persistRetentionTransaction(
-                // Recovery is the write-ahead side of the transaction. If the process dies before
-                // preferences commit, restart sees a mismatch and existing history fails closed.
-                writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
-                commitNewPreferences = { settingsEditor.commit() },
-                restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
-                restorePreferences = {
-                    preferences.edit()
-                        .putInt(PrefKey.RETENTION_MODE, rollbackRetention.mode.storageCode.toInt())
-                        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, rollbackRetention.oneShotSeconds)
-                        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rollbackRetention.oneShotSizeBytes)
-                        .putLong(PrefKey.RETENTION_SECONDS, rollbackRetention.loopingSeconds)
-                        .putLong(PrefKey.AUDIO_MEMORY_SIZE, rollbackRetention.loopingSizeBytes)
-                        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(rollbackRetention))
-                        .putInt(PrefKey.OUTPUT_FORMAT, rollbackFormat.storageCode.toInt())
-                        .putInt(PrefKey.OUTPUT_CODEC, rollbackCodec.storageCode.toInt())
-                        .putInt(PrefKey.PCM_SAMPLE_FORMAT, rollbackSampleFormat.storageCode.toInt())
-                        .putInt(PrefKey.AUDIO_SOURCE, rollbackSource.storageCode.toInt())
-                        .putInt(PrefKey.CHANNEL_MODE, rollbackChannelMode.storageCode.toInt())
-                        .putInt(PrefKey.INPUT_ROUTE, rollbackRoute.storageCode.toInt())
-                        .putInt(PrefKey.SAMPLE_RATE, rollbackSampleRate)
-                        .putBoolean(PrefKey.WAKE_LOCK_ENABLED, rollbackWakeLock)
-                        .putInt(PrefKey.THEME_MODE, rollbackTheme.storageCode.toInt())
-                        .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, rollbackOneShotFull)
-                        .apply {
-                            if (rollbackExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
-                            else putString(PrefKey.EXPORT_DIRECTORY_URI, rollbackExportDirectoryUri)
-                        }
-                        .commit()
-                },
-            )
+                    persistRetentionTransaction(
+                        // Recovery is the write-ahead side of the transaction. If the process dies before
+                        // preferences commit, restart sees a mismatch and existing history fails closed.
+                        writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
+                        commitNewPreferences = { settingsEditor.commit() },
+                        restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
+                        restorePreferences = {
+                            preferences.edit()
+                                .putInt(PrefKey.RETENTION_MODE, rollbackRetention.mode.storageCode.toInt())
+                                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, rollbackRetention.oneShotSeconds)
+                                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rollbackRetention.oneShotSizeBytes)
+                                .putLong(PrefKey.RETENTION_SECONDS, rollbackRetention.loopingSeconds)
+                                .putLong(PrefKey.AUDIO_MEMORY_SIZE, rollbackRetention.loopingSizeBytes)
+                                .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(rollbackRetention))
+                                .putInt(PrefKey.OUTPUT_FORMAT, rollbackFormat.storageCode.toInt())
+                                .putInt(PrefKey.OUTPUT_CODEC, rollbackCodec.storageCode.toInt())
+                                .putInt(PrefKey.PCM_SAMPLE_FORMAT, rollbackSampleFormat.storageCode.toInt())
+                                .putInt(PrefKey.AUDIO_SOURCE, rollbackSource.storageCode.toInt())
+                                .putInt(PrefKey.CHANNEL_MODE, rollbackChannelMode.storageCode.toInt())
+                                .putInt(PrefKey.INPUT_ROUTE, rollbackRoute.storageCode.toInt())
+                                .putInt(PrefKey.SAMPLE_RATE, rollbackSampleRate)
+                                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, rollbackWakeLock)
+                                .putInt(PrefKey.THEME_MODE, rollbackTheme.storageCode.toInt())
+                                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, rollbackOneShotFull)
+                                .apply {
+                                    if (rollbackExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
+                                    else putString(PrefKey.EXPORT_DIRECTORY_URI, rollbackExportDirectoryUri)
+                                }
+                                .commit()
+                        },
+                    )
+                }
             }
+            if (committed) applyCommittedSettingsToRuntime(transactionService)
+            committed
         }
         if (!persisted) {
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
@@ -662,27 +695,6 @@ fun SettingsScreen(
         }
         onThemeChanged(selectedTheme)
 
-        val currentService = service
-        if (currentService != null) {
-            currentService.applyUpdatedPreferences()
-        } else if (getRecorderPreferences(context).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
-            runCatching {
-                context.startService(
-                    Intent(context, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
-                )
-            }.onFailure { error ->
-                // Durable settings changed but no recorder accepted the reload. Replace stale
-                // runtime tile state immediately with a fail-closed snapshot, then hydrate the
-                // committed stopped settings on the tile IO worker.
-                refreshStoppedQuickTileFallback()
-                AppFeedbackCenter.post(
-                    resources.getString(R.string.settings_apply_failed),
-                    FeedbackTone.ERROR,
-                )
-            }
-        } else {
-            refreshStoppedQuickTileFallback()
-        }
         val editedWhileSaving = settingsEditedDuringPersistence(
             submittedRevision = submittedEditRevision,
             currentRevision = settingsEditRevision[0],

@@ -1596,8 +1596,9 @@ class ReverbService : Service() {
         return true
     }
 
-    fun applyUpdatedPreferences() {
-        audioHandler.post {
+    fun applyUpdatedPreferences(): Boolean {
+        if (serviceDestroying) return false
+        return audioHandler.post {
             try {
                 applyConfiguredPreferencesOnAudioThread()
             } catch (error: Exception) {
