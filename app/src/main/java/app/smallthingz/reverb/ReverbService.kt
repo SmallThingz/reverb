@@ -2196,14 +2196,27 @@ class ReverbService : Service() {
     }
 
     internal fun getRecordingTileSnapshot(callback: (RecordingTileSnapshot) -> Unit) {
-        audioHandler.post {
-            val snapshot = publishQuickTileSnapshotOnAudioThread(refreshTiles = false)
-            mainHandler.post { callback(snapshot) }
+        if (serviceDestroying) {
+            val fallback = failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking())
+            mainHandler.post { callback(fallback) }
+            return
+        }
+        if (!audioHandler.post {
+                val snapshot = publishQuickTileSnapshotOnAudioThread(refreshTiles = false)
+                mainHandler.post { callback(snapshot) }
+            }
+        ) {
+            val fallback = failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking())
+            mainHandler.post { callback(fallback) }
         }
     }
 
     fun getState(callback: StateCallback) {
-        audioHandler.post {
+        if (serviceDestroying) {
+            postUnavailableState(callback)
+            return
+        }
+        if (!audioHandler.post {
             val commandGeneration = listeningCommandGeneration.get()
             try {
                 val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
@@ -2250,6 +2263,28 @@ class ReverbService : Service() {
                     )
                 }
             }
+        }) {
+            postUnavailableState(callback)
+        }
+    }
+
+    private fun postUnavailableState(callback: StateCallback) {
+        val commandGeneration = listeningCommandGeneration.get()
+        mainHandler.post {
+            callback.state(
+                commandGeneration,
+                false,
+                activeBufferSlot,
+                0f,
+                0L,
+                0f,
+                0L,
+                false,
+                false,
+                false,
+                null,
+                hasActiveExport(),
+            )
         }
     }
 
@@ -2360,8 +2395,9 @@ class ReverbService : Service() {
         )
     }
 
-    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING) {
-        audioHandler.post {
+    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean {
+        if (serviceDestroying) return false
+        return audioHandler.post {
             if (bufferSlot == BufferSlot.ONE_SHOT) {
                 clearOneShotFullQuickTileCacheOnAudioThread()
             }

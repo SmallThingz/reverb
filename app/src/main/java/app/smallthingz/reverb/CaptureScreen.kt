@@ -692,7 +692,9 @@ fun CaptureScreen(
             bufferSlot = bufferSlot,
             onConfirm = {
                 pendingClearBuffer = null
-                service?.clearBuffer(bufferSlot)
+                if (service?.clearBuffer(bufferSlot) != true) {
+                    errorMessage = resources.getString(R.string.recorder_state_persist_failed)
+                }
             },
             onDismiss = { pendingClearBuffer = null },
         )
