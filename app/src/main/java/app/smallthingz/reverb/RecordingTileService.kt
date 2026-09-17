@@ -145,6 +145,14 @@ internal fun stoppedRecordingTileSnapshot(
     loopingSeconds = live?.loopingSeconds ?: persisted.loopingSeconds,
 )
 
+internal fun recordingTileSnapshotAfterClear(
+    previous: RecordingTileSnapshot,
+    bufferSlot: ReverbService.BufferSlot,
+): RecordingTileSnapshot = when (bufferSlot) {
+    ReverbService.BufferSlot.ONE_SHOT -> previous.copy(oneShotFull = false, oneShotSeconds = 0f)
+    ReverbService.BufferSlot.LOOPING -> previous.copy(loopingSeconds = 0f)
+}
+
 internal fun failClosedRecordingTileSnapshot(
     previous: RecordingTileSnapshot? = null,
 ): RecordingTileSnapshot = RecordingTileSnapshot(
@@ -321,6 +329,29 @@ internal object RecordingQuickTileStateCache {
                 prefs.safeLong(PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L),
             ),
         )
+    }
+
+    fun recordBufferCleared(context: Context, bufferSlot: ReverbService.BufferSlot) {
+        val appContext = context.applicationContext
+        val cleared = synchronized(stateLock) {
+            val updated = recordingTileSnapshotAfterClear(
+                cachedSnapshot ?: failClosedRecordingTileSnapshot(),
+                bufferSlot,
+            )
+            cachedSnapshot = updated
+            stateGeneration++
+            // The store clear just completed, so this memory snapshot is more authoritative than
+            // persisted fallback data until markServiceStopped() transfers ownership to stopped
+            // hydration a moment later.
+            runtimeAuthoritative = true
+            updated
+        }
+        if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) {
+            // apply() changes this process immediately, so markServiceStopped() cannot hydrate a
+            // stale Full bit while its disk write completes asynchronously.
+            getRecorderPreferences(appContext).edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) }
+        }
+        persistedReadExecutor.execute { persistDurations(appContext, cleared) }
     }
 
     fun persistCurrentDurations(context: Context) {

@@ -1664,6 +1664,27 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun successfulClearUpdatesStoppedTileFallbackWithoutInventingOtherChanges() {
+        val previous = RecordingTileSnapshot(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = true,
+            loopingEnabled = true,
+            oneShotSeconds = 12.5f,
+            loopingSeconds = 34.5f,
+        )
+        assertEquals(
+            previous.copy(oneShotFull = false, oneShotSeconds = 0f),
+            recordingTileSnapshotAfterClear(previous, ReverbService.BufferSlot.ONE_SHOT),
+        )
+        assertEquals(
+            previous.copy(loopingSeconds = 0f),
+            recordingTileSnapshotAfterClear(previous, ReverbService.BufferSlot.LOOPING),
+        )
+    }
+
+    @Test
     fun quickTileFallback_isFailClosedAndMemoryOnly() {
         val live = RecordingTileSnapshot(
             listening = true,

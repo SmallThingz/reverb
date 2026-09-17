@@ -819,17 +819,6 @@ class ReverbService : Service() {
         return true
     }
 
-    private fun clearOneShotFullQuickTileCacheOnAudioThread() {
-        check(audioHandler.looper == Looper.myLooper())
-        if (serviceDestroying) return
-        val prefs = getRecorderPreferences(this)
-        if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)) {
-            // Tile fallback state is a cache, not capture intent. Never block the audio handler
-            // on a filesystem-backed SharedPreferences commit for non-authoritative UI state.
-            prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) }
-        }
-    }
-
     private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying) return
@@ -2585,15 +2574,20 @@ class ReverbService : Service() {
             // puts Clear ahead of the later terminal store-close task. Otherwise reject it.
             if (!serviceAudioMutationMayQueue(serviceDestroying)) return@synchronized false
             audioHandler.post {
-                if (bufferSlot == BufferSlot.ONE_SHOT) {
-                    clearOneShotFullQuickTileCacheOnAudioThread()
-                }
+                var cleared = false
                 try {
                     chunkStore(bufferSlot).clear()
+                    cleared = true
                 } catch (error: Exception) {
                     reportPersistentStoreFailure("clear history", error)
                 } finally {
-                    if (bufferSlot == BufferSlot.ONE_SHOT) {
+                    if (serviceDestroying) {
+                        // This Clear was accepted before teardown took the lifetime lock, so it
+                        // legitimately runs ahead of terminal store close. Preserve its successful
+                        // zero-history result in the stopped tile fallback without touching cache
+                        // state when the storage clear itself failed.
+                        if (cleared) RecordingQuickTileStateCache.recordBufferCleared(this, bufferSlot)
+                    } else if (bufferSlot == BufferSlot.ONE_SHOT) {
                         syncOneShotFullQuickTileOnAudioThread()
                         RecordingQuickTileStateCache.persistCurrentDurations(this)
                     } else {
