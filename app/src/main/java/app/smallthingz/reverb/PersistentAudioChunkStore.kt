@@ -1538,6 +1538,20 @@ internal class PersistentAudioChunkStore internal constructor(
         return true
     }
 
+    private fun requireFinalizedChunkPayloadIntegrityLocked(record: ChunkRecord) {
+        if (record.state != ChunkState.FINALIZED) {
+            throw IOException("Retention source chunk is not finalized: ${record.id}")
+        }
+        val actualPayloadBytes = (Files.size(record.file.toPath()) - record.payloadOffsetBytes).coerceAtLeast(0L)
+        if (actualPayloadBytes != record.payloadBytes) {
+            throw IOException("Retention source chunk size changed: ${record.id}")
+        }
+        val actualChecksum = crc32FilePayload(record.file, record.payloadOffsetBytes, record.payloadBytes)
+        if (actualChecksum != record.payloadChecksum) {
+            throw IOException("Retention source chunk checksum changed: ${record.id}")
+        }
+    }
+
     private fun truncateFinalizedChunkLocked(
         record: ChunkRecord,
         payloadBytes: Long,
@@ -1552,6 +1566,7 @@ internal class PersistentAudioChunkStore internal constructor(
         require(sourcePayloadOffsetBytes + payloadBytes <= record.payloadBytes) { "Truncated payload exceeds source" }
 
         if (record === activeRecord) finalizeActiveLocked()
+        requireFinalizedChunkPayloadIntegrityLocked(record)
         val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
         if (temp.exists()) {
             preserveUnrecognizedChunkLocked(temp, "stale-truncation")
@@ -1654,7 +1669,7 @@ internal class PersistentAudioChunkStore internal constructor(
             val dropBytes = loopingDropBytesLocked(oldest)
             if (dropBytes <= 0L) break
             if (dropBytes >= oldest.payloadBytes || !exactBoundary) {
-                removeFirstChunkAndRetireLocked()
+                removeFirstChunkForRetentionLocked()
                 changed = true
                 continue
             }
@@ -1720,6 +1735,12 @@ internal class PersistentAudioChunkStore internal constructor(
         )
     }
 
+    private fun removeFirstChunkForRetentionLocked(): ChunkRecord {
+        val record = chunks.first()
+        requireFinalizedChunkPayloadIntegrityLocked(record)
+        return removeFirstChunkAndRetireLocked()
+    }
+
     private fun removeFirstChunkAndRetireLocked(): ChunkRecord {
         val record = chunks.first()
         val durabilityFailure = persistRetirementTombstoneLocked(record)
@@ -1740,6 +1761,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun removeChunkAndRetireLocked(record: ChunkRecord): Boolean {
         if (record !in chunks) return false
+        requireFinalizedChunkPayloadIntegrityLocked(record)
         val durabilityFailure = persistRetirementTombstoneLocked(record)
         if (record === activeRecord) {
             closeActiveAccessLocked()

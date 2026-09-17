@@ -799,6 +799,121 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun loopingRetentionShrink_neverRetiresCorruptedFinalizedChunk() = withStoreRoot { root ->
+        val first = pcmBytes(8_192)
+        val second = ByteArray(8_192) { index -> ((index * 37 + 11) and 0xff).toByte() }
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
+            configure(store, 64 * 1024L)
+            assertEquals(first.size, store.append(first, 0, first.size))
+            store.sealActiveChunk()
+            assertEquals(second.size, store.append(second, 0, second.size))
+            store.sealActiveChunk()
+        }
+        val firstChunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        RandomAccessFile(firstChunk, "rw").use { file ->
+            file.seek(128L + 137L)
+            val original = file.read()
+            file.seek(128L + 137L)
+            file.write(original xor 0x40)
+            file.fd.sync()
+        }
+        val corruptedBytes = firstChunk.readBytes()
+
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { reopened ->
+            assertThrows(IOException::class.java) { configure(reopened, second.size.toLong()) }
+        }
+        assertTrue(firstChunk.isFile)
+        assertArrayEquals(corruptedBytes, firstChunk.readBytes())
+    }
+
+    @Test
+    fun oneShotRetentionShrink_neverRetiresCorruptedFinalizedTailChunk() = withStoreRoot { root ->
+        val first = pcmBytes(8_192)
+        val second = ByteArray(8_192) { index -> ((index * 41 + 23) and 0xff).toByte() }
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->
+            configure(store, 64 * 1024L)
+            assertEquals(first.size, store.append(first, 0, first.size))
+            store.sealActiveChunk()
+            assertEquals(second.size, store.append(second, 0, second.size))
+            store.sealActiveChunk()
+        }
+        val chunkFiles = File(root, BUFFER_CHUNKS_FOLDER_NAME).listFiles().orEmpty()
+            .filter { it.name.toUIntOrNull() != null }
+            .sortedBy { it.name.toUInt() }
+        val secondChunk = requireNotNull(chunkFiles.lastOrNull())
+        RandomAccessFile(secondChunk, "rw").use { file ->
+            file.seek(128L + 311L)
+            val original = file.read()
+            file.seek(128L + 311L)
+            file.write(original xor 0x10)
+            file.fd.sync()
+        }
+        val corruptedBytes = secondChunk.readBytes()
+
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            val beforeShrink = requireNotNull(reopened.peekSnapshot())
+            assertTrue(beforeShrink.chunkCount >= 2)
+            assertEquals((first.size + second.size).toLong(), beforeShrink.filledBytes)
+            assertThrows(IOException::class.java) { readAll(reopened) }
+            assertThrows(IOException::class.java) { configure(reopened, first.size.toLong()) }
+        }
+        assertTrue(secondChunk.isFile)
+        assertArrayEquals(corruptedBytes, secondChunk.readBytes())
+    }
+
+    @Test
+    fun loopingRetentionBoundaryTrim_neverRecertifiesCorruptedFinalizedChunk() = withStoreRoot { root ->
+        val expected = pcmBytes(16_000)
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
+            configure(store, 64 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        RandomAccessFile(chunk, "rw").use { file ->
+            file.seek(128L + 4_000L)
+            val original = file.read()
+            file.seek(128L + 4_000L)
+            file.write(original xor 0x20)
+            file.fd.sync()
+        }
+        val corruptedBytes = chunk.readBytes()
+
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { reopened ->
+            // Initial 64 KiB retention subdivides this history into 4 KiB chunks. Keeping
+            // 14 KiB therefore requires a 2 KiB partial trim of the corrupted oldest chunk.
+            assertThrows(IOException::class.java) { configure(reopened, 14_000L) }
+        }
+        assertTrue(chunk.isFile)
+        assertArrayEquals(corruptedBytes, chunk.readBytes())
+    }
+
+    @Test
+    fun explicitClear_stillDeletesCorruptedFinalizedChunk() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
+            configure(store, 64 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        RandomAccessFile(chunk, "rw").use { file ->
+            file.seek(file.length() - 1L)
+            val original = file.read()
+            file.seek(file.length() - 1L)
+            file.write(original xor 0x01)
+            file.fd.sync()
+        }
+
+        PersistentAudioChunkStore(root, overwriteOldest = true).use { reopened ->
+            configure(reopened, 64 * 1024L)
+            reopened.clear()
+            assertFalse(reopened.hasData())
+        }
+        assertFalse(chunk.exists())
+    }
+
+    @Test
     fun checksumCorruption_isDetectedWithoutDeletingTheOnlyChunk() = withStoreRoot { root ->
         val expected = pcmBytes(16_000)
         PersistentAudioChunkStore(root).use { store ->
