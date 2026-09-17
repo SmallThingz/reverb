@@ -1945,7 +1945,13 @@ class ReverbService : Service() {
     ) {
         check(audioHandler.looper == Looper.myLooper())
         val disposition = synchronized(listeningIntentLock) {
-            if (generation != listeningCommandGeneration.get() || state != STATE_LISTENING) return
+            if (!automaticCaptureStopMayBegin(
+                    serviceDestroying = serviceDestroying,
+                    requestedGeneration = generation,
+                    currentGeneration = listeningCommandGeneration.get(),
+                    recorderListening = state == STATE_LISTENING,
+                )
+            ) return
             val prefs = getRecorderPreferences(this)
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
@@ -3283,6 +3289,13 @@ internal enum class AutomaticCaptureStopDisposition {
     PERSISTENCE_FAILURE,
     INCIDENT_STATE_FAILURE,
 }
+
+internal fun automaticCaptureStopMayBegin(
+    serviceDestroying: Boolean,
+    requestedGeneration: Long,
+    currentGeneration: Long,
+    recorderListening: Boolean,
+): Boolean = !serviceDestroying && requestedGeneration == currentGeneration && recorderListening
 
 internal fun automaticCaptureStopDisposition(
     stopIntentPersisted: Boolean,

@@ -870,6 +870,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun automaticCaptureStopNeverConsumesIntentAfterServiceTeardownBegins() {
+        assertTrue(automaticCaptureStopMayBegin(false, 7L, 7L, recorderListening = true))
+        assertFalse(automaticCaptureStopMayBegin(true, 7L, 7L, recorderListening = true))
+        assertFalse(automaticCaptureStopMayBegin(false, 6L, 7L, recorderListening = true))
+        assertFalse(automaticCaptureStopMayBegin(false, 7L, 7L, recorderListening = false))
+    }
+
+    @Test
     fun automaticCaptureStopIsKnownOnlyAfterDurableIntentAndIncidentCommit() {
         assertEquals(
             AutomaticCaptureStopDisposition.KNOWN_STOP,
