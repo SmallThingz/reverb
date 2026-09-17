@@ -31,6 +31,15 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun directoryReconciliation_skipsDuplicateFallbackProbesOnlyForKnownHandledDirectories() {
+        val handled = setOf("configured", "persisted", "legacy")
+        assertFalse(recordingNeedsFallbackAssetProbe("configured", handled))
+        assertFalse(recordingNeedsFallbackAssetProbe("persisted", handled))
+        assertFalse(recordingNeedsFallbackAssetProbe("legacy", handled))
+        assertTrue(recordingNeedsFallbackAssetProbe("unavailable-or-unscanned", handled))
+    }
+
+    @Test
     fun recordingOperationRegistry_keepsIdentityBusyUntilMatchingTerminal() {
         val registry = RecordingOperationRegistry()
         val first = requireNotNull(registry.tryBegin("recording-a"))

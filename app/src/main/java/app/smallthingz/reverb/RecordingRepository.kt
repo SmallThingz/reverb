@@ -82,8 +82,12 @@ object RecordingRepository {
 
     private suspend fun refreshLocked(context: Context): List<RecordingEntity> {
         replayPendingDeletionsLocked(context)
-        syncRecoverableDirectories(context)
-        updateMissingStatesLocked(context, skipDirectoryId = getConfiguredOutputDirectoryId(context))
+        val reconciledDirectoryIds = syncRecoverableDirectories(context).toMutableSet().apply {
+            // Preserve the existing fail-closed rule for the configured destination: if its
+            // directory enumeration fails, that failure is not evidence that every row vanished.
+            add(getConfiguredOutputDirectoryId(context))
+        }
+        updateMissingStatesLocked(context, skipDirectoryIds = reconciledDirectoryIds)
         val pending = pendingDeletionIds(context)
         return visibleCatalogRecordings(
             dao(context).listAll(),
@@ -580,7 +584,8 @@ object RecordingRepository {
         return true
     }
 
-    private suspend fun syncRecoverableDirectories(context: Context) {
+    private suspend fun syncRecoverableDirectories(context: Context): Set<String> {
+        val reconciledDirectoryIds = LinkedHashSet<String>()
         val directoryUris = LinkedHashMap<String, Uri?>()
         directoryUris[getOutputDirectoryId(context, null)] = null
         getConfiguredExportTreeUri(context)?.let { uri ->
@@ -594,16 +599,19 @@ object RecordingRepository {
                 directoryUris.putIfAbsent(permission.uri.toString(), permission.uri)
             }
 
-        for (treeUri in directoryUris.values) {
-            syncRecoverableDirectory(context, treeUri)
+        for ((directoryId, treeUri) in directoryUris) {
+            if (syncRecoverableDirectory(context, treeUri)) reconciledDirectoryIds += directoryId
         }
 
         // Pre-MediaStore builds saved into app-specific external/internal storage. Keep
         // scanning it forever so upgrading never strands a recording in the old location.
         val legacyDirectoryId = getSavedRecordingsDirectory(context).absolutePath
         if (legacyDirectoryId !in directoryUris.keys) {
-            syncObservedDirectory(context, legacyDirectoryId) { known ->
-                listLegacyAppStorageRecordings(context, known)
+            if (syncObservedDirectory(context, legacyDirectoryId) { known ->
+                    listLegacyAppStorageRecordings(context, known)
+                }
+            ) {
+                reconciledDirectoryIds += legacyDirectoryId
             }
         }
 
@@ -613,6 +621,7 @@ object RecordingRepository {
         if (getConfiguredExportTreeUri(context) == null && legacyDirectoryId != getConfiguredOutputDirectoryId(context)) {
             migrateLegacyAppStorageLocked(context, legacyDirectoryId)
         }
+        return reconciledDirectoryIds
     }
 
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
@@ -658,9 +667,9 @@ object RecordingRepository {
     private suspend fun syncRecoverableDirectory(
         context: Context,
         treeUri: Uri?,
-    ) {
+    ): Boolean {
         val directoryId = getOutputDirectoryId(context, treeUri)
-        syncObservedDirectory(context, directoryId) { known ->
+        return syncObservedDirectory(context, directoryId) { known ->
             listOutputDirectoryRecordings(context, treeUri, known)
         }
     }
@@ -669,7 +678,7 @@ object RecordingRepository {
         context: Context,
         directoryId: String,
         scan: (Map<String, RecordingEntity>) -> List<RecordingEntity>,
-    ) {
+    ): Boolean {
         val dao = dao(context)
         val existing = dao.listByDirectory(directoryId)
         val existingById = HashMap<String, RecordingEntity>(existing.size)
@@ -681,7 +690,7 @@ object RecordingRepository {
             // disappeared. Leave this directory's catalog state untouched and continue
             // reconciling other recoverable locations.
             Log.w("RecordingRepository", "Unable to enumerate recording directory $directoryId", error)
-            return
+            return false
         }
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
@@ -707,18 +716,19 @@ object RecordingRepository {
             }
 
         dao.applyChanges(importedUpdates + updates, emptyList())
+        return true
     }
 
     private suspend fun updateMissingStatesLocked(
         context: Context,
-        skipDirectoryId: String? = null,
+        skipDirectoryIds: Set<String> = emptySet(),
     ) {
         val dao = dao(context)
         val all = dao.listAll()
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
         all.forEach { recording ->
-            if (recording.directoryId == skipDirectoryId) return@forEach
+            if (!recordingNeedsFallbackAssetProbe(recording.directoryId, skipDirectoryIds)) return@forEach
             val updated = when (selectedRecordingAssetState(context, recording)) {
                 RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
                 RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
@@ -781,6 +791,11 @@ object RecordingRepository {
             get() = failed > 0 || cleanupFailed > 0
     }
 }
+
+internal fun recordingNeedsFallbackAssetProbe(
+    directoryId: String,
+    reconciledOrProtectedDirectoryIds: Set<String>,
+): Boolean = directoryId !in reconciledOrProtectedDirectoryIds
 
 internal enum class MoveSourceCleanupAction { DELETE_SOURCE, COMPLETE, KEEP_SOURCE }
 
