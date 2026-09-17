@@ -1762,10 +1762,12 @@ class ReverbService : Service() {
         return true
     }
 
-    fun applyUpdatedPreferences(): Boolean {
-        if (serviceDestroying) return false
-        return audioHandler.post {
-            if (serviceDestroying) return@post
+    fun applyUpdatedPreferences(): Boolean = synchronized(listeningIntentLock) {
+        // Settings treats true as acceptance of the committed runtime reload. Serialize that
+        // acceptance with onDestroy(): an accepted task is queued before terminal store close;
+        // once teardown owns the lifetime, reject so Settings can use its stopped/restart fallback.
+        if (!serviceAudioMutationMayQueue(serviceDestroying)) return@synchronized false
+        audioHandler.post {
             try {
                 applyConfiguredPreferencesOnAudioThread()
             } catch (error: Exception) {

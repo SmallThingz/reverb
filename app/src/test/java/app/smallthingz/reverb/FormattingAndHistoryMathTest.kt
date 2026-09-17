@@ -991,6 +991,12 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun committedSettingsReloadIsRejectedOnceServiceTeardownOwnsLifetime() {
+        assertTrue(serviceAudioMutationMayQueue(serviceDestroying = false))
+        assertFalse(serviceAudioMutationMayQueue(serviceDestroying = true))
+    }
+
+    @Test
     fun queuedRuntimeReadFailsClosedOnceServiceTeardownOwnsLifetime() {
         assertTrue(serviceRuntimeReadMayExecute(serviceDestroying = false))
         assertFalse(serviceRuntimeReadMayExecute(serviceDestroying = true))
