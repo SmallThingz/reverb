@@ -41,17 +41,22 @@ internal fun rangeDurationWheelErrorMask(
     seconds: Int,
     maximumWholeSeconds: Int,
 ): Int {
-    val maximum = splitRangeDurationWheelSeconds(maximumWholeSeconds)
+    // This runs on every custom-View draw while the wheel is moving. Keep the maximum split in
+    // primitive locals instead of allocating RangeDurationWheelTimeParts every frame.
+    val maximum = maximumWholeSeconds.coerceAtLeast(0)
+    val maximumHours = maximum / 3_600
+    val maximumMinutes = maximum % 3_600 / 60
+    val maximumSeconds = maximum % 60
     return when {
-        hours > maximum.hours ->
+        hours > maximumHours ->
             RANGE_DURATION_WHEEL_ERROR_HOUR or
                 RANGE_DURATION_WHEEL_ERROR_MINUTE or
                 RANGE_DURATION_WHEEL_ERROR_SECOND
-        hours < maximum.hours -> 0
-        minutes > maximum.minutes ->
+        hours < maximumHours -> 0
+        minutes > maximumMinutes ->
             RANGE_DURATION_WHEEL_ERROR_MINUTE or RANGE_DURATION_WHEEL_ERROR_SECOND
-        minutes < maximum.minutes -> 0
-        seconds > maximum.seconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
+        minutes < maximumMinutes -> 0
+        seconds > maximumSeconds -> RANGE_DURATION_WHEEL_ERROR_SECOND
         else -> 0
     }
 }
