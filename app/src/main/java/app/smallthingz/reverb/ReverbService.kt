@@ -79,6 +79,9 @@ internal fun quickTileCommandBufferSlot(
     null
 }
 
+internal fun quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes: Int): Boolean =
+    foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
+
 internal class IdentityOwnerRegistry<T : Any> {
     private val owners = ArrayList<T>()
 
@@ -2423,7 +2426,7 @@ class ReverbService : Service() {
         startId: Int,
     ): Boolean {
         if (serviceDestroying) return false
-        if (foregroundServiceTypes == 0) {
+        if (quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes)) {
             try {
                 foregroundServiceTimedOut = false
                 val exporting = hasActiveExport()

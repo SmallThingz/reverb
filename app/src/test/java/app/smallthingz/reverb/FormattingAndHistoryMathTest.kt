@@ -1815,6 +1815,16 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileCommand_promotesMicrophoneWhenServiceIsIdleOrExportOnly() {
+        val microphone = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        val dataSync = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        assertTrue(quickTileCommandNeedsMicrophoneForeground(0))
+        assertTrue(quickTileCommandNeedsMicrophoneForeground(dataSync))
+        assertFalse(quickTileCommandNeedsMicrophoneForeground(microphone))
+        assertFalse(quickTileCommandNeedsMicrophoneForeground(microphone or dataSync))
+    }
+
+    @Test
     fun successfulClearUpdatesStoppedTileFallbackWithoutInventingOtherChanges() {
         val previous = RecordingTileSnapshot(
             listening = true,
