@@ -124,6 +124,12 @@ internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition =
 
 internal enum class CaptureSessionStartDisposition { NEW_SESSION, CONTINUE_SESSION, RESOLVE_INTERRUPTED_SESSION }
 
+internal enum class KnownCaptureStopResult {
+    DURABLE,
+    FAILED_REARMED,
+    FAILED_UNCERTAIN,
+}
+
 internal fun captureSessionStartDisposition(
     sameProcessArmedSession: Boolean,
     continuousRestart: Boolean,
@@ -334,25 +340,44 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun recordKnownCaptureStop(context: Context) {
+    fun recordKnownCaptureStop(context: Context): KnownCaptureStopResult {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)
         val existing = try {
             readSession(file)
         } catch (_: IOException) {
-            // This path is reached only for an explicit known stop. The user intent is now
-            // authoritative, so discard an unreadable stale marker best-effort without turning
-            // storage uncertainty into a framework crash.
-            runCatching { deleteAtomicDurablyIfPresent(file) }
-            return
-        } ?: return
-        if (!existing.armed) return
-        runCatching {
-            writeSession(file, existing.copy(armed = false))
-        }.onFailure {
-            // Best-effort fallback. A known stop should disarm durably; if that write fails,
-            // remove the marker only through the same durable directory boundary.
-            runCatching { deleteAtomicDurablyIfPresent(file) }
+            // A known Stop may retire unreadable incident metadata only if that removal is
+            // durable. Otherwise the prior armed state is unknown and the caller must fail closed.
+            return if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
+                KnownCaptureStopResult.DURABLE
+            } else {
+                KnownCaptureStopResult.FAILED_UNCERTAIN
+            }
+        }
+        if (existing == null) {
+            // AtomicFile.openRead can report no readable base while backup/new state is still
+            // ambiguous. The durable delete helper distinguishes real absence from uncertainty.
+            return if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
+                KnownCaptureStopResult.DURABLE
+            } else {
+                KnownCaptureStopResult.FAILED_UNCERTAIN
+            }
+        }
+        if (!existing.armed) return KnownCaptureStopResult.DURABLE
+        if (runCatching { writeSession(file, existing.copy(armed = false)) }.isSuccess) {
+            return KnownCaptureStopResult.DURABLE
+        }
+        // Durable deletion is a valid known-Stop fallback. If deletion cannot be proven, restore
+        // the exact original armed marker before allowing capture to continue. A failed re-arm
+        // means marker state is uncertain, so the caller must stop/reclassify rather than record
+        // with potentially disabled incident tracking.
+        if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
+            return KnownCaptureStopResult.DURABLE
+        }
+        return if (runCatching { writeSession(file, existing) }.isSuccess) {
+            KnownCaptureStopResult.FAILED_REARMED
+        } else {
+            KnownCaptureStopResult.FAILED_UNCERTAIN
         }
     }
 

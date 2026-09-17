@@ -807,14 +807,59 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun automaticCaptureStopIsKnownOnlyAfterDurableIntentCommit() {
+    fun explicitCaptureStop_rejectsOnlyWhenPriorArmedMarkerWasRestored() {
+        assertEquals(
+            ExplicitCaptureStopDisposition.KNOWN_STOP,
+            explicitCaptureStopDisposition(
+                stopIntentChanged = true,
+                incidentResult = KnownCaptureStopResult.DURABLE,
+            ),
+        )
+        assertEquals(
+            ExplicitCaptureStopDisposition.REJECT_REARMED,
+            explicitCaptureStopDisposition(
+                stopIntentChanged = true,
+                incidentResult = KnownCaptureStopResult.FAILED_REARMED,
+            ),
+        )
+        assertEquals(
+            ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
+            explicitCaptureStopDisposition(
+                stopIntentChanged = false,
+                incidentResult = KnownCaptureStopResult.FAILED_REARMED,
+            ),
+        )
+        assertEquals(
+            ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
+            explicitCaptureStopDisposition(
+                stopIntentChanged = true,
+                incidentResult = KnownCaptureStopResult.FAILED_UNCERTAIN,
+            ),
+        )
+    }
+
+    @Test
+    fun automaticCaptureStopIsKnownOnlyAfterDurableIntentAndIncidentCommit() {
         assertEquals(
             AutomaticCaptureStopDisposition.KNOWN_STOP,
-            automaticCaptureStopDisposition(stopIntentPersisted = true),
+            automaticCaptureStopDisposition(
+                stopIntentPersisted = true,
+                incidentStopPersisted = true,
+            ),
         )
         assertEquals(
             AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE,
-            automaticCaptureStopDisposition(stopIntentPersisted = false),
+            automaticCaptureStopDisposition(
+                stopIntentPersisted = false,
+                incidentStopPersisted = false,
+            ),
+        )
+        assertEquals(
+            AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE,
+            automaticCaptureStopDisposition(
+                stopIntentPersisted = true,
+                incidentStopPersisted = false,
+            ),
         )
     }
 

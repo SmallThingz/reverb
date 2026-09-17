@@ -561,19 +561,21 @@ class ReverbService : Service() {
         requestedBufferSlot: BufferSlot? = null,
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
+        var stopIncidentStateFailure = false
         val generation = synchronized(listeningIntentLock) {
             if (serviceDestroying) return rejectedListeningCommand()
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
+            val stopIntentChanged = !enabled && previousEnabled
             val needsPersistence = captureIntentNeedsPersistence(
                 previousEnabled = previousEnabled,
                 requestedEnabled = enabled,
                 previousStoredSlot = previousStoredSlot,
                 requestedSlot = requestedSlot,
             )
-            if (!needsPersistence) {
+            val commandGeneration = if (!needsPersistence) {
                 if (enabled) {
                     activeBufferSlot = requestedSlot
                     foregroundStartBlocked = false
@@ -594,22 +596,50 @@ class ReverbService : Service() {
                         Log.e(TAG, "Unable to durably restore recorder intent after failed command")
                     }
                     null
-                } else {
-                    if (enabled) {
-                        activeBufferSlot = requestedSlot
-                        foregroundStartBlocked = false
-                        foregroundServiceTimedOut = false
-                        persistenceFailureBlocked = false
-                    }
+                } else if (enabled) {
+                    activeBufferSlot = requestedSlot
+                    foregroundStartBlocked = false
+                    foregroundServiceTimedOut = false
+                    persistenceFailureBlocked = false
                     listeningCommandGeneration.incrementAndGet()
+                } else {
+                    // Do not invalidate the active reader until the known-Stop marker is durably
+                    // disarmed too. If that second half fails, roll the intent back and keep
+                    // capture continuous rather than accepting a Stop that later looks accidental.
+                    listeningCommandGeneration.get()
                 }
-            }.also { resolvedGeneration ->
-                if (resolvedGeneration != null && !enabled) {
-                    // The durable Stop intent and incident disarm are one lifetime boundary.
-                    // onDestroy takes the same lock before it can classify an armed session as
-                    // interrupted, so a known Stop cannot race into a false incident.
-                    captureContinuityGeneration.incrementAndGet()
-                    RecordingIncidentStore.recordKnownCaptureStop(this)
+            }
+            if (commandGeneration == null || enabled) {
+                commandGeneration
+            } else {
+                when (
+                    explicitCaptureStopDisposition(
+                        stopIntentChanged = stopIntentChanged,
+                        incidentResult = RecordingIncidentStore.recordKnownCaptureStop(this),
+                    )
+                ) {
+                    ExplicitCaptureStopDisposition.KNOWN_STOP -> {
+                        captureContinuityGeneration.incrementAndGet()
+                        if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
+                    }
+                    ExplicitCaptureStopDisposition.REJECT_REARMED -> {
+                        if (!restoreCaptureIntentPreferences(
+                                prefs = prefs,
+                                previousEnabled = previousEnabled,
+                                previousStoredSlot = previousStoredSlot,
+                            )) {
+                            Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
+                        }
+                        null
+                    }
+                    ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
+                        // Continuing with uncertain or already-disabled incident state can make a
+                        // later process death invisible. Honor the Stop, but classify the
+                        // bookkeeping loss as an interruption instead of pretending it was known.
+                        stopIncidentStateFailure = true
+                        captureContinuityGeneration.incrementAndGet()
+                        if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
+                    }
                 }
             }
         }
@@ -618,6 +648,14 @@ class ReverbService : Service() {
             return ListeningCommandResult(
                 accepted = false,
                 generation = listeningCommandGeneration.get(),
+            )
+        }
+        if (!enabled && stopIncidentStateFailure) {
+            val error = IOException("Unable to persist known-Stop incident state")
+            reportPersistentStoreFailure("persist known Stop incident state", error)
+            RecordingIncidentStore.recordCaptureInterrupted(
+                this,
+                "Capture stopped because known-Stop incident state could not be persisted",
             )
         }
         if (enabled) {
@@ -640,12 +678,13 @@ class ReverbService : Service() {
         return editor.commit()
     }
 
-    private fun isListeningEnabled(): Boolean {
-        return getRecorderPreferences(this).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+    private fun isListeningEnabled(): Boolean = synchronized(listeningIntentLock) {
+        getRecorderPreferences(this).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
     }
 
-    private fun persistedCaptureBufferSlot(): BufferSlot? =
+    private fun persistedCaptureBufferSlot(): BufferSlot? = synchronized(listeningIntentLock) {
         readCaptureBufferSlotPreference(getRecorderPreferences(this))
+    }
 
     private fun resolveConfiguredCaptureBufferSlot(): BufferSlot {
         val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
@@ -1875,20 +1914,31 @@ class ReverbService : Service() {
                 }
                 persistenceFailureBlocked = true
             }
+            // Keep known-Stop incident state in the same lifetime transaction as the intent.
+            // onDestroy takes this lock before it can classify an armed marker as interrupted.
+            val incidentStopPersisted = committed &&
+                RecordingIncidentStore.recordKnownCaptureStop(this) == KnownCaptureStopResult.DURABLE
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
-            automaticCaptureStopDisposition(committed)
+            automaticCaptureStopDisposition(committed, incidentStopPersisted)
         }
         when (disposition) {
-            AutomaticCaptureStopDisposition.KNOWN_STOP ->
-                RecordingIncidentStore.recordKnownCaptureStop(this)
+            AutomaticCaptureStopDisposition.KNOWN_STOP -> Unit
             AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE -> {
                 val error = IOException("Unable to persist automatic capture stop")
                 reportPersistentStoreFailure("persist automatic stop", error)
                 RecordingIncidentStore.recordCaptureInterrupted(
                     this,
                     "Capture stopped because automatic-stop persistence failed",
+                )
+            }
+            AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
+                val error = IOException("Unable to persist automatic known-Stop incident state")
+                reportPersistentStoreFailure("persist automatic Stop incident state", error)
+                RecordingIncidentStore.recordCaptureInterrupted(
+                    this,
+                    "Capture stopped because known-Stop incident state could not be persisted",
                 )
             }
         }
@@ -3168,14 +3218,36 @@ internal fun foregroundServiceTypesForWork(
     else -> 0
 }
 
+internal enum class ExplicitCaptureStopDisposition {
+    KNOWN_STOP,
+    REJECT_REARMED,
+    INCIDENT_STATE_FAILURE,
+}
+
+internal fun explicitCaptureStopDisposition(
+    stopIntentChanged: Boolean,
+    incidentResult: KnownCaptureStopResult,
+): ExplicitCaptureStopDisposition = when {
+    incidentResult == KnownCaptureStopResult.DURABLE -> ExplicitCaptureStopDisposition.KNOWN_STOP
+    incidentResult == KnownCaptureStopResult.FAILED_REARMED && stopIntentChanged ->
+        ExplicitCaptureStopDisposition.REJECT_REARMED
+    else -> ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE
+}
+
 internal enum class AutomaticCaptureStopDisposition {
     KNOWN_STOP,
     PERSISTENCE_FAILURE,
+    INCIDENT_STATE_FAILURE,
 }
 
-internal fun automaticCaptureStopDisposition(stopIntentPersisted: Boolean): AutomaticCaptureStopDisposition =
-    if (stopIntentPersisted) AutomaticCaptureStopDisposition.KNOWN_STOP
-    else AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE
+internal fun automaticCaptureStopDisposition(
+    stopIntentPersisted: Boolean,
+    incidentStopPersisted: Boolean,
+): AutomaticCaptureStopDisposition = when {
+    !stopIntentPersisted -> AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE
+    !incidentStopPersisted -> AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE
+    else -> AutomaticCaptureStopDisposition.KNOWN_STOP
+}
 
 internal fun captureSlotNeedsPersistence(
     previousStoredSlot: ReverbService.BufferSlot?,
