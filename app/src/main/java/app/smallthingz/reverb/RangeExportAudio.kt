@@ -535,6 +535,7 @@ internal class TimelineAudioPreviewController : Closeable {
             rate = rate,
             sourceFactory = { TimelineShuttlePcmSource(snapshot) },
             onStarted = null,
+            onFailureAfterStart = null,
         )
     }
 
@@ -544,6 +545,7 @@ internal class TimelineAudioPreviewController : Closeable {
         atSeconds: Double,
         rate: Float,
         onStarted: () -> Unit = {},
+        onFailureAfterStart: () -> Unit = {},
     ) {
         startShuttleInternal(
             // Catalog duration can lag MediaPlayer/the opened WAV. The source thread owns the
@@ -552,6 +554,7 @@ internal class TimelineAudioPreviewController : Closeable {
             rate = rate,
             sourceFactory = { RecordingShuttlePcmSource(context.applicationContext, recording) },
             onStarted = onStarted,
+            onFailureAfterStart = onFailureAfterStart,
         )
     }
 
@@ -560,6 +563,7 @@ internal class TimelineAudioPreviewController : Closeable {
         rate: Float,
         sourceFactory: () -> ShuttlePcmSource,
         onStarted: (() -> Unit)?,
+        onFailureAfterStart: (() -> Unit)?,
     ) {
         if (closed) return
         cancelCurrent()
@@ -579,7 +583,7 @@ internal class TimelineAudioPreviewController : Closeable {
                 if (activeShuttleToken == token) activeShuttleToken = 0L
                 return@enqueueLatest
             }
-            shuttle(token, source, onStarted)
+            shuttle(token, source, onStarted, onFailureAfterStart)
         }
     }
 
@@ -650,8 +654,10 @@ internal class TimelineAudioPreviewController : Closeable {
         token: Long,
         source: ShuttlePcmSource,
         onStarted: (() -> Unit)?,
+        onFailureAfterStart: (() -> Unit)?,
     ) {
         var track: AudioTrack? = null
+        var startedCallbackSent = false
         try {
             checkCurrent(token)
             val grainBufferBytes = (
@@ -676,7 +682,6 @@ internal class TimelineAudioPreviewController : Closeable {
             var previousAnchorSeconds: Double? = null
             var previousDirection = 0
             var sourceWindow: ShuttlePcmWindow? = null
-            var startedCallbackSent = false
 
             fun write(bytes: ByteArray) {
                 if (bytes.isEmpty()) return
@@ -830,7 +835,12 @@ internal class TimelineAudioPreviewController : Closeable {
         } catch (_: PreviewCancelled) {
             Unit
         } catch (_: Exception) {
-            Unit
+            // Cancellation/newer gestures stay silent. A real failure after AudioTrack took
+            // audible ownership must hand control back to the caller so it can restore its
+            // already-open player instead of leaving the gesture silent until finger-up.
+            if (startedCallbackSent && onFailureAfterStart != null && isCurrent(token)) {
+                postIfCurrent(token, onFailureAfterStart)
+            }
         } finally {
             if (activeShuttleToken == token) activeShuttleToken = 0L
             if (track != null) {

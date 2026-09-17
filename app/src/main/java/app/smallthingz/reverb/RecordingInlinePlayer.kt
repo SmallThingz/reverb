@@ -199,6 +199,12 @@ private fun openInlinePlayerMediaSource(
     }
 }
 
+internal fun inlineShuttleFailureShouldResume(
+    shuttleActive: Boolean,
+    resumeAfterScrub: Boolean,
+    lifecycleResumed: Boolean,
+): Boolean = shuttleActive && resumeAfterScrub && lifecycleResumed
+
 private class InlinePlayerBookkeeping {
     var resumeAfterScrub = false
     var released = false
@@ -380,6 +386,24 @@ internal fun RecordingInlinePlayer(
             onStarted = {
                 if (playbackBookkeeping.fineSeekShuttleActive && playbackBookkeeping.resumeAfterScrub) {
                     runCatching { mediaPlayer?.pause() }
+                }
+            },
+            onFailureAfterStart = {
+                if (inlineShuttleFailureShouldResume(
+                        shuttleActive = playbackBookkeeping.fineSeekShuttleActive,
+                        resumeAfterScrub = playbackBookkeeping.resumeAfterScrub,
+                        lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                    )
+                ) {
+                    val player = mediaPlayer
+                    if (player != null) {
+                        runCatching { player.start() }
+                            .onSuccess { isPlaying = true }
+                            .onFailure {
+                                releasePlayer()
+                                onPlaybackFailed()
+                            }
+                    }
                 }
             },
         )
