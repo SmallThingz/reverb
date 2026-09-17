@@ -171,6 +171,18 @@ internal fun settingsShouldOwnServiceBinding(active: Boolean, persisting: Boolea
 internal fun settingsEditedDuringPersistence(submittedRevision: Long, currentRevision: Long): Boolean =
     submittedRevision != currentRevision
 
+internal data class SettingsRetentionModeChange(
+    val mode: RetentionMode,
+    val preserveInputDrafts: Boolean,
+)
+
+internal fun settingsRetentionModeChange(
+    currentMode: RetentionMode,
+    requestedMode: RetentionMode,
+): SettingsRetentionModeChange? =
+    if (currentMode == requestedMode) null
+    else SettingsRetentionModeChange(requestedMode, preserveInputDrafts = true)
+
 internal fun settingsSnapshotHasUnsavedChanges(
     durableSnapshot: SettingsSnapshot,
     currentSnapshot: SettingsSnapshot,
@@ -449,11 +461,11 @@ fun SettingsScreen(
     }
 
     fun activateRetentionMode(mode: RetentionMode) {
-        if (activeRetentionMode == mode) return
+        val change = settingsRetentionModeChange(activeRetentionMode, mode) ?: return
         // onValueChange keeps the active backing value current. Switching modes only
-        // changes presentation; it must never reparse the rounded display string.
-        activeRetentionMode = mode
-        refreshRetentionFields(preserveActiveInputs = false)
+        // changes presentation; it must never reparse the rounded display string or erase drafts.
+        activeRetentionMode = change.mode
+        refreshRetentionFields(preserveActiveInputs = change.preserveInputDrafts)
         currentSnapshot = currentSettingsSnapshot()
         pushUndoState()
     }
