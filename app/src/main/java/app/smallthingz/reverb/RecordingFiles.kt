@@ -1888,15 +1888,23 @@ private fun recoverStagedDocumentOutputs(
     return changed
 }
 
+internal fun fileDirectoryListingFailureIsAuthoritativeEmpty(
+    directoryState: StoragePathState,
+): Boolean = directoryState == StoragePathState.MISSING
+
 private fun listFileDirectoryRecordings(
     context: Context,
     directory: File,
     knownRecordings: Map<String, RecordingEntity>,
     suppressedIds: Set<String>,
 ): List<RecordingEntity> {
-    var files = directory.listFiles() ?: if (!directory.exists()) {
+    var files = directory.listFiles() ?: if (
+        fileDirectoryListingFailureIsAuthoritativeEmpty(storagePathState(directory))
+    ) {
         emptyArray()
     } else {
+        // A null listing on a present/unavailable path is not evidence that every recording
+        // disappeared. Abort this reconciliation scope so existing catalog rows stay visible.
         throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
     }
     if (recoverStagedFileOutputs(context, directory, files, suppressedIds)) {
