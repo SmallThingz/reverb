@@ -113,6 +113,20 @@ data class SettingsSnapshot(
     val wakeLockEnabled: Boolean = false,
 )
 
+private data class SettingsInitialConfiguration(
+    val themeMode: AppThemeMode,
+    val retention: RetentionConfiguration,
+    val format: ExportFormat,
+    val codec: ExportCodec,
+    val sampleFormat: PcmSampleFormat,
+    val route: InputRouteMode,
+    val source: AudioSourceMode,
+    val channelMode: ChannelMode,
+    val sampleRate: Int,
+    val exportTreeUri: Uri?,
+    val wakeLockEnabled: Boolean,
+)
+
 internal fun shouldInvalidateCachedOneShotFull(
     previousMode: RetentionMode,
     newMode: RetentionMode,
@@ -189,6 +203,7 @@ fun SettingsScreen(
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var hasUnsavedChanges by remember { mutableStateOf(false) }
     var settingsPersisting by remember { mutableStateOf(false) }
+    var settingsHydrated by remember { mutableStateOf(false) }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
@@ -718,9 +733,24 @@ fun SettingsScreen(
         }
     }
 
-    fun bindUiFromPreferences() {
-        val configuredThemeMode = getConfiguredThemeMode(context)
-        val retention = retentionConfigurationForRead(context)
+    suspend fun bindUiFromPreferences() {
+        val initial = withContext(Dispatchers.IO) {
+            SettingsInitialConfiguration(
+                themeMode = getConfiguredThemeMode(context),
+                retention = retentionConfigurationForRead(context),
+                format = getConfiguredOutputFormat(context),
+                codec = getConfiguredOutputCodec(context),
+                sampleFormat = getConfiguredPcmSampleFormat(context),
+                route = getConfiguredInputRouteMode(context),
+                source = getConfiguredAudioSourceMode(context),
+                channelMode = getConfiguredChannelMode(context),
+                sampleRate = getConfiguredSampleRate(context),
+                exportTreeUri = getConfiguredExportTreeUri(context),
+                wakeLockEnabled = isWakeLockEnabled(context),
+            )
+        }
+        val configuredThemeMode = initial.themeMode
+        val retention = initial.retention
         val configuredMode = retention.mode
         val configuredOneShotTime = retention.oneShotSeconds
             .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
@@ -728,14 +758,14 @@ fun SettingsScreen(
             .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
         val storedOneShotSizeBytes = retention.oneShotSizeBytes
         val storedLoopingSizeBytes = retention.loopingSizeBytes
-        val configuredFormat = getConfiguredOutputFormat(context)
-        val configuredCodec = getConfiguredOutputCodec(context)
-        val configuredSampleFormatVal = getConfiguredPcmSampleFormat(context)
-        val configuredRouteVal = getConfiguredInputRouteMode(context)
-        val configuredSourceVal = getConfiguredAudioSourceMode(context)
-        val configuredChannelModeVal = getConfiguredChannelMode(context)
-        val configuredRateVal = getConfiguredSampleRate(context)
-        val configuredExportTreeUriVal = getConfiguredExportTreeUri(context)
+        val configuredFormat = initial.format
+        val configuredCodec = initial.codec
+        val configuredSampleFormatVal = initial.sampleFormat
+        val configuredRouteVal = initial.route
+        val configuredSourceVal = initial.source
+        val configuredChannelModeVal = initial.channelMode
+        val configuredRateVal = initial.sampleRate
+        val configuredExportTreeUriVal = initial.exportTreeUri
 
         activeRetentionMode = configuredMode
         oneShotRetentionTimeSecondsValue = configuredOneShotTime
@@ -765,9 +795,10 @@ fun SettingsScreen(
         refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
-        currentSnapshot = currentSettingsSnapshot(isWakeLockEnabled(context))
+        currentSnapshot = currentSettingsSnapshot(initial.wakeLockEnabled)
         originalSnapshot = currentSnapshot
         hasUnsavedChanges = false
+        settingsHydrated = true
     }
 
     val exportDirectoryLauncher = rememberLauncherForActivityResult(
@@ -928,6 +959,10 @@ fun SettingsScreen(
         }
     }
     LaunchedEffect(Unit) { bindUiFromPreferences() }
+    if (!settingsHydrated) {
+        Box(modifier = modifier.fillMaxSize())
+        return
+    }
     LaunchedEffect(active, selectedExportTreeUri) {
         refreshMoveRecordingsAvailability()
     }

@@ -14,6 +14,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -41,6 +42,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.BottomSheetDefaults
@@ -112,6 +114,8 @@ class MainActivity : ComponentActivity() {
     private var batteryOptimizationAllowed by mutableStateOf(false)
     private var showPermissionDenied by mutableStateOf(false)
     private var showOnboarding by mutableStateOf(false)
+    private var onboardingBufferAvailability by mutableStateOf<ConfiguredBufferAvailability?>(null)
+    private var onboardingFinishing by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
 
     private val microphonePermissionLauncher =
@@ -173,11 +177,21 @@ class MainActivity : ComponentActivity() {
             batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         }
         themeMode = configuredThemeMode
-        val onboardingBuffers = if (showOnboarding) getConfiguredBufferAvailability(this) else null
+        if (showOnboarding) {
+            lifecycleScope.launch {
+                onboardingBufferAvailability = withContext(Dispatchers.IO) {
+                    getConfiguredBufferAvailability(applicationContext)
+                }
+            }
+        }
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
                 if (showOnboarding) {
+                    val onboardingBuffers = onboardingBufferAvailability
+                    if (onboardingBuffers == null) {
+                        OnboardingLoadingScreen()
+                    } else {
                     OnboardingScreen(
                         microphoneAllowed = microphonePermissionGranted,
                         storageAllowed = storagePermissionGranted,
@@ -187,8 +201,9 @@ class MainActivity : ComponentActivity() {
                         notificationAllowed = notificationPermissionGranted,
                         notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
                         batteryOptimizationAllowed = batteryOptimizationAllowed,
-                        initialOneShotEnabled = onboardingBuffers?.oneShotEnabled == true,
-                        initialLoopingEnabled = onboardingBuffers?.loopingEnabled == true,
+                        initialOneShotEnabled = onboardingBuffers.oneShotEnabled,
+                        initialLoopingEnabled = onboardingBuffers.loopingEnabled,
+                        finishing = onboardingFinishing,
                         onRequestMicrophone = {
                             microphonePermissionRequested = true
                             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -220,17 +235,32 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onFinish = { oneShotEnabled, loopingEnabled ->
-                            if (finishOnboarding(this, oneShotEnabled, loopingEnabled)) {
-                                showOnboarding = false
-                                beginPermissionFlow()
-                            } else {
-                                AppFeedbackCenter.post(
-                                    getString(R.string.recorder_state_persist_failed),
-                                    FeedbackTone.ERROR,
-                                )
+                            if (!onboardingFinishing) {
+                                onboardingFinishing = true
+                                lifecycleScope.launch {
+                                    val finished = withContext(Dispatchers.IO) {
+                                        finishOnboarding(
+                                            this@MainActivity,
+                                            oneShotEnabled,
+                                            loopingEnabled,
+                                        )
+                                    }
+                                    onboardingFinishing = false
+                                    if (finished) {
+                                        onboardingBufferAvailability = null
+                                        showOnboarding = false
+                                        beginPermissionFlow()
+                                    } else {
+                                        AppFeedbackCenter.post(
+                                            getString(R.string.recorder_state_persist_failed),
+                                            FeedbackTone.ERROR,
+                                        )
+                                    }
+                                }
                             }
                         },
                     )
+                    }
                 } else {
                     if (showPermissionDenied) {
                         PermissionDeniedSheet(
@@ -377,6 +407,16 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
 }
 
 @Composable
+private fun OnboardingLoadingScreen() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
 private fun OnboardingScreen(
     microphoneAllowed: Boolean,
     storageAllowed: Boolean,
@@ -388,6 +428,7 @@ private fun OnboardingScreen(
     batteryOptimizationAllowed: Boolean,
     initialOneShotEnabled: Boolean,
     initialLoopingEnabled: Boolean,
+    finishing: Boolean,
     onRequestMicrophone: () -> Unit,
     onRequestStorage: () -> Unit,
     onRequestRecovery: () -> Unit,
@@ -400,7 +441,7 @@ private fun OnboardingScreen(
     var oneShotEnabled by rememberSaveable { mutableStateOf(validInitialOneShot) }
     var loopingEnabled by rememberSaveable { mutableStateOf(initialLoopingEnabled) }
     val backMotion = rememberPredictiveBackMotion(
-        enabled = page > 0,
+        enabled = page > 0 && !finishing,
         onBack = { page-- },
     )
     val backProgress = if (backMotion.gestureActive) backMotion.progress.value.coerceIn(0f, 1f) else 0f
@@ -420,6 +461,7 @@ private fun OnboardingScreen(
                 batteryOptimizationAllowed = batteryOptimizationAllowed,
                 oneShotEnabled = oneShotEnabled,
                 loopingEnabled = loopingEnabled,
+                interactionEnabled = false,
                 onRequestMicrophone = {},
                 onRequestStorage = {},
                 onRequestRecovery = {},
@@ -453,6 +495,7 @@ private fun OnboardingScreen(
             batteryOptimizationAllowed = batteryOptimizationAllowed,
             oneShotEnabled = oneShotEnabled,
             loopingEnabled = loopingEnabled,
+            interactionEnabled = !finishing,
             onRequestMicrophone = onRequestMicrophone,
             onRequestStorage = onRequestStorage,
             onRequestRecovery = onRequestRecovery,
@@ -487,6 +530,7 @@ private fun OnboardingPage(
     batteryOptimizationAllowed: Boolean,
     oneShotEnabled: Boolean,
     loopingEnabled: Boolean,
+    interactionEnabled: Boolean,
     onRequestMicrophone: () -> Unit,
     onRequestStorage: () -> Unit,
     onRequestRecovery: () -> Unit,
@@ -529,7 +573,7 @@ private fun OnboardingPage(
                             title = stringResource(R.string.onboarding_microphone_title),
                             body = stringResource(R.string.onboarding_microphone_body),
                             allowed = microphoneAllowed,
-                            canRequest = true,
+                            canRequest = interactionEnabled,
                             onAllow = onRequestMicrophone,
                         )
                         if (storagePermissionRequired) {
@@ -539,7 +583,7 @@ private fun OnboardingPage(
                                 title = stringResource(R.string.storage_settings_title),
                                 body = stringResource(R.string.onboarding_storage_body),
                                 allowed = storageAllowed,
-                                canRequest = true,
+                                canRequest = interactionEnabled,
                                 onAllow = onRequestStorage,
                             )
                         }
@@ -550,7 +594,7 @@ private fun OnboardingPage(
                                 title = stringResource(R.string.recording_recovery_title),
                                 body = stringResource(R.string.recording_recovery_body),
                                 allowed = recoveryAllowed,
-                                canRequest = true,
+                                canRequest = interactionEnabled,
                                 onAllow = onRequestRecovery,
                             )
                         }
@@ -560,7 +604,7 @@ private fun OnboardingPage(
                             title = stringResource(R.string.onboarding_notifications_title),
                             body = stringResource(R.string.onboarding_notifications_body),
                             allowed = notificationAllowed,
-                            canRequest = notificationPermissionRequired,
+                            canRequest = interactionEnabled && notificationPermissionRequired,
                             onAllow = onRequestNotifications,
                         )
                     }
@@ -599,7 +643,7 @@ private fun OnboardingPage(
                             title = stringResource(R.string.onboarding_one_shot_title),
                             body = stringResource(R.string.onboarding_one_shot_body),
                             checked = oneShotEnabled,
-                            enabled = !oneShotEnabled || loopingEnabled,
+                            enabled = interactionEnabled && (!oneShotEnabled || loopingEnabled),
                             onCheckedChange = onOneShotEnabledChange,
                         )
                         Spacer(Modifier.height(12.dp))
@@ -608,7 +652,7 @@ private fun OnboardingPage(
                             title = stringResource(R.string.onboarding_looping_title),
                             body = stringResource(R.string.onboarding_looping_body),
                             checked = loopingEnabled,
-                            enabled = !loopingEnabled || oneShotEnabled,
+                            enabled = interactionEnabled && (!loopingEnabled || oneShotEnabled),
                             onCheckedChange = onLoopingEnabledChange,
                         )
                         Spacer(Modifier.height(18.dp))
@@ -640,12 +684,13 @@ private fun OnboardingPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (page > 0) {
-                    TextButton(onClick = onBackPage) {
+                    TextButton(onClick = onBackPage, enabled = interactionEnabled) {
                         Text(stringResource(R.string.onboarding_back))
                     }
                 }
                 Button(
                     onClick = onContinue,
+                    enabled = interactionEnabled,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(
