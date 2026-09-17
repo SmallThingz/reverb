@@ -97,6 +97,32 @@ class MoveDeletionAuthorityJournalTest {
         }
     }
 
+    @Test
+    fun claimedMoveSource_targetValidationFailureFailsSafe() {
+        withClaimedMoveSource("00000000-0000-0000-0000-000000000205") { source, claim, bytes, intent ->
+            val result = replayClaimedFileDeletion(intent, claim) { error("provider unavailable") }
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
+            assertTrue(source.isFile)
+            assertArrayEquals(bytes, source.readBytes())
+            assertFalse(claim.exists())
+        }
+    }
+
+    @Test
+    fun partialMoveAuthorityCannotSerializeAsDeletionJournal() {
+        val partial = PendingDeletionIntent(
+            id = "/storage/source.wav",
+            byteCount = 12L,
+            sha256Hex = "ef".repeat(32),
+            assetDeleted = false,
+            storageType = RecordingStorageType.FILE,
+            claimToken = "00000000-0000-0000-0000-000000000206",
+            fileIdentity = "stat:source:identity",
+            moveTargetStorageType = RecordingStorageType.FILE,
+        )
+        assertEquals("", encodePendingDeletionIntent(partial))
+    }
+
     private inline fun withClaimedMoveSource(
         token: String,
         block: (source: File, claim: File, bytes: ByteArray, intent: PendingDeletionIntent) -> Unit,

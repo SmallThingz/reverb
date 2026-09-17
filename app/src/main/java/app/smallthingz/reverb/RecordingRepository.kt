@@ -411,10 +411,11 @@ object RecordingRepository {
     private fun pendingDeletionMoveTargetMatchesCurrentAsset(
         context: Context,
         intent: PendingDeletionIntent,
-    ): Boolean {
-        val storageType = intent.moveTargetStorageType ?: return !pendingDeletionHasAnyMoveTargetField(intent)
-        val id = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return false
-        val identity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return false
+    ): Boolean = runCatching {
+        val storageType = intent.moveTargetStorageType
+            ?: return@runCatching !pendingDeletionHasAnyMoveTargetField(intent)
+        val id = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return@runCatching false
+        val identity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return@runCatching false
         val target = RecordingEntity(
             id = id,
             displayName = "",
@@ -427,9 +428,9 @@ object RecordingRepository {
             directoryId = "",
             fileIdentity = identity,
         )
-        val digest = sha256StableRecording(context, target) ?: return false
-        return pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
-    }
+        val digest = sha256StableRecording(context, target) ?: return@runCatching false
+        pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
+    }.getOrDefault(false)
 
     private fun pendingDeletionMatchesCurrentAsset(
         context: Context,
@@ -441,11 +442,12 @@ object RecordingRepository {
     }.getOrDefault(false)
 
     private fun putPendingDeletionLocked(context: Context, intent: PendingDeletionIntent): Boolean {
+        val encoded = encodePendingDeletionIntent(intent).takeIf { it.isNotBlank() } ?: return false
         val current = pendingDeletionEntries(context)
         val updated = current.filterNotTo(mutableSetOf()) { raw ->
             pendingDeletionSuppressedId(raw) == intent.id
         }
-        updated += encodePendingDeletionIntent(intent)
+        updated += encoded
         return getRecorderPreferences(context).edit()
             .putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
             .commit()
@@ -1240,9 +1242,12 @@ internal fun replayClaimedFileDeletion(
         val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
         return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
     }
-    if (pendingDeletionHasAnyMoveTargetField(intent) && moveTargetStillCurrent?.invoke() != true) {
-        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
-        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+    if (pendingDeletionHasAnyMoveTargetField(intent)) {
+        val targetStillCurrent = runCatching { moveTargetStillCurrent?.invoke() == true }.getOrDefault(false)
+        if (!targetStillCurrent) {
+            val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
+            return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+        }
     }
     return try {
         if (!Files.deleteIfExists(resolvedClaim.toPath())) return FileDeletionClaimResult.RETRY
