@@ -216,6 +216,18 @@ internal object RecordingIncidentStore {
         // Do not allow the next capture start to overwrite the only durable evidence of the
         // previous armed session. Any read/write failure propagates so capture fails closed.
         enqueuePendingSession(appContext, marker)
+        // This marker belongs to a process that is already gone, so the interruption itself is
+        // certain even if Android has not published ApplicationExitInfo yet. Surface a
+        // provisional incident immediately; the pending queue remains the durable authority for
+        // later reason/timestamp enrichment, and appendIncident merges by capture-session ID.
+        appendIncident(
+            appContext,
+            incidentWithoutExitEvidence(
+                marker = marker,
+                occurredAtMillis = System.currentTimeMillis(),
+                description = "Recording process ended while capture was running; exit evidence pending",
+            ),
+        )
         markerFile.delete()
         resolvePendingSessions(appContext)
     }

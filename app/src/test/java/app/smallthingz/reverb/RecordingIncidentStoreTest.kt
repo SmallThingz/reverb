@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.app.ApplicationExitInfo
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,6 +75,30 @@ class RecordingIncidentStoreTest {
             captureSessionStartDisposition(true, continuousRestart = false) ==
                 CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION,
         )
+    }
+
+    @Test
+    fun provisionalIncidentIsEnrichedWhenExitEvidenceArrives() {
+        val provisional = RecordingIncident(
+            occurredAtMillis = 5_000L,
+            resumedAtMillis = 0L,
+            exitReason = android.app.ApplicationExitInfo.REASON_UNKNOWN,
+            pid = 77,
+            captureArmedAtMillis = 1_000L,
+            description = "pending",
+        )
+        val classified = provisional.copy(
+            occurredAtMillis = 4_000L,
+            resumedAtMillis = 6_000L,
+            exitReason = android.app.ApplicationExitInfo.REASON_CRASH,
+            description = "crash",
+        )
+        val merged = mergeRecordingIncidentEvidence(provisional, classified)
+        assertTrue(recordingIncidentsShareCaptureSession(provisional, classified))
+        assertEquals(4_000L, merged.occurredAtMillis)
+        assertEquals(6_000L, merged.resumedAtMillis)
+        assertEquals(android.app.ApplicationExitInfo.REASON_CRASH, merged.exitReason)
+        assertEquals("crash", merged.description)
     }
 
     @Test

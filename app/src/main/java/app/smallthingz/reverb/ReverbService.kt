@@ -337,10 +337,15 @@ class ReverbService : Service() {
     }
 
     private fun noteClientBound() {
+        retrySuspendedListeningIfUiForeground()
+    }
+
+    private fun retrySuspendedListeningIfUiForeground() {
         val retryGeneration = synchronized(listeningIntentLock) {
             if (
-                shouldRetrySuspendedListeningOnForegroundBind(
+                shouldRetrySuspendedListeningWithForegroundUi(
                     listeningIntentEnabled = isListeningEnabled(),
+                    appUiForeground = appUiForeground,
                     foregroundStartBlocked = foregroundStartBlocked,
                     foregroundServiceTimedOut = foregroundServiceTimedOut,
                     persistenceFailureBlocked = persistenceFailureBlocked,
@@ -2211,7 +2216,15 @@ class ReverbService : Service() {
     }
 
     fun setAppUiForeground(owner: Any, foreground: Boolean) {
-        appUiForeground = appUiForegroundOwners.update(owner, foreground)
+        val wasForeground = appUiForeground
+        val nowForeground = appUiForegroundOwners.update(owner, foreground)
+        appUiForeground = nowForeground
+        if (!wasForeground && nowForeground) {
+            // A bind may have been created while keyguard/occlusion prevented microphone-FGS
+            // eligibility. The existing binding survives that transition, so foregrounding the
+            // actual app UI must retry the durable listening intent without requiring a rebind.
+            retrySuspendedListeningIfUiForeground()
+        }
     }
 
     fun setVisualizationCallback(callback: VisualizationCallback) {
@@ -3043,12 +3056,13 @@ internal fun shouldEnsureRuntimeCaptureAfterInitialization(
         persistenceFailureBlocked = persistenceFailureBlocked,
     )
 
-internal fun shouldRetrySuspendedListeningOnForegroundBind(
+internal fun shouldRetrySuspendedListeningWithForegroundUi(
     listeningIntentEnabled: Boolean,
+    appUiForeground: Boolean,
     foregroundStartBlocked: Boolean,
     foregroundServiceTimedOut: Boolean,
     persistenceFailureBlocked: Boolean,
-): Boolean = listeningIntentEnabled &&
+): Boolean = listeningIntentEnabled && appUiForeground &&
     (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
 
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying

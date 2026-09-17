@@ -514,7 +514,11 @@ fun CaptureScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         observerInstalled = true
         val initialBind = Runnable { bindIfNeeded() }
+        // Keep normal startup frame-first, but keyguard/occlusion can suppress app frames
+        // indefinitely. A delayed main-loop fallback restores durable capture intent even when
+        // postOnAnimation never fires; bindIfNeeded() makes the duplicate callback harmless.
         view.postOnAnimation(initialBind)
+        view.postDelayed(initialBind, CAPTURE_INITIAL_BIND_FALLBACK_MILLIS)
         onDispose {
             view.removeCallbacks(initialBind)
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -1059,6 +1063,7 @@ internal fun bufferSwipeProgress(
     return (forwardDistance / viewportWidthPx).coerceIn(0f, 1f)
 }
 
+private const val CAPTURE_INITIAL_BIND_FALLBACK_MILLIS = 250L
 private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
 private const val BUFFER_FLIP_DURATION_MILLIS = 260
 private const val BUFFER_FLIP_MIDPOINT_SCALE = 0.94f

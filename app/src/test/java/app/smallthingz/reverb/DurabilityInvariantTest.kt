@@ -945,6 +945,15 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun mediaStoreNameQuery_requiresAuthoritativeCursor() {
+        assertTrue(mediaStoreNameQueryOccupied(cursorAvailable = true, hasMatchingRow = true))
+        assertFalse(mediaStoreNameQueryOccupied(cursorAvailable = true, hasMatchingRow = false))
+        assertThrows(IOException::class.java) {
+            mediaStoreNameQueryOccupied(cursorAvailable = false, hasMatchingRow = false)
+        }
+    }
+
+    @Test
     fun freshMoveCopyCollisionPreservesExistingTargets() {
         val occupied = setOf("clip.wav", "clip (2).wav")
         assertEquals(

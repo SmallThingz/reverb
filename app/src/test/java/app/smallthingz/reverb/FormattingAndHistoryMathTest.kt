@@ -1014,30 +1014,41 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun foregroundBind_retriesSuspendedDurableIntent() {
+    fun suspendedDurableIntent_retriesOnlyWithActualForegroundUi() {
         assertTrue(
-            shouldRetrySuspendedListeningOnForegroundBind(
-                true, foregroundStartBlocked = true, foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, appUiForeground = true, foregroundStartBlocked = true,
+                foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
             ),
         )
         assertTrue(
-            shouldRetrySuspendedListeningOnForegroundBind(
-                true, foregroundStartBlocked = false, foregroundServiceTimedOut = true, persistenceFailureBlocked = false,
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, appUiForeground = true, foregroundStartBlocked = false,
+                foregroundServiceTimedOut = true, persistenceFailureBlocked = false,
             ),
         )
         assertTrue(
-            shouldRetrySuspendedListeningOnForegroundBind(
-                true, foregroundStartBlocked = false, foregroundServiceTimedOut = false, persistenceFailureBlocked = true,
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, appUiForeground = true, foregroundStartBlocked = false,
+                foregroundServiceTimedOut = false, persistenceFailureBlocked = true,
             ),
         )
         assertFalse(
-            shouldRetrySuspendedListeningOnForegroundBind(
-                true, foregroundStartBlocked = false, foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, appUiForeground = false, foregroundStartBlocked = true,
+                foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
             ),
         )
         assertFalse(
-            shouldRetrySuspendedListeningOnForegroundBind(
-                false, foregroundStartBlocked = true, foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+            shouldRetrySuspendedListeningWithForegroundUi(
+                true, appUiForeground = true, foregroundStartBlocked = false,
+                foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+            ),
+        )
+        assertFalse(
+            shouldRetrySuspendedListeningWithForegroundUi(
+                false, appUiForeground = true, foregroundStartBlocked = true,
+                foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
             ),
         )
     }
@@ -1054,6 +1065,14 @@ class FormattingAndHistoryMathTest {
         assertTrue(settingsServiceBindingCallbackIsCurrent(4L, 4L, bindingOwned = true))
         assertFalse(settingsServiceBindingCallbackIsCurrent(3L, 4L, bindingOwned = true))
         assertFalse(settingsServiceBindingCallbackIsCurrent(4L, 4L, bindingOwned = false))
+    }
+
+    @Test
+    fun settingsServiceBinding_survivesOnlyAnInFlightHiddenSave() {
+        assertTrue(settingsShouldOwnServiceBinding(active = true, persisting = false))
+        assertTrue(settingsShouldOwnServiceBinding(active = true, persisting = true))
+        assertTrue(settingsShouldOwnServiceBinding(active = false, persisting = true))
+        assertFalse(settingsShouldOwnServiceBinding(active = false, persisting = false))
     }
 
     @Test

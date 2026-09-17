@@ -2104,15 +2104,24 @@ private fun queryContentSize(context: Context, uri: Uri): Long = runCatching {
 }.onFailure { Log.w(TAG, "Unable to query content size for $uri", it) }.getOrDefault(0L)
 
 
+internal fun mediaStoreNameQueryOccupied(cursorAvailable: Boolean, hasMatchingRow: Boolean): Boolean {
+    if (!cursorAvailable) throw IOException("MediaStore name query returned no cursor")
+    return hasMatchingRow
+}
+
 private fun mediaStoreNameExists(context: Context, displayName: String): Boolean {
     if (!usesMediaStoreDefaultStorage()) return false
-    return context.contentResolver.query(
+    val cursor = context.contentResolver.query(
         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
         arrayOf(MediaStore.MediaColumns._ID),
         "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
         arrayOf(MEDIA_STORE_RELATIVE_PATH, displayName),
         null,
-    )?.use { it.moveToFirst() } == true
+    )
+    return mediaStoreNameQueryOccupied(
+        cursorAvailable = cursor != null,
+        hasMatchingRow = cursor?.use { it.moveToFirst() } ?: false,
+    )
 }
 
 private fun queryContentDisplayName(context: Context, uri: Uri): String? = runCatching {

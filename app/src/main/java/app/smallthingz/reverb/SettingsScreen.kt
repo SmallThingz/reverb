@@ -146,6 +146,9 @@ internal fun settingsServiceBindingCallbackIsCurrent(
     bindingOwned: Boolean,
 ): Boolean = bindingOwned && callbackGeneration == currentGeneration
 
+internal fun settingsShouldOwnServiceBinding(active: Boolean, persisting: Boolean): Boolean =
+    active || persisting
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -717,7 +720,8 @@ fun SettingsScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     val serviceBindingGeneration = remember { longArrayOf(0L) }
-    DisposableEffect(active, lifecycleOwner) {
+    val shouldOwnServiceBinding = settingsShouldOwnServiceBinding(active, settingsPersisting)
+    DisposableEffect(shouldOwnServiceBinding, lifecycleOwner) {
         var boundConnection: android.content.ServiceConnection? = null
 
         fun unbindCurrentConnection() {
@@ -729,7 +733,7 @@ fun SettingsScreen(
         }
 
         fun bindIfNeeded() {
-            if (!active ||
+            if (!shouldOwnServiceBinding ||
                 boundConnection != null ||
                 !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             ) return
