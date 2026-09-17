@@ -900,7 +900,6 @@ private fun MainScreen(
 
     fun openIncidents() {
         showIncidents = true
-        scope.launch { loadIncidents() }
     }
 
     LaunchedEffect(Unit) {
