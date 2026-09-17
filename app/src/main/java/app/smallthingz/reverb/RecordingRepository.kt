@@ -157,6 +157,7 @@ object RecordingRepository {
                 var movable = false
                 dao.listAll().forEach { recording ->
                     if (!isRecordingEligibleForMove(recording.id, pendingIds)) return@forEach
+                    if (recordingMutations.isActive(recording.id)) return@forEach
                     if (recording.directoryId == targetDirectoryId) return@forEach
                     val updated = when (selectedRecordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> {
@@ -210,54 +211,59 @@ object RecordingRepository {
     }
 
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
-        return withContext(Dispatchers.IO) {
-            mutex.withLock {
-                replayPendingDeletionsLocked(context)
-                val dao = dao(context)
-                val tracked = dao.findById(recording.id) ?: return@withLock true
-                if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
-                if (tracked.storageType == RecordingStorageType.FILE &&
-                    !recordingFileIdentityMatches(tracked)
-                ) {
-                    return@withLock false
-                }
-
-                val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
-                if (!putPendingDeletionLocked(context, intent)) return@withLock false
-
-                val deleted = when (tracked.storageType) {
-                    RecordingStorageType.FILE -> when (deleteClaimedFile(intent)) {
-                        FileDeletionClaimResult.DELETED -> true
-                        FileDeletionClaimResult.MISMATCH_PRESERVED -> {
-                            removePendingDeletionLocked(context, tracked.id)
-                            false
-                        }
-                        FileDeletionClaimResult.RETRY -> false
+        val operation = recordingMutations.tryBegin(recording.id) ?: return false
+        try {
+            return withContext(Dispatchers.IO) {
+                mutex.withLock {
+                    replayPendingDeletionsLocked(context)
+                    val dao = dao(context)
+                    val tracked = dao.findById(recording.id) ?: return@withLock true
+                    if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
+                    if (tracked.storageType == RecordingStorageType.FILE &&
+                        !recordingFileIdentityMatches(tracked)
+                    ) {
+                        return@withLock false
                     }
-                    else -> {
-                        if (!pendingDeletionMatchesCurrentAsset(context, tracked, intent)) {
-                            removePendingDeletionLocked(context, tracked.id)
-                            false
-                        } else {
-                            deleteVerifiedRecordingAsset(context, tracked)
+
+                    val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
+                    if (!putPendingDeletionLocked(context, intent)) return@withLock false
+
+                    val deleted = when (tracked.storageType) {
+                        RecordingStorageType.FILE -> when (deleteClaimedFile(intent)) {
+                            FileDeletionClaimResult.DELETED -> true
+                            FileDeletionClaimResult.MISMATCH_PRESERVED -> {
+                                removePendingDeletionLocked(context, tracked.id)
+                                false
+                            }
+                            FileDeletionClaimResult.RETRY -> false
+                        }
+                        else -> {
+                            if (!pendingDeletionMatchesCurrentAsset(context, tracked, intent)) {
+                                removePendingDeletionLocked(context, tracked.id)
+                                false
+                            } else {
+                                deleteVerifiedRecordingAsset(context, tracked)
+                            }
                         }
                     }
-                }
-                if (!deleted) return@withLock false
+                    if (!deleted) return@withLock false
 
-                // Persist the destructive phase boundary before touching catalog metadata.
-                // If this commit fails, keep the existing planned intent and catalog row; the
-                // pending-id filter hides it and replay can finish cleanup once absence is known.
-                if (!putPendingDeletionLocked(context, intent.copy(assetDeleted = true))) {
-                    return@withLock true
+                    // Persist the destructive phase boundary before touching catalog metadata.
+                    // If this commit fails, keep the existing planned intent and catalog row; the
+                    // pending-id filter hides it and replay can finish cleanup once absence is known.
+                    if (!putPendingDeletionLocked(context, intent.copy(assetDeleted = true))) {
+                        return@withLock true
+                    }
+                    // This row describes the object the user selected, not any later object that
+                    // may reuse the same path. Retiring metadata cannot delete replacement bytes;
+                    // directory reconciliation will import a replacement as a fresh observation.
+                    dao.deleteById(tracked.id)
+                    removePendingDeletionLocked(context, tracked.id)
+                    true
                 }
-                // This row describes the object the user selected, not any later object that
-                // may reuse the same path. Retiring metadata cannot delete replacement bytes;
-                // directory reconciliation will import a replacement as a fresh observation.
-                dao.deleteById(tracked.id)
-                removePendingDeletionLocked(context, tracked.id)
-                true
             }
+        } finally {
+            recordingMutations.finish(operation)
         }
     }
 
@@ -404,38 +410,43 @@ object RecordingRepository {
         recording: RecordingEntity,
         requestedBaseName: String,
     ): RecordingEntity? {
-        return withContext(Dispatchers.IO) {
-            mutex.withLock {
-                val dao = dao(context)
-                val tracked = dao.findById(recording.id) ?: return@withLock null
-                if (!sameRecordingActionTarget(recording, tracked)) {
-                    throw IOException("Recording changed before rename")
-                }
-                if (!recordingContentIdentityMatches(context, tracked)) {
-                    throw IOException("Recording changed before rename")
-                }
-                val renamed = renameRecordingAsset(context, tracked, requestedBaseName) ?: return@withLock null
-                if (renamed == tracked) return@withLock tracked
-                try {
-                    dao.applyChanges(
-                        upserts = listOf(renamed),
-                        deleteIds = if (renamed.id == tracked.id) emptyList() else listOf(tracked.id),
-                    )
-                } catch (error: Exception) {
-                    // Prefer restoring the original physical identity. If that is no longer
-                    // possible (for example the old path was reused concurrently), never keep
-                    // a stale catalog row that could now address unrelated bytes. A refresh can
-                    // rediscover both the renamed recording and any replacement independently.
-                    val rolledBack = runCatching {
-                        renameRecordingAsset(context, renamed, tracked.displayName)
-                    }.getOrNull()
-                    if (rolledBack?.id != tracked.id) {
-                        runCatching { dao.deleteById(tracked.id) }
+        val operation = recordingMutations.tryBegin(recording.id) ?: return null
+        try {
+            return withContext(Dispatchers.IO) {
+                mutex.withLock {
+                    val dao = dao(context)
+                    val tracked = dao.findById(recording.id) ?: return@withLock null
+                    if (!sameRecordingActionTarget(recording, tracked)) {
+                        throw IOException("Recording changed before rename")
                     }
-                    throw error
+                    if (!recordingContentIdentityMatches(context, tracked)) {
+                        throw IOException("Recording changed before rename")
+                    }
+                    val renamed = renameRecordingAsset(context, tracked, requestedBaseName) ?: return@withLock null
+                    if (renamed == tracked) return@withLock tracked
+                    try {
+                        dao.applyChanges(
+                            upserts = listOf(renamed),
+                            deleteIds = if (renamed.id == tracked.id) emptyList() else listOf(tracked.id),
+                        )
+                    } catch (error: Exception) {
+                        // Prefer restoring the original physical identity. If that is no longer
+                        // possible (for example the old path was reused concurrently), never keep
+                        // a stale catalog row that could now address unrelated bytes. A refresh can
+                        // rediscover both the renamed recording and any replacement independently.
+                        val rolledBack = runCatching {
+                            renameRecordingAsset(context, renamed, tracked.displayName)
+                        }.getOrNull()
+                        if (rolledBack?.id != tracked.id) {
+                            runCatching { dao.deleteById(tracked.id) }
+                        }
+                        throw error
+                    }
+                    renamed
                 }
-                renamed
             }
+        } finally {
+            recordingMutations.finish(operation)
         }
     }
 
@@ -501,22 +512,31 @@ object RecordingRepository {
                 var failed = 0
                 var cleanupFailed = 0
                 moveCandidates.forEach { source ->
-                    // Equal bytes/name are not proof that an existing target belongs to this
-                    // move. Without a durable source→target transaction marker, preserve any
-                    // existing target and make a fresh verified copy before touching the source.
-                    val target = copyRecordingToConfiguredDirectory(context, source)
-                    if (target == null) {
-                        failed++
+                    val operation = recordingMutations.tryBegin(source.id)
+                    if (operation == null) {
+                        skipped++
                         return@forEach
                     }
-                    val cleanupComplete = commitVerifiedMoveLocked(
-                        context = context,
-                        dao = dao,
-                        source = source,
-                        target = target,
-                    )
-                    moved++
-                    if (!cleanupComplete) cleanupFailed++
+                    try {
+                        // Equal bytes/name are not proof that an existing target belongs to this
+                        // move. Without a durable source→target transaction marker, preserve any
+                        // existing target and make a fresh verified copy before touching the source.
+                        val target = copyRecordingToConfiguredDirectory(context, source)
+                        if (target == null) {
+                            failed++
+                            return@forEach
+                        }
+                        val cleanupComplete = commitVerifiedMoveLocked(
+                            context = context,
+                            dao = dao,
+                            source = source,
+                            target = target,
+                        )
+                        moved++
+                        if (!cleanupComplete) cleanupFailed++
+                    } finally {
+                        recordingMutations.finish(operation)
+                    }
                 }
 
                 MoveResult(
@@ -595,23 +615,27 @@ object RecordingRepository {
             if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
             if (selectedRecordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
             if (!recordingDestructiveIdentityMatches(context, source)) continue
+            val operation = recordingMutations.tryBegin(source.id) ?: continue
+            try {
+                // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
+                // verified copy preserves intentionally duplicated recordings; only an explicit
+                // future source→target transaction marker may authorize target reuse.
+                val target = copyRecordingToConfiguredDirectory(context, source) ?: continue
 
-            // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
-            // verified copy preserves intentionally duplicated recordings; only an explicit
-            // future source→target transaction marker may authorize target reuse.
-            val target = copyRecordingToConfiguredDirectory(context, source) ?: continue
-
-            val cleanupComplete = commitVerifiedMoveLocked(
-                context = context,
-                dao = dao,
-                source = source,
-                target = target,
-            )
-            if (!cleanupComplete) {
-                Log.w(
-                    "RecordingRepository",
-                    "Verified legacy target kept, but source cleanup was unsafe: ${source.id}",
+                val cleanupComplete = commitVerifiedMoveLocked(
+                    context = context,
+                    dao = dao,
+                    source = source,
+                    target = target,
                 )
+                if (!cleanupComplete) {
+                    Log.w(
+                        "RecordingRepository",
+                        "Verified legacy target kept, but source cleanup was unsafe: ${source.id}",
+                    )
+                }
+            } finally {
+                recordingMutations.finish(operation)
             }
         }
     }

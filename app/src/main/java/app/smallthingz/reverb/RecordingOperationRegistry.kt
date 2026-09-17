@@ -40,4 +40,4 @@ internal class RecordingOperationRegistry {
     }
 }
 
-internal val recordingTrimOperations = RecordingOperationRegistry()
+internal val recordingMutations = RecordingOperationRegistry()

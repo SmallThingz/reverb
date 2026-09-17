@@ -21,7 +21,7 @@ internal suspend fun saveTrimmedRecordingCopy(
     endMillis: Int,
 ): RecordingEntity {
     val appContext = context.applicationContext
-    val operation = recordingTrimOperations.tryBegin(recording.id)
+    val operation = recordingMutations.tryBegin(recording.id)
         ?: throw IOException("Trim is already in progress for this recording")
     try {
         return withContext(Dispatchers.IO + NonCancellable) {
@@ -31,7 +31,7 @@ internal suspend fun saveTrimmedRecordingCopy(
                 .getOrDefault(created)
         }
     } finally {
-        recordingTrimOperations.finish(operation)
+        recordingMutations.finish(operation)
     }
 }
 

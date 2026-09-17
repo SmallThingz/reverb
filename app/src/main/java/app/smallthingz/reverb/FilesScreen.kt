@@ -119,7 +119,7 @@ fun FilesScreen(
     val density = LocalDensity.current
     val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
     val chrome = appChrome()
-    val activeTrimRecordingIds by recordingTrimOperations.activeIds.collectAsState()
+    val activeMutationRecordingIds by recordingMutations.activeIds.collectAsState()
 
     var recordings by remember { mutableStateOf(initialRecordings) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -488,6 +488,9 @@ fun FilesScreen(
     }
 
     val selectionActive by remember { derivedStateOf { selectedIds.isNotEmpty() } }
+    val selectionHasBusyMutation by remember {
+        derivedStateOf { selectedIds.keys.any { it in activeMutationRecordingIds } }
+    }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
     LaunchedEffect(expandedRecordingId) {
         onExpandedRecordingActiveChange(expandedRecordingId != null)
@@ -563,7 +566,10 @@ fun FilesScreen(
                         )
                         Spacer(Modifier.weight(1f))
                         if (selectedIds.isNotEmpty()) {
-                            IconButton(onClick = { shareRecordings(selectedIds.values.toList()) }) {
+                            IconButton(
+                                onClick = { shareRecordings(selectedIds.values.toList()) },
+                                enabled = !selectionHasBusyMutation,
+                            ) {
                                 Icon(
                                     imageVector = AppIcons.share,
                                     contentDescription = stringResource(R.string.share_recording),
@@ -572,7 +578,7 @@ fun FilesScreen(
                             }
                         }
                         if (selectedIds.isNotEmpty()) {
-                            IconButton(onClick = { deleteSelected() }, enabled = !isDeleting) {
+                            IconButton(onClick = { deleteSelected() }, enabled = !isDeleting && !selectionHasBusyMutation) {
                                 Icon(
                                     AppIcons.delete,
                                     contentDescription = stringResource(R.string.delete_recording),
@@ -672,7 +678,7 @@ fun FilesScreen(
                                         menuExpanded = contextMenuRecordingId == recording.id,
                                         expanded = expandedRecordingId == recording.id,
                                         trimRequested = trimRequestRecordingId == recording.id,
-                                        externallyBusy = recording.id in activeTrimRecordingIds,
+                                        externallyBusy = recording.id in activeMutationRecordingIds,
                                         onClick = {
                                             contextMenuRecordingId = null
                                             if (selectionActive) {
@@ -923,26 +929,31 @@ private fun RecordingItem(
             containerColor = chrome.raised,
         ) {
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.rename_recording), color = chrome.ink) },
                 onClick = onRename,
                 leadingIcon = { Icon(AppIcons.edit, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.recording_info), color = chrome.ink) },
                 onClick = onInfo,
                 leadingIcon = { Icon(AppIcons.info, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.share_recording), color = chrome.ink) },
                 onClick = onShare,
                 leadingIcon = { Icon(AppIcons.share, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.trim_recording), color = chrome.ink) },
                 onClick = onTrim,
                 leadingIcon = { Icon(AppIcons.trim, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
                 onClick = onDelete,
                 leadingIcon = {
@@ -950,6 +961,7 @@ private fun RecordingItem(
                 },
             )
             DropdownMenuItem(
+                enabled = !operationBusy,
                 text = { Text(stringResource(R.string.multi_select), color = chrome.ink) },
                 onClick = onMultiSelect,
                 leadingIcon = { Icon(AppIcons.multiSelect, contentDescription = null, tint = chrome.ink) },

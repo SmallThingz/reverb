@@ -125,4 +125,4 @@
 - Blob-to-range interaction readiness is owned by the opening animation once the morph starts; later live source-geometry/activity updates must never cancel the readiness waiter and strand settled range controls disabled.
 - Blob-to-range source geometry is frozen at the renderer handoff for that range snapshot; later service/visualizer activity may not move the source endpoint during the in-flight morph.
 
-- Inline Trim Save is owned by a process-level recording-operation registry until the non-cancellable physical save/catalog registration reaches terminal; close/reopen, player disposal, refresh, or revision changes must not re-enable rename/delete/share against the same row while that save is still running.
+- Physical saved-recording mutations are process-exclusive per recording identity: trim, rename, delete, explicit move, and legacy migration cannot overlap on the same row. Inline Trim Save keeps that reservation through its non-cancellable physical save/catalog registration, so close/reopen, player disposal, refresh, or revision changes must not re-enable conflicting actions before terminal.
