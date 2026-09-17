@@ -179,6 +179,16 @@ internal fun settingsSnapshotHasUnsavedChanges(
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
+internal suspend fun runSettingsPersistenceAttempt(
+    block: suspend () -> Boolean,
+): Boolean = try {
+    block()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    false
+}
+
 internal fun settingsShouldRehydrate(
     active: Boolean,
     persisting: Boolean,
@@ -664,8 +674,9 @@ fun SettingsScreen(
         // Once the recovery/preferences transaction starts, a configuration change or Activity
         // disposal may cancel only the UI tail. A successful durable commit must still reach the
         // surviving recorder (or stopped tile fallback) before this section can terminate.
-        val persisted = withContext(NonCancellable) {
-            val committed = withContext(Dispatchers.IO) {
+        val persisted = runSettingsPersistenceAttempt {
+            withContext(NonCancellable) {
+                val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
@@ -715,9 +726,10 @@ fun SettingsScreen(
                         },
                     )
                 }
+                }
+                if (committed) applyCommittedSettingsToRuntime(transactionService)
+                committed
             }
-            if (committed) applyCommittedSettingsToRuntime(transactionService)
-            committed
         }
         if (!persisted) {
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)

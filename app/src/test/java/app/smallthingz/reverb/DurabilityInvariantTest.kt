@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
@@ -639,6 +640,15 @@ class DurabilityInvariantTest {
             ),
             resolveRetentionConfiguration(null, null, historyExists = false),
         )
+    }
+
+    @Test
+    fun settingsPersistenceAttempt_returnsFailureButPreservesCancellation() {
+        assertTrue(runBlocking { runSettingsPersistenceAttempt { true } })
+        assertFalse(runBlocking { runSettingsPersistenceAttempt { throw IOException("storage unavailable") } })
+        assertThrows(CancellationException::class.java) {
+            runBlocking { runSettingsPersistenceAttempt { throw CancellationException("cancelled") } }
+        }
     }
 
     @Test
