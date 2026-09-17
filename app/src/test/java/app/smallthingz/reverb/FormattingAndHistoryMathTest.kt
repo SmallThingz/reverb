@@ -11,15 +11,16 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
-    fun feedbackQueue_isBoundedOrderedAndStaleAcknowledgeSafe() {
+    fun feedbackQueue_preservesUnacknowledgedHeadUnderCapacityPressure() {
         val first = FeedbackEvent(1L, "first", FeedbackTone.INFO)
         val second = FeedbackEvent(2L, "second", FeedbackTone.ERROR)
         val third = FeedbackEvent(3L, "third", FeedbackTone.SUCCESS)
 
         val bounded = enqueueFeedbackEvent(listOf(first, second), third, maxEvents = 2)
-        assertEquals(listOf(second, third), bounded)
+        assertEquals(listOf(first, third), bounded)
         assertEquals(bounded, acknowledgeFeedbackEvent(bounded, third.id))
-        assertEquals(listOf(third), acknowledgeFeedbackEvent(bounded, second.id))
+        assertEquals(listOf(third), acknowledgeFeedbackEvent(bounded, first.id))
+        assertEquals(listOf(first), enqueueFeedbackEvent(listOf(first), second, maxEvents = 1))
     }
 
     @Test

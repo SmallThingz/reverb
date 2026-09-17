@@ -55,7 +55,13 @@ internal fun enqueueFeedbackEvent(
     maxEvents: Int = MAX_PENDING_FEEDBACK_EVENTS,
 ): List<FeedbackEvent> {
     require(maxEvents > 0)
-    return (pending + event).takeLast(maxEvents)
+    if (pending.size < maxEvents) return pending + event
+
+    // The head is the next acknowledged delivery and may already be on-screen. Capacity pressure
+    // can shed older tail events, but must never erase that unacknowledged delivery.
+    val head = pending.first()
+    if (maxEvents == 1) return listOf(head)
+    return listOf(head) + (pending.drop(1) + event).takeLast(maxEvents - 1)
 }
 
 internal fun acknowledgeFeedbackEvent(
