@@ -805,7 +805,6 @@ fun SettingsScreen(
         )
         refreshRetentionFields()
         refreshExportDirectoryUi()
-        refreshMoveRecordingsAvailability()
         refreshBatteryOptimizationUi()
 
         currentSnapshot = currentSettingsSnapshot(initial.wakeLockEnabled)
