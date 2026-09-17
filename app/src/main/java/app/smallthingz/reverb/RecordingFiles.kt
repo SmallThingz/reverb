@@ -701,7 +701,7 @@ private fun finalizeMediaStoreOutputTarget(
             digest = expectedFingerprint.digest,
         )
         if (suppressed) {
-            if (!removeVerifiedExportStaging(context, target.storageType, target.id)) {
+            if (!removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)) {
                 Log.w(TAG, "Unable to revoke recovery for unsafe MediaStore publish ${target.id}")
             }
         } else {
@@ -948,7 +948,7 @@ private fun finalizeDocumentOutputTarget(
             Log.w(TAG, "Unable to durably suppress unsafe document publish $sourceUri -> $renamedUri")
         }
         val recoveryRevoked = runCatching {
-            removeVerifiedExportStaging(context, target.storageType, target.id)
+            removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)
         }.getOrDefault(false)
         if (!recoveryRevoked) {
             Log.w(TAG, "Unable to revoke recovery for unsafe document publish ${target.id}")
@@ -1783,7 +1783,7 @@ private fun recoverStagedFileOutputs(
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging recording $file", it) }
             .isSuccess
-        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id)
+        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, publishFingerprint)
         changed = changed || recovered
     }
     return changed
@@ -1882,7 +1882,7 @@ private fun recoverStagedDocumentOutputs(
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging document ${file.uri}", it) }
             .isSuccess
-        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id)
+        if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, publishFingerprint)
         changed = changed || recovered
     }
     return changed
@@ -2137,7 +2137,7 @@ private fun listMediaStoreRecordings(
                                 finalizeOutputTarget(context, stagedTarget, publishFingerprint)
                             }.onFailure { Log.w(TAG, "Unable to publish recovered pending recording $uri", it) }
                                 .getOrNull() ?: continue
-                            removeVerifiedExportStaging(context, stagedTarget.storageType, stagedTarget.id)
+                            removeVerifiedExportStaging(context, stagedTarget.storageType, stagedTarget.id, publishFingerprint)
                             name = finalized.displayName
                             durationMillis = observation.durationMillis
                             media = inspectRecordingMedia(context, uri, name)

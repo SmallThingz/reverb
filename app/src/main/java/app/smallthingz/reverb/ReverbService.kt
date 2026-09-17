@@ -1643,7 +1643,7 @@ class ReverbService : Service() {
                         val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
                         outTarget = finalizedTarget
                         cleanupFingerprint = outputCleanupFingerprintForTarget(finalizedTarget, verifiedOutput)
-                        if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId)) {
+                        if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId, verifiedOutput)) {
                             Log.w(TAG, "Unable to clear verified export recovery marker: $stagingId")
                         }
                         ensureExportNotCancelled(exportToken)

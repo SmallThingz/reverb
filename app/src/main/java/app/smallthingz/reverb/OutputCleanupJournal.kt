@@ -358,20 +358,35 @@ internal fun putVerifiedExportStaging(
     }
 }
 
+internal fun verifiedExportStagingEntriesAfterFingerprintRemoval(
+    entries: Set<String>,
+    storageType: RecordingStorageType,
+    id: String,
+    expectedFingerprint: StableOutputFingerprint,
+): Set<String> = entries.filterNotTo(mutableSetOf()) { raw ->
+    decodeVerifiedExportStagingRecord(raw)?.let { record ->
+        record.storageType == storageType &&
+            record.id == id &&
+            verifiedExportStagingRecordMatches(record, expectedFingerprint)
+    } == true
+}
+
 internal fun removeVerifiedExportStaging(
     context: Context,
     storageType: RecordingStorageType,
     id: String,
+    expectedFingerprint: StableOutputFingerprint,
 ): Boolean = synchronized(verifiedExportStagingLock) {
-        val current = verifiedExportStagingEntriesLocked(context)
-        val updated = current.filterNotTo(mutableSetOf()) { raw ->
-            decodeVerifiedExportStagingRecord(raw)?.let { record ->
-                record.storageType == storageType && record.id == id
-            } == true
-        }
-        if (updated.size == current.size) return@synchronized true
-        writeVerifiedExportStagingEntriesLocked(context, updated)
-    }
+    val current = verifiedExportStagingEntriesLocked(context)
+    val updated = verifiedExportStagingEntriesAfterFingerprintRemoval(
+        entries = current,
+        storageType = storageType,
+        id = id,
+        expectedFingerprint = expectedFingerprint,
+    )
+    if (updated.size == current.size) return@synchronized true
+    writeVerifiedExportStagingEntriesLocked(context, updated)
+}
 
 @SuppressLint("UseKtx") // The commit() Boolean is part of the fail-closed durability contract.
 private fun writeVerifiedExportStagingEntriesLocked(context: Context, entries: Set<String>): Boolean {
@@ -421,7 +436,7 @@ internal fun suppressAndDeleteOutputTarget(
             }
             // Positive absence needs no destructive authority. Revoke any recovery/suppression
             // metadata only after that absence is proven durable.
-            if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
+            if (!removeVerifiedExportStaging(context, target.storageType, id, expectedFingerprint)) return false
             existing?.let { removePendingOutputCleanupEntry(context, it.raw) }
             return true
         }
@@ -455,7 +470,7 @@ internal fun suppressAndDeleteOutputTarget(
     }
     // The cleanup journal now owns the exact verified object. Recovery authority may be revoked;
     // if that commit fails, leave both records in place and keep the bytes.
-    if (!removeVerifiedExportStaging(context, target.storageType, id)) return false
+    if (!removeVerifiedExportStaging(context, target.storageType, id, expectedFingerprint)) return false
 
     val cleaned = deletePendingOutputAsset(context, record)
     if (cleaned) removePendingOutputCleanupEntry(context, entry.raw)

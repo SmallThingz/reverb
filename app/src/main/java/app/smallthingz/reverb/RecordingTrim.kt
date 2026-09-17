@@ -126,7 +126,7 @@ private fun writeTrimmedRecordingCopy(
                 verifiedComplete = true
                 finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
             }
-            if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId)) {
+            if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId, verifiedOutput)) {
                 Log.w(TRIM_TAG, "Unable to clear verified trim recovery marker: $stagingId")
             }
             val durationMillis = selectedFrames * 1000L / layout.sampleRate.toLong()
