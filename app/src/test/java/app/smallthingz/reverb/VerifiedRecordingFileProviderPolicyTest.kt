@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.provider.OpenableColumns
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class VerifiedRecordingFileProviderPolicyTest {
@@ -17,5 +18,16 @@ class VerifiedRecordingFileProviderPolicyTest {
         assertEquals(listOf(OpenableColumns.SIZE, OpenableColumns.DISPLAY_NAME), requested)
         assertEquals(listOf(123L, "clip.wav"), verifiedFileProviderQueryValues(requested, "clip.wav", 123L))
         assertEquals(listOf(null, "clip.wav"), verifiedFileProviderQueryValues(requested, "clip.wav", null))
+    }
+
+    @Test
+    fun mimeType_requiresTheGrantedFileDescriptorIdentity() {
+        val expected = "stat:1:2:3:4:5"
+        assertEquals(
+            "audio/wav",
+            verifiedFileProviderMimeType(expected, "statfd:1:2:3:4", "audio/wav"),
+        )
+        assertNull(verifiedFileProviderMimeType(expected, "statfd:1:9:3:4", "audio/wav"))
+        assertNull(verifiedFileProviderMimeType(expected, "", "audio/wav"))
     }
 }

@@ -29,6 +29,14 @@ internal fun verifiedFileProviderQueryValues(
     }
 }
 
+internal fun verifiedFileProviderMimeType(
+    expectedIdentity: String,
+    descriptorIdentity: String,
+    mimeType: String?,
+): String? = mimeType?.takeIf {
+    fileDescriptorIdentityMatches(expectedIdentity, descriptorIdentity)
+}
+
 class VerifiedRecordingFileProvider : FileProvider() {
     private fun openVerifiedReadDescriptor(uri: Uri): ParcelFileDescriptor {
         val expectedIdentity = verifiedFileProviderIdentity(uri)
@@ -46,6 +54,22 @@ class VerifiedRecordingFileProvider : FileProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw FileNotFoundException("Recording provider is read-only")
         return openVerifiedReadDescriptor(uri)
+    }
+
+    override fun getType(uri: Uri): String? {
+        val expectedIdentity = verifiedFileProviderIdentity(uri) ?: return null
+        val descriptor = try {
+            openVerifiedReadDescriptor(uri)
+        } catch (_: Exception) {
+            return null
+        }
+        return descriptor.use { opened ->
+            verifiedFileProviderMimeType(
+                expectedIdentity = expectedIdentity,
+                descriptorIdentity = resolveFileDescriptorIdentity(opened.fileDescriptor),
+                mimeType = runCatching { super.getType(uri) }.getOrNull(),
+            )
+        }
     }
 
     override fun query(

@@ -88,6 +88,13 @@ internal fun buildVerifiedProviderUri(context: Context, recording: RecordingEnti
         ),
     )
 
+internal fun verifiedProviderMimeType(
+    request: VerifiedProviderRequest,
+    currentIdentity: String,
+): String? = request.mimeType.takeIf {
+    providerRecordingIdentityMatches(request.expectedIdentity, currentIdentity)
+}
+
 class VerifiedRecordingProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
@@ -119,8 +126,14 @@ class VerifiedRecordingProvider : ContentProvider() {
         return descriptor
     }
 
-    override fun getType(uri: Uri): String? =
-        decodeVerifiedProviderPathSegments(uri.pathSegments)?.mimeType
+    override fun getType(uri: Uri): String? {
+        val request = decodeVerifiedProviderPathSegments(uri.pathSegments) ?: return null
+        val context = context ?: return null
+        val source = request.sourceId.toUri()
+        if (source.scheme != "content") return null
+        val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source)
+        return verifiedProviderMimeType(request, currentIdentity)
+    }
 
     override fun query(
         uri: Uri,

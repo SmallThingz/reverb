@@ -272,6 +272,8 @@ class RecordingWaveformTest {
         )
         assertEquals(request, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request)))
         assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request).dropLast(1)))
+        assertEquals(request.mimeType, verifiedProviderMimeType(request, first))
+        assertEquals(null, verifiedProviderMimeType(request, "provider:2:other:1234:9"))
         assertFalse(providerRecordingIdentityMatches("", first))
         assertFalse(providerRecordingIdentityMatches(first, ""))
         assertFalse(providerRecordingIdentityMatches(first, "provider:MEDIASTORE:other"))
