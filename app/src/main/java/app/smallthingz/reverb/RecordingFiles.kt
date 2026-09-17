@@ -2708,7 +2708,10 @@ internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
 
     var consumedBytes = 12L
     var byteRate = 0L
+    var blockAlign = 0L
     var dataSize = -1L
+    var sawFormat = false
+    var sawData = false
     val chunkHeader = ByteArray(8)
     val discardBuffer = ByteArray(FILE_COPY_BUFFER_BYTES)
     while (consumedBytes < expectedTotalBytes) {
@@ -2720,16 +2723,40 @@ internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
         if (paddedChunkSize > expectedTotalBytes - consumedBytes) return@runCatching 0L
 
         if (chunkHeader.regionMatchesAscii(0, "fmt ")) {
-            if (chunkSize < 16L) return@runCatching 0L
+            if (sawFormat || chunkSize < 16L) return@runCatching 0L
             val format = ByteArray(16)
             if (!input.readFully(format)) return@runCatching 0L
             consumedBytes += format.size
-            byteRate = littleEndianUnsignedInt(format, 8)
+            val formatTag = littleEndianUnsignedShort(format, 0)
+            val channelCount = littleEndianUnsignedShort(format, 2)
+            val sampleRate = littleEndianUnsignedInt(format, 4)
+            val declaredByteRate = littleEndianUnsignedInt(format, 8)
+            val declaredBlockAlign = littleEndianUnsignedShort(format, 12).toLong()
+            val bitsPerSample = littleEndianUnsignedShort(format, 14)
+            val sampleBytes = when {
+                formatTag == 1 && bitsPerSample == 8 -> 1L
+                formatTag == 1 && bitsPerSample == 16 -> 2L
+                formatTag == 3 && bitsPerSample == 32 -> 4L
+                else -> return@runCatching 0L
+            }
+            if (channelCount !in 1..2 || sampleRate !in 1L..Int.MAX_VALUE.toLong()) return@runCatching 0L
+            val expectedBlockAlign = channelCount.toLong() * sampleBytes
+            val expectedByteRate = sampleRate * expectedBlockAlign
+            if (declaredBlockAlign != expectedBlockAlign || declaredByteRate != expectedByteRate) {
+                return@runCatching 0L
+            }
+            byteRate = declaredByteRate
+            blockAlign = declaredBlockAlign
+            sawFormat = true
             val remainder = chunkSize - format.size.toLong()
             if (!input.discardFully(remainder, discardBuffer)) return@runCatching 0L
             consumedBytes += remainder
         } else {
-            if (chunkHeader.regionMatchesAscii(0, "data")) dataSize = chunkSize
+            if (chunkHeader.regionMatchesAscii(0, "data")) {
+                if (sawData) return@runCatching 0L
+                dataSize = chunkSize
+                sawData = true
+            }
             if (!input.discardFully(chunkSize, discardBuffer)) return@runCatching 0L
             consumedBytes += chunkSize
         }
@@ -2739,7 +2766,8 @@ internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
         }
     }
     if (consumedBytes != expectedTotalBytes || input.read() >= 0) return@runCatching 0L
-    if (byteRate <= 0L || dataSize <= 0L) return@runCatching 0L
+    if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return@runCatching 0L
+    if (dataSize % blockAlign != 0L) return@runCatching 0L
     (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: 0L
 }.getOrDefault(0L)
 
@@ -2803,6 +2831,9 @@ private fun littleEndianInt(
 private fun littleEndianUnsignedInt(data: ByteArray, offset: Int): Long {
     return littleEndianInt(data, offset).toLong() and 0xFFFF_FFFFL
 }
+
+private fun littleEndianUnsignedShort(data: ByteArray, offset: Int): Int =
+    (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
 
 private fun ByteArray.regionMatchesAscii(offset: Int, expected: String): Boolean {
     if (offset < 0 || expected.length > size - offset) return false

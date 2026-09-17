@@ -833,6 +833,22 @@ class DurabilityInvariantTest {
 
         val placeholder = buildWavHeaderBytes(44_100, 1, PcmSampleFormat.PCM_16, 0L) + payload
         assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(placeholder)))
+
+        val unsupportedFormat = complete.clone().also { it[20] = 2 }
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(unsupportedFormat)))
+        val inconsistentByteRate = complete.clone().also { it[28] = 0 }
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(inconsistentByteRate)))
+        val inconsistentBlockAlign = complete.clone().also { it[32] = 1 }
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(inconsistentBlockAlign)))
+
+        val partialFramePayload = payload + byteArrayOf(1)
+        val partialFrame = buildWavHeaderBytes(
+            44_100,
+            1,
+            PcmSampleFormat.PCM_16,
+            partialFramePayload.size.toLong(),
+        ) + partialFramePayload + byteArrayOf(0)
+        assertEquals(0L, readRecoverableStagingWavDurationMillis(ByteArrayInputStream(partialFrame)))
     }
 
     @Test
