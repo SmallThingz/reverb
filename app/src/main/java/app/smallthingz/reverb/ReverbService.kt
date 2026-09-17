@@ -580,6 +580,7 @@ class ReverbService : Service() {
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         var stopIncidentStateFailure = false
+        var stopIntentRollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
             if (serviceDestroying) return rejectedListeningCommand()
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
@@ -606,12 +607,18 @@ class ReverbService : Service() {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
                 if (enabled) editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.storageCode.toInt())
                 if (!editor.commit()) {
-                    if (!restoreCaptureIntentPreferences(
-                            prefs = prefs,
-                            previousEnabled = previousEnabled,
-                            previousStoredSlot = previousStoredSlot,
-                        )) {
+                    val rollbackPersisted = restoreCaptureIntentPreferences(
+                        prefs = prefs,
+                        previousEnabled = previousEnabled,
+                        previousStoredSlot = previousStoredSlot,
+                    )
+                    if (!rollbackPersisted) {
                         Log.e(TAG, "Unable to durably restore recorder intent after failed command")
+                        if (captureStopRollbackRequiresPause(previousEnabled, rollbackPersisted) && !enabled) {
+                            stopIntentRollbackFailure = IOException(
+                                "Unable to restore recorder intent after failed Stop persistence",
+                            )
+                        }
                     }
                     null
                 } else if (enabled) {
@@ -641,12 +648,16 @@ class ReverbService : Service() {
                         if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
                     }
                     ExplicitCaptureStopDisposition.REJECT_REARMED -> {
-                        if (!restoreCaptureIntentPreferences(
-                                prefs = prefs,
-                                previousEnabled = previousEnabled,
-                                previousStoredSlot = previousStoredSlot,
-                            )) {
+                        val rollbackPersisted = restoreCaptureIntentPreferences(
+                            prefs = prefs,
+                            previousEnabled = previousEnabled,
+                            previousStoredSlot = previousStoredSlot,
+                        )
+                        if (!rollbackPersisted) {
                             Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
+                            stopIntentRollbackFailure = IOException(
+                                "Unable to restore recorder intent after failed known Stop",
+                            )
                         }
                         null
                     }
@@ -662,7 +673,15 @@ class ReverbService : Service() {
             }
         }
         if (generation == null) {
-            reportError(getString(R.string.recorder_state_persist_failed))
+            val rollbackFailure = stopIntentRollbackFailure
+            if (rollbackFailure != null) {
+                pauseListeningAfterPersistenceFailure(
+                    operation = "restore recorder intent after rejected Stop",
+                    error = rollbackFailure,
+                )
+            } else {
+                reportError(getString(R.string.recorder_state_persist_failed))
+            }
             return ListeningCommandResult(
                 accepted = false,
                 generation = listeningCommandGeneration.get(),
@@ -3282,6 +3301,11 @@ internal enum class ExplicitCaptureStopDisposition {
     REJECT_REARMED,
     INCIDENT_STATE_FAILURE,
 }
+
+internal fun captureStopRollbackRequiresPause(
+    previousEnabled: Boolean,
+    rollbackPersisted: Boolean,
+): Boolean = previousEnabled && !rollbackPersisted
 
 internal fun explicitCaptureStopDisposition(
     stopIntentChanged: Boolean,

@@ -838,6 +838,13 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun failedStopRollbackPausesWhenPriorIntentCannotBeRestoredDurably() {
+        assertTrue(captureStopRollbackRequiresPause(previousEnabled = true, rollbackPersisted = false))
+        assertFalse(captureStopRollbackRequiresPause(previousEnabled = true, rollbackPersisted = true))
+        assertFalse(captureStopRollbackRequiresPause(previousEnabled = false, rollbackPersisted = false))
+    }
+
+    @Test
     fun explicitCaptureStop_rejectsOnlyWhenPriorArmedMarkerWasRestored() {
         assertEquals(
             ExplicitCaptureStopDisposition.KNOWN_STOP,
