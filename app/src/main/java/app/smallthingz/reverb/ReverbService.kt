@@ -1498,7 +1498,13 @@ class ReverbService : Service() {
         }
     }
 
-    fun cancelCurrentExport(): Boolean = requestExportCancellation(preserveVerifiedOutput = false)
+    fun cancelCurrentExport(): Boolean = synchronized(listeningIntentLock) {
+        // A stale UI binder must not turn generic Service teardown into user cancellation.
+        // Serialize acceptance with onDestroy(); cancellations accepted before that boundary
+        // still own the export token, while later calls fail closed.
+        if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
+        requestExportCancellation(preserveVerifiedOutput = false)
+    }
 
     private fun requestExportCancellation(preserveVerifiedOutput: Boolean): Boolean {
         var receiverToNotify: AudioFileReceiver? = null
@@ -1728,14 +1734,22 @@ class ReverbService : Service() {
     }
 
     private fun beginExport(receiver: AudioFileReceiver): ExportCancellationToken? =
-        synchronized(exportStateLock) {
-            if (serviceDestroying || activeExportToken != null) {
+        synchronized(listeningIntentLock) {
+            // Export is a user-visible Service command too. Take the same lifetime lock as
+            // onDestroy() so a command either owns a token before teardown or is rejected after.
+            if (!serviceCommandMayQueue(serviceDestroying)) {
                 null
             } else {
-                ExportCancellationToken(nextExportTokenId.getAndIncrement()).also { token ->
-                    activeExportToken = token
-                    activeExportFuture = null
-                    activeExportReceiver = receiver
+                synchronized(exportStateLock) {
+                    if (activeExportToken != null) {
+                        null
+                    } else {
+                        ExportCancellationToken(nextExportTokenId.getAndIncrement()).also { token ->
+                            activeExportToken = token
+                            activeExportFuture = null
+                            activeExportReceiver = receiver
+                        }
+                    }
                 }
             }
         }
@@ -1780,7 +1794,7 @@ class ReverbService : Service() {
         // Settings treats true as acceptance of the committed runtime reload. Serialize that
         // acceptance with onDestroy(): an accepted task is queued before terminal store close;
         // once teardown owns the lifetime, reject so Settings can use its stopped/restart fallback.
-        if (!serviceAudioMutationMayQueue(serviceDestroying)) return@synchronized false
+        if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
         audioHandler.post {
             try {
                 applyConfiguredPreferencesOnAudioThread()
@@ -2610,7 +2624,7 @@ class ReverbService : Service() {
             // Serialize command acceptance with onDestroy() taking ownership of the Service. If
             // this post succeeds before teardown flips serviceDestroying, MessageQueue ordering
             // puts Clear ahead of the later terminal store-close task. Otherwise reject it.
-            if (!serviceAudioMutationMayQueue(serviceDestroying)) return@synchronized false
+            if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
             audioHandler.post {
                 var cleared = false
                 try {
@@ -3443,7 +3457,7 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
-internal fun serviceAudioMutationMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
+internal fun serviceCommandMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean = !serviceDestroying
 

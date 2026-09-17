@@ -986,14 +986,20 @@ class FormattingAndHistoryMathTest {
 
     @Test
     fun destructiveAudioMutationIsRejectedOnceServiceTeardownOwnsLifetime() {
-        assertTrue(serviceAudioMutationMayQueue(serviceDestroying = false))
-        assertFalse(serviceAudioMutationMayQueue(serviceDestroying = true))
+        assertTrue(serviceCommandMayQueue(serviceDestroying = false))
+        assertFalse(serviceCommandMayQueue(serviceDestroying = true))
     }
 
     @Test
     fun committedSettingsReloadIsRejectedOnceServiceTeardownOwnsLifetime() {
-        assertTrue(serviceAudioMutationMayQueue(serviceDestroying = false))
-        assertFalse(serviceAudioMutationMayQueue(serviceDestroying = true))
+        assertTrue(serviceCommandMayQueue(serviceDestroying = false))
+        assertFalse(serviceCommandMayQueue(serviceDestroying = true))
+    }
+
+    @Test
+    fun exportStartAndUserCancelAreRejectedOnceServiceTeardownOwnsLifetime() {
+        assertTrue(serviceCommandMayQueue(serviceDestroying = false))
+        assertFalse(serviceCommandMayQueue(serviceDestroying = true))
     }
 
     @Test
