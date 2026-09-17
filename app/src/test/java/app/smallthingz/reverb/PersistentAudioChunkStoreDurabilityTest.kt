@@ -134,6 +134,52 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun processDeath_neverRecertifiesCorruptedCheckpointedActivePrefix() = withStoreRoot { root ->
+        val checkpointed = pcmBytes(8_192)
+        val tail = pcmBytes(4_096).mapIndexed { index, byte -> (byte.toInt() xor (index and 0x1f)).toByte() }.toByteArray()
+        val crashed = PersistentAudioChunkStore(root)
+        configure(crashed, 512 * 1024L)
+        assertEquals(checkpointed.size, crashed.append(checkpointed, 0, checkpointed.size))
+        crashed.checkpoint()
+        assertEquals(tail.size, crashed.append(tail, 0, tail.size))
+        simulateProcessDeath(crashed)
+
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val corrupted = chunk.readBytes().also { bytes ->
+            val payloadOffset = 128
+            bytes[payloadOffset + 137] = (bytes[payloadOffset + 137].toInt() xor 0x40).toByte()
+        }
+        chunk.writeBytes(corrupted)
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 512 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+        val preserved = File(root, "preserved").listFiles().orEmpty()
+            .singleOrNull { ".corrupt" in it.name }
+        assertNotNull(preserved)
+        assertArrayEquals(corrupted, requireNotNull(preserved).readBytes())
+    }
+
+    @Test
+    fun processDeath_recoversUncheckpointedTailOnlyWhenCheckpointedPrefixStillMatches() = withStoreRoot { root ->
+        val checkpointed = pcmBytes(8_192)
+        val tail = ByteArray(4_096) { index -> ((index * 43 + 19) and 0xff).toByte() }
+        val expected = checkpointed + tail
+        val crashed = PersistentAudioChunkStore(root)
+        configure(crashed, 512 * 1024L)
+        assertEquals(checkpointed.size, crashed.append(checkpointed, 0, checkpointed.size))
+        crashed.checkpoint()
+        assertEquals(tail.size, crashed.append(tail, 0, tail.size))
+        simulateProcessDeath(crashed)
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 512 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun tornFinalFrame_isPreservedBeforeLiveRecoveryAlignsPayload() = withStoreRoot { root ->
         val expected = pcmBytes(12_000)
         val crashed = PersistentAudioChunkStore(root)

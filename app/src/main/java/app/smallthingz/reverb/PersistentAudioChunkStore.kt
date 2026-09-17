@@ -1293,9 +1293,25 @@ internal class PersistentAudioChunkStore internal constructor(
             )
         }
 
-        // ACTIVE metadata can lag the payload after a crash. The immutable prefix is
-        // independently checksummed, so payload geometry can be reconstructed safely. If
-        // the crash tore the final frame, preserve the original bytes before aligning the
+        // ACTIVE metadata can lag the payload after a crash, but the latest valid mutable
+        // slot describes a prefix that already crossed a successful fsync. Never bless that
+        // known-durable prefix again from whatever bytes happen to occupy the file now: prove
+        // its geometry/checksum first. Bytes appended after that checkpoint have no prior CRC,
+        // so they remain best-effort crash recovery once the authoritative prefix is intact.
+        if (
+            header.payloadBytes < 0L ||
+            header.payloadBytes % frameBytes.toLong() != 0L ||
+            header.sampleFrames != header.payloadBytes / frameBytes.toLong() ||
+            alignedActualPayload < header.payloadBytes
+        ) {
+            return null
+        }
+        if (header.payloadBytes > 0L) {
+            val checkpointChecksum = crc32FilePayload(file, header.payloadOffsetBytes, header.payloadBytes)
+            if (checkpointChecksum != header.payloadChecksum) return null
+        }
+
+        // If the crash tore the final frame, preserve the original bytes before aligning the
         // live copy; even undecodable trailing bytes are never silently destroyed.
         if (actualPayload != alignedActualPayload) {
             preserveFileCopyLocked(file, "partial-frame")
