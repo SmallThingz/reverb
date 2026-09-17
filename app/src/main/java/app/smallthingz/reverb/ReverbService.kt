@@ -65,6 +65,11 @@ internal class UiForegroundOwnerTracker {
     fun size(): Int = owners.size
 }
 
+internal fun serviceOwnerRegistrationMayApply(
+    serviceDestroying: Boolean,
+    registering: Boolean,
+): Boolean = !registering || !serviceDestroying
+
 internal class IdentityOwnerRegistry<T : Any> {
     private val owners = ArrayList<T>()
 
@@ -297,6 +302,8 @@ class ReverbService : Service() {
         // teardown begins. Explicit Stop/failure paths already invalidate continuity themselves.
         synchronized(listeningIntentLock) {
             serviceDestroying = true
+            appUiForegroundOwners.clear()
+            appUiForeground = false
         }
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
@@ -2522,10 +2529,14 @@ class ReverbService : Service() {
     }
 
     fun setAppUiForeground(owner: Any, foreground: Boolean) {
-        val wasForeground = appUiForeground
-        val nowForeground = appUiForegroundOwners.update(owner, foreground)
-        appUiForeground = nowForeground
-        if (!wasForeground && nowForeground) {
+        val shouldRetry = synchronized(listeningIntentLock) {
+            if (!serviceOwnerRegistrationMayApply(serviceDestroying, foreground)) return
+            val wasForeground = appUiForeground
+            val nowForeground = appUiForegroundOwners.update(owner, foreground)
+            appUiForeground = nowForeground
+            !wasForeground && nowForeground && !serviceDestroying
+        }
+        if (shouldRetry) {
             // A bind may have been created while keyguard/occlusion prevented microphone-FGS
             // eligibility. The existing binding survives that transition, so foregrounding the
             // actual app UI must retry the durable listening intent without requiring a rebind.
@@ -2534,14 +2545,25 @@ class ReverbService : Service() {
     }
 
     fun setVisualizationCallback(callback: VisualizationCallback) {
+        if (!serviceOwnerRegistrationMayApply(serviceDestroying, registering = true)) return
         if (!visualizationCallbacks.register(callback)) return
+        // Teardown can win between the pre-check and registry mutation. Revoke this exact stale
+        // owner rather than repopulating a registry on a dying Service.
+        if (serviceDestroying) {
+            visualizationCallbacks.unregister(callback)
+            return
+        }
         pendingVisualizationFrame.set(null)
         if (!::audioHandler.isInitialized) return
-        audioHandler.post {
-            if (visualizationCallbacks.current() === callback) {
+        val accepted = audioHandler.post {
+            if (!serviceDestroying && visualizationCallbacks.current() === callback) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
             }
+        }
+        if (!accepted) {
+            visualizationCallbacks.unregister(callback)
+            pendingVisualizationFrame.set(null)
         }
     }
 
@@ -2549,9 +2571,9 @@ class ReverbService : Service() {
         if (!visualizationCallbacks.unregister(callback)) return
         pendingVisualizationFrame.set(null)
         val fallback = visualizationCallbacks.current()
-        if (!::audioHandler.isInitialized) return
+        if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
-            if (visualizationCallbacks.current() === fallback) {
+            if (!serviceDestroying && visualizationCallbacks.current() === fallback) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
             }
@@ -2561,9 +2583,9 @@ class ReverbService : Service() {
     private fun clearAllVisualizationCallbacks() {
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
-        if (!::audioHandler.isInitialized) return
+        if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
-            if (visualizationCallbacks.current() == null) {
+            if (!serviceDestroying && visualizationCallbacks.current() == null) {
                 visualizationAnalyzer.reset()
                 visualizationFaulted = false
             }
