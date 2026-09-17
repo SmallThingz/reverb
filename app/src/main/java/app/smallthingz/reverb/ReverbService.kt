@@ -2571,26 +2571,30 @@ class ReverbService : Service() {
         )
     }
 
-    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean {
-        if (serviceDestroying) return false
-        return audioHandler.post {
-            if (bufferSlot == BufferSlot.ONE_SHOT) {
-                clearOneShotFullQuickTileCacheOnAudioThread()
-            }
-            try {
-                chunkStore(bufferSlot).clear()
-            } catch (error: Exception) {
-                reportPersistentStoreFailure("clear history", error)
-            } finally {
+    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
+        synchronized(listeningIntentLock) {
+            // Serialize command acceptance with onDestroy() taking ownership of the Service. If
+            // this post succeeds before teardown flips serviceDestroying, MessageQueue ordering
+            // puts Clear ahead of the later terminal store-close task. Otherwise reject it.
+            if (!serviceAudioMutationMayQueue(serviceDestroying)) return@synchronized false
+            audioHandler.post {
                 if (bufferSlot == BufferSlot.ONE_SHOT) {
-                    syncOneShotFullQuickTileOnAudioThread()
-                    RecordingQuickTileStateCache.persistCurrentDurations(this)
-                } else {
-                    publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
+                    clearOneShotFullQuickTileCacheOnAudioThread()
+                }
+                try {
+                    chunkStore(bufferSlot).clear()
+                } catch (error: Exception) {
+                    reportPersistentStoreFailure("clear history", error)
+                } finally {
+                    if (bufferSlot == BufferSlot.ONE_SHOT) {
+                        syncOneShotFullQuickTileOnAudioThread()
+                        RecordingQuickTileStateCache.persistCurrentDurations(this)
+                    } else {
+                        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
+                    }
                 }
             }
         }
-    }
 
     inner class BackgroundRecorderBinder : Binder() {
         val service: ReverbService
@@ -3399,6 +3403,8 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
     result == AudioThreadShutdownWaitResult.REJECTED
 
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun serviceAudioMutationMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun captureReadShouldReschedule(
     commandGenerationUnchanged: Boolean,

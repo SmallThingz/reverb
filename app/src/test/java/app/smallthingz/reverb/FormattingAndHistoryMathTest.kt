@@ -1003,6 +1003,12 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun destructiveAudioMutationIsRejectedOnceServiceTeardownOwnsLifetime() {
+        assertTrue(serviceAudioMutationMayQueue(serviceDestroying = false))
+        assertFalse(serviceAudioMutationMayQueue(serviceDestroying = true))
+    }
+
+    @Test
     fun serviceDestroyKeepsOnlyTheReadAlreadyInFlight() {
         assertTrue(captureReadMayStart(serviceDestroying = false))
         assertFalse(captureReadMayStart(serviceDestroying = true))
