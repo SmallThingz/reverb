@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,6 +99,100 @@ internal fun shouldHandoffPendingDeletionsToBackground(
     committedInBackground: Boolean,
     foregroundCommitInFlight: Boolean,
 ): Boolean = hasPending && !committedInBackground && !foregroundCommitInFlight
+
+internal suspend fun runCommittedRecordingRename(
+    rename: suspend () -> RecordingEntity?,
+    onTerminal: (Result<RecordingEntity?>) -> Unit,
+) = withContext(NonCancellable) {
+    val result = try {
+        Result.success(rename())
+    } catch (error: Exception) {
+        Result.failure(error)
+    }
+    onTerminal(result)
+}
+
+internal class RenameUiCallbackGate(
+    private var onRenamed: ((RecordingEntity) -> Unit)?,
+    private var onRejected: (() -> Unit)?,
+    private var onUncertain: (() -> Unit)?,
+    private var onHiddenTerminal: (() -> Unit)?,
+    private val isVisible: () -> Boolean,
+) {
+    var attached: Boolean = true
+        private set
+
+    fun detach() {
+        attached = false
+        onRenamed = null
+        onRejected = null
+        onUncertain = null
+        onHiddenTerminal = null
+    }
+
+    fun renamed(recording: RecordingEntity): Boolean = deliverVisible { onRenamed?.invoke(recording) }
+
+    fun rejected(): Boolean = deliverVisible { onRejected?.invoke() }
+
+    fun uncertain(): Boolean = deliverVisible { onUncertain?.invoke() }
+
+    private inline fun deliverVisible(deliver: () -> Unit): Boolean {
+        if (!attached) return false
+        if (!isVisible()) {
+            onHiddenTerminal?.invoke()
+            return false
+        }
+        deliver()
+        return true
+    }
+}
+
+internal class RenameResultReceiver(
+    onRenamed: (RecordingEntity) -> Unit,
+    onRejected: () -> Unit,
+    onUncertain: () -> Unit,
+    onHiddenTerminal: () -> Unit,
+    isUiVisible: () -> Boolean,
+    private val onDetachedSuccess: (RecordingEntity) -> Unit,
+    private val onDetachedFailure: () -> Unit,
+    private val onTerminal: (RenameResultReceiver) -> Unit,
+) {
+    private val uiCallbacks = RenameUiCallbackGate(
+        onRenamed = onRenamed,
+        onRejected = onRejected,
+        onUncertain = onUncertain,
+        onHiddenTerminal = onHiddenTerminal,
+        isVisible = isUiVisible,
+    )
+    private val terminalDelivered = AtomicBoolean(false)
+
+    fun detachUi() = uiCallbacks.detach()
+
+    fun terminal(result: Result<RecordingEntity?>) {
+        if (!terminalDelivered.compareAndSet(false, true)) return
+        try {
+            result.fold(
+                onSuccess = { renamed ->
+                    if (renamed != null) {
+                        if (!runCatching { uiCallbacks.renamed(renamed) }.getOrDefault(false)) {
+                            onDetachedSuccess(renamed)
+                        }
+                    } else if (!runCatching { uiCallbacks.rejected() }.getOrDefault(false)) {
+                        onDetachedFailure()
+                    }
+                },
+                onFailure = {
+                    if (!runCatching { uiCallbacks.uncertain() }.getOrDefault(false)) {
+                        onDetachedFailure()
+                    }
+                },
+            )
+        } finally {
+            uiCallbacks.detach()
+            onTerminal(this)
+        }
+    }
+}
 
 internal fun releaseCompletedForegroundDeletionTargets(
     pendingDeletions: MutableMap<String, RecordingEntity>,
@@ -908,6 +1003,7 @@ fun FilesScreen(
         } else {
             RenameRecordingDialog(
                 recording = renameRecording ?: return,
+                active = active,
                 onDismiss = { showRenameDialog = false; renameRecording = null },
                 onRenamed = { renamed ->
                     val updatedRecordings = recordings.map { item ->
@@ -1084,19 +1180,28 @@ private fun RecordingItem(
 @Composable
 private fun RenameRecordingDialog(
     recording: RecordingEntity,
+    active: Boolean,
     onDismiss: () -> Unit,
     onRenamed: (RecordingEntity) -> Unit,
     onStateUncertain: () -> Unit,
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val activeState = androidx.compose.runtime.rememberUpdatedState(active)
+    val activeReceiver = remember(recording.id) { arrayOfNulls<RenameResultReceiver>(1) }
     var name by remember(recording.id, recording.displayName) {
         val baseName = recording.displayName.substringBeforeLast('.', recording.displayName)
         mutableStateOf(if (baseName.isEmpty()) recording.displayName else baseName)
     }
     var error by remember(recording.id) { mutableStateOf<String?>(null) }
     var isRenaming by remember(recording.id) { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        onDispose { activeReceiver[0]?.detachUi() }
+    }
 
     fun validateAndRename(trimmed: String) {
         if (isRenaming) return
@@ -1109,18 +1214,49 @@ private fun RenameRecordingDialog(
             return
         }
         isRenaming = true
-        scope.launch {
-            try {
-                val renamed = RecordingRepository.rename(context, recording, trimmed)
-                if (renamed == null) error = resources.getString(R.string.rename_recording_failed)
-                else onRenamed(renamed)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                onStateUncertain()
-            } finally {
+        lateinit var receiver: RenameResultReceiver
+        receiver = RenameResultReceiver(
+            onRenamed = { renamed ->
                 isRenaming = false
-            }
+                onRenamed(renamed)
+            },
+            onRejected = {
+                isRenaming = false
+                error = resources.getString(R.string.rename_recording_failed)
+            },
+            onUncertain = {
+                isRenaming = false
+                onStateUncertain()
+            },
+            onHiddenTerminal = {
+                isRenaming = false
+                onDismiss()
+            },
+            isUiVisible = {
+                activeState.value && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            },
+            onDetachedSuccess = { renamed ->
+                AppFeedbackCenter.post(
+                    "${appContext.getString(R.string.rename_recording)}: ${renamed.displayName}",
+                    FeedbackTone.SUCCESS,
+                )
+            },
+            onDetachedFailure = {
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.rename_recording_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+            onTerminal = { completed ->
+                if (activeReceiver[0] === completed) activeReceiver[0] = null
+            },
+        )
+        activeReceiver[0] = receiver
+        scope.launch {
+            runCommittedRecordingRename(
+                rename = { RecordingRepository.rename(appContext, recording, trimmed) },
+                onTerminal = receiver::terminal,
+            )
         }
     }
 
