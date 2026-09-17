@@ -203,6 +203,21 @@ internal fun settingsMoveAvailabilityResultIsCurrent(
     currentGeneration: Int,
 ): Boolean = active && requestGeneration == currentGeneration
 
+internal suspend fun <T> runCommittedSettingsMove(
+    persistSettings: suspend () -> Boolean,
+    move: suspend () -> T,
+    onTerminal: (Result<T>) -> Unit,
+): Boolean = withContext(NonCancellable) {
+    if (!persistSettings()) return@withContext false
+    val result = try {
+        Result.success(move())
+    } catch (error: Exception) {
+        Result.failure(error)
+    }
+    onTerminal(result)
+    true
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -938,40 +953,65 @@ fun SettingsScreen(
     fun moveExistingRecordings() {
         if (settingsPersisting) return
         val moveTargetTreeUri = selectedExportTreeUri
+        val appContext = context.applicationContext
+        val appResources = appContext.resources
         scope.launch {
-            // persistSettings() returns true only if no newer edit superseded this submitted
-            // snapshot while IO was in flight, so this URI is exactly the destination committed
-            // by this Move action. Pass it explicitly instead of rereading preferences later.
-            if (!persistSettings()) return@launch
-            canMove = false
-            val result = try {
-                RecordingRepository.moveAllToDirectory(context, moveTargetTreeUri)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                AppFeedbackCenter.post(resources.getString(R.string.move_recordings_failed), FeedbackTone.ERROR)
-                refreshMoveRecordingsAvailability()
-                return@launch
-            }
-            val messageParts = buildList {
-                if (result.moved > 0) {
-                    add(resources.getQuantityString(R.plurals.move_recordings_done, result.moved, result.moved))
-                }
-                if (result.failed > 0) {
-                    add(resources.getQuantityString(R.plurals.move_recordings_failed_count, result.failed, result.failed))
-                }
-                if (result.cleanupFailed > 0) {
-                    add(
-                        resources.getQuantityString(
-                            R.plurals.move_recordings_cleanup_failed,
-                            result.cleanupFailed, result.cleanupFailed,
-                        ),
+            // A Move action first commits the exact Settings snapshot that selected this target.
+            // Once that commit succeeds, the physical batch and its process-level terminal result
+            // outlive Activity/Compose cancellation. The repository already pins moveTargetTreeUri
+            // for the full batch, so newer Settings edits cannot retarget work already accepted.
+            val moveStarted = runCommittedSettingsMove(
+                persistSettings = ::persistSettings,
+                move = {
+                    canMove = false
+                    RecordingRepository.moveAllToDirectory(appContext, moveTargetTreeUri)
+                },
+                onTerminal = { outcome ->
+                    outcome.fold(
+                        onSuccess = { result ->
+                            val messageParts = buildList {
+                                if (result.moved > 0) {
+                                    add(
+                                        appResources.getQuantityString(
+                                            R.plurals.move_recordings_done, result.moved, result.moved,
+                                        ),
+                                    )
+                                }
+                                if (result.failed > 0) {
+                                    add(
+                                        appResources.getQuantityString(
+                                            R.plurals.move_recordings_failed_count, result.failed, result.failed,
+                                        ),
+                                    )
+                                }
+                                if (result.cleanupFailed > 0) {
+                                    add(
+                                        appResources.getQuantityString(
+                                            R.plurals.move_recordings_cleanup_failed,
+                                            result.cleanupFailed, result.cleanupFailed,
+                                        ),
+                                    )
+                                }
+                            }
+                            val message = messageParts.joinToString(" ").ifBlank {
+                                appResources.getString(R.string.move_recordings_none)
+                            }
+                            AppFeedbackCenter.post(
+                                message,
+                                if (result.hasFailures) FeedbackTone.ERROR else FeedbackTone.SUCCESS,
+                            )
+                        },
+                        onFailure = {
+                            AppFeedbackCenter.post(
+                                appResources.getString(R.string.move_recordings_failed),
+                                FeedbackTone.ERROR,
+                            )
+                        },
                     )
-                }
-            }
-            val message = messageParts.joinToString(" ").ifBlank { resources.getString(R.string.move_recordings_none) }
+                },
+            )
+            if (!moveStarted) return@launch
             refreshMoveRecordingsAvailability()
-            AppFeedbackCenter.post(message, if (result.hasFailures) FeedbackTone.ERROR else FeedbackTone.SUCCESS)
         }
     }
 
