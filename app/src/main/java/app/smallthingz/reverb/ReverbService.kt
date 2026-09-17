@@ -1393,7 +1393,11 @@ class ReverbService : Service() {
         token: ExportCancellationToken,
         receiver: AudioFileReceiver,
     ): Boolean {
-        if (!isExportPending(token)) return false
+        if (serviceDestroying || !isExportPending(token)) {
+            clearExportState(token)
+            finishExportFailure(token, receiver, getString(R.string.save_failed))
+            return false
+        }
         foregroundServiceTimedOut = false
         return try {
             if (foregroundServiceTypes == 0) {
@@ -1431,7 +1435,7 @@ class ReverbService : Service() {
     }
 
     private fun ensureExportOnlyForegroundIfNeeded() {
-        if (!hasActiveExport()) return
+        if (serviceDestroying || !hasActiveExport()) return
         if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) return
         try {
             promoteForeground(
@@ -1448,7 +1452,7 @@ class ReverbService : Service() {
 
     private fun refreshForegroundAfterExport() {
         mainHandler.post {
-            if (hasActiveExport()) return@post
+            if (serviceDestroying || hasActiveExport()) return@post
             if (foregroundServiceTimedOut) {
                 stopForegroundTracked()
                 return@post
