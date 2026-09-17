@@ -93,6 +93,23 @@ import kotlin.math.tanh
 
 internal enum class RangeEditTarget { START, END }
 
+internal data class RangeDurationWheelInteraction(
+    val target: RangeEditTarget? = null,
+    val commitAllowed: Boolean = false,
+) {
+    val active: Boolean get() = target != null
+
+    fun begin(target: RangeEditTarget): RangeDurationWheelInteraction =
+        RangeDurationWheelInteraction(target = target, commitAllowed = true)
+
+    fun invalidateCommit(): RangeDurationWheelInteraction =
+        if (active && commitAllowed) copy(commitAllowed = false) else this
+
+    fun end(): RangeDurationWheelInteraction = RangeDurationWheelInteraction()
+
+    fun commitTarget(): RangeEditTarget? = target?.takeIf { commitAllowed }
+}
+
 private const val BOUNDARY_CURSOR_END_LEAD_IN_SECONDS = 3f
 
 internal data class BoundaryCursorPreviewWindow(
@@ -571,6 +588,10 @@ internal class RangeExportEditorState(
         private set
     private var activeTextTarget: RangeEditTarget? = null
     private var activeTextDraft: String? = null
+    private var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
+
+    val selectionDurationEditing: Boolean
+        get() = selectionDurationInteraction.active
 
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
@@ -585,7 +606,7 @@ internal class RangeExportEditorState(
     fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =
         rangeSelectionDurationWheelLimitSeconds(
             values = currentEditValues(),
-            target = lastTarget,
+            target = selectionDurationInteraction.target ?: lastTarget,
             timelineDurationSeconds = durationSeconds,
             exportLimitSeconds = exportLimitSeconds,
         )
@@ -595,6 +616,7 @@ internal class RangeExportEditorState(
 
     fun attachSnapshot(value: ReverbService.TimelineSnapshot) {
         invalidateTextEditing()
+        invalidateSelectionDurationCommit()
         val previousDuration = durationSeconds
         val nextDuration = rangeTimelineDurationSeconds(value.durationSeconds.toFloat())
         val endWasAtLiveEdge = kotlin.math.abs(endSeconds - previousDuration) <= 0.15f
@@ -649,6 +671,7 @@ internal class RangeExportEditorState(
     }
 
     fun beginTextEditing(target: RangeEditTarget, draft: String) {
+        invalidateSelectionDurationCommit()
         activeTextTarget = target
         activeTextDraft = draft
     }
@@ -674,11 +697,12 @@ internal class RangeExportEditorState(
     }
 
     fun selectTarget(target: RangeEditTarget) {
+        invalidateSelectionDurationCommit()
         lastTarget = target
     }
 
     fun setTarget(target: RangeEditTarget, requestedSeconds: Float) {
-        lastTarget = target
+        selectTarget(target)
         applyEditUpdate(
             adjustRangeEditTarget(
                 values = currentEditValues(),
@@ -690,6 +714,9 @@ internal class RangeExportEditorState(
     }
 
     fun beginSelectionDurationEdit() {
+        // Native wheel state settles after the pointer is released. Pin the edit owner now so
+        // the delayed terminal commit and reachable cap belong to this exact interaction.
+        selectionDurationInteraction = selectionDurationInteraction.begin(lastTarget)
         if (activeTextTarget != null || activeTextDraft != null) {
             invalidateTextEditing()
         }
@@ -697,14 +724,23 @@ internal class RangeExportEditorState(
     }
 
     fun setSelectionDuration(requestedDurationSeconds: Float) {
+        val target = selectionDurationInteraction.commitTarget() ?: return
         applyEditUpdate(
             resizeRangeSelectionDuration(
                 values = currentEditValues(),
-                target = lastTarget,
+                target = target,
                 requestedDurationSeconds = requestedDurationSeconds,
                 durationSeconds = durationSeconds,
             ),
         )
+    }
+
+    fun endSelectionDurationEdit() {
+        selectionDurationInteraction = selectionDurationInteraction.end()
+    }
+
+    private fun invalidateSelectionDurationCommit() {
+        selectionDurationInteraction = selectionDurationInteraction.invalidateCommit()
     }
 
     private fun currentEditValues() = RangeEditValues(startSeconds, endSeconds)
@@ -717,6 +753,7 @@ internal class RangeExportEditorState(
     }
 
     fun commitTarget(target: RangeEditTarget, requestedSeconds: Float): Boolean {
+        invalidateSelectionDurationCommit()
         if (!requestedSeconds.isFinite() || requestedSeconds !in 0f..durationSeconds) return false
         when (target) {
             RangeEditTarget.START -> if (requestedSeconds >= endSeconds) return false
@@ -771,6 +808,7 @@ internal class RangeExportEditorState(
     }
 
     fun beginFineAdjust(shuttleRate: Float) {
+        invalidateSelectionDurationCommit()
         invalidateTextEditing()
         resumeAfterScrub = isPlaying
         if (isPlaying) {
@@ -1019,7 +1057,7 @@ internal fun RangeExportHomeContent(
                     morphProgress = morphProgress,
                     morphStartColor = morphStartColor,
                     chromeAlpha = chromeAlpha,
-                    interactionEnabled = interactionReady && backProgress <= 0f,
+                    interactionEnabled = interactionReady && backProgress <= 0f && !state.selectionDurationEditing,
                     sourceGeometry = sourceGeometry,
                     transitionStarted = transitionStarted,
                     targetBoundsInRoot = waveformTargetBoundsInRoot,
@@ -1033,7 +1071,7 @@ internal fun RangeExportHomeContent(
                 Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
                 SpringFineAdjust(
                     state = state,
-                    enabled = interactionReady && backProgress <= 0f,
+                    enabled = interactionReady && backProgress <= 0f && !state.selectionDurationEditing,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(if (compact) 120.dp else 132.dp)
@@ -1092,6 +1130,7 @@ private fun RangeSelectionDurationWheel(
             view.onDurationChanged = { seconds ->
                 state.setSelectionDuration(seconds.toFloat())
             }
+            view.onInteractionEnd = state::endSelectionDurationEdit
             view.setPalette(
                 ink = colors.onSurface.toArgb(),
                 muted = colors.onSurfaceVariant.toArgb(),
@@ -1951,7 +1990,7 @@ private fun RangeExportControls(
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
-    val exportEnabled = state.snapshotReady && canExport
+    val exportEnabled = state.snapshotReady && canExport && !state.selectionDurationEditing
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     val focusManager = LocalFocusManager.current

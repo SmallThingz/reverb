@@ -105,6 +105,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     private var accessibilityLabel = ""
 
     var onInteractionStart: (() -> Unit)? = null
+    var onInteractionEnd: (() -> Unit)? = null
     var onDurationChanged: ((Int) -> Unit)? = null
 
     private val animationFrame = object : Runnable {
@@ -316,10 +317,10 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         ) {
             val index = wheelIndexAt(event.x)
             if (index == NO_WHEEL) return false
-            stopAnimation()
-            onInteractionStart?.invoke()
             val delta = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
             if (delta == 0f) return false
+            stopAnimation()
+            onInteractionStart?.invoke()
             wheels[index].position += if (delta > 0f) -1.0 else 1.0
             animateTo(index, round(wheels[index].position))
             return true
@@ -333,7 +334,11 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        val hadInteraction = isGestureActive()
         stopAnimation()
+        activeWheelIndex = NO_WHEEL
+        pointerId = MotionEvent.INVALID_POINTER_ID
+        if (hadInteraction) onInteractionEnd?.invoke()
         super.onDetachedFromWindow()
     }
 
@@ -366,15 +371,21 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     }
 
     private fun finishInteraction(index: Int) {
-        if (index == PROFILE_WHEEL) {
-            applyProfileSelection()
-        } else {
-            val selected = currentDisplayParts()
-            rebuildTimeWheels(selected.hours, selected.minutes, selected.seconds)
+        try {
+            if (index == PROFILE_WHEEL) {
+                applyProfileSelection()
+            } else {
+                val selected = currentDisplayParts()
+                rebuildTimeWheels(selected.hours, selected.minutes, selected.seconds)
+            }
+            publishDurationIfChanged()
+            updateContentDescription()
+            invalidate()
+        } finally {
+            // Terminal delivery is independent of whether the selected duration changed. Compose
+            // uses this to release the edit owner/export lock after every native settle.
+            onInteractionEnd?.invoke()
         }
-        publishDurationIfChanged()
-        updateContentDescription()
-        invalidate()
     }
 
     private fun publishDurationIfChanged() {

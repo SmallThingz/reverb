@@ -237,6 +237,33 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun selectionDurationWheel_pinsOwnerAndCanInvalidateDelayedCommit() {
+        val values = RangeEditValues(startSeconds = 30f, endSeconds = 80f)
+        var interaction = RangeDurationWheelInteraction().begin(RangeEditTarget.START)
+        assertTrue(interaction.active)
+        assertEquals(RangeEditTarget.START, interaction.target)
+        assertEquals(RangeEditTarget.START, interaction.commitTarget())
+
+        val committed = resizeRangeSelectionDuration(
+            values = values,
+            target = requireNotNull(interaction.commitTarget()),
+            requestedDurationSeconds = 25f,
+            durationSeconds = 100f,
+        )
+        assertEquals(55f, committed.values.startSeconds, 0f)
+        assertEquals(80f, committed.values.endSeconds, 0f)
+
+        interaction = interaction.invalidateCommit()
+        assertTrue(interaction.active)
+        assertEquals(RangeEditTarget.START, interaction.target)
+        assertEquals(null, interaction.commitTarget())
+
+        interaction = interaction.end()
+        assertFalse(interaction.active)
+        assertEquals(null, interaction.target)
+    }
+
+    @Test
     fun selectionDurationWheelLimit_respectsFixedOppositeBoundary() {
         val values = RangeEditValues(startSeconds = 120f, endSeconds = 600f)
 
