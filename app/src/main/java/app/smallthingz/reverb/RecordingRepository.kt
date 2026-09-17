@@ -293,8 +293,10 @@ object RecordingRepository {
         for (raw in rawEntries) {
             val intent = decodePendingDeletionIntent(raw)
             if (intent == null) {
-                // Old ID-only and malformed entries do not contain enough identity to
-                // authorize a destructive retry. Drop the intent, never the asset.
+                // Malformed records never regain destructive authority. A torn FILE record may
+                // still correspond to bytes already renamed into a hidden deletion claim, so
+                // preserve unowned claims visibly before its suppression record can disappear.
+                if (!preserveTornPendingDeletionClaims(context, raw, rawEntries)) continue
                 removePendingDeletionRawLocked(context, raw)
                 continue
             }
@@ -1170,6 +1172,101 @@ internal fun pendingDeletionSuppressedId(raw: String): String? {
     return runCatching {
         String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8)
     }.getOrNull()?.takeIf { it.isNotBlank() }
+}
+
+internal fun tornPendingDeletionFileSourceId(raw: String): String? {
+    if (decodePendingDeletionIntent(raw) != null) return null
+    val parts = raw.split('|')
+    if (parts.size < 6) return null
+    val storageType = when (parts[0]) {
+        "v2" -> RecordingStorageType.fromLegacyName(parts[5])
+        "v3", "v4" -> parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        else -> null
+    }
+    if (storageType != RecordingStorageType.FILE) return null
+    val sourceId = decodePendingDeletionField(parts[1]) ?: return null
+    val source = File(sourceId)
+    return sourceId.takeIf { source.isAbsolute && source.parentFile != null }
+}
+
+private fun pendingDeletionOwnsClaimPath(rawEntries: Set<String>, claimPath: String): Boolean =
+    rawEntries.any { raw ->
+        decodePendingDeletionIntent(raw)?.let(::deletionClaimFile)?.absolutePath == claimPath
+    }
+
+private fun preserveTornPendingDeletionClaims(
+    context: Context,
+    raw: String,
+    pendingDeletionSnapshot: Set<String>,
+): Boolean {
+    val sourceId = tornPendingDeletionFileSourceId(raw) ?: return true
+    return preserveOrphanedDeletionClaims(sourceId) { claim ->
+        pendingDeletionOwnsClaimPath(pendingDeletionSnapshot, claim.absolutePath) ||
+            pendingOutputCleanupOwnsClaimPath(context, claim.absolutePath)
+    }
+}
+
+internal fun preserveOrphanedDeletionClaims(
+    sourceId: String,
+    claimOwnedByValidJournal: (File) -> Boolean,
+): Boolean {
+    val source = File(sourceId)
+    val parent = source.parentFile ?: return false
+    val files = parent.listFiles() ?: return if (storagePathState(parent) == StoragePathState.MISSING) {
+        confirmMissingFileRecordingDurable(parent)
+    } else {
+        false
+    }
+    for (claim in files) {
+        if (!isDeletionClaimFileName(claim.name)) continue
+        val observation = observeStoragePath(claim)
+        when (observation.state) {
+            StoragePathState.MISSING -> continue
+            StoragePathState.UNAVAILABLE -> return false
+            StoragePathState.PRESENT -> if (!observation.isRegularFile) return false
+        }
+        if (claimOwnedByValidJournal(claim)) continue
+        if (!publishOrphanedDeletionClaim(source, claim)) return false
+    }
+    // A missing claim is safe evidence only after its parent directory is synced. This also
+    // makes every claim -> visible-recovery rename above crash-stable before suppression drops.
+    return confirmFileDirectoryStateDurable(source)
+}
+
+internal fun deletionClaimTokenFromFileName(name: String): String? {
+    if (!name.startsWith(DELETION_CLAIM_PREFIX) || !name.endsWith(DELETION_CLAIM_SUFFIX)) return null
+    val token = name.removePrefix(DELETION_CLAIM_PREFIX).removeSuffix(DELETION_CLAIM_SUFFIX)
+    if (token.length != 36) return null
+    val parsed = runCatching { UUID.fromString(token) }.getOrNull() ?: return null
+    return token.takeIf { parsed.toString().equals(token, ignoreCase = true) }
+}
+
+internal fun isDeletionClaimFileName(name: String): Boolean =
+    deletionClaimTokenFromFileName(name) != null
+
+private fun publishOrphanedDeletionClaim(source: File, claim: File): Boolean {
+    val parent = source.parentFile ?: claim.parentFile ?: return false
+    val extension = source.name.substringAfterLast('.', "").takeIf { it.isNotBlank() }
+    val suffix = extension?.let { ".$it" }.orEmpty()
+    val tokenLabel = deletionClaimTokenFromFileName(claim.name)?.take(8) ?: return false
+    val base = "recovered-delete-journal-${System.currentTimeMillis()}-$tokenLabel"
+    for (index in 0 until 10_000) {
+        val candidateName = if (index == 0) "$base$suffix" else "$base-$index$suffix"
+        val candidate = File(parent, candidateName)
+        try {
+            Files.move(claim.toPath(), candidate.toPath())
+            return confirmFileDirectoryStateDurable(candidate)
+        } catch (_: FileAlreadyExistsException) {
+            continue
+        } catch (error: IOException) {
+            Log.w("RecordingRepository", "Unable to publish orphaned deletion claim: ${claim.absolutePath}", error)
+            return false
+        } catch (error: SecurityException) {
+            Log.w("RecordingRepository", "Unable to publish orphaned deletion claim: ${claim.absolutePath}", error)
+            return false
+        }
+    }
+    return false
 }
 
 internal fun pendingDeletionMatchesDigest(

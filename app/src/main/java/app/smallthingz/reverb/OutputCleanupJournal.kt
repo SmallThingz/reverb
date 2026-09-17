@@ -833,6 +833,18 @@ internal fun outputCleanupClaimTokens(record: PendingOutputCleanupRecord): List<
         outputCleanupClaimToken(record, record.storageType.name),
     ).distinct()
 
+internal fun pendingOutputCleanupOwnsClaimPath(context: Context, claimPath: String): Boolean =
+    synchronized(outputCleanupJournalLock) {
+        pendingOutputCleanupEntriesLocked(context).any { raw ->
+            val record = decodePendingOutputCleanupRecord(raw) ?: return@any false
+            if (record.storageType != RecordingStorageType.FILE) return@any false
+            outputCleanupClaimTokens(record).any { token ->
+                pendingOutputCleanupFileIntent(record, token)?.let(::deletionClaimFile)
+                    ?.absolutePath == claimPath
+            }
+        }
+    }
+
 private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord): String =
     outputCleanupClaimTokens(record).first()
 
