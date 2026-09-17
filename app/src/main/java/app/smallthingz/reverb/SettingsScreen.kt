@@ -191,6 +191,12 @@ internal fun settingsHydrationMayApply(
     currentEditRevision: Long,
 ): Boolean = expectedEditRevision == currentEditRevision
 
+internal fun settingsSupersededHydrationMayReleaseInteraction(
+    active: Boolean,
+    persisting: Boolean,
+    hasUnsavedChanges: Boolean,
+): Boolean = active && !persisting && hasUnsavedChanges
+
 internal fun settingsMoveAvailabilityResultIsCurrent(
     active: Boolean,
     requestGeneration: Int,
@@ -751,7 +757,7 @@ fun SettingsScreen(
         }
     }
 
-    suspend fun bindUiFromPreferences() {
+    suspend fun bindUiFromPreferences(): Boolean {
         val hydrationEditRevision = settingsEditRevision[0]
         val initial = withContext(Dispatchers.IO) {
             SettingsInitialConfiguration(
@@ -768,7 +774,7 @@ fun SettingsScreen(
                 wakeLockEnabled = isWakeLockEnabled(context),
             )
         }
-        if (!settingsHydrationMayApply(hydrationEditRevision, settingsEditRevision[0])) return
+        if (!settingsHydrationMayApply(hydrationEditRevision, settingsEditRevision[0])) return false
         val configuredThemeMode = initial.themeMode
         val retention = initial.retention
         val configuredMode = retention.mode
@@ -819,6 +825,7 @@ fun SettingsScreen(
         hasUnsavedChanges = false
         settingsHydrated = true
         settingsInteractionReady = true
+        return true
     }
 
     val exportDirectoryLauncher = rememberLauncherForActivityResult(
@@ -988,11 +995,30 @@ fun SettingsScreen(
             var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
             var failureReported = false
             while (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
-                val hydrated = runDurableUiBooleanAttempt {
-                    bindUiFromPreferences()
-                    true
-                }
+                val hydrationAttemptRevision = settingsEditRevision[0]
+                val hydrated = runDurableUiBooleanAttempt { bindUiFromPreferences() }
                 if (hydrated) break
+
+                val superseded = !settingsHydrationMayApply(
+                    hydrationAttemptRevision,
+                    settingsEditRevision[0],
+                )
+                if (superseded) {
+                    if (settingsSupersededHydrationMayReleaseInteraction(
+                            active = active,
+                            persisting = settingsPersisting,
+                            hasUnsavedChanges = hasUnsavedChanges,
+                        )
+                    ) {
+                        settingsInteractionReady = true
+                    }
+                    if (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
+                        retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
+                        continue
+                    }
+                    break
+                }
+
                 if (!failureReported) {
                     AppFeedbackCenter.post(
                         resources.getString(R.string.recorder_state_persist_failed),

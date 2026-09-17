@@ -1423,6 +1423,26 @@ class FormattingAndHistoryMathTest {
         assertFalse(settingsShouldRehydrate(active = true, persisting = false, hasUnsavedChanges = true))
         assertTrue(settingsHydrationMayApply(expectedEditRevision = 8L, currentEditRevision = 8L))
         assertFalse(settingsHydrationMayApply(expectedEditRevision = 8L, currentEditRevision = 9L))
+        assertTrue(
+            settingsSupersededHydrationMayReleaseInteraction(
+                active = true, persisting = false, hasUnsavedChanges = true,
+            ),
+        )
+        assertFalse(
+            settingsSupersededHydrationMayReleaseInteraction(
+                active = true, persisting = false, hasUnsavedChanges = false,
+            ),
+        )
+        assertFalse(
+            settingsSupersededHydrationMayReleaseInteraction(
+                active = false, persisting = false, hasUnsavedChanges = true,
+            ),
+        )
+        assertFalse(
+            settingsSupersededHydrationMayReleaseInteraction(
+                active = true, persisting = true, hasUnsavedChanges = true,
+            ),
+        )
     }
 
     @Test
