@@ -122,6 +122,14 @@ private data class PendingServiceStopIncidentRetry(
     val incident: RecordingIncident? = null,
 )
 
+private data class PendingCaptureInterruptionRetry(
+    val occurredAtMillis: Long,
+    val description: String,
+    val expectedPid: Int,
+    val expectedProcessStartElapsedRealtimeMillis: Long,
+    val incident: RecordingIncident? = null,
+)
+
 internal enum class RecordingExitDisposition {
     INCIDENT,
     PENDING,
@@ -147,7 +155,7 @@ internal fun captureSessionStartDisposition(
     else -> CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION
 }
 
-internal fun serviceStopIncidentMarkerMatches(
+internal fun processLocalIncidentMarkerMatches(
     armed: Boolean,
     markerPid: Int,
     markerProcessStartElapsedRealtimeMillis: Long,
@@ -198,6 +206,7 @@ internal object RecordingIncidentStore {
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
     private val pendingServiceStopIncidentRetries = mutableListOf<PendingServiceStopIncidentRetry>()
+    private val pendingCaptureInterruptionRetries = mutableListOf<PendingCaptureInterruptionRetry>()
 
     @Synchronized
     fun recoverPriorSessionIfNeeded(context: Context) {
@@ -267,6 +276,10 @@ internal object RecordingIncidentStore {
         continuousRestart: Boolean = false,
     ) {
         val appContext = context.applicationContext
+        // Process-local interruption publication/disarm failures have no process-exit evidence
+        // to recover while this process remains alive. Resolve them before a fresh capture can
+        // replace the armed marker they belong to; failure keeps capture start fail-closed.
+        retryPendingCaptureInterruptions(appContext)
         // A prior same-process Service teardown may have failed to publish its provisional
         // incident. Resolve that process-local evidence before a fresh capture can replace the
         // armed marker it belongs to. Failure propagates so capture start remains fail-closed.
@@ -331,7 +344,7 @@ internal object RecordingIncidentStore {
             enqueueServiceStopIncidentRetry(retry)
             return
         } ?: return
-        if (!serviceStopIncidentMarkerMatches(
+        if (!processLocalIncidentMarkerMatches(
                 armed = marker.armed,
                 markerPid = marker.pid,
                 markerProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
@@ -360,36 +373,65 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun recordCaptureInterrupted(context: Context, description: String) {
         val appContext = context.applicationContext
+        val interruptedAtMillis = System.currentTimeMillis()
+        val retry = PendingCaptureInterruptionRetry(
+            occurredAtMillis = interruptedAtMillis,
+            description = description,
+            expectedPid = Process.myPid(),
+            expectedProcessStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
+        )
         val file = sessionFile(appContext)
         val marker = try {
             readSession(file)
         } catch (_: IOException) {
-            // Preserve unreadable evidence for startup recovery; a framework timeout must not
-            // turn bookkeeping corruption into a second process crash.
+            // The marker itself remains durable evidence, but a same-process outage has no
+            // ApplicationExitInfo to make this incident visible later. Keep a process-local retry
+            // bound to this process lifetime and wake the history reader so transient I/O can
+            // recover without waiting for capture to restart or the process to die.
+            enqueueCaptureInterruptionRetry(retry)
             return
         } ?: return
-        if (!marker.armed) return
-
-        // Persist the incident before disarming the session. If history persistence fails,
-        // leave the marker armed so restart recovery still has a chance to report the outage.
-        val persisted = runCatching {
-            appendIncident(
-                appContext,
-                incidentWithoutExitEvidence(
-                    marker = marker,
-                    occurredAtMillis = System.currentTimeMillis(),
-                    description = description,
-                ),
+        if (!processLocalIncidentMarkerMatches(
+                armed = marker.armed,
+                markerPid = marker.pid,
+                markerProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+                markerArmedAtMillis = marker.armedAtMillis,
+                expectedPid = retry.expectedPid,
+                expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
+                stopOccurredAtMillis = retry.occurredAtMillis,
             )
-        }.isSuccess
-        if (!persisted) return
-        runCatching { writeSession(file, marker.copy(armed = false)) }
-            .onFailure { runCatching { deleteAtomicDurablyIfPresent(file) } }
+        ) return
+
+        val incident = incidentWithoutExitEvidence(
+            marker = marker,
+            occurredAtMillis = interruptedAtMillis,
+            description = description,
+        )
+        // Persist the incident before disarming the session. If either history publication or
+        // marker retirement is transiently unavailable, retain a process-local retry. Leaving an
+        // armed marker forever after the incident is already durable can otherwise misattribute a
+        // much later process exit to capture that had already stopped.
+        if (runCatching { appendIncident(appContext, incident) }.isFailure) {
+            enqueueCaptureInterruptionRetry(retry.copy(incident = incident))
+            return
+        }
+        if (!disarmInterruptedSession(file, marker)) {
+            enqueueCaptureInterruptionRetry(retry.copy(incident = incident))
+        }
     }
 
     @Synchronized
     fun recordKnownCaptureStop(context: Context): KnownCaptureStopResult {
         val appContext = context.applicationContext
+        // Do not let a later explicit Stop erase same-process interruption evidence that is only
+        // waiting on transient incident/session I/O. Uncertain retry state follows the existing
+        // fail-closed Stop path, which preserves/reclassifies the armed marker instead of silently
+        // declaring the interruption known.
+        try {
+            retryPendingCaptureInterruptions(appContext)
+        } catch (_: Exception) {
+            return KnownCaptureStopResult.FAILED_UNCERTAIN
+        }
         val file = sessionFile(appContext)
         val existing = try {
             readSession(file)
@@ -432,6 +474,9 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun readIncidents(context: Context): List<RecordingIncident> {
         val appContext = context.applicationContext
+        // Same-process capture interruptions can fail while reading/writing the session/history
+        // files. Retry both publication and exact-session disarm on every bounded UI history read.
+        retryPendingCaptureInterruptions(appContext)
         // Same-process Service-stop publication failures have no ApplicationExitInfo to recover
         // while this process remains alive. Retry that process-local evidence first; exceptions
         // intentionally feed the UI's bounded history-read backoff.
@@ -474,6 +519,86 @@ internal object RecordingIncidentStore {
         signalHistoryChanged()
     }
 
+    private fun enqueueCaptureInterruptionRetry(retry: PendingCaptureInterruptionRetry) {
+        // A pending interruption blocks fresh capture before marker replacement, so another retry
+        // from the same process lifetime still refers to that unresolved armed session. Keep the
+        // first outage boundary instead of growing an unbounded in-memory queue while I/O is sick.
+        if (pendingCaptureInterruptionRetries.any { pending ->
+                pending.expectedPid == retry.expectedPid &&
+                    pending.expectedProcessStartElapsedRealtimeMillis ==
+                    retry.expectedProcessStartElapsedRealtimeMillis
+            }
+        ) {
+            signalHistoryChanged()
+            return
+        }
+        pendingCaptureInterruptionRetries += retry
+        // Reuse the history revision as a process-local retry trigger. The UI collector already
+        // performs bounded backoff, and recordCaptureStarted retries again before marker replacement.
+        signalHistoryChanged()
+    }
+
+    private fun disarmInterruptedSession(
+        file: AtomicFile,
+        marker: ActiveRecordingSessionMarker,
+    ): Boolean {
+        if (runCatching { writeSession(file, marker.copy(armed = false)) }.isSuccess) return true
+        return runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess
+    }
+
+    private fun retryPendingCaptureInterruptions(context: Context) {
+        val iterator = pendingCaptureInterruptionRetries.iterator()
+        while (iterator.hasNext()) {
+            val retry = iterator.next()
+            val markerFile = sessionFile(context)
+            val marker = readSession(markerFile)
+            if (marker == null) {
+                when (atomicFileBackingState(markerFile.baseFile)) {
+                    StoragePathState.MISSING -> {
+                        // If history was already built before marker retirement failed, keep that
+                        // incident. With no marker left there is no exact session identity from
+                        // which an earlier read failure can safely synthesize one.
+                        retry.incident?.let { appendIncident(context, it) }
+                        iterator.remove()
+                        continue
+                    }
+                    StoragePathState.PRESENT,
+                    StoragePathState.UNAVAILABLE,
+                    -> throw IOException(
+                        "Unable to resolve armed session for pending capture interruption",
+                    )
+                }
+            }
+            val resolvedMarker = requireNotNull(marker)
+            val markerMatches = processLocalIncidentMarkerMatches(
+                armed = resolvedMarker.armed,
+                markerPid = resolvedMarker.pid,
+                markerProcessStartElapsedRealtimeMillis = resolvedMarker.processStartElapsedRealtimeMillis,
+                markerArmedAtMillis = resolvedMarker.armedAtMillis,
+                expectedPid = retry.expectedPid,
+                expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
+                stopOccurredAtMillis = retry.occurredAtMillis,
+            )
+            val incident = retry.incident ?: if (markerMatches) {
+                incidentWithoutExitEvidence(
+                    marker = resolvedMarker,
+                    occurredAtMillis = retry.occurredAtMillis,
+                    description = retry.description,
+                )
+            } else {
+                // Never retarget a retry whose session identity could not be read originally at a
+                // newer/prior marker from the same process lifetime.
+                iterator.remove()
+                continue
+            }
+            appendIncident(context, incident)
+            if (markerMatches && !disarmInterruptedSession(markerFile, resolvedMarker)) {
+                throw IOException("Unable to retire session after pending capture interruption")
+            }
+            iterator.remove()
+        }
+    }
+
     private fun retryPendingServiceStopIncidents(context: Context) {
         val iterator = pendingServiceStopIncidentRetries.iterator()
         while (iterator.hasNext()) {
@@ -496,7 +621,7 @@ internal object RecordingIncidentStore {
                     }
                 }
                 val resolvedMarker = requireNotNull(marker)
-                if (!serviceStopIncidentMarkerMatches(
+                if (!processLocalIncidentMarkerMatches(
                         armed = resolvedMarker.armed,
                         markerPid = resolvedMarker.pid,
                         markerProcessStartElapsedRealtimeMillis = resolvedMarker.processStartElapsedRealtimeMillis,

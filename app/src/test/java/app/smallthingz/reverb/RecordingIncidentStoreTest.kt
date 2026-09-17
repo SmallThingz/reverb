@@ -52,37 +52,37 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
-    fun serviceStopIncident_bindsOnlyToTheArmedSessionFromThisProcessLifetime() {
+    fun processLocalIncidentRetry_bindsOnlyToTheArmedSessionFromThisProcessLifetime() {
         assertTrue(
-            serviceStopIncidentMarkerMatches(
+            processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
                 markerArmedAtMillis = 1_000L, expectedPid = 41,
                 expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
             ),
         )
         assertFalse(
-            serviceStopIncidentMarkerMatches(
+            processLocalIncidentMarkerMatches(
                 armed = false, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
                 markerArmedAtMillis = 1_000L, expectedPid = 41,
                 expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
             ),
         )
         assertFalse(
-            serviceStopIncidentMarkerMatches(
+            processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 40, markerProcessStartElapsedRealtimeMillis = 100L,
                 markerArmedAtMillis = 1_000L, expectedPid = 41,
                 expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
             ),
         )
         assertFalse(
-            serviceStopIncidentMarkerMatches(
+            processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 99L,
                 markerArmedAtMillis = 1_000L, expectedPid = 41,
                 expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
             ),
         )
         assertFalse(
-            serviceStopIncidentMarkerMatches(
+            processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
                 markerArmedAtMillis = 2_001L, expectedPid = 41,
                 expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
