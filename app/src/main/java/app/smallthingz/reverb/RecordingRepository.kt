@@ -305,7 +305,11 @@ object RecordingRepository {
                 when (claimedFileReplayAction(claimObservation)) {
                     ClaimedFileReplayAction.WAIT -> continue
                     ClaimedFileReplayAction.NO_CLAIM -> Unit
-                    ClaimedFileReplayAction.REPLAY -> when (replayClaimedFileDeletion(intent, claim)) {
+                    ClaimedFileReplayAction.REPLAY -> when (
+                        replayClaimedFileDeletion(intent, claim) {
+                            pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
+                        }
+                    ) {
                         FileDeletionClaimResult.RETRY -> continue
                         FileDeletionClaimResult.MISMATCH_PRESERVED,
                         FileDeletionClaimResult.DELETED,
@@ -384,6 +388,48 @@ object RecordingRepository {
             fileIdentity = recording.fileIdentity.takeIf { isFile && it.isNotBlank() },
         )
     }.getOrNull()
+
+    private fun createMovePendingDeletionIntent(
+        context: Context,
+        source: RecordingEntity,
+        target: RecordingEntity,
+    ): PendingDeletionIntent? = runCatching {
+        val intent = createPendingDeletionIntent(context, source) ?: return@runCatching null
+        val targetIdentity = target.fileIdentity.takeIf { it.isNotBlank() } ?: return@runCatching null
+        val targetDigest = sha256StableRecording(context, target) ?: return@runCatching null
+        if (!pendingDeletionMatchesDigest(intent, targetDigest.byteCount, targetDigest.sha256.toHexString())) {
+            return@runCatching null
+        }
+        intent.copy(
+            storageType = source.storageType,
+            moveTargetStorageType = target.storageType,
+            moveTargetId = target.id,
+            moveTargetIdentity = targetIdentity,
+        )
+    }.getOrNull()
+
+    private fun pendingDeletionMoveTargetMatchesCurrentAsset(
+        context: Context,
+        intent: PendingDeletionIntent,
+    ): Boolean {
+        val storageType = intent.moveTargetStorageType ?: return !pendingDeletionHasAnyMoveTargetField(intent)
+        val id = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return false
+        val identity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return false
+        val target = RecordingEntity(
+            id = id,
+            displayName = "",
+            mimeType = "",
+            startedAtMillis = 0L,
+            durationMillis = 0L,
+            sizeBytes = intent.byteCount,
+            codecSummary = "",
+            storageType = storageType,
+            directoryId = "",
+            fileIdentity = identity,
+        )
+        val digest = sha256StableRecording(context, target) ?: return false
+        return pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
+    }
 
     private fun pendingDeletionMatchesCurrentAsset(
         context: Context,
@@ -820,10 +866,12 @@ object RecordingRepository {
             MoveSourceCleanupAction.COMPLETE -> true
             MoveSourceCleanupAction.KEEP_SOURCE -> false
             MoveSourceCleanupAction.DELETE_SOURCE -> {
-                val intent = createPendingDeletionIntent(context, source) ?: return false
+                val intent = createMovePendingDeletionIntent(context, source, target) ?: return false
                 if (!putPendingDeletionLocked(context, intent)) return false
                 if (source.storageType != RecordingStorageType.FILE) {
-                    if (!pendingDeletionMatchesCurrentAsset(context, source, intent)) {
+                    if (!pendingDeletionMatchesCurrentAsset(context, source, intent) ||
+                        !pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
+                    ) {
                         removePendingDeletionLocked(context, source.id)
                         return false
                     }
@@ -833,7 +881,11 @@ object RecordingRepository {
                     putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
                     true
                 } else {
-                    when (deleteClaimedFile(intent)) {
+                    when (
+                        deleteClaimedFile(intent) {
+                            pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
+                        }
+                    ) {
                         FileDeletionClaimResult.DELETED -> {
                             // Best effort phase marker. The planned v2 intent is still safe if
                             // this write fails because replay understands missing/reused paths.
@@ -891,6 +943,7 @@ internal fun moveSourceCleanupAction(
 private const val PENDING_DELETION_V1_PREFIX = "v1|"
 private const val PENDING_DELETION_V2_PREFIX = "v2|"
 private const val PENDING_DELETION_V3_PREFIX = "v3|"
+private const val PENDING_DELETION_V4_PREFIX = "v4|"
 private const val DELETION_CLAIM_PREFIX = ".reverb-delete-"
 private const val DELETION_CLAIM_SUFFIX = ".pending"
 
@@ -902,11 +955,38 @@ internal data class PendingDeletionIntent(
     val storageType: RecordingStorageType? = null,
     val claimToken: String? = null,
     val fileIdentity: String? = null,
+    val moveTargetStorageType: RecordingStorageType? = null,
+    val moveTargetId: String? = null,
+    val moveTargetIdentity: String? = null,
 )
 
 internal fun encodePendingDeletionIntent(intent: PendingDeletionIntent): String {
-    val id = Base64.getUrlEncoder().withoutPadding()
-        .encodeToString(intent.id.toByteArray(StandardCharsets.UTF_8))
+    val id = encodePendingDeletionField(intent.id)
+    if (pendingDeletionHasAnyMoveTargetField(intent)) {
+        val sourceStorage = intent.storageType ?: return ""
+        val targetStorage = intent.moveTargetStorageType ?: return ""
+        val targetId = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return ""
+        val targetIdentity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return ""
+        if (sourceStorage == RecordingStorageType.FILE &&
+            (intent.claimToken.isNullOrBlank() || intent.fileIdentity.isNullOrBlank())
+        ) return ""
+        if (sourceStorage != RecordingStorageType.FILE &&
+            (!intent.claimToken.isNullOrBlank() || !intent.fileIdentity.isNullOrBlank())
+        ) return ""
+        return buildString {
+            append(PENDING_DELETION_V4_PREFIX)
+            append(id).append('|')
+            append(intent.byteCount).append('|')
+            append(intent.sha256Hex.lowercase()).append('|')
+            append(if (intent.assetDeleted) '1' else '0').append('|')
+            append(sourceStorage.storageCode.toInt()).append('|')
+            append(intent.claimToken.orEmpty()).append('|')
+            append(intent.fileIdentity?.let(::encodePendingDeletionField).orEmpty()).append('|')
+            append(targetStorage.storageCode.toInt()).append('|')
+            append(encodePendingDeletionField(targetId)).append('|')
+            append(encodePendingDeletionField(targetIdentity))
+        }
+    }
     if (intent.storageType == null && intent.claimToken == null && intent.fileIdentity == null) {
         return buildString {
             append(PENDING_DELETION_V1_PREFIX)
@@ -926,19 +1006,27 @@ internal fun encodePendingDeletionIntent(intent: PendingDeletionIntent): String 
         append(if (intent.assetDeleted) '1' else '0').append('|')
         append(storage.storageCode.toInt()).append('|')
         append(token).append('|')
-        append(
-            intent.fileIdentity?.let { identity ->
-                Base64.getUrlEncoder().withoutPadding().encodeToString(identity.toByteArray(StandardCharsets.UTF_8))
-            }.orEmpty(),
-        )
+        append(intent.fileIdentity?.let(::encodePendingDeletionField).orEmpty())
     }
 }
+
+private fun encodePendingDeletionField(value: String): String =
+    Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+
+private fun decodePendingDeletionField(value: String): String? =
+    runCatching { String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8) }
+        .getOrNull()?.takeIf { it.isNotBlank() }
+
+internal fun pendingDeletionHasAnyMoveTargetField(intent: PendingDeletionIntent): Boolean =
+    intent.moveTargetStorageType != null || intent.moveTargetId != null || intent.moveTargetIdentity != null
+
 
 internal fun decodePendingDeletionIntent(raw: String): PendingDeletionIntent? {
     return when {
         raw.startsWith(PENDING_DELETION_V1_PREFIX) -> decodePendingDeletionV1(raw)
         raw.startsWith(PENDING_DELETION_V2_PREFIX) -> decodePendingDeletionV2(raw)
         raw.startsWith(PENDING_DELETION_V3_PREFIX) -> decodePendingDeletionV3(raw)
+        raw.startsWith(PENDING_DELETION_V4_PREFIX) -> decodePendingDeletionV4(raw)
         else -> null
     }
 }
@@ -964,6 +1052,40 @@ private fun decodePendingDeletionV3(raw: String): PendingDeletionIntent? {
     return decodePendingDeletionClaim(parts, storage)
 }
 
+private fun decodePendingDeletionV4(raw: String): PendingDeletionIntent? {
+    val parts = raw.split('|')
+    if (parts.size != 11 || parts[0] != "v4") return null
+    val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
+    val sourceStorage = parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
+    val claimToken: String?
+    val sourceIdentity: String?
+    if (sourceStorage == RecordingStorageType.FILE) {
+        claimToken = parts[6].takeIf { it.isNotBlank() }?.let { value ->
+            runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
+        } ?: return null
+        sourceIdentity = decodePendingDeletionField(parts[7]) ?: return null
+    } else {
+        if (parts[6].isNotBlank() || parts[7].isNotBlank()) return null
+        claimToken = null
+        sourceIdentity = null
+    }
+    val targetStorage = parts[8].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
+    val targetId = decodePendingDeletionField(parts[9]) ?: return null
+    val targetIdentity = decodePendingDeletionField(parts[10]) ?: return null
+    return PendingDeletionIntent(
+        id = common.first,
+        byteCount = common.second,
+        sha256Hex = common.third,
+        assetDeleted = common.fourth,
+        storageType = sourceStorage,
+        claimToken = claimToken,
+        fileIdentity = sourceIdentity,
+        moveTargetStorageType = targetStorage,
+        moveTargetId = targetId,
+        moveTargetIdentity = targetIdentity,
+    )
+}
+
 private fun decodePendingDeletionClaim(
     parts: List<String>,
     storage: RecordingStorageType,
@@ -974,8 +1096,7 @@ private fun decodePendingDeletionClaim(
         runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
     }
     val fileIdentity = parts[7].takeIf { it.isNotBlank() }?.let { encoded ->
-        runCatching { String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8) }
-            .getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        decodePendingDeletionField(encoded) ?: return null
     }
     if (token == null || fileIdentity == null) return null
     return PendingDeletionIntent(
@@ -1013,7 +1134,8 @@ private fun decodePendingDeletionCommon(
 private fun isEncodedPendingDeletionEntry(raw: String): Boolean =
     raw.startsWith(PENDING_DELETION_V1_PREFIX) ||
     raw.startsWith(PENDING_DELETION_V2_PREFIX) ||
-    raw.startsWith(PENDING_DELETION_V3_PREFIX)
+    raw.startsWith(PENDING_DELETION_V3_PREFIX) ||
+    raw.startsWith(PENDING_DELETION_V4_PREFIX)
 
 private fun looksLikeVersionedPendingDeletionEntry(raw: String): Boolean {
     if (!raw.startsWith('v')) return false
@@ -1066,7 +1188,10 @@ internal fun deletionClaimFile(intent: PendingDeletionIntent): File? {
     return File(parent, "$DELETION_CLAIM_PREFIX$token$DELETION_CLAIM_SUFFIX")
 }
 
-internal fun deleteClaimedFile(intent: PendingDeletionIntent): FileDeletionClaimResult {
+internal fun deleteClaimedFile(
+    intent: PendingDeletionIntent,
+    moveTargetStillCurrent: (() -> Boolean)? = null,
+): FileDeletionClaimResult {
     val source = File(intent.id)
     val claim = deletionClaimFile(intent) ?: return FileDeletionClaimResult.RETRY
     try {
@@ -1074,14 +1199,14 @@ internal fun deleteClaimedFile(intent: PendingDeletionIntent): FileDeletionClaim
         if (!confirmFileDirectoryStateDurable(source)) return FileDeletionClaimResult.RETRY
     } catch (_: NoSuchFileException) {
         return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
             ClaimedFileReplayAction.NO_CLAIM,
             ClaimedFileReplayAction.WAIT,
             -> FileDeletionClaimResult.RETRY
         }
     } catch (_: FileAlreadyExistsException) {
         return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim)
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
             ClaimedFileReplayAction.NO_CLAIM,
             ClaimedFileReplayAction.WAIT,
             -> FileDeletionClaimResult.RETRY
@@ -1093,12 +1218,13 @@ internal fun deleteClaimedFile(intent: PendingDeletionIntent): FileDeletionClaim
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY
     }
-    return replayClaimedFileDeletion(intent, claim)
+    return replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
 }
 
 internal fun replayClaimedFileDeletion(
     intent: PendingDeletionIntent,
     claim: File? = deletionClaimFile(intent),
+    moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
     val expectedIdentity = intent.fileIdentity ?: return FileDeletionClaimResult.RETRY
@@ -1111,6 +1237,10 @@ internal fun replayClaimedFileDeletion(
         return FileDeletionClaimResult.RETRY
     }
     if (!pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())) {
+        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
+        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+    }
+    if (pendingDeletionHasAnyMoveTargetField(intent) && moveTargetStillCurrent?.invoke() != true) {
         val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
         return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
     }
