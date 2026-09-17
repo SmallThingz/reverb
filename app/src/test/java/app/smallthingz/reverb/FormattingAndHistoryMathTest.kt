@@ -220,6 +220,30 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun deletionBackgroundHandoff_doesNotDuplicateCommittedForegroundBatch() {
+        assertTrue(
+            shouldHandoffPendingDeletionsToBackground(
+                hasPending = true, committedInBackground = false, foregroundCommitInFlight = false,
+            ),
+        )
+        assertFalse(
+            shouldHandoffPendingDeletionsToBackground(
+                hasPending = true, committedInBackground = false, foregroundCommitInFlight = true,
+            ),
+        )
+        assertFalse(
+            shouldHandoffPendingDeletionsToBackground(
+                hasPending = true, committedInBackground = true, foregroundCommitInFlight = false,
+            ),
+        )
+        assertFalse(
+            shouldHandoffPendingDeletionsToBackground(
+                hasPending = false, committedInBackground = false, foregroundCommitInFlight = false,
+            ),
+        )
+    }
+
+    @Test
     fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
         val steps = recordingDatabaseMigrationSteps(1, 2)
         assertEquals(

@@ -73,6 +73,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -91,6 +92,12 @@ private sealed class ListItem {
 
 internal fun deletionBatchFailed(requestedCount: Int, deletedCount: Int, hadError: Boolean): Boolean =
     hadError || deletedCount < requestedCount
+
+internal fun shouldHandoffPendingDeletionsToBackground(
+    hasPending: Boolean,
+    committedInBackground: Boolean,
+    foregroundCommitInFlight: Boolean,
+): Boolean = hasPending && !committedInBackground && !foregroundCommitInFlight
 
 internal fun libraryEmptyStateVisible(
     hasLoaded: Boolean,
@@ -148,6 +155,7 @@ fun FilesScreen(
     val shareGeneration = remember { intArrayOf(0) }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
     val deletionsCommittedInBackground = remember { booleanArrayOf(false) }
+    val deletionCommitInFlight = remember { booleanArrayOf(false) }
     var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
@@ -330,18 +338,23 @@ fun FilesScreen(
         var deleted = 0
         var failed = false
         val deletedIds = mutableSetOf<String>()
-        pending.forEach { recording ->
-            val didDelete = try {
-                RecordingRepository.delete(context, recording)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                failed = true
-                false
-            }
-            if (didDelete) {
-                deleted++
-                deletedIds += recording.id
+        // Once the undo window has closed, the user's delete is committed. Keep the physical
+        // identity-bound batch alive through panel/lifecycle disposal; the deletion journal owns
+        // crash recovery, while UI cancellation must not stop halfway through the selected batch.
+        withContext(NonCancellable) {
+            pending.forEach { recording ->
+                val didDelete = try {
+                    RecordingRepository.delete(context, recording)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    failed = true
+                    false
+                }
+                if (didDelete) {
+                    deleted++
+                    deletedIds += recording.id
+                }
             }
         }
         recordings = recordings.filterNot { it.id in deletedIds }
@@ -364,7 +377,12 @@ fun FilesScreen(
     }
 
     fun commitPendingDeletionsInBackground() {
-        if (pendingDeletions.isEmpty() || deletionsCommittedInBackground[0]) return
+        if (!shouldHandoffPendingDeletionsToBackground(
+                hasPending = pendingDeletions.isNotEmpty(),
+                committedInBackground = deletionsCommittedInBackground[0],
+                foregroundCommitInFlight = deletionCommitInFlight[0],
+            )
+        ) return
         deletionJob[0]?.cancel()
         deletionJob[0] = null
         val pending = pendingDeletions.values.toList()
@@ -440,9 +458,16 @@ fun FilesScreen(
             notice = null
             // Close the undo transaction before any physical delete begins. A stale
             // FeedbackCard callback may still be dispatched for one frame after notice clears.
+            // Mark foreground ownership before dropping the undo Job reference so ON_STOP/panel
+            // disposal cannot enqueue the same identity-bound delete concurrently.
+            deletionCommitInFlight[0] = true
             deletionJob[0] = null
-            finalizeDeletions()
-            isDeleting = false
+            try {
+                finalizeDeletions()
+            } finally {
+                deletionCommitInFlight[0] = false
+                isDeleting = false
+            }
         }
     }
 
