@@ -3546,7 +3546,12 @@ internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
         runCatching { snapshot?.close() }
         callback(null)
     } else {
-        callback(snapshot)
+        try {
+            callback(snapshot)
+        } catch (error: Throwable) {
+            runCatching { snapshot?.close() }
+            throw error
+        }
     }
 }
 
