@@ -11,6 +11,25 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun recordingOperationRegistry_keepsIdentityBusyUntilMatchingTerminal() {
+        val registry = RecordingOperationRegistry()
+        val first = requireNotNull(registry.tryBegin("recording-a"))
+        assertTrue(registry.isActive("recording-a"))
+        assertEquals(setOf("recording-a"), registry.activeIds.value)
+        assertEquals(null, registry.tryBegin("recording-a"))
+
+        registry.finish(first.copy(generation = first.generation + 1L))
+        assertTrue(registry.isActive("recording-a"))
+        registry.finish(first)
+        assertFalse(registry.isActive("recording-a"))
+        assertTrue(registry.activeIds.value.isEmpty())
+
+        val second = requireNotNull(registry.tryBegin("recording-a"))
+        assertTrue(second.generation > first.generation)
+        registry.finish(second)
+    }
+
+    @Test
     fun captureResolvedBufferState_failsClosedUntilRetentionResolves() {
         assertEquals(
             CaptureResolvedBufferState(false, false, false),

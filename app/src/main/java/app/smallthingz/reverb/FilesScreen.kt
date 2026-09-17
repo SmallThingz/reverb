@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -118,6 +119,7 @@ fun FilesScreen(
     val density = LocalDensity.current
     val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
     val chrome = appChrome()
+    val activeTrimRecordingIds by recordingTrimOperations.activeIds.collectAsState()
 
     var recordings by remember { mutableStateOf(initialRecordings) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -670,6 +672,7 @@ fun FilesScreen(
                                         menuExpanded = contextMenuRecordingId == recording.id,
                                         expanded = expandedRecordingId == recording.id,
                                         trimRequested = trimRequestRecordingId == recording.id,
+                                        externallyBusy = recording.id in activeTrimRecordingIds,
                                         onClick = {
                                             contextMenuRecordingId = null
                                             if (selectionActive) {
@@ -866,6 +869,7 @@ private fun RecordingItem(
     menuExpanded: Boolean,
     expanded: Boolean,
     trimRequested: Boolean,
+    externallyBusy: Boolean,
     onClick: () -> Unit,
     onIconLongClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -883,7 +887,8 @@ private fun RecordingItem(
     onPlaybackFailed: () -> Unit,
 ) {
     val chrome = appChrome()
-    var operationBusy by remember(item.recording.id) { mutableStateOf(false) }
+    var localOperationBusy by remember(item.recording.id) { mutableStateOf(false) }
+    val operationBusy = localOperationBusy || externallyBusy
     Box {
         RecordingEntityCard(
             recording = item.recording,
@@ -904,7 +909,7 @@ private fun RecordingItem(
                     onTrimRequestConsumed = onTrimRequestConsumed,
                     onTrimSaved = onTrimSaved,
                     onWaveformCached = onWaveformCached,
-                    onBusyChange = { operationBusy = it },
+                    onBusyChange = { localOperationBusy = it },
                     onCollapse = onCollapse,
                     onPlaybackFailed = onPlaybackFailed,
                 )

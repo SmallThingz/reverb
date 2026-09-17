@@ -21,11 +21,17 @@ internal suspend fun saveTrimmedRecordingCopy(
     endMillis: Int,
 ): RecordingEntity {
     val appContext = context.applicationContext
-    return withContext(Dispatchers.IO + NonCancellable) {
-        val created = writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
-        runCatching { RecordingRepository.register(appContext, created) }
-            .onFailure { Log.w(TRIM_TAG, "Trim was saved but catalog registration failed", it) }
-            .getOrDefault(created)
+    val operation = recordingTrimOperations.tryBegin(recording.id)
+        ?: throw IOException("Trim is already in progress for this recording")
+    try {
+        return withContext(Dispatchers.IO + NonCancellable) {
+            val created = writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
+            runCatching { RecordingRepository.register(appContext, created) }
+                .onFailure { Log.w(TRIM_TAG, "Trim was saved but catalog registration failed", it) }
+                .getOrDefault(created)
+        }
+    } finally {
+        recordingTrimOperations.finish(operation)
     }
 }
 
