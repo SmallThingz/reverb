@@ -1636,6 +1636,14 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun destroyedTileRejectsDeferredUnlockActionBeforeRecorderBind() {
+        assertTrue(tileActionMayBegin(actionInFlight = false, tileDestroyed = false))
+        assertFalse(tileActionMayBegin(actionInFlight = true, tileDestroyed = false))
+        assertFalse(tileActionMayBegin(actionInFlight = false, tileDestroyed = true))
+        assertFalse(tileActionMayBegin(actionInFlight = true, tileDestroyed = true))
+    }
+
+    @Test
     fun destroyedTileRejectsAlreadyQueuedActionCallbacks() {
         assertTrue(tileActionCallbackIsCurrent(true, 7L, 7L))
         assertFalse(tileActionCallbackIsCurrent(false, 7L, 7L))

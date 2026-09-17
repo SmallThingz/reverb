@@ -131,6 +131,11 @@ internal fun tileActionCallbackIsCurrent(
     currentGeneration: Long,
 ): Boolean = actionInFlight && callbackGeneration == currentGeneration
 
+internal fun tileActionMayBegin(
+    actionInFlight: Boolean,
+    tileDestroyed: Boolean,
+): Boolean = !tileDestroyed && !actionInFlight
+
 internal fun stoppedRecordingTileSnapshot(
     persisted: RecordingTileSnapshot,
     live: RecordingTileSnapshot?,
@@ -543,6 +548,7 @@ abstract class RecordingTileService : TileService() {
     private var actionTimeout: Runnable? = null
     private var actionInFlight = false
     private var actionGeneration = 0L
+    private var tileDestroyed = false
 
     private fun refreshFromCacheAndHydrate() {
         updateTile(readRecordingTileSnapshotNonBlocking())
@@ -578,6 +584,7 @@ abstract class RecordingTileService : TileService() {
     }
 
     override fun onDestroy() {
+        tileDestroyed = true
         tileListening = false
         RecordingQuickTiles.unregister(this)
         // Recorder snapshot callbacks are posted independently of this TileService lifecycle.
@@ -592,7 +599,10 @@ abstract class RecordingTileService : TileService() {
     }
 
     private fun beginTileAction() {
-        if (actionInFlight) return
+        // unlockAndRun() may invoke this callback after SystemUI already destroyed the tile
+        // service. That deferred callback is outside our Handler queue, so onDestroy() cannot
+        // cancel it. Reject before binding the recorder or creating a new action generation.
+        if (!tileActionMayBegin(actionInFlight, tileDestroyed)) return
         actionInFlight = true
         val timeout = Runnable { finishTileAction() }
         actionTimeout = timeout
