@@ -75,7 +75,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -215,6 +218,7 @@ fun SettingsScreen(
     var hasUnsavedChanges by remember { mutableStateOf(false) }
     var settingsPersisting by remember { mutableStateOf(false) }
     var settingsHydrated by remember { mutableStateOf(false) }
+    var settingsInteractionReady by remember(active) { mutableStateOf(false) }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
@@ -811,6 +815,7 @@ fun SettingsScreen(
         originalSnapshot = currentSnapshot
         hasUnsavedChanges = false
         settingsHydrated = true
+        settingsInteractionReady = true
     }
 
     val exportDirectoryLauncher = rememberLauncherForActivityResult(
@@ -989,7 +994,18 @@ fun SettingsScreen(
     }
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(settingsInteractionReady) {
+                if (!settingsInteractionReady) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                        }
+                    }
+                }
+            }
+            .semantics { if (!settingsInteractionReady) hideFromAccessibility() },
         containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
