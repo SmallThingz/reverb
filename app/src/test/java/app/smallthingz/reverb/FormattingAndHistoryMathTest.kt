@@ -352,6 +352,13 @@ class FormattingAndHistoryMathTest {
         assertEquals("", changed.waveformData)
         assertEquals("", changed.waveformRevision)
 
+        val identityUnavailable = mergeObservedRecording(
+            cached, observed.copy(fileIdentity = ""), nowMillis = 40L,
+        )
+        assertEquals("stat:a", identityUnavailable.fileIdentity)
+        assertEquals("", identityUnavailable.waveformData)
+        assertEquals("", identityUnavailable.waveformRevision)
+
         val malformed = cached.copy(waveformData = "not-base64!")
         val healed = mergeObservedRecording(malformed, observed, nowMillis = 40L)
         assertEquals("", healed.waveformData)

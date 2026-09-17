@@ -1142,7 +1142,7 @@ internal fun mergeObservedRecording(
             observedStorageType == RecordingStorageType.MEDIASTORE) &&
         existing.fileIdentity.isNotBlank() && observed.fileIdentity.isBlank()
     val metadataFallback = existing?.takeIf { sameAsset || providerIdentityUnproven }
-    val waveformFallback = existing?.takeIf { sameAsset }
+    val waveformFallback = existing?.takeIf { current -> sameRecordingActionTarget(current, observed) }
     val merged = observed.copy(
         mimeType = observed.mimeType.takeIf { it.isNotBlank() } ?: metadataFallback?.mimeType.orEmpty(),
         durationMillis = observed.durationMillis.takeIf { it > 0L } ?: metadataFallback?.durationMillis ?: 0L,
