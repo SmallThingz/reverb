@@ -667,10 +667,8 @@ object RecordingRepository {
         // source path/URI may have disappeared or been reused for different bytes.
         dao.upsert(target)
 
-        val cleanupComplete = cleanupMovedSourceAfterVerifiedCopy(context, source, target)
-        if (!cleanupComplete) {
-            return verifiedMoveCommitResult(targetIdentityCurrent = true, sourceCleanupComplete = false)
-        }
+        val cleanupResult = cleanupMovedSourceAfterVerifiedCopy(context, source, target)
+        if (cleanupResult != VerifiedMoveCommitResult.MOVED) return cleanupResult
 
         // Physical source cleanup completed (or the source was already positively absent).
         // Metadata retirement is last; if it fails, a FILE cleanup journal can finish it
@@ -772,7 +770,7 @@ object RecordingRepository {
                     VerifiedMoveCommitResult.TARGET_CHANGED -> {
                         Log.w(
                             "RecordingRepository",
-                            "Legacy move target changed before catalog commit; source retained: ${source.id}",
+                            "Legacy move target changed before move completion; source retained: ${source.id}",
                         )
                     }
                 }
@@ -861,27 +859,40 @@ object RecordingRepository {
         context: Context,
         source: RecordingEntity,
         target: RecordingEntity,
-    ): Boolean {
+    ): VerifiedMoveCommitResult {
+        fun failedCleanupResult(): VerifiedMoveCommitResult = verifiedMoveCommitResult(
+            targetIdentityCurrent = recordingContentIdentityMatches(context, target),
+            sourceCleanupComplete = false,
+        )
+
+        if (!recordingContentIdentityMatches(context, target)) {
+            return VerifiedMoveCommitResult.TARGET_CHANGED
+        }
         val state = recordingAssetState(context, source)
         val sameContent = state == RecordingAssetState.PRESENT && recordingsHaveSameContent(context, source, target)
         return when (moveSourceCleanupAction(state, sameContent)) {
-            MoveSourceCleanupAction.COMPLETE -> true
-            MoveSourceCleanupAction.KEEP_SOURCE -> false
+            MoveSourceCleanupAction.COMPLETE -> {
+                if (recordingContentIdentityMatches(context, target)) VerifiedMoveCommitResult.MOVED
+                else VerifiedMoveCommitResult.TARGET_CHANGED
+            }
+            MoveSourceCleanupAction.KEEP_SOURCE -> failedCleanupResult()
             MoveSourceCleanupAction.DELETE_SOURCE -> {
-                val intent = createMovePendingDeletionIntent(context, source, target) ?: return false
-                if (!putPendingDeletionLocked(context, intent)) return false
+                val intent = createMovePendingDeletionIntent(context, source, target)
+                    ?: return failedCleanupResult()
+                if (!putPendingDeletionLocked(context, intent)) return failedCleanupResult()
                 if (source.storageType != RecordingStorageType.FILE) {
-                    if (!pendingDeletionMatchesCurrentAsset(context, source, intent) ||
-                        !pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
-                    ) {
+                    val sourceCurrent = pendingDeletionMatchesCurrentAsset(context, source, intent)
+                    val targetCurrent = pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
+                    if (!sourceCurrent || !targetCurrent) {
                         removePendingDeletionLocked(context, source.id)
-                        return false
+                        return if (!targetCurrent) VerifiedMoveCommitResult.TARGET_CHANGED
+                        else VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED
                     }
-                    if (!deleteVerifiedRecordingAsset(context, source)) return false
+                    if (!deleteVerifiedRecordingAsset(context, source)) return failedCleanupResult()
                     // Physical deletion is never replayed for provider assets. The phase marker
                     // lets restart cleanup retire metadata immediately when it can be persisted.
                     putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
-                    true
+                    VerifiedMoveCommitResult.MOVED
                 } else {
                     when (
                         deleteClaimedFile(intent) {
@@ -889,16 +900,16 @@ object RecordingRepository {
                         }
                     ) {
                         FileDeletionClaimResult.DELETED -> {
-                            // Best effort phase marker. The planned v2 intent is still safe if
-                            // this write fails because replay understands missing/reused paths.
+                            // Best effort phase marker. The planned intent is still safe if this
+                            // write fails because replay understands missing/reused paths.
                             putPendingDeletionLocked(context, intent.copy(assetDeleted = true))
-                            true
+                            VerifiedMoveCommitResult.MOVED
                         }
                         FileDeletionClaimResult.MISMATCH_PRESERVED -> {
                             removePendingDeletionLocked(context, source.id)
-                            false
+                            failedCleanupResult()
                         }
-                        FileDeletionClaimResult.RETRY -> false
+                        FileDeletionClaimResult.RETRY -> failedCleanupResult()
                     }
                 }
             }
