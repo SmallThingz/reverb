@@ -114,6 +114,14 @@ private data class PendingRecordingSession(
     val resumedAtMillis: Long = 0L,
 )
 
+private data class PendingServiceStopIncidentRetry(
+    val occurredAtMillis: Long,
+    val description: String,
+    val expectedPid: Int,
+    val expectedProcessStartElapsedRealtimeMillis: Long,
+    val incident: RecordingIncident? = null,
+)
+
 internal enum class RecordingExitDisposition {
     INCIDENT,
     PENDING,
@@ -138,6 +146,20 @@ internal fun captureSessionStartDisposition(
     continuousRestart -> CaptureSessionStartDisposition.CONTINUE_SESSION
     else -> CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION
 }
+
+internal fun serviceStopIncidentMarkerMatches(
+    armed: Boolean,
+    markerPid: Int,
+    markerProcessStartElapsedRealtimeMillis: Long,
+    markerArmedAtMillis: Long,
+    expectedPid: Int,
+    expectedProcessStartElapsedRealtimeMillis: Long,
+    stopOccurredAtMillis: Long,
+): Boolean = armed &&
+    markerPid == expectedPid &&
+    markerProcessStartElapsedRealtimeMillis == expectedProcessStartElapsedRealtimeMillis &&
+    markerArmedAtMillis > 0L &&
+    markerArmedAtMillis <= stopOccurredAtMillis
 
 
 internal fun completeRecordingIncidentDowntimes(
@@ -175,6 +197,7 @@ internal object RecordingIncidentStore {
 
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
+    private val pendingServiceStopIncidentRetries = mutableListOf<PendingServiceStopIncidentRetry>()
 
     @Synchronized
     fun recoverPriorSessionIfNeeded(context: Context) {
@@ -244,6 +267,10 @@ internal object RecordingIncidentStore {
         continuousRestart: Boolean = false,
     ) {
         val appContext = context.applicationContext
+        // A prior same-process Service teardown may have failed to publish its provisional
+        // incident. Resolve that process-local evidence before a fresh capture can replace the
+        // armed marker it belongs to. Failure propagates so capture start remains fail-closed.
+        retryPendingServiceStopIncidents(appContext)
         val markerFile = sessionFile(appContext)
         val existing = readSession(markerFile)
         val sameProcessArmed = existing?.armed == true && markerBelongsToCurrentProcess(existing)
@@ -288,24 +315,45 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun recordCaptureServiceStopped(context: Context, description: String) {
         val appContext = context.applicationContext
+        val stoppedAtMillis = System.currentTimeMillis()
+        val retry = PendingServiceStopIncidentRetry(
+            occurredAtMillis = stoppedAtMillis,
+            description = description,
+            expectedPid = Process.myPid(),
+            expectedProcessStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
+        )
+        val markerFile = sessionFile(appContext)
         val marker = try {
-            readSession(sessionFile(appContext))
+            readSession(markerFile)
         } catch (_: IOException) {
+            // The marker itself remains durable evidence. Remember that this live process did
+            // cross a Service-stop boundary and retry once the marker becomes readable.
+            enqueueServiceStopIncidentRetry(retry)
             return
         } ?: return
-        if (!marker.armed) return
+        if (!serviceStopIncidentMarkerMatches(
+                armed = marker.armed,
+                markerPid = marker.pid,
+                markerProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+                markerArmedAtMillis = marker.armedAtMillis,
+                expectedPid = retry.expectedPid,
+                expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
+                stopOccurredAtMillis = retry.occurredAtMillis,
+            )
+        ) {
+            // A prior-process armed marker belongs to startup recovery, not this Service lifetime.
+            return
+        }
 
         // Service-only teardown may not produce ApplicationExitInfo. Record the outage now but
         // keep the marker armed so a subsequent process death can enrich this same session.
-        runCatching {
-            appendIncident(
-                appContext,
-                incidentWithoutExitEvidence(
-                    marker = marker,
-                    occurredAtMillis = System.currentTimeMillis(),
-                    description = description,
-                ),
-            )
+        val incident = incidentWithoutExitEvidence(
+            marker = marker,
+            occurredAtMillis = stoppedAtMillis,
+            description = description,
+        )
+        if (runCatching { appendIncident(appContext, incident) }.isFailure) {
+            enqueueServiceStopIncidentRetry(retry.copy(incident = incident))
         }
     }
 
@@ -384,6 +432,10 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun readIncidents(context: Context): List<RecordingIncident> {
         val appContext = context.applicationContext
+        // Same-process Service-stop publication failures have no ApplicationExitInfo to recover
+        // while this process remains alive. Retry that process-local evidence first; exceptions
+        // intentionally feed the UI's bounded history-read backoff.
+        retryPendingServiceStopIncidents(appContext)
         // Application startup recovery is best-effort. Every history read is retried by the UI,
         // so retry the complete prior-session recovery here too; otherwise one transient startup
         // failure can leave an armed previous-process marker invisible until capture starts again.
@@ -414,6 +466,61 @@ internal object RecordingIncidentStore {
     private fun markerBelongsToCurrentProcess(marker: ActiveRecordingSessionMarker): Boolean =
         marker.pid == Process.myPid() &&
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
+
+    private fun enqueueServiceStopIncidentRetry(retry: PendingServiceStopIncidentRetry) {
+        pendingServiceStopIncidentRetries += retry
+        // StateFlow retains the latest revision even with no active UI. A live UI immediately
+        // enters its existing read/backoff loop; a later UI load also sees the incremented value.
+        signalHistoryChanged()
+    }
+
+    private fun retryPendingServiceStopIncidents(context: Context) {
+        val iterator = pendingServiceStopIncidentRetries.iterator()
+        while (iterator.hasNext()) {
+            val retry = iterator.next()
+            var incident = retry.incident
+            if (incident == null) {
+                val markerFile = sessionFile(context)
+                val marker = readSession(markerFile)
+                if (marker == null) {
+                    when (atomicFileBackingState(markerFile.baseFile)) {
+                        StoragePathState.MISSING -> {
+                            iterator.remove()
+                            continue
+                        }
+                        StoragePathState.PRESENT,
+                        StoragePathState.UNAVAILABLE,
+                        -> throw IOException(
+                            "Unable to resolve armed session for pending Service-stop incident",
+                        )
+                    }
+                }
+                val resolvedMarker = requireNotNull(marker)
+                if (!serviceStopIncidentMarkerMatches(
+                        armed = resolvedMarker.armed,
+                        markerPid = resolvedMarker.pid,
+                        markerProcessStartElapsedRealtimeMillis = resolvedMarker.processStartElapsedRealtimeMillis,
+                        markerArmedAtMillis = resolvedMarker.armedAtMillis,
+                        expectedPid = retry.expectedPid,
+                        expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
+                        stopOccurredAtMillis = retry.occurredAtMillis,
+                    )
+                ) {
+                    // The only matching durable marker is gone or no longer armed. Never retarget
+                    // this old stop at a newer/prior capture session.
+                    iterator.remove()
+                    continue
+                }
+                incident = incidentWithoutExitEvidence(
+                    marker = resolvedMarker,
+                    occurredAtMillis = retry.occurredAtMillis,
+                    description = retry.description,
+                )
+            }
+            appendIncident(context, requireNotNull(incident))
+            iterator.remove()
+        }
+    }
 
     private fun enqueuePendingSession(
         context: Context,

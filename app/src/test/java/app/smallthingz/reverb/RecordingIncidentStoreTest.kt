@@ -52,6 +52,45 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun serviceStopIncident_bindsOnlyToTheArmedSessionFromThisProcessLifetime() {
+        assertTrue(
+            serviceStopIncidentMarkerMatches(
+                armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
+                markerArmedAtMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+            ),
+        )
+        assertFalse(
+            serviceStopIncidentMarkerMatches(
+                armed = false, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
+                markerArmedAtMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+            ),
+        )
+        assertFalse(
+            serviceStopIncidentMarkerMatches(
+                armed = true, markerPid = 40, markerProcessStartElapsedRealtimeMillis = 100L,
+                markerArmedAtMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+            ),
+        )
+        assertFalse(
+            serviceStopIncidentMarkerMatches(
+                armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 99L,
+                markerArmedAtMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+            ),
+        )
+        assertFalse(
+            serviceStopIncidentMarkerMatches(
+                armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
+                markerArmedAtMillis = 2_001L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+            ),
+        )
+    }
+
+    @Test
     fun externalStopReasonsHaveUsefulIncidentLabels() {
         assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_PACKAGE_UPDATED) == "Package updated")
         assertTrue(recordingExitReasonLabel(ApplicationExitInfo.REASON_USER_REQUESTED) == "User requested stop")
