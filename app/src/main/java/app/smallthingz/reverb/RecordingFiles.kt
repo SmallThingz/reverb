@@ -2042,6 +2042,18 @@ private fun listDocumentTreeRecordings(
         .toList()
 }
 
+internal fun canReuseKnownMediaStoreRecording(
+    existing: RecordingEntity?,
+    displayName: String,
+    sizeBytes: Long,
+    identity: String,
+): Boolean = identity.isNotBlank() &&
+    existing != null &&
+    existing.durationMillis > 0L &&
+    existing.displayName == displayName &&
+    (sizeBytes == 0L || existing.sizeBytes == sizeBytes) &&
+    providerRecordingIdentityMatches(existing.fileIdentity, identity)
+
 private fun listMediaStoreRecordings(
     context: Context,
     knownRecordings: Map<String, RecordingEntity>,
@@ -2057,7 +2069,6 @@ private fun listMediaStoreRecordings(
         add(MediaStore.MediaColumns.MIME_TYPE)
         add(MediaStore.MediaColumns.SIZE)
         add(MediaStore.MediaColumns.DATE_MODIFIED)
-        add(MediaStore.Audio.AudioColumns.DURATION)
         if (useGeneration) add(MediaStore.MediaColumns.GENERATION_MODIFIED)
         add(MediaStore.MediaColumns.IS_PENDING)
     }.toTypedArray()
@@ -2074,7 +2085,6 @@ private fun listMediaStoreRecordings(
             val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
             val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
             val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
-            val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DURATION)
             val generationIndex = if (useGeneration) {
                 cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.GENERATION_MODIFIED)
             } else -1
@@ -2086,7 +2096,6 @@ private fun listMediaStoreRecordings(
                     if (uri.toString() in suppressedIds) continue
                     val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
                     val pending = cursor.getInt(pendingIndex) != 0
-                    val reportedDuration = cursor.getLong(durationIndex).coerceAtLeast(0L)
                     val modifiedSeconds = cursor.getLong(modifiedIndex).coerceAtLeast(0L)
                     val modifiedMillis = if (modifiedSeconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE
                     else modifiedSeconds * 1000L
@@ -2095,7 +2104,7 @@ private fun listMediaStoreRecordings(
 
                     var name = storedName
                     var media: RecordingMediaMetadata? = null
-                    var durationMillis = reportedDuration
+                    var durationMillis = 0L
 
                     if (pending) {
                         val metadata = parseStagingOutputMetadata(storedName)
@@ -2149,7 +2158,6 @@ private fun listMediaStoreRecordings(
                         }
                     } else {
                         if (!isSupportedRecordingName(name)) continue
-                        if (durationMillis <= 0L) media = inspectRecordingMedia(context, uri, name)
                     }
 
                     val id = uri.toString()
@@ -2161,13 +2169,26 @@ private fun listMediaStoreRecordings(
                         )
                     }
                     val existing = knownRecordings[id]
-                    if (
-                        identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
-                        existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
-                        providerRecordingIdentityMatches(existing.fileIdentity, identity)
-                    ) {
-                        add(existing)
+                    if (canReuseKnownMediaStoreRecording(existing, name, size, identity)) {
+                        add(requireNotNull(existing))
                         continue
+                    }
+                    if (!pending) {
+                        // MediaStore duration/name metadata does not prove that the underlying
+                        // bytes are a complete recording. Match FILE/SAF reconciliation: only a
+                        // new or changed row pays this read, while identity-stable rows above stay
+                        // on the no-I/O fast path. Transport/read uncertainty aborts this scan
+                        // scope so existing catalog state is preserved rather than treated empty.
+                        val strictDuration = try {
+                            resolver.openInputStream(uri)?.use { input ->
+                                structurallyCompleteRecordingDurationMillis(name, input)
+                            } ?: throw IOException("Unable to open discovered MediaStore recording $uri")
+                        } catch (error: Exception) {
+                            throw IOException("Unable to validate discovered MediaStore recording $uri", error)
+                        }
+                        if (strictDuration <= 0L) continue
+                        durationMillis = strictDuration
+                        media = inspectRecordingMedia(context, uri, name)
                     }
                     add(
                         RecordingEntity(
