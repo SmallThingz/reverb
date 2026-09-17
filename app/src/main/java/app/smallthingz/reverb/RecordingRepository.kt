@@ -560,14 +560,19 @@ object RecordingRepository {
                             failed++
                             return@forEach
                         }
-                        val cleanupComplete = commitVerifiedMoveLocked(
+                        when (commitVerifiedMoveLocked(
                             context = context,
                             dao = dao,
                             source = source,
                             target = target,
-                        )
-                        moved++
-                        if (!cleanupComplete) cleanupFailed++
+                        )) {
+                            VerifiedMoveCommitResult.MOVED -> moved++
+                            VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED -> {
+                                moved++
+                                cleanupFailed++
+                            }
+                            VerifiedMoveCommitResult.TARGET_CHANGED -> failed++
+                        }
                     } finally {
                         recordingMutations.finish(operation)
                     }
@@ -588,21 +593,38 @@ object RecordingRepository {
         dao: RecordingDao,
         source: RecordingEntity,
         target: RecordingEntity,
-    ): Boolean {
-        // Once a verified target exists, make it recoverable before touching the source.
-        // Never delete that target merely because later source cleanup is uncertain: the
+    ): VerifiedMoveCommitResult {
+        // copyRecordingToDirectory() verified and pinned this target, but external writers are
+        // outside Reverb's repository mutex. Recheck the exact target immediately before its
+        // catalog commit; a replacement must never become the recoverable authority for deleting
+        // the selected source.
+        val stableTargetIdentityAvailable = target.fileIdentity.isNotBlank()
+        val targetIdentityCurrent = recordingCatalogIdentityIsCurrent(
+            stableIdentityAvailable = stableTargetIdentityAvailable,
+            currentIdentityMatches = stableTargetIdentityAvailable &&
+                recordingContentIdentityMatches(context, target),
+        )
+        if (!targetIdentityCurrent) {
+            Log.w("RecordingRepository", "Verified move target changed before catalog commit: ${target.id}")
+            return verifiedMoveCommitResult(targetIdentityCurrent = false, sourceCleanupComplete = false)
+        }
+
+        // Once the exact verified target is cataloged, make it recoverable before touching the
+        // source. Never delete that target merely because later source cleanup is uncertain: the
         // source path/URI may have disappeared or been reused for different bytes.
         dao.upsert(target)
 
         val cleanupComplete = cleanupMovedSourceAfterVerifiedCopy(context, source, target)
-        if (!cleanupComplete) return false
+        if (!cleanupComplete) {
+            return verifiedMoveCommitResult(targetIdentityCurrent = true, sourceCleanupComplete = false)
+        }
 
         // Physical source cleanup completed (or the source was already positively absent).
         // Metadata retirement is last; if it fails, a FILE cleanup journal can finish it
         // without ever targeting a reused original path.
         dao.deleteById(source.id)
         removePendingDeletionLocked(context, source.id)
-        return true
+        return verifiedMoveCommitResult(targetIdentityCurrent = true, sourceCleanupComplete = true)
     }
 
     private suspend fun syncRecoverableDirectories(context: Context): Set<String> {
@@ -681,17 +703,25 @@ object RecordingRepository {
                     targetTreeUri = null,
                 ) ?: continue
 
-                val cleanupComplete = commitVerifiedMoveLocked(
+                when (commitVerifiedMoveLocked(
                     context = context,
                     dao = dao,
                     source = source,
                     target = target,
-                )
-                if (!cleanupComplete) {
-                    Log.w(
-                        "RecordingRepository",
-                        "Verified legacy target kept, but source cleanup was unsafe: ${source.id}",
-                    )
+                )) {
+                    VerifiedMoveCommitResult.MOVED -> Unit
+                    VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED -> {
+                        Log.w(
+                            "RecordingRepository",
+                            "Verified legacy target kept, but source cleanup was unsafe: ${source.id}",
+                        )
+                    }
+                    VerifiedMoveCommitResult.TARGET_CHANGED -> {
+                        Log.w(
+                            "RecordingRepository",
+                            "Legacy move target changed before catalog commit; source retained: ${source.id}",
+                        )
+                    }
                 }
             } finally {
                 recordingMutations.finish(operation)
@@ -1151,6 +1181,17 @@ internal fun recordingCatalogIdentityIsCurrent(
     stableIdentityAvailable: Boolean,
     currentIdentityMatches: Boolean,
 ): Boolean = stableIdentityAvailable && currentIdentityMatches
+
+internal enum class VerifiedMoveCommitResult { MOVED, SOURCE_CLEANUP_FAILED, TARGET_CHANGED }
+
+internal fun verifiedMoveCommitResult(
+    targetIdentityCurrent: Boolean,
+    sourceCleanupComplete: Boolean,
+): VerifiedMoveCommitResult = when {
+    !targetIdentityCurrent -> VerifiedMoveCommitResult.TARGET_CHANGED
+    !sourceCleanupComplete -> VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED
+    else -> VerifiedMoveCommitResult.MOVED
+}
 
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,
