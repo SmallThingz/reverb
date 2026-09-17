@@ -988,6 +988,38 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun unexpectedFileRename_suppressesVisibleTargetBeforeRollback() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "rename-race-").toFile()
+        try {
+            val replacementBytes = byteArrayOf(7, 6, 5, 4, 3)
+            val source = File(directory, "original.wav")
+            val moved = File(directory, "renamed.wav").apply { writeBytes(replacementBytes) }
+            var callbackSawVisibleTarget = false
+            var protectedDigest: CopyDigest? = null
+
+            val protected = preserveUnexpectedRenameTarget(
+                source = source,
+                moved = moved,
+                originalDisplayName = "original.wav",
+                onUnexpectedMovedFile = { visible, digest ->
+                    callbackSawVisibleTarget = visible == moved && moved.isFile && !source.exists()
+                    protectedDigest = digest
+                    true
+                },
+            )
+
+            assertTrue(protected)
+            assertTrue(callbackSawVisibleTarget)
+            assertEquals(replacementBytes.size.toLong(), requireNotNull(protectedDigest).byteCount)
+            assertArrayEquals(replacementBytes, source.readBytes())
+            assertFalse(moved.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun mediaStoreNameQuery_requiresAuthoritativeCursor() {
         assertTrue(mediaStoreNameQueryOccupied(cursorAvailable = true, hasMatchingRow = true))
         assertFalse(mediaStoreNameQueryOccupied(cursorAvailable = true, hasMatchingRow = false))

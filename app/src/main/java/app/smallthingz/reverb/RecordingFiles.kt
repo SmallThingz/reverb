@@ -2360,7 +2360,21 @@ private fun renameFileRecording(
             Files.move(source.toPath(), target.toPath())
             val renamedIdentity = resolveFileIdentity(target)
             if (!sameFileObjectAcrossRename(recording.fileIdentity, renamedIdentity)) {
-                preserveUnexpectedRenameTarget(source, target, recording.displayName)
+                val protected = preserveUnexpectedRenameTarget(
+                    source = source,
+                    moved = target,
+                    originalDisplayName = recording.displayName,
+                    onUnexpectedMovedFile = { unexpected, digest ->
+                        suppressFileOutputWithoutDeletion(
+                            context = context,
+                            id = unexpected.absolutePath,
+                            digest = digest,
+                        )
+                    },
+                )
+                if (!protected) {
+                    Log.e(TAG, "Unexpected rename target could not be durably suppressed or restored: $target")
+                }
                 throw IllegalStateException("Recording changed on disk during rename")
             }
             try {
@@ -2418,13 +2432,27 @@ private fun renameFileRecording(
     return null
 }
 
-private fun preserveUnexpectedRenameTarget(source: File, moved: File, originalDisplayName: String) {
+internal fun preserveUnexpectedRenameTarget(
+    source: File,
+    moved: File,
+    originalDisplayName: String,
+    onUnexpectedMovedFile: ((File, CopyDigest) -> Boolean)? = null,
+): Boolean {
+    val suppressionDigest = readStableFileOutputFingerprint(moved)?.digest ?: runCatching {
+        FileInputStream(moved).use(::sha256)
+    }.getOrNull()
+    val suppressed = suppressionDigest != null && onUnexpectedMovedFile != null &&
+        runCatching { onUnexpectedMovedFile(moved, suppressionDigest) }.getOrDefault(false)
+
     try {
         Files.move(moved.toPath(), source.toPath())
-        source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
-            runCatching { forceRecordingDirectoryDurable(parent) }
-        }
-        return
+        val restoredDurably = source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
+            runCatching {
+                forceRecordingDirectoryDurable(parent)
+                true
+            }.getOrDefault(false)
+        } == true
+        return suppressed || restoredDurably
     } catch (_: FileAlreadyExistsException) {
         // A new file owns the original path. Preserve the object we accidentally moved
         // under a separate visible recovery name rather than overwrite either object.
@@ -2434,22 +2462,27 @@ private fun preserveUnexpectedRenameTarget(source: File, moved: File, originalDi
         // Fall through to recovery-name publication.
     }
 
-    val parent = moved.parentFile ?: return
+    val parent = moved.parentFile ?: return suppressed
     val extension = originalDisplayName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
     val suffix = extension?.let { ".$it" }.orEmpty()
     val base = "recovered-rename-race-${System.currentTimeMillis()}"
     for (index in 0 until 10_000) {
         val name = if (index == 0) "$base$suffix" else "$base-$index$suffix"
+        val recovery = File(parent, name)
         try {
-            Files.move(moved.toPath(), File(parent, name).toPath())
-            runCatching { forceRecordingDirectoryDurable(parent) }
-            return
+            Files.move(moved.toPath(), recovery.toPath())
+            val recoveryDurable = runCatching {
+                forceRecordingDirectoryDurable(parent)
+                true
+            }.getOrDefault(false)
+            return suppressed || recoveryDurable
         } catch (_: FileAlreadyExistsException) {
             continue
         } catch (_: Exception) {
-            return
+            return suppressed
         }
     }
+    return suppressed
 }
 
 private fun renameMediaStoreRecording(
