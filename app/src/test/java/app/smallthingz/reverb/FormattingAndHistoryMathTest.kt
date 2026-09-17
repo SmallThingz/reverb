@@ -40,6 +40,25 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun legacyMigration_requiresOneDefaultDestinationAdmissionSnapshot() {
+        assertTrue(
+            shouldMigrateLegacyAppStorage(
+                configuredTreeSelected = false, legacyDirectoryId = "legacy", targetDirectoryId = "default",
+            ),
+        )
+        assertFalse(
+            shouldMigrateLegacyAppStorage(
+                configuredTreeSelected = true, legacyDirectoryId = "legacy", targetDirectoryId = "tree",
+            ),
+        )
+        assertFalse(
+            shouldMigrateLegacyAppStorage(
+                configuredTreeSelected = false, legacyDirectoryId = "default", targetDirectoryId = "default",
+            ),
+        )
+    }
+
+    @Test
     fun recordingOperationRegistry_keepsIdentityBusyUntilMatchingTerminal() {
         val registry = RecordingOperationRegistry()
         val first = requireNotNull(registry.tryBegin("recording-a"))

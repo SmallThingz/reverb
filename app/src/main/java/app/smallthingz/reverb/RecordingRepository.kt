@@ -623,9 +623,16 @@ object RecordingRepository {
         }
 
         // Older builds used app-specific external storage, which Android removes on
-        // uninstall. When the user is on the default destination, migrate those recordings
-        // to the durable shared Music/Reverb destination using verified copy-before-delete.
-        if (getConfiguredExportTreeUri(context) == null && legacyDirectoryId != getConfiguredOutputDirectoryId(context)) {
+        // uninstall. Snapshot migration admission once immediately before the batch. A Settings
+        // change after this point cannot split the decision from the default target pinned below.
+        val migrationTargetTreeUri = getConfiguredExportTreeUri(context)
+        val migrationTargetDirectoryId = getOutputDirectoryId(context, migrationTargetTreeUri)
+        if (shouldMigrateLegacyAppStorage(
+                configuredTreeSelected = migrationTargetTreeUri != null,
+                legacyDirectoryId = legacyDirectoryId,
+                targetDirectoryId = migrationTargetDirectoryId,
+            )
+        ) {
             migrateLegacyAppStorageLocked(context, legacyDirectoryId)
         }
         return reconciledDirectoryIds
@@ -803,6 +810,12 @@ internal fun recordingNeedsFallbackAssetProbe(
     directoryId: String,
     reconciledOrProtectedDirectoryIds: Set<String>,
 ): Boolean = directoryId !in reconciledOrProtectedDirectoryIds
+
+internal fun shouldMigrateLegacyAppStorage(
+    configuredTreeSelected: Boolean,
+    legacyDirectoryId: String,
+    targetDirectoryId: String,
+): Boolean = !configuredTreeSelected && legacyDirectoryId != targetDirectoryId
 
 internal enum class MoveSourceCleanupAction { DELETE_SOURCE, COMPLETE, KEEP_SOURCE }
 
