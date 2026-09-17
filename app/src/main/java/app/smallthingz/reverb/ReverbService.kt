@@ -1303,12 +1303,12 @@ class ReverbService : Service() {
         callback: (TimelineSnapshot?) -> Unit,
     ) {
         if (serviceDestroying) {
-            mainHandler.post { callback(null) }
+            postTimelineSnapshot(callback, null)
             return
         }
         if (!audioHandler.post {
             if (serviceDestroying) {
-                mainHandler.post { callback(null) }
+                postTimelineSnapshot(callback, null)
                 return@post
             }
             val snapshot = try {
@@ -1323,10 +1323,24 @@ class ReverbService : Service() {
                 reportPersistentStoreFailure("acquire timeline snapshot", error)
                 null
             }
-            mainHandler.post { callback(snapshot) }
+            postTimelineSnapshot(callback, snapshot)
         }) {
-            mainHandler.post { callback(null) }
+            postTimelineSnapshot(callback, null)
         }
+    }
+
+    private fun postTimelineSnapshot(
+        callback: (TimelineSnapshot?) -> Unit,
+        snapshot: TimelineSnapshot?,
+    ) {
+        val posted = mainHandler.post {
+            deliverTimelineSnapshotAtServiceBoundary(
+                serviceDestroying = serviceDestroying,
+                snapshot = snapshot,
+                callback = callback,
+            )
+        }
+        if (!posted) runCatching { snapshot?.close() }
     }
 
     fun dumpRecordingRange(
@@ -3432,6 +3446,19 @@ internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !service
 internal fun serviceAudioMutationMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
+    serviceDestroying: Boolean,
+    snapshot: T?,
+    callback: (T?) -> Unit,
+) {
+    if (serviceDestroying) {
+        runCatching { snapshot?.close() }
+        callback(null)
+    } else {
+        callback(snapshot)
+    }
+}
 
 internal fun runtimeRecordingTileSnapshotForDelivery(
     serviceDestroying: Boolean,

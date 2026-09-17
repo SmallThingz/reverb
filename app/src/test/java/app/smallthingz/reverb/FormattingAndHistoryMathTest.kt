@@ -997,6 +997,29 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun timelineSnapshotDelivery_releasesLeaseWhenTeardownWinsBeforeMainCallback() {
+        var liveClosed = false
+        var liveDelivered: java.io.Closeable? = null
+        val live = java.io.Closeable { liveClosed = true }
+        deliverTimelineSnapshotAtServiceBoundary(
+            serviceDestroying = false,
+            snapshot = live,
+        ) { liveDelivered = it }
+        assertFalse(liveClosed)
+        assertTrue(liveDelivered === live)
+
+        var staleClosed = false
+        var staleDelivered: java.io.Closeable? = live
+        val stale = java.io.Closeable { staleClosed = true }
+        deliverTimelineSnapshotAtServiceBoundary(
+            serviceDestroying = true,
+            snapshot = stale,
+        ) { staleDelivered = it }
+        assertTrue(staleClosed)
+        assertEquals(null, staleDelivered)
+    }
+
+    @Test
     fun queuedRuntimeReadFailsClosedOnceServiceTeardownOwnsLifetime() {
         assertTrue(serviceRuntimeReadMayExecute(serviceDestroying = false))
         assertFalse(serviceRuntimeReadMayExecute(serviceDestroying = true))
