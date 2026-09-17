@@ -815,6 +815,7 @@ fun FilesScreen(
                                             if (trimRequestRecordingId == recording.id) trimRequestRecordingId = null
                                         },
                                         onTrimSaved = { refresh(showSpinner = false) },
+                                        onTrimStateUncertain = { refresh(showSpinner = false) },
                                         onWaveformCached = { cached ->
                                             recordings = recordings.map { current ->
                                                 if (
@@ -962,6 +963,7 @@ private fun RecordingItem(
     onCollapse: () -> Unit,
     onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
+    onTrimStateUncertain: () -> Unit,
     onWaveformCached: (RecordingEntity) -> Unit,
     onPlaybackFailed: () -> Unit,
 ) {
@@ -987,6 +989,7 @@ private fun RecordingItem(
                     trimRequested = trimRequested,
                     onTrimRequestConsumed = onTrimRequestConsumed,
                     onTrimSaved = onTrimSaved,
+                    onTrimStateUncertain = onTrimStateUncertain,
                     onWaveformCached = onWaveformCached,
                     onBusyChange = { localOperationBusy = it },
                     onCollapse = onCollapse,

@@ -225,6 +225,7 @@ internal fun RecordingInlinePlayer(
     trimRequested: Boolean,
     onTrimRequestConsumed: () -> Unit,
     onTrimSaved: (RecordingEntity) -> Unit,
+    onTrimStateUncertain: () -> Unit,
     onWaveformCached: (RecordingEntity) -> Unit,
     onCollapse: () -> Unit,
     onPlaybackFailed: () -> Unit,
@@ -1036,10 +1037,13 @@ internal fun RecordingInlinePlayer(
                                     onTrimSaved(trimmed)
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
-                                } catch (_: Exception) {
+                                } catch (error: Exception) {
                                     trimSaving = false
                                     onBusyChange(false)
                                     trimError = true
+                                    if (error is RecordingCatalogIdentityChangedException) {
+                                        onTrimStateUncertain()
+                                    }
                                 }
                             }
                         }

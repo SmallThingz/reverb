@@ -1674,11 +1674,15 @@ class ReverbService : Service() {
                         }
                         // The verified file is now irrevocably committed. Catalog registration
                         // is metadata: retry it, but never delete valid audio if SQLite fails.
-                        val cataloguedRecording = runCatching {
+                        val cataloguedRecording = try {
                             runBlocking { RecordingRepository.register(this@ReverbService, recording) }
-                        }.onFailure { error ->
+                        } catch (error: Exception) {
+                            if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(error)) {
+                                throw error
+                            }
                             Log.e(TAG, "Unable to register committed export ${recording.id}", error)
-                        }.getOrDefault(recording)
+                            recording
+                        }
                         finishExportSuccess(exportToken, receiver, cataloguedRecording)
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")

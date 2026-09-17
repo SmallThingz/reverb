@@ -31,6 +31,11 @@ internal class CatalogFirstPaintUnavailableException : IOException(
     "Recording catalog was reset after corruption and requires storage reconciliation",
 )
 
+internal class RecordingCatalogIdentityChangedException(message: String) : IOException(message)
+
+internal fun catalogRegistrationFailureAllowsVerifiedSaveSuccess(error: Throwable): Boolean =
+    error !is RecordingCatalogIdentityChangedException
+
 internal suspend fun <T> recoverCatalogAfterCorruption(
     mode: CatalogCorruptionRecoveryMode,
     reset: () -> Unit,
@@ -190,7 +195,7 @@ object RecordingRepository {
                             recordingContentIdentityMatches(context, recording),
                     )
                 ) {
-                    throw IOException("Recording changed before catalog registration")
+                    throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
                 }
                 val dao = dao(context)
                 val existing = dao.findById(recording.id)
