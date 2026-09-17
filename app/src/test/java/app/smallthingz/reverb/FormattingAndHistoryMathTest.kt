@@ -284,6 +284,52 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun foregroundDeletionTerminal_releasesOnlyTheExactAttemptedTargets() {
+        fun recording(id: String, identity: String) = RecordingEntity(
+            id = id,
+            displayName = "$id.wav",
+            mimeType = "audio/wav",
+            startedAtMillis = 1L,
+            durationMillis = 2L,
+            sizeBytes = 3L,
+            codecSummary = "PCM",
+            storageType = RecordingStorageType.FILE,
+            directoryId = "dir",
+            fileIdentity = identity,
+            createdAtMillis = 1L,
+            lastSeenAtMillis = 1L,
+        )
+        val attemptedDeleted = recording("deleted", "inode-1")
+        val attemptedFailed = recording("failed", "inode-2")
+        val replacement = recording("reused", "inode-new")
+        val oldReusedTarget = replacement.copy(fileIdentity = "inode-old")
+        val untouched = recording("untouched", "inode-4")
+        val pending = linkedMapOf(
+            attemptedDeleted.id to attemptedDeleted,
+            attemptedFailed.id to attemptedFailed,
+            replacement.id to replacement,
+            untouched.id to untouched,
+        )
+
+        releaseCompletedForegroundDeletionTargets(
+            pending,
+            listOf(attemptedDeleted, attemptedFailed, oldReusedTarget),
+        )
+
+        assertFalse(pending.containsKey(attemptedDeleted.id))
+        assertFalse(pending.containsKey(attemptedFailed.id))
+        assertEquals(replacement, pending[replacement.id])
+        assertEquals(untouched, pending[untouched.id])
+
+        val recordingsAfterPhysicalPhase =
+            listOf(attemptedDeleted, attemptedFailed, replacement, untouched)
+                .filterNot { it.id == attemptedDeleted.id }
+        val visibleAfterTerminalRelease =
+            recordingsAfterPhysicalPhase.filterNot { it.id in pending }
+        assertEquals(listOf(attemptedFailed), visibleAfterTerminalRelease)
+    }
+
+    @Test
     fun recordingDatabase_v1ToV2MigrationIsExplicitAndNonDestructive() {
         val steps = recordingDatabaseMigrationSteps(1, 2)
         assertEquals(

@@ -99,6 +99,18 @@ internal fun shouldHandoffPendingDeletionsToBackground(
     foregroundCommitInFlight: Boolean,
 ): Boolean = hasPending && !committedInBackground && !foregroundCommitInFlight
 
+internal fun releaseCompletedForegroundDeletionTargets(
+    pendingDeletions: MutableMap<String, RecordingEntity>,
+    attempted: Collection<RecordingEntity>,
+) {
+    attempted.forEach { requested ->
+        val current = pendingDeletions[requested.id] ?: return@forEach
+        if (sameRecordingActionTarget(requested, current)) {
+            pendingDeletions.remove(requested.id)
+        }
+    }
+}
+
 internal fun librarySnapshotWithoutWaveformTrust(
     recordings: List<RecordingEntity>,
 ): List<RecordingEntity> {
@@ -367,9 +379,10 @@ fun FilesScreen(
         var deleted = 0
         var failed = false
         val deletedIds = mutableSetOf<String>()
-        // Once the undo window has closed, the user's delete is committed. Keep the physical
-        // identity-bound batch alive through panel/lifecycle disposal; the deletion journal owns
-        // crash recovery, while UI cancellation must not stop halfway through the selected batch.
+        // Once the undo window has closed, the user's delete is committed. Keep both the physical
+        // identity-bound batch and its terminal optimistic-state reconciliation alive through
+        // panel/lifecycle disposal. A cancelled owner must not leave a completed attempt hidden in
+        // pendingDeletions after the irreversible delete phase has already run.
         withContext(NonCancellable) {
             pending.forEach { recording ->
                 val didDelete = try {
@@ -385,23 +398,42 @@ fun FilesScreen(
                     deletedIds += recording.id
                 }
             }
+            // Remove successful rows before releasing the optimistic suppression. Failed exact
+            // targets then become visible again immediately, while successful deletes cannot
+            // flicker back during a cancelled/unavailable authoritative refresh. Identity-check
+            // pending entries so a newer reused ID could never be cleared by this older batch.
+            recordings = recordings.filterNot { it.id in deletedIds }
+            releaseCompletedForegroundDeletionTargets(pendingDeletions, pending)
+            deletionsCommittedInBackground[0] = false
         }
-        recordings = recordings.filterNot { it.id in deletedIds }
+        val deletePhaseFailed = deletionBatchFailed(pending.size, deleted, failed)
         try {
             val refreshed = RecordingRepository.refresh(context)
             if (generation == refreshGeneration[0]) recordings = refreshed
         } catch (cancelled: CancellationException) {
+            // Local Library UI may already be gone. Preserve failure feedback at process scope.
+            if (deletePhaseFailed) {
+                AppFeedbackCenter.post(
+                    resources.getString(R.string.recording_delete_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
             throw cancelled
         } catch (_: Exception) {
             if (generation == refreshGeneration[0]) failed = true
         }
-        pendingDeletions.clear()
-        deletionsCommittedInBackground[0] = false
         if (deletionBatchFailed(pending.size, deleted, failed)) {
-            notice = LibraryNotice(
-                resources.getString(R.string.recording_delete_failed),
-                FeedbackTone.ERROR,
-            )
+            if (activeState.value) {
+                notice = LibraryNotice(
+                    resources.getString(R.string.recording_delete_failed),
+                    FeedbackTone.ERROR,
+                )
+            } else {
+                AppFeedbackCenter.post(
+                    resources.getString(R.string.recording_delete_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
         }
     }
 
