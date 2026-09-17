@@ -1308,6 +1308,31 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun suppressionOnlyFileOutput_rechecksReplacementWithoutDeletionAuthority() {
+        val digest = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val record = requireNotNull(
+            suppressionOnlyFileOutputRecord("/recordings/unsafe-final.wav", digest),
+        )
+
+        assertEquals(RecordingStorageType.FILE, record.storageType)
+        assertEquals(null, record.fileKey)
+        assertEquals(null, pendingOutputCleanupFileIntent(record))
+        assertFalse(pendingFileOutputCleanupRequiresClaimReplay(record))
+        assertEquals(
+            PendingOutputCleanupMatch.UNPROVEN,
+            classifyPendingOutputCleanup(
+                record, digest.byteCount, digest.sha256.toHexString(), "stat:current-object",
+            ),
+        )
+        assertEquals(
+            PendingOutputCleanupMatch.REPLACED,
+            classifyPendingOutputCleanup(
+                record, digest.byteCount, "aa".repeat(32), "stat:replacement-object",
+            ),
+        )
+    }
+
+    @Test
     fun suppressionOnlyProviderOutput_neverGainsDeletionAuthority() {
         val digest = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val record = requireNotNull(
@@ -1587,6 +1612,7 @@ class DurabilityInvariantTest {
         )
         assertFalse(pendingOutputCleanupMatches(record, 10L, record.sha256Hex, null))
         assertEquals(null, pendingOutputCleanupFileIntent(record))
+        assertFalse(pendingFileOutputCleanupRequiresClaimReplay(record))
     }
 
     @Test

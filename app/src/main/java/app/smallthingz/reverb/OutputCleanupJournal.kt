@@ -162,6 +162,9 @@ internal fun pendingOutputCleanupMatches(
     record, byteCount, sha256Hex, fileKey, providerIdentity,
 ) == PendingOutputCleanupMatch.EXACT
 
+internal fun pendingFileOutputCleanupRequiresClaimReplay(record: PendingOutputCleanupRecord): Boolean =
+    record.storageType == RecordingStorageType.FILE && !record.fileKey.isNullOrBlank()
+
 internal fun pendingOutputCleanupSuppressedId(raw: String): String? {
     decodePendingOutputCleanupRecord(raw)?.let { return it.id }
     val parts = raw.split('|')
@@ -477,7 +480,7 @@ internal fun retryPendingOutputCleanup(context: Context) {
             // expose a cancelled/failed final-name output. Keep it suppression-only.
             continue
         }
-        if (record.storageType == RecordingStorageType.FILE) {
+        if (pendingFileOutputCleanupRequiresClaimReplay(record)) {
             when (outputCleanupClaimState(record)) {
                 OutputCleanupClaimState.WAIT -> continue
                 OutputCleanupClaimState.NONE -> Unit
