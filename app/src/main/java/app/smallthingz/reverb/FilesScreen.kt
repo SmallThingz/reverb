@@ -99,6 +99,21 @@ internal fun shouldHandoffPendingDeletionsToBackground(
     foregroundCommitInFlight: Boolean,
 ): Boolean = hasPending && !committedInBackground && !foregroundCommitInFlight
 
+internal fun librarySnapshotWithoutWaveformTrust(
+    recordings: List<RecordingEntity>,
+): List<RecordingEntity> {
+    var changed = false
+    val sanitized = recordings.map { recording ->
+        if (recording.waveformData.isEmpty() && recording.waveformRevision.isEmpty()) {
+            recording
+        } else {
+            changed = true
+            recording.copy(waveformData = "", waveformRevision = "")
+        }
+    }
+    return if (changed) sanitized else recordings
+}
+
 internal fun libraryEmptyStateVisible(
     hasLoaded: Boolean,
     listEmpty: Boolean,
@@ -135,7 +150,9 @@ fun FilesScreen(
     val chrome = appChrome()
     val activeMutationRecordingIds by recordingMutations.activeIds.collectAsState()
 
-    var recordings by remember { mutableStateOf(initialRecordings) }
+    var recordings by remember {
+        mutableStateOf(librarySnapshotWithoutWaveformTrust(initialRecordings))
+    }
     var isRefreshing by remember { mutableStateOf(false) }
     var hasLoaded by remember { mutableStateOf(initialRecordings.isNotEmpty()) }
     val refreshGeneration = remember { intArrayOf(0) }
@@ -276,10 +293,14 @@ fun FilesScreen(
 
     LaunchedEffect(initialRecordings) {
         if (pendingDeletions.isEmpty() && initialRecordings != recordings) {
+            // Parent snapshots are catalog-only until this Library session itself has completed
+            // storage reconciliation. Keep metadata for the fast first paint, but do not trust a
+            // derived waveform cache merely because its stored revision matches stale metadata.
+            val safeInitialRecordings = librarySnapshotWithoutWaveformTrust(initialRecordings)
             val previousById = recordings.associateBy { it.id }
-            recordings = initialRecordings
+            recordings = safeInitialRecordings
             hasLoaded = true
-            val currentById = initialRecordings.associateBy { it.id }
+            val currentById = safeInitialRecordings.associateBy { it.id }
             selectedIds.keys.toList().forEach { id ->
                 val previous = selectedIds[id]
                 val updated = currentById[id]
@@ -296,6 +317,9 @@ fun FilesScreen(
 
     LaunchedEffect(active) {
         if (!active) {
+            // A hidden retained Library no longer has current storage proof. Preserve cheap
+            // catalog metadata, but revoke waveform-cache trust before the next visible session.
+            recordings = librarySnapshotWithoutWaveformTrust(recordings)
             // The Library stays composed behind the home screen. Invalidate any storage refresh
             // launched by the previous visible session so it cannot mutate retained UI state
             // after close or leave a spinner owned by an obsolete generation stuck on reopen.
@@ -317,7 +341,9 @@ fun FilesScreen(
         }
         if (!hasLoaded) {
             try {
-                recordings = RecordingRepository.listKnown(context)
+                recordings = librarySnapshotWithoutWaveformTrust(
+                    RecordingRepository.listKnown(context),
+                )
                 hasLoaded = true
             } catch (cancelled: CancellationException) {
                 throw cancelled
