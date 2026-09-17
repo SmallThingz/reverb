@@ -208,6 +208,15 @@ internal fun inlineShuttleFailureShouldResume(
     lifecycleResumed: Boolean,
 ): Boolean = shuttleActive && resumeAfterScrub && lifecycleResumed
 
+internal inline fun handleInlinePlaybackError(
+    shouldReportFailure: Boolean,
+    releaseResources: () -> Unit,
+    reportFailure: () -> Unit,
+) {
+    releaseResources()
+    if (shouldReportFailure) reportFailure()
+}
+
 private class InlinePlayerBookkeeping {
     var resumeAfterScrub = false
     var released = false
@@ -402,9 +411,10 @@ internal fun RecordingInlinePlayer(
     fun releasePlayer() {
         if (playbackBookkeeping.released) return
         playbackBookkeeping.released = true
-        mediaPlayer?.runCatching { stop() }
-        mediaPlayer?.release()
+        val player = mediaPlayer
         mediaPlayer = null
+        player?.runCatching { stop() }
+        player?.runCatching { release() }
         runCatching { pinnedMediaSource.getAndSet(null)?.close() }
         prepared = false
         isPlaying = false
@@ -629,8 +639,12 @@ internal fun RecordingInlinePlayer(
             }
         }
         player.setOnErrorListener { _, _, _ ->
-            if (!playbackBookkeeping.released && !disposed) onPlaybackFailed()
-            releasePlayer()
+            val shouldReportFailure = !playbackBookkeeping.released && !disposed
+            handleInlinePlaybackError(
+                shouldReportFailure = shouldReportFailure,
+                releaseResources = ::releasePlayer,
+                reportFailure = onPlaybackFailed,
+            )
             true
         }
         mediaPlayer = player
