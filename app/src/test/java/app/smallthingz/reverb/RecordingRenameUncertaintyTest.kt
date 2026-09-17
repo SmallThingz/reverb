@@ -17,4 +17,11 @@ class RecordingRenameUncertaintyTest {
         val error: Throwable = RecordingRenameStateUncertainException("rename state uncertain")
         assertTrue(error is java.io.IOException)
     }
+    @Test
+    fun fileMove_ioFailureIsUncertain_butCollisionIsNot() {
+        assertTrue(fileRenameMoveFailureIsUncertain(java.io.IOException("move failed")))
+        assertFalse(fileRenameMoveFailureIsUncertain(java.nio.file.FileAlreadyExistsException("target")))
+        assertFalse(fileRenameMoveFailureIsUncertain(SecurityException("denied")))
+    }
+
 }

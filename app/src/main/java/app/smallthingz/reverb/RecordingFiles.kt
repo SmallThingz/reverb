@@ -2482,7 +2482,13 @@ private fun renameFileRecording(
             suffix++
         } catch (error: IllegalStateException) {
             throw error
-        } catch (_: IOException) {
+        } catch (error: IOException) {
+            if (fileRenameMoveFailureIsUncertain(error)) {
+                throw RecordingRenameStateUncertainException(
+                    "File rename result is uncertain: ${recording.id}",
+                    error,
+                )
+            }
             return null
         } catch (_: SecurityException) {
             return null
@@ -2553,6 +2559,9 @@ internal fun providerRenameStateIsUncertain(
     mutationAccepted: Boolean,
     contentContinuityVerified: Boolean,
 ): Boolean = mutationAccepted && !contentContinuityVerified
+
+internal fun fileRenameMoveFailureIsUncertain(error: Throwable): Boolean =
+    error is IOException && error !is FileAlreadyExistsException
 
 private fun renameMediaStoreRecording(
     context: Context,
