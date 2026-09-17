@@ -1147,6 +1147,16 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun settingsRehydrate_runsOnlyForCleanVisiblePanel() {
+        assertTrue(settingsShouldRehydrate(active = true, persisting = false, hasUnsavedChanges = false))
+        assertFalse(settingsShouldRehydrate(active = false, persisting = false, hasUnsavedChanges = false))
+        assertFalse(settingsShouldRehydrate(active = true, persisting = true, hasUnsavedChanges = false))
+        assertFalse(settingsShouldRehydrate(active = true, persisting = false, hasUnsavedChanges = true))
+        assertTrue(settingsHydrationMayApply(expectedEditRevision = 8L, currentEditRevision = 8L))
+        assertFalse(settingsHydrationMayApply(expectedEditRevision = 8L, currentEditRevision = 9L))
+    }
+
+    @Test
     fun settingsMoveAvailability_rejectsHiddenAndStaleResults() {
         assertTrue(settingsMoveAvailabilityResultIsCurrent(active = true, requestGeneration = 3, currentGeneration = 3))
         assertFalse(settingsMoveAvailabilityResultIsCurrent(active = false, requestGeneration = 3, currentGeneration = 3))

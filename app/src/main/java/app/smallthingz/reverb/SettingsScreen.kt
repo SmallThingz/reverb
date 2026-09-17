@@ -176,6 +176,17 @@ internal fun settingsSnapshotHasUnsavedChanges(
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
+internal fun settingsShouldRehydrate(
+    active: Boolean,
+    persisting: Boolean,
+    hasUnsavedChanges: Boolean,
+): Boolean = active && !persisting && !hasUnsavedChanges
+
+internal fun settingsHydrationMayApply(
+    expectedEditRevision: Long,
+    currentEditRevision: Long,
+): Boolean = expectedEditRevision == currentEditRevision
+
 internal fun settingsMoveAvailabilityResultIsCurrent(
     active: Boolean,
     requestGeneration: Int,
@@ -734,6 +745,7 @@ fun SettingsScreen(
     }
 
     suspend fun bindUiFromPreferences() {
+        val hydrationEditRevision = settingsEditRevision[0]
         val initial = withContext(Dispatchers.IO) {
             SettingsInitialConfiguration(
                 themeMode = getConfiguredThemeMode(context),
@@ -749,6 +761,7 @@ fun SettingsScreen(
                 wakeLockEnabled = isWakeLockEnabled(context),
             )
         }
+        if (!settingsHydrationMayApply(hydrationEditRevision, settingsEditRevision[0])) return
         val configuredThemeMode = initial.themeMode
         val retention = initial.retention
         val configuredMode = retention.mode
@@ -958,7 +971,11 @@ fun SettingsScreen(
             releaseInputFocus()
         }
     }
-    LaunchedEffect(Unit) { bindUiFromPreferences() }
+    LaunchedEffect(active, settingsPersisting) {
+        if (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
+            bindUiFromPreferences()
+        }
+    }
     if (!settingsHydrated) {
         Box(modifier = modifier.fillMaxSize())
         return
