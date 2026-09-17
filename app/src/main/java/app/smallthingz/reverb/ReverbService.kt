@@ -431,14 +431,25 @@ class ReverbService : Service() {
     }
 
     fun enableListening(bufferSlot: BufferSlot): ListeningCommandResult {
+        if (serviceDestroying) return rejectedListeningCommand()
+        val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
+            try {
+                oneShotAudioChunkStore.isFull()
+            } catch (error: Exception) {
+                if (!serviceDestroying) reportPersistentStoreFailure("read one-shot availability", error)
+                return rejectedListeningCommand()
+            }
+        } else {
+            false
+        }
         if (!canActivateCaptureBuffer(
                 requested = bufferSlot,
                 oneShotEnabled = oneShotBufferEnabled,
-                oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
+                oneShotFull = oneShotFull,
                 loopingEnabled = loopingBufferEnabled,
             )
         ) {
-            return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
+            return rejectedListeningCommand()
         }
         if (isLogicalListeningState(state, isListeningEnabled()) && activeBufferSlot != bufferSlot) {
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
@@ -451,20 +462,30 @@ class ReverbService : Service() {
     }
 
     fun selectCaptureBuffer(bufferSlot: BufferSlot): ListeningCommandResult {
+        if (serviceDestroying) return rejectedListeningCommand()
+        val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
+            try {
+                oneShotAudioChunkStore.isFull()
+            } catch (error: Exception) {
+                if (!serviceDestroying) reportPersistentStoreFailure("read one-shot availability", error)
+                return rejectedListeningCommand()
+            }
+        } else {
+            false
+        }
         val canActivate = canActivateCaptureBuffer(
             requested = bufferSlot,
             oneShotEnabled = oneShotBufferEnabled,
-            oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
+            oneShotFull = oneShotFull,
             loopingEnabled = loopingBufferEnabled,
         )
-        if (!canActivate) {
-            return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
-        }
+        if (!canActivate) return rejectedListeningCommand()
 
         val prefs = getRecorderPreferences(this)
         val previousActiveBuffer = activeBufferSlot
         var targetChanged = false
         val generation = synchronized(listeningIntentLock) {
+            if (serviceDestroying) return rejectedListeningCommand()
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
@@ -532,12 +553,16 @@ class ReverbService : Service() {
         }
     }
 
+    private fun rejectedListeningCommand(): ListeningCommandResult =
+        ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
+
     private fun setListeningEnabled(
         enabled: Boolean,
         requestedBufferSlot: BufferSlot? = null,
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         val generation = synchronized(listeningIntentLock) {
+            if (serviceDestroying) return rejectedListeningCommand()
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
@@ -578,6 +603,14 @@ class ReverbService : Service() {
                     }
                     listeningCommandGeneration.incrementAndGet()
                 }
+            }.also { resolvedGeneration ->
+                if (resolvedGeneration != null && !enabled) {
+                    // The durable Stop intent and incident disarm are one lifetime boundary.
+                    // onDestroy takes the same lock before it can classify an armed session as
+                    // interrupted, so a known Stop cannot race into a false incident.
+                    captureContinuityGeneration.incrementAndGet()
+                    RecordingIncidentStore.recordKnownCaptureStop(this)
+                }
             }
         }
         if (generation == null) {
@@ -590,8 +623,6 @@ class ReverbService : Service() {
         if (enabled) {
             innerStartListening(generation)
         } else {
-            captureContinuityGeneration.incrementAndGet()
-            RecordingIncidentStore.recordKnownCaptureStop(this)
             innerStopListening()
         }
         return ListeningCommandResult(accepted = true, generation = generation)
