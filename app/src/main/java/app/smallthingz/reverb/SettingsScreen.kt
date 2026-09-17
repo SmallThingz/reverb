@@ -927,11 +927,15 @@ fun SettingsScreen(
 
     fun moveExistingRecordings() {
         if (settingsPersisting) return
+        val moveTargetTreeUri = selectedExportTreeUri
         scope.launch {
+            // persistSettings() returns true only if no newer edit superseded this submitted
+            // snapshot while IO was in flight, so this URI is exactly the destination committed
+            // by this Move action. Pass it explicitly instead of rereading preferences later.
             if (!persistSettings()) return@launch
             canMove = false
             val result = try {
-                RecordingRepository.moveAllToConfiguredDirectory(context)
+                RecordingRepository.moveAllToDirectory(context, moveTargetTreeUri)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

@@ -554,9 +554,24 @@ internal fun createOutputTarget(
     mimeType: String,
     startedAtMillis: Long,
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
+): RecordingOutputTarget = createOutputTargetInDirectory(
+    context = context,
+    targetTreeUri = getConfiguredExportTreeUri(context),
+    requestedDisplayName = requestedDisplayName,
+    mimeType = mimeType,
+    startedAtMillis = startedAtMillis,
+    stagingKind = stagingKind,
+)
+
+internal fun createOutputTargetInDirectory(
+    context: Context,
+    targetTreeUri: Uri?,
+    requestedDisplayName: String,
+    mimeType: String,
+    startedAtMillis: Long,
+    stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
-    val treeUri = getConfiguredExportTreeUri(context)
-    return if (treeUri == null) {
+    return if (targetTreeUri == null) {
         if (usesMediaStoreDefaultStorage()) {
             createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
         } else {
@@ -567,7 +582,9 @@ internal fun createOutputTarget(
             )
         }
     } else {
-        createDocumentOutputTarget(context, treeUri, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
+        createDocumentOutputTarget(
+            context, targetTreeUri, requestedDisplayName, mimeType, startedAtMillis, stagingKind,
+        )
     }
 }
 
@@ -1326,16 +1343,18 @@ fun renameRecordingAsset(
     }
 }
 
-fun copyRecordingToConfiguredDirectory(
+fun copyRecordingToDirectory(
     context: Context,
     recording: RecordingEntity,
+    targetTreeUri: Uri?,
 ): RecordingEntity? {
     var target: RecordingOutputTarget? = null
     var cleanupFingerprint: StableOutputFingerprint? = null
     var preserveVerifiedCopyOnFailure = false
     return try {
-        val resolvedTarget = createOutputTarget(
+        val resolvedTarget = createOutputTargetInDirectory(
             context = context,
+            targetTreeUri = targetTreeUri,
             requestedDisplayName = recording.displayName,
             mimeType = recording.mimeType,
             startedAtMillis = recording.startedAtMillis,

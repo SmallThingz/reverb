@@ -450,7 +450,10 @@ object RecordingRepository {
         }
     }
 
-    suspend fun moveAllToConfiguredDirectory(context: Context): MoveResult {
+    suspend fun moveAllToDirectory(
+        context: Context,
+        targetTreeUri: Uri?,
+    ): MoveResult {
         return withContext(Dispatchers.IO) {
             awaitBackgroundDeletes()
             mutex.withLock {
@@ -462,7 +465,9 @@ object RecordingRepository {
                     return@withLock MoveResult()
                 }
 
-                val targetDirectoryId = getConfiguredOutputDirectoryId(context)
+                // The caller pins one destination before this IO transaction begins. Later
+                // Settings saves must not retarget or split an already-submitted move batch.
+                val targetDirectoryId = getOutputDirectoryId(context, targetTreeUri)
                 val stateUpdates = mutableListOf<RecordingEntity>()
                 val moveCandidates = mutableListOf<RecordingEntity>()
                 var skipped = 0
@@ -521,7 +526,11 @@ object RecordingRepository {
                         // Equal bytes/name are not proof that an existing target belongs to this
                         // move. Without a durable source→target transaction marker, preserve any
                         // existing target and make a fresh verified copy before touching the source.
-                        val target = copyRecordingToConfiguredDirectory(context, source)
+                        val target = copyRecordingToDirectory(
+                            context = context,
+                            recording = source,
+                            targetTreeUri = targetTreeUri,
+                        )
                         if (target == null) {
                             failed++
                             return@forEach
@@ -620,7 +629,13 @@ object RecordingRepository {
                 // Do not infer interrupted-move ownership from equal bytes or metadata. A fresh
                 // verified copy preserves intentionally duplicated recordings; only an explicit
                 // future source→target transaction marker may authorize target reuse.
-                val target = copyRecordingToConfiguredDirectory(context, source) ?: continue
+                // This migration was admitted only while the configured destination was the
+                // default shared location. Keep that target pinned even if Settings changes later.
+                val target = copyRecordingToDirectory(
+                    context = context,
+                    recording = source,
+                    targetTreeUri = null,
+                ) ?: continue
 
                 val cleanupComplete = commitVerifiedMoveLocked(
                     context = context,
