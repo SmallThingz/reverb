@@ -454,6 +454,7 @@ fun CaptureScreen(
                         )
                     ) return
                     bookkeeping.latestListeningCommandGeneration = commandGeneration
+                    val previousListening = isListening
                     val previousActiveBuffer = activeBuffer
                     isListening = listeningEnabled
                     activeBuffer = activeBufferSlot
@@ -491,12 +492,14 @@ fun CaptureScreen(
                             loopingEnabled = resolvedBuffers.loopingEnabled,
                         )
                         bookkeeping.startupBufferChosen = true
-                    } else if (
-                        listeningEnabled &&
-                        previousActiveBuffer == ReverbService.BufferSlot.ONE_SHOT &&
-                        activeBufferSlot == ReverbService.BufferSlot.LOOPING
-                    ) {
-                        selectedBuffer = ReverbService.BufferSlot.LOOPING
+                    } else {
+                        selectedBuffer = captureSelectedBufferAfterRecorderState(
+                            currentSelection = selectedBuffer,
+                            wasListening = previousListening,
+                            previousActiveBuffer = previousActiveBuffer,
+                            listening = listeningEnabled,
+                            activeBuffer = activeBufferSlot,
+                        )
                     }
                 }
             },
@@ -1125,6 +1128,17 @@ internal fun shouldApplyRecorderStateSnapshot(
     latestCommandGeneration: Long,
 ): Boolean = snapshotConnectionGeneration == currentConnectionGeneration &&
     snapshotGeneration >= latestCommandGeneration
+
+internal fun captureSelectedBufferAfterRecorderState(
+    currentSelection: ReverbService.BufferSlot,
+    wasListening: Boolean,
+    previousActiveBuffer: ReverbService.BufferSlot?,
+    listening: Boolean,
+    activeBuffer: ReverbService.BufferSlot?,
+): ReverbService.BufferSlot {
+    if (!listening || activeBuffer == null) return currentSelection
+    return if (!wasListening || previousActiveBuffer != activeBuffer) activeBuffer else currentSelection
+}
 
 internal fun timelineSnapshotRequestIsCurrent(
     requestGeneration: Long,
