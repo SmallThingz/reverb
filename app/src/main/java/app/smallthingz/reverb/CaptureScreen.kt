@@ -111,6 +111,25 @@ internal fun detachedSaveSuccessNeedsInAppFallback(
 ): Boolean = !notificationsEnabled || !channelEnabled ||
     (runtimePermissionRequired && !runtimePermissionGranted)
 
+internal inline fun deliverDetachedSaveSuccess(
+    notificationAvailable: () -> Boolean,
+    notify: () -> Unit,
+    fallback: () -> Unit,
+): Boolean {
+    val notified = try {
+        if (!notificationAvailable()) {
+            false
+        } else {
+            notify()
+            true
+        }
+    } catch (_: Exception) {
+        false
+    }
+    if (!notified) fallback()
+    return notified
+}
+
 private fun ensureCaptureResultNotificationChannel(context: Context) {
     context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
         NotificationChannel(
@@ -127,38 +146,36 @@ class NotifyFileReceiver(
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {
         backgroundRecordingResultScope.launch {
-            ensureCaptureResultNotificationChannel(appContext)
-            val notificationManager = NotificationManagerCompat.from(appContext)
-            val platformNotificationManager = appContext.getSystemService(NotificationManager::class.java)
-            val runtimePermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-            val runtimePermissionGranted = !runtimePermissionRequired ||
-                ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
-            val needsFallback = detachedSaveSuccessNeedsInAppFallback(
-                notificationsEnabled = runCatching { notificationManager.areNotificationsEnabled() }
-                    .getOrDefault(false),
-                channelEnabled = runCatching {
-                    platformNotificationManager
-                        ?.getNotificationChannel(ReverbService.NOTIFICATION_CHANNEL_ID)
-                        ?.importance
-                        ?.let { importance -> importance != NotificationManager.IMPORTANCE_NONE }
-                        ?: false
-                }.getOrDefault(false),
-                runtimePermissionRequired = runtimePermissionRequired,
-                runtimePermissionGranted = runtimePermissionGranted,
+            deliverDetachedSaveSuccess(
+                notificationAvailable = {
+                    ensureCaptureResultNotificationChannel(appContext)
+                    val notificationManager = NotificationManagerCompat.from(appContext)
+                    val platformNotificationManager = appContext.getSystemService(NotificationManager::class.java)
+                    val runtimePermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                    val runtimePermissionGranted = !runtimePermissionRequired ||
+                        ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
+                        PackageManager.PERMISSION_GRANTED
+                    !detachedSaveSuccessNeedsInAppFallback(
+                        notificationsEnabled = notificationManager.areNotificationsEnabled(),
+                        channelEnabled = platformNotificationManager
+                            ?.getNotificationChannel(ReverbService.NOTIFICATION_CHANNEL_ID)
+                            ?.importance
+                            ?.let { importance -> importance != NotificationManager.IMPORTANCE_NONE }
+                            ?: false,
+                        runtimePermissionRequired = runtimePermissionRequired,
+                        runtimePermissionGranted = runtimePermissionGranted,
+                    )
+                },
+                notify = {
+                    NotificationManagerCompat.from(appContext).notify(
+                        RECORDING_SAVED_NOTIFICATION_ID,
+                        buildCaptureNotification(appContext, recording),
+                    )
+                },
+                fallback = {
+                    AppFeedbackCenter.post(appContext.getString(R.string.recording_saved), FeedbackTone.SUCCESS)
+                },
             )
-            if (needsFallback) {
-                AppFeedbackCenter.post(appContext.getString(R.string.recording_saved), FeedbackTone.SUCCESS)
-                return@launch
-            }
-            runCatching {
-                notificationManager.notify(
-                    RECORDING_SAVED_NOTIFICATION_ID,
-                    buildCaptureNotification(appContext, recording),
-                )
-            }.onFailure {
-                AppFeedbackCenter.post(appContext.getString(R.string.recording_saved), FeedbackTone.SUCCESS)
-            }
         }
     }
 
