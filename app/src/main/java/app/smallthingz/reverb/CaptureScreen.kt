@@ -2337,10 +2337,24 @@ private fun handleExport(
 internal inline fun <T> deliverTerminalSaveResult(
     deliver: () -> T,
     finish: () -> Unit,
-): T = try {
-    deliver()
-} finally {
-    finish()
+): T {
+    var deliveryFailure: Throwable? = null
+    try {
+        return deliver()
+    } catch (error: Throwable) {
+        deliveryFailure = error
+        throw error
+    } finally {
+        try {
+            finish()
+        } catch (cleanupError: Throwable) {
+            val primary = deliveryFailure
+            if (primary == null) {
+                throw cleanupError
+            }
+            if (cleanupError !== primary) primary.addSuppressed(cleanupError)
+        }
+    }
 }
 
 internal class SaveUiCallbackGate(

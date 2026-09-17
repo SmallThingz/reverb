@@ -37,4 +37,36 @@ class SaveTerminalDeliveryTest {
         assertTrue(threw)
         assertEquals(listOf("deliver", "finish"), events)
     }
+
+    @Test
+    fun terminalDelivery_preservesPrimaryFailureWhenCleanupAlsoFails() {
+        val primary = IllegalStateException("ui callback failed")
+        val cleanup = IllegalArgumentException("terminal cleanup failed")
+        var observed: Throwable? = null
+        try {
+            deliverTerminalSaveResult<Unit>(
+                deliver = { throw primary },
+                finish = { throw cleanup },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+        assertTrue(observed === primary)
+        assertEquals(listOf(cleanup), primary.suppressed.toList())
+    }
+
+    @Test
+    fun terminalDelivery_propagatesCleanupFailureAfterSuccessfulCallback() {
+        val cleanup = IllegalArgumentException("terminal cleanup failed")
+        var observed: Throwable? = null
+        try {
+            deliverTerminalSaveResult(
+                deliver = { 7 },
+                finish = { throw cleanup },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+        assertTrue(observed === cleanup)
+    }
 }
