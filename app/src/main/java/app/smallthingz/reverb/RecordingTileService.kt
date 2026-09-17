@@ -192,14 +192,6 @@ internal object RecordingQuickTileStateCache {
         }
     }
 
-    fun invalidateRuntimeSnapshot() {
-        synchronized(stateLock) {
-            cachedSnapshot = null
-            stateGeneration++
-            runtimeAuthoritative = false
-        }
-    }
-
     /** Memory-only fallback. This is safe on the recorder audio thread and TileService main thread. */
     fun readNonBlocking(): RecordingTileSnapshot =
         cachedSnapshot ?: failClosedRecordingTileSnapshot()

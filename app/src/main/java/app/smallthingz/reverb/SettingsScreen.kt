@@ -446,6 +446,15 @@ fun SettingsScreen(
         hasUnsavedChanges = false
     }
 
+    fun refreshStoppedQuickTileFallback() {
+        val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(context)
+        RecordingQuickTiles.refreshCachedSnapshot(
+            context = context,
+            snapshot = fallback,
+            requestSystemRefresh = true,
+        )
+    }
+
     @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
     suspend fun persistSettings(): Boolean {
         if (settingsPersisting) return false
@@ -662,19 +671,17 @@ fun SettingsScreen(
                     Intent(context, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
                 )
             }.onFailure { error ->
-                // Durable settings changed but no recorder accepted the reload. Drop the stale
-                // process-global tile snapshot so SystemUI reflects the committed preferences
-                // while runtime capture correctly fails closed.
-                RecordingQuickTileStateCache.invalidateRuntimeSnapshot()
-                RecordingQuickTiles.requestRefresh(context)
+                // Durable settings changed but no recorder accepted the reload. Replace stale
+                // runtime tile state immediately with a fail-closed snapshot, then hydrate the
+                // committed stopped settings on the tile IO worker.
+                refreshStoppedQuickTileFallback()
                 AppFeedbackCenter.post(
                     resources.getString(R.string.settings_apply_failed),
                     FeedbackTone.ERROR,
                 )
             }
         } else {
-            RecordingQuickTileStateCache.invalidateRuntimeSnapshot()
-            RecordingQuickTiles.requestRefresh(context)
+            refreshStoppedQuickTileFallback()
         }
         val editedWhileSaving = settingsEditedDuringPersistence(
             submittedRevision = submittedEditRevision,
