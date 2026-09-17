@@ -177,13 +177,7 @@ class MainActivity : ComponentActivity() {
             batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         }
         themeMode = configuredThemeMode
-        if (showOnboarding) {
-            lifecycleScope.launch {
-                onboardingBufferAvailability = withContext(Dispatchers.IO) {
-                    getConfiguredBufferAvailability(applicationContext)
-                }
-            }
-        }
+        if (showOnboarding) startOnboardingBufferHydration()
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
@@ -238,12 +232,14 @@ class MainActivity : ComponentActivity() {
                             if (!onboardingFinishing) {
                                 onboardingFinishing = true
                                 lifecycleScope.launch {
-                                    val finished = withContext(Dispatchers.IO) {
-                                        finishOnboarding(
-                                            this@MainActivity,
-                                            oneShotEnabled,
-                                            loopingEnabled,
-                                        )
+                                    val finished = runDurableUiBooleanAttempt {
+                                        withContext(Dispatchers.IO) {
+                                            finishOnboarding(
+                                                this@MainActivity,
+                                                oneShotEnabled,
+                                                loopingEnabled,
+                                            )
+                                        }
                                     }
                                     onboardingFinishing = false
                                     if (finished) {
@@ -286,6 +282,37 @@ class MainActivity : ComponentActivity() {
                         onThemeChanged = { themeMode = it },
                     )
                 }
+            }
+        }
+    }
+
+    private fun startOnboardingBufferHydration() {
+        lifecycleScope.launch {
+            var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
+            var failureReported = false
+            while (showOnboarding && onboardingBufferAvailability == null) {
+                val loaded = try {
+                    withContext(Dispatchers.IO) {
+                        getConfiguredBufferAvailability(applicationContext)
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                if (loaded != null) {
+                    if (showOnboarding) onboardingBufferAvailability = loaded
+                    return@launch
+                }
+                if (!failureReported) {
+                    AppFeedbackCenter.post(
+                        getString(R.string.recorder_state_persist_failed),
+                        FeedbackTone.ERROR,
+                    )
+                    failureReported = true
+                }
+                delay(retryDelayMillis)
+                retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
             }
         }
     }
@@ -952,10 +979,10 @@ private fun MainScreen(
         // recovery, resume-time completion, or checked-state changes durable history. Latest-only
         // collection cancels an obsolete read/retry when a newer durable revision arrives.
         RecordingIncidentStore.historyRevision.collectLatest {
-            var retryDelayMillis = 500L
+            var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
             while (!loadIncidents()) {
                 delay(retryDelayMillis)
-                retryDelayMillis = (retryDelayMillis * 2L).coerceAtMost(30_000L)
+                retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
             }
         }
     }

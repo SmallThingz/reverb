@@ -180,22 +180,6 @@ internal fun settingsSnapshotHasUnsavedChanges(
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
-internal suspend fun runSettingsDurableIoAttempt(
-    block: suspend () -> Boolean,
-): Boolean = try {
-    block()
-} catch (cancelled: CancellationException) {
-    throw cancelled
-} catch (_: Exception) {
-    false
-}
-
-private const val SETTINGS_HYDRATION_RETRY_INITIAL_MILLIS = 500L
-private const val SETTINGS_HYDRATION_RETRY_MAX_MILLIS = 30_000L
-
-internal fun nextSettingsHydrationRetryDelayMillis(currentMillis: Long): Long =
-    (currentMillis * 2L).coerceAtMost(SETTINGS_HYDRATION_RETRY_MAX_MILLIS)
-
 internal fun settingsShouldRehydrate(
     active: Boolean,
     persisting: Boolean,
@@ -681,7 +665,7 @@ fun SettingsScreen(
         // Once the recovery/preferences transaction starts, a configuration change or Activity
         // disposal may cancel only the UI tail. A successful durable commit must still reach the
         // surviving recorder (or stopped tile fallback) before this section can terminate.
-        val persisted = runSettingsDurableIoAttempt {
+        val persisted = runDurableUiBooleanAttempt {
             withContext(NonCancellable) {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
@@ -1001,10 +985,10 @@ fun SettingsScreen(
     LaunchedEffect(active, settingsPersisting) {
         if (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
             settingsInteractionReady = false
-            var retryDelayMillis = SETTINGS_HYDRATION_RETRY_INITIAL_MILLIS
+            var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
             var failureReported = false
             while (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
-                val hydrated = runSettingsDurableIoAttempt {
+                val hydrated = runDurableUiBooleanAttempt {
                     bindUiFromPreferences()
                     true
                 }
@@ -1017,7 +1001,7 @@ fun SettingsScreen(
                     failureReported = true
                 }
                 delay(retryDelayMillis)
-                retryDelayMillis = nextSettingsHydrationRetryDelayMillis(retryDelayMillis)
+                retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
             }
         }
     }

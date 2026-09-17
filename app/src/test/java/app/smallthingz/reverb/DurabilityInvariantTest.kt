@@ -644,18 +644,18 @@ class DurabilityInvariantTest {
 
     @Test
     fun settingsPersistenceAttempt_returnsFailureButPreservesCancellation() {
-        assertTrue(runBlocking { runSettingsDurableIoAttempt { true } })
-        assertFalse(runBlocking { runSettingsDurableIoAttempt { throw IOException("storage unavailable") } })
+        assertTrue(runBlocking { runDurableUiBooleanAttempt { true } })
+        assertFalse(runBlocking { runDurableUiBooleanAttempt { throw IOException("storage unavailable") } })
         assertThrows(CancellationException::class.java) {
-            runBlocking { runSettingsDurableIoAttempt { throw CancellationException("cancelled") } }
+            runBlocking { runDurableUiBooleanAttempt { throw CancellationException("cancelled") } }
         }
     }
 
     @Test
     fun settingsHydrationRetry_usesBoundedExponentialBackoff() {
-        assertEquals(1_000L, nextSettingsHydrationRetryDelayMillis(500L))
-        assertEquals(30_000L, nextSettingsHydrationRetryDelayMillis(20_000L))
-        assertEquals(30_000L, nextSettingsHydrationRetryDelayMillis(30_000L))
+        assertEquals(1_000L, nextDurableUiRetryDelayMillis(500L))
+        assertEquals(30_000L, nextDurableUiRetryDelayMillis(20_000L))
+        assertEquals(30_000L, nextDurableUiRetryDelayMillis(30_000L))
     }
 
     @Test
