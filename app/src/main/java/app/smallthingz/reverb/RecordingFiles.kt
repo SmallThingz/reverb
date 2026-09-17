@@ -1175,6 +1175,21 @@ private fun buildStatFileIdentity(
 internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String): Boolean =
     storedIdentity.isNotBlank() && currentIdentity.isNotBlank() && storedIdentity == currentIdentity
 
+internal fun scannedRecordingIdentityRemainsCurrent(
+    storageType: RecordingStorageType,
+    beforeValidation: String,
+    afterValidation: String,
+): Boolean {
+    if (beforeValidation.isBlank()) return true
+    if (afterValidation.isBlank()) return false
+    return when (storageType) {
+        RecordingStorageType.FILE -> fileIdentityMatches(beforeValidation, afterValidation)
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> providerRecordingIdentityMatches(beforeValidation, afterValidation)
+    }
+}
+
 internal fun sameFileObjectAcrossRename(before: String, after: String): Boolean {
     if (before.isBlank() || after.isBlank()) return false
     val beforeParts = before.split(':')
@@ -1969,6 +1984,14 @@ private fun listFileDirectoryRecordings(
                 }
                 if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(file)
+                if (!scannedRecordingIdentityRemainsCurrent(
+                        storageType = RecordingStorageType.FILE,
+                        beforeValidation = identity,
+                        afterValidation = resolveFileIdentity(file),
+                    )
+                ) {
+                    throw IOException("Recording changed while scanning $file")
+                }
                 RecordingEntity(
                     id = id,
                     displayName = file.name,
@@ -2025,6 +2048,16 @@ private fun listDocumentTreeRecordings(
                 }
                 if (strictDuration <= 0L) return@mapNotNull null
                 val media = inspectRecordingMedia(context, uri, name)
+                if (!scannedRecordingIdentityRemainsCurrent(
+                        storageType = RecordingStorageType.DOCUMENT,
+                        beforeValidation = identity,
+                        afterValidation = resolveProviderRecordingIdentity(
+                            context, RecordingStorageType.DOCUMENT, uri,
+                        ),
+                    )
+                ) {
+                    throw IOException("Recording changed while scanning $uri")
+                }
                 RecordingEntity(
                     id = uri.toString(),
                     displayName = name,
@@ -2189,6 +2222,16 @@ private fun listMediaStoreRecordings(
                         if (strictDuration <= 0L) continue
                         durationMillis = strictDuration
                         media = inspectRecordingMedia(context, uri, name)
+                        if (!scannedRecordingIdentityRemainsCurrent(
+                                storageType = RecordingStorageType.MEDIASTORE,
+                                beforeValidation = identity,
+                                afterValidation = resolveProviderRecordingIdentity(
+                                    context, RecordingStorageType.MEDIASTORE, uri,
+                                ),
+                            )
+                        ) {
+                            throw IOException("Recording changed while scanning $uri")
+                        }
                     }
                     add(
                         RecordingEntity(
