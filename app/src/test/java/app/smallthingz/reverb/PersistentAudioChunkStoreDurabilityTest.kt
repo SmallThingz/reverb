@@ -551,6 +551,27 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun atomicFileBackingState_neverTreatsAmbiguousBackingAsAbsent() {
+        val base = File("build/tmp/atomic-state-test/state.bin")
+        fun state(vararg values: Pair<String, StoragePathState>): StoragePathState {
+            val bySuffix = values.toMap()
+            return atomicFileBackingState(base) { candidate ->
+                val suffix = candidate.path.removePrefix(base.path)
+                bySuffix[suffix] ?: StoragePathState.MISSING
+            }
+        }
+
+        assertEquals(StoragePathState.MISSING, state())
+        assertEquals(StoragePathState.PRESENT, state(".bak" to StoragePathState.PRESENT))
+        assertEquals(StoragePathState.PRESENT, state(".new" to StoragePathState.PRESENT))
+        assertEquals(StoragePathState.UNAVAILABLE, state("" to StoragePathState.UNAVAILABLE))
+        assertEquals(
+            StoragePathState.PRESENT,
+            state("" to StoragePathState.UNAVAILABLE, ".bak" to StoragePathState.PRESENT),
+        )
+    }
+
+    @Test
     fun staleRetirementMarker_isClearedBeforeChunkIdReuse() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         val store = PersistentAudioChunkStore(root)

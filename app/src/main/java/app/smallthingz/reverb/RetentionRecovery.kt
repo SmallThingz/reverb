@@ -342,7 +342,7 @@ internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
         atomicFile.openRead().use { input -> DataInputStream(input).readBytes() }
     } catch (_: FileNotFoundException) {
         return RetentionRecoveryRead(
-            if (retentionRecoveryBackingState(context) == StoragePathState.MISSING) {
+            if (atomicFileBackingState(retentionRecoveryFile(context)) == StoragePathState.MISSING) {
                 RetentionRecoveryReadState.MISSING
             } else {
                 RetentionRecoveryReadState.INVALID
@@ -391,19 +391,6 @@ internal fun restoreRetentionConfigurationToPreferences(
 
 private fun retentionRecoveryFile(context: Context): File =
     File(context.noBackupFilesDir, RETENTION_RECOVERY_FILE_NAME)
-
-private fun retentionRecoveryBackingState(context: Context): StoragePathState {
-    val base = retentionRecoveryFile(context)
-    var unavailable = false
-    for (candidate in listOf(base, File(base.path + ".bak"), File(base.path + ".new"))) {
-        when (storagePathState(candidate)) {
-            StoragePathState.PRESENT -> return StoragePathState.PRESENT
-            StoragePathState.UNAVAILABLE -> unavailable = true
-            StoragePathState.MISSING -> Unit
-        }
-    }
-    return if (unavailable) StoragePathState.UNAVAILABLE else StoragePathState.MISSING
-}
 
 private fun syncRetentionRecoveryDirectory(context: Context): Boolean {
     val directory = context.noBackupFilesDir

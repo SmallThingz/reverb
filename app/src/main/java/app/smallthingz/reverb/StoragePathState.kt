@@ -35,3 +35,18 @@ internal fun storagePathState(file: File): StoragePathState = observeStoragePath
 
 internal fun storagePathMayContainData(state: StoragePathState): Boolean =
     state != StoragePathState.MISSING
+
+internal fun atomicFileBackingState(
+    baseFile: File,
+    observe: (File) -> StoragePathState = ::storagePathState,
+): StoragePathState {
+    var unavailable = false
+    for (candidate in listOf(baseFile, File(baseFile.path + ".bak"), File(baseFile.path + ".new"))) {
+        when (observe(candidate)) {
+            StoragePathState.PRESENT -> return StoragePathState.PRESENT
+            StoragePathState.UNAVAILABLE -> unavailable = true
+            StoragePathState.MISSING -> Unit
+        }
+    }
+    return if (unavailable) StoragePathState.UNAVAILABLE else StoragePathState.MISSING
+}

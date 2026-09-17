@@ -177,11 +177,11 @@ internal object RecordingIncidentStore {
 
         val markerFile = sessionFile(appContext)
         val marker = readSession(markerFile) ?: run {
-            markerFile.delete()
+            deleteAtomicDurablyIfPresent(markerFile)
             return
         }
         if (!marker.armed) {
-            markerFile.delete()
+            deleteAtomicDurablyIfPresent(markerFile)
             return
         }
         val currentElapsed = SystemClock.elapsedRealtime()
@@ -196,7 +196,7 @@ internal object RecordingIncidentStore {
                     currentElapsedRealtimeMillis = currentElapsed,
                 ),
             )
-            markerFile.delete()
+            deleteAtomicDurablyIfPresent(markerFile)
             return
         }
 
@@ -206,7 +206,7 @@ internal object RecordingIncidentStore {
                 appContext,
                 incidentWithoutExitEvidence(marker, System.currentTimeMillis()),
             )
-            markerFile.delete()
+            deleteAtomicDurablyIfPresent(markerFile)
             return
         }
 
@@ -228,7 +228,7 @@ internal object RecordingIncidentStore {
                 description = "Recording process ended while capture was running; exit evidence pending",
             ),
         )
-        markerFile.delete()
+        deleteAtomicDurablyIfPresent(markerFile)
         resolvePendingSessions(appContext)
     }
 
@@ -258,7 +258,6 @@ internal object RecordingIncidentStore {
                         description = "Capture restarted after an unresolved interruption",
                     ),
                 )
-                markerFile.delete()
             }
             CaptureSessionStartDisposition.NEW_SESSION -> recoverPriorSessionIfNeeded(appContext)
         }
@@ -331,7 +330,7 @@ internal object RecordingIncidentStore {
         }.isSuccess
         if (!persisted) return
         runCatching { writeSession(file, marker.copy(armed = false)) }
-            .onFailure { file.delete() }
+            .onFailure { runCatching { deleteAtomicDurablyIfPresent(file) } }
     }
 
     @Synchronized
@@ -342,8 +341,9 @@ internal object RecordingIncidentStore {
             readSession(file)
         } catch (_: IOException) {
             // This path is reached only for an explicit known stop. The user intent is now
-            // authoritative, so discard an unreadable stale marker rather than crashing stop.
-            file.delete()
+            // authoritative, so discard an unreadable stale marker best-effort without turning
+            // storage uncertainty into a framework crash.
+            runCatching { deleteAtomicDurablyIfPresent(file) }
             return
         } ?: return
         if (!existing.armed) return
@@ -351,8 +351,8 @@ internal object RecordingIncidentStore {
             writeSession(file, existing.copy(armed = false))
         }.onFailure {
             // Best-effort fallback. A known stop should disarm durably; if that write fails,
-            // deleting the marker is safer than falsely reporting a later process death.
-            file.delete()
+            // remove the marker only through the same durable directory boundary.
+            runCatching { deleteAtomicDurablyIfPresent(file) }
         }
     }
 
@@ -410,7 +410,7 @@ internal object RecordingIncidentStore {
         val file = pendingSessionFile(context)
         val pending = readPendingSessions(file)
         if (pending.isEmpty()) {
-            file.delete()
+            deleteAtomicDurablyIfPresent(file)
             return
         }
 
@@ -597,6 +597,29 @@ internal object RecordingIncidentStore {
         AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
 
+    private fun deleteAtomicDurablyIfPresent(file: AtomicFile) {
+        when (atomicFileBackingState(file.baseFile)) {
+            StoragePathState.MISSING -> return
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to inspect durable incident state: ${file.baseFile.absolutePath}",
+            )
+            StoragePathState.PRESENT -> Unit
+        }
+        file.delete()
+        when (atomicFileBackingState(file.baseFile)) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.PRESENT -> throw IOException(
+                "Unable to remove durable incident state: ${file.baseFile.absolutePath}",
+            )
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to confirm durable incident removal: ${file.baseFile.absolutePath}",
+            )
+        }
+        if (!confirmFileDirectoryStateDurable(file.baseFile)) {
+            throw IOException("Unable to persist incident-state removal: ${file.baseFile.absolutePath}")
+        }
+    }
+
     private fun readSession(file: AtomicFile): ActiveRecordingSessionMarker? =
         readAtomic(file, "recording session") { input ->
             requireFileHeader(input, SESSION_MAGIC, SESSION_FORMAT_VERSION, "recording session")
@@ -635,7 +658,7 @@ internal object RecordingIncidentStore {
         sessions: List<PendingRecordingSession>,
     ) {
         if (sessions.isEmpty()) {
-            file.delete()
+            deleteAtomicDurablyIfPresent(file)
             return
         }
         if (sessions.size > MAX_PENDING_INCIDENT_SESSIONS) {
@@ -805,13 +828,18 @@ internal object RecordingIncidentStore {
 
     private inline fun writeAtomic(file: AtomicFile, block: (DataOutputStream) -> Unit) {
         val stream = file.startWrite()
+        var committed = false
         try {
             val output = DataOutputStream(BufferedOutputStream(stream))
             block(output)
             output.flush()
             file.finishWrite(stream)
+            committed = true
+            if (!confirmFileDirectoryStateDurable(file.baseFile)) {
+                throw IOException("Unable to persist incident-state publication: ${file.baseFile.absolutePath}")
+            }
         } catch (error: Throwable) {
-            file.failWrite(stream)
+            if (!committed) file.failWrite(stream)
             throw error
         }
     }
