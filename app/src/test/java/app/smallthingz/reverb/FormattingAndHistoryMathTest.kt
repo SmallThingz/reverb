@@ -241,43 +241,6 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun backgroundDeletionRefresh_reportsOnlyTheSelectedAssetStillPresent() {
-        val selected = RecordingEntity(
-            id = "/recordings/clip.wav",
-            displayName = "clip.wav",
-            mimeType = "audio/wav",
-            startedAtMillis = 100L,
-            durationMillis = 2_000L,
-            sizeBytes = 4_000L,
-            codecSummary = "WAV",
-            storageType = RecordingStorageType.FILE,
-            directoryId = "/recordings",
-            fileIdentity = "stat:selected",
-        )
-
-        assertTrue(
-            backgroundDeletionBatchFailedAfterRefresh(
-                requested = listOf(selected),
-                refreshedById = mapOf(selected.id to selected),
-            ),
-        )
-        assertFalse(
-            backgroundDeletionBatchFailedAfterRefresh(
-                requested = listOf(selected),
-                refreshedById = emptyMap(),
-            ),
-        )
-        assertFalse(
-            backgroundDeletionBatchFailedAfterRefresh(
-                requested = listOf(selected),
-                refreshedById = mapOf(
-                    selected.id to selected.copy(fileIdentity = "stat:replacement"),
-                ),
-            ),
-        )
-    }
-
-    @Test
     fun deletionBackgroundHandoff_doesNotDuplicateCommittedForegroundBatch() {
         assertTrue(
             shouldHandoffPendingDeletionsToBackground(

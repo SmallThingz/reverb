@@ -99,13 +99,6 @@ internal fun shouldHandoffPendingDeletionsToBackground(
     foregroundCommitInFlight: Boolean,
 ): Boolean = hasPending && !committedInBackground && !foregroundCommitInFlight
 
-internal fun backgroundDeletionBatchFailedAfterRefresh(
-    requested: Collection<RecordingEntity>,
-    refreshedById: Map<String, RecordingEntity>,
-): Boolean = requested.any { selected ->
-    refreshedById[selected.id]?.let { current -> sameRecordingActionTarget(selected, current) } == true
-}
-
 internal fun libraryEmptyStateVisible(
     hasLoaded: Boolean,
     listEmpty: Boolean,
@@ -234,19 +227,12 @@ fun FilesScreen(
                 syncSelectionActive()
                 reconcileTransientRecordings(previousById, storedById)
                 if (deletionsCommittedInBackground[0]) {
-                    val backgroundDeleteFailed = backgroundDeletionBatchFailedAfterRefresh(
-                        requested = pendingDeletions.values,
-                        refreshedById = storedById,
-                    )
+                    // deleteInBackground owns failure reporting through the process feedback
+                    // queue before refresh can return. Refresh only reconciles the optimistic
+                    // Library transaction; do not render a second local error card for it.
                     pendingDeletions.clear()
                     deletionsCommittedInBackground[0] = false
                     isDeleting = false
-                    if (backgroundDeleteFailed) {
-                        notice = LibraryNotice(
-                            resources.getString(R.string.recording_delete_failed),
-                            FeedbackTone.ERROR,
-                        )
-                    }
                 } else {
                     var pendingTargetInvalidated = false
                     pendingDeletions.keys.toList().forEach { id ->
