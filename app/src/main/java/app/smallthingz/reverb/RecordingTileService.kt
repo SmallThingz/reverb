@@ -14,6 +14,7 @@ import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.edit
+import java.util.concurrent.Executors
 
 internal data class RecordingTileSnapshot(
     val listening: Boolean,
@@ -139,29 +140,173 @@ internal fun stoppedRecordingTileSnapshot(
     loopingSeconds = live?.loopingSeconds ?: persisted.loopingSeconds,
 )
 
+internal fun failClosedRecordingTileSnapshot(
+    previous: RecordingTileSnapshot? = null,
+): RecordingTileSnapshot = RecordingTileSnapshot(
+    listening = false,
+    activeBuffer = null,
+    oneShotEnabled = false,
+    oneShotFull = false,
+    loopingEnabled = false,
+    oneShotSeconds = previous?.oneShotSeconds ?: 0f,
+    loopingSeconds = previous?.loopingSeconds ?: 0f,
+)
+
+internal fun runtimeRecordingTileFallbackSnapshot(
+    cached: RecordingTileSnapshot?,
+    activeBuffer: ReverbService.BufferSlot?,
+    oneShotEnabled: Boolean,
+    loopingEnabled: Boolean,
+): RecordingTileSnapshot = (cached ?: failClosedRecordingTileSnapshot()).copy(
+    listening = false,
+    activeBuffer = activeBuffer,
+    oneShotEnabled = oneShotEnabled,
+    oneShotFull = false,
+    loopingEnabled = loopingEnabled,
+)
+
+internal fun tileHydrationCanApply(
+    expectedGeneration: Long,
+    currentGeneration: Long,
+    expectedSnapshot: RecordingTileSnapshot?,
+    currentSnapshot: RecordingTileSnapshot?,
+): Boolean = expectedGeneration == currentGeneration && currentSnapshot === expectedSnapshot
+
 internal object RecordingQuickTileStateCache {
+    private val stateLock = Any()
+    private val persistedReadExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "reverb-tile-persisted-state").apply { isDaemon = true }
+    }
+
     @Volatile
-    private var liveSnapshot: RecordingTileSnapshot? = null
+    private var cachedSnapshot: RecordingTileSnapshot? = null
+    private var stateGeneration = 0L
+    private var hydrationGeneration: Long? = null
+    private var runtimeAuthoritative = false
 
     fun publish(snapshot: RecordingTileSnapshot) {
-        liveSnapshot = snapshot
+        synchronized(stateLock) {
+            cachedSnapshot = snapshot
+            stateGeneration++
+            runtimeAuthoritative = true
+        }
     }
 
     fun invalidateRuntimeSnapshot() {
-        liveSnapshot = null
+        synchronized(stateLock) {
+            cachedSnapshot = null
+            stateGeneration++
+            runtimeAuthoritative = false
+        }
     }
 
-    fun markServiceStopped(context: Context): RecordingTileSnapshot {
-        // Persisted settings own the stopped state. The last live snapshot contributes only
-        // duration counters, so a concurrent Settings commit cannot be overwritten by stale
-        // runtime enabled/full/destination fields during Service teardown.
-        val stopped = stoppedRecordingTileSnapshot(readPersisted(context), liveSnapshot)
-        liveSnapshot = stopped
-        persistDurations(context, stopped)
+    /** Memory-only fallback. This is safe on the recorder audio thread and TileService main thread. */
+    fun readNonBlocking(): RecordingTileSnapshot =
+        cachedSnapshot ?: failClosedRecordingTileSnapshot()
+
+    fun readCachedOrNull(): RecordingTileSnapshot? = cachedSnapshot
+
+    fun markServiceStopped(context: Context): RecordingTileSnapshot =
+        markRuntimeUnavailable(context, persistLatestDurations = true)
+
+    fun markRuntimeUnavailable(context: Context): RecordingTileSnapshot =
+        markRuntimeUnavailable(context, persistLatestDurations = false)
+
+    private fun markRuntimeUnavailable(
+        context: Context,
+        persistLatestDurations: Boolean,
+    ): RecordingTileSnapshot {
+        val appContext = context.applicationContext
+        val stopped: RecordingTileSnapshot
+        val expectedGeneration: Long
+        synchronized(stateLock) {
+            stopped = failClosedRecordingTileSnapshot(cachedSnapshot)
+            cachedSnapshot = stopped
+            stateGeneration++
+            runtimeAuthoritative = false
+            expectedGeneration = stateGeneration
+        }
+        persistedReadExecutor.execute {
+            // Duration cache is convenience state. Keep the latest live counters, but resolve
+            // enabled/full/destination from durable settings off UI/audio threads.
+            if (persistLatestDurations) persistDurations(appContext, stopped)
+            val persisted = runCatching { readPersisted(appContext) }.getOrNull()
+                ?: return@execute
+            val hydrated = stoppedRecordingTileSnapshot(persisted, stopped)
+            val accepted = synchronized(stateLock) {
+                if (runtimeAuthoritative || !tileHydrationCanApply(
+                        expectedGeneration = expectedGeneration,
+                        currentGeneration = stateGeneration,
+                        expectedSnapshot = stopped,
+                        currentSnapshot = cachedSnapshot,
+                    )
+                ) {
+                    false
+                } else {
+                    cachedSnapshot = hydrated
+                    stateGeneration++
+                    runtimeAuthoritative = false
+                    true
+                }
+            }
+            if (accepted) {
+                RecordingQuickTiles.refreshCachedSnapshot(
+                    context = appContext,
+                    snapshot = hydrated,
+                    requestSystemRefresh = true,
+                )
+            }
+        }
         return stopped
     }
 
-    fun read(context: Context): RecordingTileSnapshot = liveSnapshot ?: readPersisted(context)
+    fun hydratePersistedAsync(context: Context) {
+        val appContext = context.applicationContext
+        val expectedGeneration: Long
+        val expectedSnapshot: RecordingTileSnapshot?
+        synchronized(stateLock) {
+            // Runtime Service state is authoritative. Persisted/fail-closed snapshots are only
+            // fallbacks, so a later TileService listening session may retry their hydration.
+            if (runtimeAuthoritative) return
+            expectedGeneration = stateGeneration
+            expectedSnapshot = cachedSnapshot
+            if (hydrationGeneration == expectedGeneration) return
+            hydrationGeneration = expectedGeneration
+        }
+        persistedReadExecutor.execute {
+            val persisted = runCatching { readPersisted(appContext) }.getOrNull()
+            if (persisted == null) {
+                synchronized(stateLock) {
+                    if (hydrationGeneration == expectedGeneration) hydrationGeneration = null
+                }
+                return@execute
+            }
+            val accepted = synchronized(stateLock) {
+                if (hydrationGeneration == expectedGeneration) hydrationGeneration = null
+                if (runtimeAuthoritative || !tileHydrationCanApply(
+                        expectedGeneration = expectedGeneration,
+                        currentGeneration = stateGeneration,
+                        expectedSnapshot = expectedSnapshot,
+                        currentSnapshot = cachedSnapshot,
+                    )
+                ) {
+                    false
+                } else {
+                    cachedSnapshot = persisted
+                    stateGeneration++
+                    runtimeAuthoritative = false
+                    true
+                }
+            }
+            if (accepted) {
+                RecordingQuickTiles.refreshCachedSnapshot(
+                    context = appContext,
+                    snapshot = persisted,
+                    requestSystemRefresh = true,
+                )
+            }
+        }
+    }
 
     private fun readPersisted(context: Context): RecordingTileSnapshot {
         val prefs = getRecorderPreferences(context)
@@ -182,7 +327,9 @@ internal object RecordingQuickTileStateCache {
     }
 
     fun persistCurrentDurations(context: Context) {
-        liveSnapshot?.let { persistDurations(context, it) }
+        val snapshot = cachedSnapshot ?: return
+        val appContext = context.applicationContext
+        persistedReadExecutor.execute { persistDurations(appContext, snapshot) }
     }
 
     private fun persistDurations(context: Context, snapshot: RecordingTileSnapshot) {
@@ -209,8 +356,8 @@ internal fun quickTileDurationMillis(seconds: Float): Long {
 internal fun cachedTileDurationSeconds(durationMillis: Long): Float =
     durationMillis.coerceAtLeast(0L).toDouble().div(1_000.0).toFloat()
 
-internal fun readRecordingTileSnapshot(context: Context): RecordingTileSnapshot =
-    RecordingQuickTileStateCache.read(context)
+internal fun readRecordingTileSnapshotNonBlocking(): RecordingTileSnapshot =
+    RecordingQuickTileStateCache.readNonBlocking()
 
 internal object RecordingQuickTiles {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -330,6 +477,22 @@ internal object RecordingQuickTiles {
         requestSystemRefresh: Boolean,
     ) {
         RecordingQuickTileStateCache.publish(snapshot)
+        dispatchSnapshot(context, snapshot, requestSystemRefresh)
+    }
+
+    internal fun refreshCachedSnapshot(
+        context: Context,
+        snapshot: RecordingTileSnapshot,
+        requestSystemRefresh: Boolean,
+    ) {
+        dispatchSnapshot(context, snapshot, requestSystemRefresh)
+    }
+
+    private fun dispatchSnapshot(
+        context: Context,
+        snapshot: RecordingTileSnapshot,
+        requestSystemRefresh: Boolean,
+    ) {
         synchronized(listeningServices) {
             val handoff = pendingHandoff
             if (handoff != null && (!snapshot.listening ||
@@ -389,16 +552,21 @@ abstract class RecordingTileService : TileService() {
     private var actionInFlight = false
     private var actionGeneration = 0L
 
+    private fun refreshFromCacheAndHydrate() {
+        updateTile(readRecordingTileSnapshotNonBlocking())
+        RecordingQuickTileStateCache.hydratePersistedAsync(this)
+    }
+
     override fun onTileAdded() {
         super.onTileAdded()
-        updateTile(readRecordingTileSnapshot(this))
+        refreshFromCacheAndHydrate()
     }
 
     override fun onStartListening() {
         super.onStartListening()
         tileListening = true
         RecordingQuickTiles.register(this)
-        updateTile(readRecordingTileSnapshot(this))
+        refreshFromCacheAndHydrate()
     }
 
     override fun onStopListening() {
@@ -410,7 +578,7 @@ abstract class RecordingTileService : TileService() {
     override fun onClick() {
         super.onClick()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            updateTile(readRecordingTileSnapshot(this))
+            refreshFromCacheAndHydrate()
             return
         }
         val action = { beginTileAction() }
@@ -497,8 +665,14 @@ abstract class RecordingTileService : TileService() {
         actionTimeout?.let(mainHandler::removeCallbacks)
         actionTimeout = null
         actionConnection?.let(::unbindActionConnection)
-        val finalSnapshot = snapshot ?: readRecordingTileSnapshot(this)
-        RecordingQuickTiles.publishSnapshot(this, finalSnapshot, requestSystemRefresh = true)
+        if (snapshot != null) {
+            RecordingQuickTiles.publishSnapshot(this, snapshot, requestSystemRefresh = true)
+        } else {
+            // Runtime state is unavailable. Never block this main-thread failure path on
+            // retention recovery; paint the current memory-only fallback and hydrate later.
+            val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+            RecordingQuickTiles.refreshCachedSnapshot(this, fallback, requestSystemRefresh = true)
+        }
     }
 
     private fun unbindActionConnection(connection: TileActionConnection) {

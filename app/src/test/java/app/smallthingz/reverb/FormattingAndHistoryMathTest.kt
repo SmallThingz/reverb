@@ -1412,6 +1412,59 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileFallback_isFailClosedAndMemoryOnly() {
+        val live = RecordingTileSnapshot(
+            listening = true,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = true,
+            loopingEnabled = true,
+            oneShotSeconds = 12f,
+            loopingSeconds = 34f,
+        )
+        assertEquals(
+            RecordingTileSnapshot(
+                listening = false,
+                activeBuffer = null,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = false,
+                oneShotSeconds = 12f,
+                loopingSeconds = 34f,
+            ),
+            failClosedRecordingTileSnapshot(live),
+        )
+        assertEquals(
+            RecordingTileSnapshot(
+                listening = false,
+                activeBuffer = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = false,
+                oneShotFull = false,
+                loopingEnabled = true,
+                oneShotSeconds = 12f,
+                loopingSeconds = 34f,
+            ),
+            runtimeRecordingTileFallbackSnapshot(
+                cached = live,
+                activeBuffer = ReverbService.BufferSlot.LOOPING,
+                oneShotEnabled = false,
+                loopingEnabled = true,
+            ),
+        )
+    }
+
+    @Test
+    fun quickTileHydration_rejectsSupersededRuntimeState() {
+        val expected = failClosedRecordingTileSnapshot()
+        val newer = expected.copy(oneShotEnabled = true)
+        assertTrue(tileHydrationCanApply(7L, 7L, expected, expected))
+        assertFalse(tileHydrationCanApply(7L, 8L, expected, expected))
+        assertFalse(tileHydrationCanApply(7L, 7L, expected, newer))
+        assertTrue(tileHydrationCanApply(7L, 7L, null, null))
+        assertFalse(tileHydrationCanApply(7L, 7L, null, expected))
+    }
+
+    @Test
     fun stoppedQuickTileUsesPersistedSettingsButKeepsLatestDurations() {
         val persisted = RecordingTileSnapshot(
             listening = false,

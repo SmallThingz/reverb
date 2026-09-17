@@ -305,7 +305,9 @@ class ReverbService : Service() {
             "Recorder service stopped while capture was running",
         )
         val stoppedTileSnapshot = RecordingQuickTileStateCache.markServiceStopped(this)
-        RecordingQuickTiles.publishSnapshot(this, stoppedTileSnapshot, requestSystemRefresh = true)
+        // markServiceStopped already installs the fail-closed snapshot and asynchronously
+        // hydrates persisted stopped state. Dispatch it without republishing/invalidation.
+        RecordingQuickTiles.refreshCachedSnapshot(this, stoppedTileSnapshot, requestSystemRefresh = true)
         releaseWakeLock()
         stopForegroundTracked()
 
@@ -2150,11 +2152,10 @@ class ReverbService : Service() {
             buildRecordingTileSnapshotOnAudioThread()
         } catch (error: Exception) {
             Log.w(TAG, "Unable to refresh quick tile snapshot", error)
-            RecordingQuickTileStateCache.read(this).copy(
-                listening = false,
+            runtimeRecordingTileFallbackSnapshot(
+                cached = RecordingQuickTileStateCache.readCachedOrNull(),
                 activeBuffer = activeBufferSlot,
                 oneShotEnabled = oneShotBufferEnabled,
-                oneShotFull = false,
                 loopingEnabled = loopingBufferEnabled,
             )
         }
