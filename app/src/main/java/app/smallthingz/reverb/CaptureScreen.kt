@@ -100,6 +100,18 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+private const val RECORDING_SAVED_NOTIFICATION_ID = 43
+private const val RECORDING_SAVE_FAILED_NOTIFICATION_ID = 44
+
+private fun ensureCaptureResultNotificationChannel(context: Context) {
+    context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+        NotificationChannel(
+            ReverbService.NOTIFICATION_CHANNEL_ID,
+            context.getString(R.string.app_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ),
+    )
+}
 
 class NotifyFileReceiver(
     private val context: Context,
@@ -113,27 +125,41 @@ class NotifyFileReceiver(
                 PackageManager.PERMISSION_GRANTED
             ) return@launch
             runCatching {
-                NotificationManagerCompat.from(appContext).notify(43, buildCaptureNotification(appContext, recording))
+                NotificationManagerCompat.from(appContext).notify(
+                    RECORDING_SAVED_NOTIFICATION_ID,
+                    buildCaptureNotification(appContext, recording),
+                )
             }
         }
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
-        AppFeedbackCenter.post(
-            message.ifBlank { appContext.getString(R.string.save_failed) },
-            FeedbackTone.ERROR,
+        val text = normalizedCaptureSaveFailureMessage(
+            message = message,
+            fallback = appContext.getString(R.string.save_failed),
         )
+        AppFeedbackCenter.post(text, FeedbackTone.ERROR)
+        backgroundRecordingResultScope.launch {
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) return@launch
+            runCatching {
+                NotificationManagerCompat.from(appContext).notify(
+                    RECORDING_SAVE_FAILED_NOTIFICATION_ID,
+                    buildCaptureFailureNotification(appContext, text),
+                )
+            }
+        }
     }
 }
 
+internal fun normalizedCaptureSaveFailureMessage(message: String, fallback: String): String =
+    message.trim().ifBlank { fallback.trim() }
+
 fun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {
-    context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-        NotificationChannel(
-            ReverbService.NOTIFICATION_CHANNEL_ID,
-            context.getString(R.string.app_name),
-            NotificationManager.IMPORTANCE_DEFAULT,
-        ),
-    )
+    ensureCaptureResultNotificationChannel(context)
     val intent = RecordingOpenActivity.intentFor(context, recording)
     val pendingIntent = PendingIntent.getActivity(
         context,
@@ -149,6 +175,29 @@ fun buildCaptureNotification(context: Context, recording: RecordingEntity): Noti
         .setAutoCancel(true)
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setCategory(NotificationCompat.CATEGORY_STATUS)
+        .build()
+}
+
+internal fun buildCaptureFailureNotification(context: Context, message: String): Notification {
+    ensureCaptureResultNotificationChannel(context)
+    val text = normalizedCaptureSaveFailureMessage(message, context.getString(R.string.save_failed))
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        1,
+        Intent(context, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    return NotificationCompat.Builder(context, ReverbService.NOTIFICATION_CHANNEL_ID)
+        .setContentTitle(context.getString(R.string.save_failed))
+        .setContentText(text)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+        .setSmallIcon(R.drawable.ic_notification_recording)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setCategory(NotificationCompat.CATEGORY_ERROR)
         .build()
 }
 

@@ -2268,6 +2268,12 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun detachedExportFailure_usesStableNonBlankNotificationText() {
+        assertEquals("Could not save", normalizedCaptureSaveFailureMessage("  ", "Could not save"))
+        assertEquals("provider failed", normalizedCaptureSaveFailureMessage("  provider failed  ", "fallback"))
+    }
+
+    @Test
     fun exportCancelRequest_keepsSavingStatusVisibleAndDisablesRepeatCancel() {
         assertEquals(
             CaptureSaveStatus.Saving(cancellable = false),
