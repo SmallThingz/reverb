@@ -1009,6 +1009,12 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun queuedRuntimeReadFailsClosedOnceServiceTeardownOwnsLifetime() {
+        assertTrue(serviceRuntimeReadMayExecute(serviceDestroying = false))
+        assertFalse(serviceRuntimeReadMayExecute(serviceDestroying = true))
+    }
+
+    @Test
     fun serviceDestroyKeepsOnlyTheReadAlreadyInFlight() {
         assertTrue(captureReadMayStart(serviceDestroying = false))
         assertFalse(captureReadMayStart(serviceDestroying = true))

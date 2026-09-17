@@ -2388,11 +2388,18 @@ class ReverbService : Service() {
     }
 
     fun getState(callback: StateCallback) {
-        if (serviceDestroying) {
+        if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
             postUnavailableState(callback)
             return
         }
         if (!audioHandler.post {
+            // A binder caller can pass the pre-post check immediately before onDestroy()
+            // queues terminal store close. Recheck on the serialized audio thread so a stale
+            // state request cannot touch closed stores or report normal teardown as corruption.
+            if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
+                postUnavailableState(callback)
+                return@post
+            }
             val commandGeneration = listeningCommandGeneration.get()
             try {
                 val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
@@ -3405,6 +3412,8 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceAudioMutationMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun captureReadShouldReschedule(
     commandGenerationUnchanged: Boolean,
