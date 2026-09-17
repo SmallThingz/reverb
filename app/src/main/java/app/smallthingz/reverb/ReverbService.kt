@@ -249,7 +249,9 @@ class ReverbService : Service() {
             try {
                 loadConfiguredPreferences()
                 configurePersistentBuffer()
-                switchActiveBufferOnAudioThread(resolveConfiguredCaptureBufferSlot(), notifyTiles = false)
+                switchResolvedCaptureBufferOnAudioThread(notifyTiles = false) {
+                    resolveConfiguredCaptureBufferSlot()
+                }
                 syncOneShotFullQuickTileOnAudioThread()
             } catch (error: Exception) {
                 if (!serviceDestroying) {
@@ -483,16 +485,22 @@ class ReverbService : Service() {
         if (!canActivate) return rejectedListeningCommand()
 
         val prefs = getRecorderPreferences(this)
-        val previousActiveBuffer = activeBufferSlot
+        var previousActiveBuffer = bufferSlot
         var targetChanged = false
+        var switchingWhileRecording = false
         val generation = synchronized(listeningIntentLock) {
             if (serviceDestroying) return rejectedListeningCommand()
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
+            previousActiveBuffer = activeBufferSlot
             if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
             } else if (!captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
                 activeBufferSlot = bufferSlot
                 targetChanged = true
+                switchingWhileRecording = isLogicalListeningState(
+                    state,
+                    prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+                )
                 listeningCommandGeneration.incrementAndGet()
             } else if (!prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
@@ -502,6 +510,10 @@ class ReverbService : Service() {
             } else {
                 activeBufferSlot = bufferSlot
                 targetChanged = true
+                switchingWhileRecording = isLogicalListeningState(
+                    state,
+                    prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+                )
                 // Target selection is observable state even while idle, so version it too. The
                 // stop path follows the durable listening=false intent and is intentionally not
                 // cancelled by an unrelated target version change.
@@ -513,7 +525,7 @@ class ReverbService : Service() {
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
         if (targetChanged) {
-            if (isLogicalListeningState(state, isListeningEnabled())) {
+            if (switchingWhileRecording) {
                 RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
                 audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
             } else {
@@ -702,51 +714,82 @@ class ReverbService : Service() {
         ) ?: (persisted ?: BufferSlot.ONE_SHOT)
     }
 
-    private fun ensureActiveCaptureTargetOnAudioThread(): Boolean {
-        check(audioHandler.looper == Looper.myLooper())
-        val resolved = resolveAvailableCaptureBufferSlot(
-            preferred = activeBufferSlot,
-            oneShotEnabled = oneShotBufferEnabled,
-            oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
-            loopingEnabled = loopingBufferEnabled,
-        ) ?: return false
-        return resolved == activeBufferSlot || switchActiveBufferOnAudioThread(resolved)
-    }
+    private fun ensureActiveCaptureTargetOnAudioThread(): Boolean =
+        switchResolvedCaptureBufferOnAudioThread(notifyTiles = true) {
+            resolveAvailableCaptureBufferSlot(
+                preferred = activeBufferSlot,
+                oneShotEnabled = oneShotBufferEnabled,
+                oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
+                loopingEnabled = loopingBufferEnabled,
+            )
+        }
 
     private fun switchActiveBufferOnAudioThread(
         bufferSlot: BufferSlot,
         notifyTiles: Boolean = true,
+    ): Boolean = switchResolvedCaptureBufferOnAudioThread(notifyTiles) { bufferSlot }
+
+    private fun switchResolvedCaptureBufferOnAudioThread(
+        notifyTiles: Boolean,
+        resolveTargetLocked: () -> BufferSlot?,
     ): Boolean {
         check(audioHandler.looper == Looper.myLooper())
-        if (activeBufferSlot == bufferSlot) return true
-        val prefs = getRecorderPreferences(this)
-        val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
-        if (captureSlotNeedsPersistence(previousStoredSlot, bufferSlot)) {
-            if (!prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()) {
+        var targetBuffer = activeBufferSlot
+        var previousActiveBuffer = activeBufferSlot
+        var switchingWhileRecording = false
+        var switchGeneration = Long.MIN_VALUE
+        var changed = false
+        var persistenceError: IOException? = null
+        var failedWhileListening = false
+
+        val accepted = synchronized(listeningIntentLock) {
+            if (serviceDestroying) return@synchronized false
+            val resolved = resolveTargetLocked() ?: return@synchronized false
+            targetBuffer = resolved
+            if (activeBufferSlot == resolved) return@synchronized true
+
+            val prefs = getRecorderPreferences(this)
+            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
+            val listeningEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            failedWhileListening = isLogicalListeningState(state, listeningEnabled)
+            if (captureSlotNeedsPersistence(previousStoredSlot, resolved) &&
+                !prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, resolved.storageCode.toInt()).commit()
+            ) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
                 }
-                val persistenceError = IOException("Unable to persist capture destination handoff")
-                if (state == STATE_LISTENING && isListeningEnabled()) {
+                persistenceError = IOException("Unable to persist capture destination handoff")
+                return@synchronized false
+            }
+
+            previousActiveBuffer = activeBufferSlot
+            switchingWhileRecording = isLogicalListeningState(state, listeningEnabled)
+            activeBufferSlot = resolved
+            if (switchingWhileRecording) {
+                switchGeneration = listeningCommandGeneration.incrementAndGet()
+            }
+            changed = true
+            true
+        }
+
+        if (!accepted) {
+            persistenceError?.let { error ->
+                if (failedWhileListening) {
                     // Losing the handoff transaction is an unexpected capture interruption, not
                     // evidence that the user asked recording to stop. Preserve durable intent so
                     // a later foreground bind can retry once persistence is healthy again.
-                    pauseListeningAfterPersistenceFailure("capture destination handoff", persistenceError)
+                    pauseListeningAfterPersistenceFailure("capture destination handoff", error)
                 } else {
-                    reportPersistentStoreFailure("capture destination handoff", persistenceError)
+                    reportPersistentStoreFailure("capture destination handoff", error)
                 }
-                return false
             }
+            return false
         }
-        val switchingWhileRecording = isLogicalListeningState(state, isListeningEnabled())
-        val previousActiveBuffer = activeBufferSlot
+        if (!changed) return true
+
         if (switchingWhileRecording) {
-            RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
-        }
-        activeBufferSlot = bufferSlot
-        if (switchingWhileRecording) {
-            val generation = listeningCommandGeneration.incrementAndGet()
-            if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = generation
+            RecordingQuickTiles.beginHandoff(previousActiveBuffer, targetBuffer)
+            if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = switchGeneration
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = notifyTiles)
         return true
