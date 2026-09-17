@@ -1718,7 +1718,6 @@ internal fun listOutputDirectoryRecordings(
     treeUri: Uri?,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
-    retryPendingOutputCleanup(context)
     val suppressedIds = pendingOutputCleanupIds(context)
     if (treeUri == null) {
         return if (usesMediaStoreDefaultStorage()) {
@@ -1739,7 +1738,6 @@ internal fun listLegacyAppStorageRecordings(
     context: Context,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
-    retryPendingOutputCleanup(context)
     return listFileDirectoryRecordings(
         context,
         getSavedRecordingsDirectory(context),

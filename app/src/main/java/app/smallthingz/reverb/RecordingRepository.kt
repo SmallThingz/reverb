@@ -585,6 +585,13 @@ object RecordingRepository {
     }
 
     private suspend fun syncRecoverableDirectories(context: Context): Set<String> {
+        // Cleanup replay can hash/provider-query large failed outputs. Run it once for the whole
+        // refresh, not once per default/persisted/legacy directory scan. Replay itself is best
+        // effort: one cleanup failure must not make unrelated directories unavailable. Each scan
+        // still reads the latest suppression IDs and therefore independently fails closed when
+        // suppression state itself cannot be read.
+        runCatching { retryPendingOutputCleanup(context) }
+            .onFailure { error -> Log.w("RecordingRepository", "Unable to replay pending output cleanup", error) }
         val reconciledDirectoryIds = LinkedHashSet<String>()
         val directoryUris = LinkedHashMap<String, Uri?>()
         directoryUris[getOutputDirectoryId(context, null)] = null
