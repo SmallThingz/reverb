@@ -69,4 +69,98 @@ class SaveTerminalDeliveryTest {
         }
         assertTrue(observed === cleanup)
     }
+
+    @Test
+    fun visibleTerminalFallback_runsOnlyWhenUiDeliveryDoesNotComplete() {
+        val events = mutableListOf<String>()
+
+        deliverVisibleSaveTerminalOrFallback(
+            deliverVisible = {
+                events += "visible"
+                true
+            },
+            fallback = { events += "fallback" },
+        )
+        assertEquals(listOf("visible"), events)
+
+        events.clear()
+        deliverVisibleSaveTerminalOrFallback(
+            deliverVisible = {
+                events += "detached"
+                false
+            },
+            fallback = { events += "fallback" },
+        )
+        assertEquals(listOf("detached", "fallback"), events)
+    }
+
+    @Test
+    fun visibleTerminalFallback_runsFallbackBeforePropagatingUiCallbackFailure() {
+        val events = mutableListOf<String>()
+        val primary = IllegalStateException("ui callback failed")
+        var observed: Throwable? = null
+
+        try {
+            deliverVisibleSaveTerminalOrFallback(
+                deliverVisible = {
+                    events += "visible"
+                    throw primary
+                },
+                fallback = { events += "fallback" },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertTrue(observed === primary)
+        assertEquals(listOf("visible", "fallback"), events)
+    }
+
+    @Test
+    fun visibleTerminalFallback_suppressesFallbackFailureOnUiCallbackFailure() {
+        val primary = IllegalStateException("ui callback failed")
+        val fallback = IllegalArgumentException("fallback failed")
+        var observed: Throwable? = null
+
+        try {
+            deliverVisibleSaveTerminalOrFallback(
+                deliverVisible = { throw primary },
+                fallback = { throw fallback },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertTrue(observed === primary)
+        assertEquals(listOf(fallback), primary.suppressed.toList())
+    }
+
+
+    @Test
+    fun terminalDelivery_runsFallbackBeforeCleanupForThrowingUiCallback() {
+        val events = mutableListOf<String>()
+        val primary = IllegalStateException("ui callback failed")
+        var observed: Throwable? = null
+
+        try {
+            deliverTerminalSaveResult(
+                deliver = {
+                    deliverVisibleSaveTerminalOrFallback(
+                        deliverVisible = {
+                            events += "visible"
+                            throw primary
+                        },
+                        fallback = { events += "fallback" },
+                    )
+                },
+                finish = { events += "finish" },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertTrue(observed === primary)
+        assertEquals(listOf("visible", "fallback", "finish"), events)
+    }
+
 }

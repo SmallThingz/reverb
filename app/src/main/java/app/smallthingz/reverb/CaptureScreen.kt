@@ -2393,6 +2393,29 @@ internal inline fun <T> deliverTerminalSaveResult(
     }
 }
 
+internal inline fun deliverVisibleSaveTerminalOrFallback(
+    deliverVisible: () -> Boolean,
+    fallback: () -> Unit,
+) {
+    var deliveryFailure: Throwable? = null
+    val delivered = try {
+        deliverVisible()
+    } catch (error: Throwable) {
+        deliveryFailure = error
+        false
+    }
+    if (!delivered) {
+        try {
+            fallback()
+        } catch (fallbackError: Throwable) {
+            val primary = deliveryFailure
+            if (primary == null) throw fallbackError
+            if (fallbackError !== primary) primary.addSuppressed(fallbackError)
+        }
+    }
+    deliveryFailure?.let { throw it }
+}
+
 internal class SaveUiCallbackGate(
     setSaving: (Boolean) -> Unit,
     onStatus: (CaptureSaveStatus?) -> Unit,
@@ -2460,9 +2483,10 @@ private class SaveResultReceiver(
                 // Range-memory bookkeeping is convenience state; it must never suppress terminal
                 // delivery for a recording that is already durably committed.
                 runCatching { onCommitted(recording) }
-                if (!uiCallbacks.saved(recording)) {
-                    NotifyFileReceiver(appContext).fileReady(recording)
-                }
+                deliverVisibleSaveTerminalOrFallback(
+                    deliverVisible = { uiCallbacks.saved(recording) },
+                    fallback = { NotifyFileReceiver(appContext).fileReady(recording) },
+                )
             },
             finish = ::finish,
         )
@@ -2473,9 +2497,10 @@ private class SaveResultReceiver(
         deliverTerminalSaveResult(
             deliver = {
                 val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
-                if (!uiCallbacks.failed(text)) {
-                    NotifyFileReceiver(appContext).fileFailed(message, error)
-                }
+                deliverVisibleSaveTerminalOrFallback(
+                    deliverVisible = { uiCallbacks.failed(text) },
+                    fallback = { NotifyFileReceiver(appContext).fileFailed(message, error) },
+                )
             },
             finish = ::finish,
         )
