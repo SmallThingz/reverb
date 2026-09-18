@@ -167,8 +167,9 @@ internal class RecordingPcm16MonoReader private constructor(
                             layout = layout,
                         )
                     } catch (error: Throwable) {
-                        runCatching { input.close() }
-                        throw error
+                        throw requireNotNull(
+                            closePreservingPrimaryFailure(error) { input.close() },
+                        )
                     }
                 }
                 RecordingStorageType.DOCUMENT,
