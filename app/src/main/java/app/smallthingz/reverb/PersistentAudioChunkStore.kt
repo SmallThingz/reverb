@@ -1761,18 +1761,15 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun removeFirstChunkAndRetireLocked(): ChunkRecord {
         val record = chunks.first()
         val durabilityFailure = persistRetirementTombstoneLocked(record)
-        if (record === activeRecord) {
-            closeActiveAccessLocked()
-            activeRecord = null
-            activePayloadCrc = CRC32()
-            activeDurablePayloadBytes = 0L
+        val closeFailure = if (record === activeRecord) {
+            closeActiveAccessLocked().also { clearActiveRecordStateLocked() }
+        } else {
+            null
         }
         val removed = removeFirstChunkLocked()
         check(removed === record) { "Unexpected chunk retirement ordering" }
         retirePreparedRecordLocked(record, tombstoneDurable = durabilityFailure == null)
-        if (durabilityFailure != null) {
-            throw IOException("Retirement marker is visible but not durably synced for chunk ${record.id}", durabilityFailure)
-        }
+        retirementFailureLocked(record, durabilityFailure, closeFailure)?.let { throw it }
         return record
     }
 
@@ -1780,23 +1777,41 @@ internal class PersistentAudioChunkStore internal constructor(
         if (record !in chunks) return false
         requireFinalizedChunkPayloadIntegrityLocked(record)
         val durabilityFailure = persistRetirementTombstoneLocked(record)
-        if (record === activeRecord) {
-            closeActiveAccessLocked()
-            activeRecord = null
-            activePayloadCrc = CRC32()
-            activeDurablePayloadBytes = 0L
+        val closeFailure = if (record === activeRecord) {
+            closeActiveAccessLocked().also { clearActiveRecordStateLocked() }
+        } else {
+            null
         }
         if (!removeChunkLocked(record)) {
             if (!deleteRetirementTombstoneLocked(record.id)) {
-                throw IOException("Unable to roll back retirement marker for chunk ${record.id}")
+                val rollbackFailure = IOException("Unable to roll back retirement marker for chunk ${record.id}")
+                closeFailure?.let(rollbackFailure::addSuppressed)
+                throw rollbackFailure
             }
+            closeFailure?.let { throw it }
             return false
         }
         retirePreparedRecordLocked(record, tombstoneDurable = durabilityFailure == null)
-        if (durabilityFailure != null) {
-            throw IOException("Retirement marker is visible but not durably synced for chunk ${record.id}", durabilityFailure)
-        }
+        retirementFailureLocked(record, durabilityFailure, closeFailure)?.let { throw it }
         return true
+    }
+
+    private fun retirementFailureLocked(
+        record: ChunkRecord,
+        durabilityFailure: Exception?,
+        closeFailure: Exception?,
+    ): Exception? {
+        val primary = durabilityFailure?.let { error ->
+            IOException(
+                "Retirement marker is visible but not durably synced for chunk ${record.id}",
+                error,
+            )
+        }
+        return when {
+            primary == null -> closeFailure
+            closeFailure == null -> primary
+            else -> primary.also { it.addSuppressed(closeFailure) }
+        }
     }
 
     private fun retirePreparedRecordLocked(record: ChunkRecord, tombstoneDurable: Boolean) {

@@ -466,6 +466,28 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun clear_surfacesActiveAccessCloseFailureAfterRetiringAudio() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        replaceActiveAccessWithFailingClose(store)
+
+        val error = assertThrows(IOException::class.java) { store.clear() }
+        assertTrue(
+            error.message?.contains("Injected active access close failure") == true ||
+                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
+        )
+        assertFalse(store.hasData())
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+    }
+
+    @Test
     fun sealActiveChunk_surfacesActiveAccessCloseFailureAfterFinalizingAudio() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         val store = PersistentAudioChunkStore(root)
