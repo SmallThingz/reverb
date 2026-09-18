@@ -1609,6 +1609,16 @@ class ReverbService : Service() {
     }
 
     private fun requestServiceStopWhenExportIdle() {
+        if (serviceHasHealthyListeningLifetime(
+                recorderState = state,
+                listeningIntentEnabled = isListeningEnabled(),
+                foregroundStartBlocked = foregroundStartBlocked,
+                foregroundServiceTimedOut = foregroundServiceTimedOut,
+                persistenceFailureBlocked = persistenceFailureBlocked,
+            )
+        ) {
+            return
+        }
         if (hasActiveExport()) {
             ensureExportOnlyForegroundIfNeeded()
             return
@@ -1618,7 +1628,7 @@ class ReverbService : Service() {
             return
         }
         if (retentionMaintenanceState.isActive()) {
-            stopForegroundTracked()
+            ensureRetentionMaintenanceOnlyForegroundIfNeeded()
             return
         }
         stopForegroundTracked()
@@ -1670,6 +1680,53 @@ class ReverbService : Service() {
         }
     }
 
+    private fun ensureRetentionMaintenanceOnlyForegroundIfNeeded(): Boolean {
+        if (serviceDestroying || !retentionMaintenanceState.isActive()) return false
+
+        // Export/Clear already own a started data-sync lifetime and their notification remains
+        // authoritative until they finish. Live capture likewise owns the microphone lifetime.
+        if (hasActiveExport() || hasActiveBufferClear()) return true
+        if (serviceHasHealthyListeningLifetime(
+                recorderState = state,
+                listeningIntentEnabled = isListeningEnabled(),
+                foregroundStartBlocked = foregroundStartBlocked,
+                foregroundServiceTimedOut = foregroundServiceTimedOut,
+                persistenceFailureBlocked = persistenceFailureBlocked,
+            )
+        ) {
+            return true
+        }
+
+        return try {
+            if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) == 0) {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, javaClass).setAction(ACTION_RETENTION_MAINTENANCE_KEEPALIVE),
+                )
+            }
+            // Even when another data-sync notification just ended, explicitly refresh the
+            // content so stale "Saving…" / "Clearing…" text cannot outlive its owner.
+            promoteForeground(
+                foregroundServiceTypesForWork(
+                    listening = false,
+                    exporting = false,
+                    retaining = true,
+                ),
+                exporting = false,
+                retaining = true,
+            )
+            true
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Unable to protect retention maintenance with a foreground service", error)
+            retentionMaintenanceState.clear()
+            AppFeedbackCenter.post(
+                getString(R.string.retention_update_failed),
+                FeedbackTone.ERROR,
+            )
+            false
+        }
+    }
+
     private fun refreshForegroundAfterExport() {
         mainHandler.post {
             if (serviceDestroying || hasActiveExport()) return@post
@@ -1693,7 +1750,7 @@ class ReverbService : Service() {
                 return@post
             }
             if (retentionMaintenanceState.isActive()) {
-                stopForegroundTracked()
+                ensureRetentionMaintenanceOnlyForegroundIfNeeded()
                 return@post
             }
             stopForegroundTracked()
@@ -1724,7 +1781,7 @@ class ReverbService : Service() {
                 return@post
             }
             if (retentionMaintenanceState.isActive()) {
-                stopForegroundTracked()
+                ensureRetentionMaintenanceOnlyForegroundIfNeeded()
                 return@post
             }
             stopForegroundTracked()
@@ -3283,6 +3340,7 @@ class ReverbService : Service() {
             return
         }
         if (retentionMaintenanceState.claimObservedNeed(needed)) {
+            if (!ensureRetentionMaintenanceOnlyForegroundIfNeeded()) return
             submitClaimedRetentionMaintenancePass()
         }
     }
@@ -3466,6 +3524,10 @@ class ReverbService : Service() {
             if (!hasActiveBufferClear()) requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_RETENTION_MAINTENANCE_KEEPALIVE) {
+            if (!retentionMaintenanceState.isActive()) requestServiceStopWhenExportIdle()
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_QUICK_TILE_COMMAND) {
             val storageCode = if (intent.hasExtra(EXTRA_QUICK_TILE_BUFFER_SLOT)) {
                 intent.getIntExtra(EXTRA_QUICK_TILE_BUFFER_SLOT, -1)
@@ -3555,6 +3617,13 @@ class ReverbService : Service() {
             if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
                 AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
             }
+            if (retentionMaintenanceState.isActive()) {
+                retentionMaintenanceState.clear()
+                AppFeedbackCenter.post(
+                    getString(R.string.retention_update_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
         }
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
@@ -3571,11 +3640,13 @@ class ReverbService : Service() {
     private fun buildNotification(
         exporting: Boolean = false,
         clearing: Boolean = false,
+        retaining: Boolean = false,
     ): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
         val contentText = when {
             clearing -> R.string.clearing_buffer
+            retaining -> R.string.updating_buffer_retention
             exporting -> R.string.saving
             else -> R.string.quick_tile_recording
         }
@@ -3594,12 +3665,20 @@ class ReverbService : Service() {
         types: Int,
         exporting: Boolean,
         clearing: Boolean = false,
+        retaining: Boolean = false,
     ) {
         require(types != 0) { "Foreground service requires at least one active type" }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting, clearing), types)
+            startForeground(
+                FOREGROUND_NOTIFICATION_ID,
+                buildNotification(exporting, clearing, retaining),
+                types,
+            )
         } else {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting, clearing))
+            startForeground(
+                FOREGROUND_NOTIFICATION_ID,
+                buildNotification(exporting, clearing, retaining),
+            )
         }
         foregroundServiceTypes = types
     }
@@ -4169,6 +4248,8 @@ class ReverbService : Service() {
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
         const val ACTION_BUFFER_CLEAR_KEEPALIVE = "app.smallthingz.reverb.BUFFER_CLEAR_KEEPALIVE"
+        const val ACTION_RETENTION_MAINTENANCE_KEEPALIVE =
+            "app.smallthingz.reverb.RETENTION_MAINTENANCE_KEEPALIVE"
         const val ACTION_QUICK_TILE_COMMAND = "app.smallthingz.reverb.QUICK_TILE_COMMAND"
         const val EXTRA_QUICK_TILE_BUFFER_SLOT = "bufferSlot"
         const val ACTION_DEBUG_ENABLE_LISTENING = "${DEBUG_ACTION_PREFIX}ENABLE_LISTENING"
@@ -4215,16 +4296,30 @@ internal fun captureReadByteCount(
     return boundedBytes - boundedBytes % alignedFrameBytes
 }
 
+internal fun serviceHasHealthyListeningLifetime(
+    recorderState: Int,
+    listeningIntentEnabled: Boolean,
+    foregroundStartBlocked: Boolean,
+    foregroundServiceTimedOut: Boolean,
+    persistenceFailureBlocked: Boolean,
+): Boolean =
+    recorderState == ReverbService.STATE_LISTENING &&
+        listeningIntentEnabled &&
+        !foregroundStartBlocked &&
+        !foregroundServiceTimedOut &&
+        !persistenceFailureBlocked
+
 internal fun foregroundServiceTypesForWork(
     listening: Boolean,
     exporting: Boolean,
     clearing: Boolean = false,
+    retaining: Boolean = false,
 ): Int = when {
     // Never combine the limited dataSync type with long-lived microphone capture.
     // The microphone FGS already owns the service lifetime while recording; if capture
     // stops during data-sync work we switch to dataSync at that boundary.
     listening -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    exporting || clearing -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    exporting || clearing || retaining -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
     else -> 0
 }
 
