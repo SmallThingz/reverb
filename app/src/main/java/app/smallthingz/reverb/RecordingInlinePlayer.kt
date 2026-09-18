@@ -61,6 +61,7 @@ import java.io.FileDescriptor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1166,7 +1167,7 @@ internal fun RecordingInlinePlayer(
                                 },
                             )
                             activeTrimReceiver.set(receiver)
-                            scope.launch {
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                 runCommittedInlineTrim(
                                     save = {
                                         saveTrimmedRecordingCopy(

@@ -72,6 +72,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -1252,7 +1253,7 @@ private fun RenameRecordingDialog(
             },
         )
         activeReceiver[0] = receiver
-        scope.launch {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             runCommittedRecordingRename(
                 rename = { RecordingRepository.rename(appContext, recording, trimmed) },
                 onTerminal = receiver::terminal,

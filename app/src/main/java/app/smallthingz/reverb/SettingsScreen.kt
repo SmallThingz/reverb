@@ -91,6 +91,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -967,7 +968,7 @@ fun SettingsScreen(
         val moveTargetTreeUri = selectedExportTreeUri
         val appContext = context.applicationContext
         val appResources = appContext.resources
-        scope.launch {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             // A Move action first commits the exact Settings snapshot that selected this target.
             // Once that commit succeeds, the physical batch and its process-level terminal result
             // outlive Activity/Compose cancellation. The repository already pins moveTargetTreeUri
@@ -1140,7 +1141,7 @@ fun SettingsScreen(
                     IconButton(
                         onClick = {
                             if (!hasUnsavedChanges || settingsPersisting) return@IconButton
-                            scope.launch {
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                 if (persistSettings()) {
                                     releaseInputFocus()
                                     onBack()
