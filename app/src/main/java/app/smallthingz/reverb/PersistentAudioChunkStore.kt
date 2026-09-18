@@ -237,6 +237,13 @@ internal class PersistentAudioChunkStore internal constructor(
         val durationSeconds: Double,
     )
 
+    data class ClearStep(
+        val removedPayloadBytes: Long,
+        val remainingPayloadBytes: Long,
+        val remainingChunkCount: Int,
+        val complete: Boolean,
+    )
+
     fun interface Consumer {
         fun consume(array: ByteArray, offset: Int, count: Int): Int
     }
@@ -690,10 +697,36 @@ internal class PersistentAudioChunkStore internal constructor(
         while (chunks.isNotEmpty()) {
             removeFirstChunkAndRetireLocked()
         }
+        finishClearStateLocked()
+        writeIndexLocked()
+    }
+
+    @Synchronized
+    fun clearOneChunk(): ClearStep {
+        ensureLoadedLocked()
+        if (chunks.isEmpty()) {
+            finishClearStateLocked()
+            return ClearStep(0L, 0L, 0, complete = true)
+        }
+        val beforeBytes = retainedPayloadBytes
+        removeFirstChunkAndRetireLocked()
+        val complete = chunks.isEmpty()
+        if (complete) {
+            finishClearStateLocked()
+            writeIndexLocked()
+        }
+        return ClearStep(
+            removedPayloadBytes = (beforeBytes - retainedPayloadBytes).coerceAtLeast(0L),
+            remainingPayloadBytes = retainedPayloadBytes,
+            remainingChunkCount = chunks.size,
+            complete = complete,
+        )
+    }
+
+    private fun finishClearStateLocked() {
         pendingOneShotRetentionTruncation = false
         pendingLoopingRetentionTruncation = false
         lastWriteAtMillis = 0L
-        writeIndexLocked()
     }
 
     @Synchronized

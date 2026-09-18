@@ -268,7 +268,12 @@ class ReverbService : Service() {
     private lateinit var audioHandler: Handler
     private lateinit var exportWorkExecutor: ExecutorService
     private lateinit var durabilitySyncExecutor: ExecutorService
+    private lateinit var bufferClearExecutor: ExecutorService
     private val durabilitySyncInFlight = AtomicBoolean(false)
+    private val bufferClearLock = Any()
+    private val nextBufferClearOperationId = AtomicLong(1L)
+    @Volatile private var bufferClearStatus: BufferClearStatus? = null
+    private var activeBufferClearOperation: BufferClearOperation? = null
     @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
@@ -305,6 +310,14 @@ class ReverbService : Service() {
                 Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                 runnable.run()
             }, "reverb-durability-sync").apply {
+                isDaemon = true
+            }
+        }
+        bufferClearExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                runnable.run()
+            }, "reverb-buffer-clear").apply {
                 isDaemon = true
             }
         }
@@ -362,6 +375,13 @@ class ReverbService : Service() {
             serviceDestroying = true
             appUiForegroundOwners.clear()
             appUiForeground = false
+        }
+        cancelActiveBufferClearForTeardown()
+        if (::bufferClearExecutor.isInitialized) {
+            // Do not interrupt a durability-critical chunk retirement already in flight.
+            // Cancellation is observed between chunk steps; store close waits for the current
+            // synchronized step before taking terminal ownership.
+            bufferClearExecutor.shutdown()
         }
         visualizationCallbacks.clearAll()
         pendingVisualizationFrame.set(null)
@@ -2845,12 +2865,13 @@ class ReverbService : Service() {
         )
     }
 
-    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
-        synchronized(listeningIntentLock) {
-            // Serialize command acceptance with onDestroy() taking ownership of the Service. If
-            // this post succeeds before teardown flips serviceDestroying, MessageQueue ordering
-            // puts Clear ahead of the later terminal store-close task. Otherwise reject it.
-            if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
+    internal fun currentBufferClearStatus(): BufferClearStatus? = bufferClearStatus
+
+    fun startClearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Long? {
+        val operation = synchronized(listeningIntentLock) intentLock@{
+            if (!serviceCommandMayQueue(serviceDestroying) || !::bufferClearExecutor.isInitialized) {
+                return@intentLock null
+            }
             val acceptedGeneration = listeningCommandGeneration.get()
             if (!clearBufferCommandMayExecute(
                     requestedBuffer = bufferSlot,
@@ -2859,47 +2880,279 @@ class ReverbService : Service() {
                     acceptedGeneration = acceptedGeneration,
                     currentGeneration = acceptedGeneration,
                 )
-            ) return@synchronized false
-            audioHandler.post {
-                // A confirmation can stay open while One-shot fills and automatically hands
-                // capture to this buffer. Revalidate on the serialized audio thread before the
-                // destructive clear: commands accepted against an older capture generation or a
-                // buffer that has since become the durable capture target must fail closed.
-                val stillOwnsConfirmedState = synchronized(listeningIntentLock) {
-                    clearBufferCommandMayExecute(
-                        requestedBuffer = bufferSlot,
-                        activeBuffer = activeBufferSlot,
-                        listeningIntentEnabled = isListeningEnabled(),
-                        acceptedGeneration = acceptedGeneration,
-                        currentGeneration = listeningCommandGeneration.get(),
+            ) {
+                return@intentLock null
+            }
+            synchronized(bufferClearLock) clearLock@{
+                if (activeBufferClearOperation != null) return@clearLock null
+                BufferClearOperation(
+                    id = nextBufferClearOperationId.getAndIncrement(),
+                    bufferSlot = bufferSlot,
+                    acceptedGeneration = acceptedGeneration,
+                ).also { accepted ->
+                    activeBufferClearOperation = accepted
+                    bufferClearStatus = BufferClearStatus(
+                        operationId = accepted.id,
+                        bufferSlot = bufferSlot,
+                        phase = BufferClearPhase.STARTING,
                     )
                 }
-                if (!stillOwnsConfirmedState) {
-                    if (!serviceDestroying) reportError(getString(R.string.recorder_state_persist_failed))
-                    return@post
-                }
-                var cleared = false
-                try {
-                    chunkStore(bufferSlot).clear()
-                    cleared = true
-                } catch (error: Exception) {
-                    reportPersistentStoreFailure("clear history", error)
-                } finally {
-                    if (serviceDestroying) {
-                        // This Clear was accepted before teardown took the lifetime lock, so it
-                        // legitimately runs ahead of terminal store close. Preserve its successful
-                        // zero-history result in the stopped tile fallback without touching cache
-                        // state when the storage clear itself failed.
-                        if (cleared) RecordingQuickTileStateCache.recordBufferCleared(this, bufferSlot)
-                    } else if (bufferSlot == BufferSlot.ONE_SHOT) {
-                        syncOneShotFullQuickTileOnAudioThread()
-                        RecordingQuickTileStateCache.persistCurrentDurations(this)
-                    } else {
-                        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
-                    }
+            }
+        } ?: return null
+
+        return try {
+            bufferClearExecutor.execute { runBufferClear(operation) }
+            operation.id
+        } catch (error: RejectedExecutionException) {
+            synchronized(bufferClearLock) {
+                if (activeBufferClearOperation === operation) {
+                    activeBufferClearOperation = null
+                    bufferClearStatus = BufferClearStatus(
+                        operationId = operation.id,
+                        bufferSlot = operation.bufferSlot,
+                        phase = BufferClearPhase.FAILED,
+                    )
                 }
             }
+            if (!serviceDestroying) reportPersistentStoreFailure("start clear history", error)
+            null
         }
+    }
+
+    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
+        startClearBuffer(bufferSlot) != null
+
+    fun cancelBufferClear(operationId: Long): Boolean = synchronized(bufferClearLock) {
+        val operation = activeBufferClearOperation
+            ?.takeIf { it.id == operationId }
+            ?: return@synchronized false
+        operation.cancelRequested.set(true)
+        bufferClearStatus = bufferClearStatus
+            ?.takeIf { it.operationId == operationId }
+            ?.copy(phase = BufferClearPhase.CANCELLING)
+        true
+    }
+
+    private fun cancelActiveBufferClearForTeardown() {
+        synchronized(bufferClearLock) {
+            val operation = activeBufferClearOperation ?: return
+            operation.cancelRequested.set(true)
+            bufferClearStatus = bufferClearStatus
+                ?.takeIf { it.operationId == operation.id }
+                ?.copy(phase = BufferClearPhase.CANCELLING)
+        }
+    }
+
+    private fun runBufferClear(operation: BufferClearOperation) {
+        val store = chunkStore(operation.bufferSlot)
+        var totalBytes = 0L
+        var totalChunks = 0
+        try {
+            if (operation.cancelRequested.get() || serviceDestroying) {
+                finishBufferClearOperation(
+                    operation = operation,
+                    phase = BufferClearPhase.CANCELLED,
+                    totalBytes = 0L,
+                    remainingBytes = 0L,
+                    totalChunks = 0,
+                    remainingChunks = 0,
+                )
+                return
+            }
+            val initial = store.peekSnapshot()
+            totalBytes = initial?.filledBytes ?: 0L
+            totalChunks = initial?.chunkCount ?: 0
+            updateBufferClearStatus(
+                operation = operation,
+                phase = if (operation.cancelRequested.get()) {
+                    BufferClearPhase.CANCELLING
+                } else {
+                    BufferClearPhase.RUNNING
+                },
+                totalBytes = totalBytes,
+                remainingBytes = totalBytes,
+                totalChunks = totalChunks,
+                remainingChunks = totalChunks,
+            )
+            if (initial == null) {
+                finishBufferClearOperation(
+                    operation = operation,
+                    phase = BufferClearPhase.COMPLETED,
+                    totalBytes = 0L,
+                    remainingBytes = 0L,
+                    totalChunks = 0,
+                    remainingChunks = 0,
+                )
+                return
+            }
+
+            while (true) {
+                if (operation.cancelRequested.get() || serviceDestroying) {
+                    finishBufferClearOperation(
+                        operation = operation,
+                        phase = BufferClearPhase.CANCELLED,
+                        totalBytes = totalBytes,
+                        remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
+                        totalChunks = totalChunks,
+                        remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
+                    )
+                    return
+                }
+
+                val step = synchronized(listeningIntentLock) {
+                    if (!bufferClearCanContinue(
+                            cancelRequested = operation.cancelRequested.get(),
+                            serviceDestroying = serviceDestroying,
+                            requestedBuffer = operation.bufferSlot,
+                            activeBuffer = activeBufferSlot,
+                            listeningIntentEnabled = isListeningEnabled(),
+                            acceptedGeneration = operation.acceptedGeneration,
+                            currentGeneration = listeningCommandGeneration.get(),
+                        )
+                    ) {
+                        null
+                    } else {
+                        store.clearOneChunk()
+                    }
+                }
+
+                if (step == null) {
+                    finishBufferClearOperation(
+                        operation = operation,
+                        phase = BufferClearPhase.CANCELLED,
+                        totalBytes = totalBytes,
+                        remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
+                        totalChunks = totalChunks,
+                        remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
+                    )
+                    return
+                }
+
+                val phase = if (operation.cancelRequested.get()) {
+                    BufferClearPhase.CANCELLING
+                } else {
+                    BufferClearPhase.RUNNING
+                }
+                updateBufferClearStatus(
+                    operation = operation,
+                    phase = phase,
+                    totalBytes = totalBytes,
+                    remainingBytes = step.remainingPayloadBytes,
+                    totalChunks = totalChunks,
+                    remainingChunks = step.remainingChunkCount,
+                )
+                if (step.complete) {
+                    finishBufferClearOperation(
+                        operation = operation,
+                        phase = BufferClearPhase.COMPLETED,
+                        totalBytes = totalBytes,
+                        remainingBytes = 0L,
+                        totalChunks = totalChunks,
+                        remainingChunks = 0,
+                    )
+                    return
+                }
+            }
+        } catch (error: Exception) {
+            val cancelled = operation.cancelRequested.get() || serviceDestroying
+            finishBufferClearOperation(
+                operation = operation,
+                phase = if (cancelled) BufferClearPhase.CANCELLED else BufferClearPhase.FAILED,
+                totalBytes = totalBytes,
+                remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
+                totalChunks = totalChunks,
+                remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
+            )
+            if (!cancelled) reportPersistentStoreFailure("clear history", error)
+        }
+    }
+
+    private fun currentBufferClearRemainingBytes(operation: BufferClearOperation, fallback: Long): Long =
+        bufferClearStatus
+            ?.takeIf { it.operationId == operation.id }
+            ?.remainingBytes
+            ?: fallback
+
+    private fun currentBufferClearRemainingChunks(operation: BufferClearOperation, fallback: Int): Int =
+        bufferClearStatus
+            ?.takeIf { it.operationId == operation.id }
+            ?.remainingChunks
+            ?: fallback
+
+    private fun updateBufferClearStatus(
+        operation: BufferClearOperation,
+        phase: BufferClearPhase,
+        totalBytes: Long,
+        remainingBytes: Long,
+        totalChunks: Int,
+        remainingChunks: Int,
+    ) {
+        synchronized(bufferClearLock) {
+            if (activeBufferClearOperation !== operation) return
+            bufferClearStatus = BufferClearStatus(
+                operationId = operation.id,
+                bufferSlot = operation.bufferSlot,
+                phase = phase,
+                totalBytes = totalBytes.coerceAtLeast(0L),
+                remainingBytes = remainingBytes.coerceAtLeast(0L),
+                totalChunks = totalChunks.coerceAtLeast(0),
+                remainingChunks = remainingChunks.coerceAtLeast(0),
+            )
+        }
+    }
+
+    private fun finishBufferClearOperation(
+        operation: BufferClearOperation,
+        phase: BufferClearPhase,
+        totalBytes: Long,
+        remainingBytes: Long,
+        totalChunks: Int,
+        remainingChunks: Int,
+    ) {
+        val finished = synchronized(bufferClearLock) {
+            if (activeBufferClearOperation !== operation) return@synchronized false
+            bufferClearStatus = BufferClearStatus(
+                operationId = operation.id,
+                bufferSlot = operation.bufferSlot,
+                phase = phase,
+                totalBytes = totalBytes.coerceAtLeast(0L),
+                remainingBytes = remainingBytes.coerceAtLeast(0L),
+                totalChunks = totalChunks.coerceAtLeast(0),
+                remainingChunks = remainingChunks.coerceAtLeast(0),
+            )
+            activeBufferClearOperation = null
+            true
+        }
+        if (!finished) return
+        publishBufferClearTerminalState(operation, phase)
+    }
+
+    private fun publishBufferClearTerminalState(
+        operation: BufferClearOperation,
+        phase: BufferClearPhase,
+    ) {
+        if (serviceDestroying) {
+            if (phase == BufferClearPhase.COMPLETED) {
+                RecordingQuickTileStateCache.recordBufferCleared(this, operation.bufferSlot)
+            }
+            return
+        }
+        if (!::audioHandler.isInitialized) return
+        audioHandler.post {
+            if (serviceDestroying) {
+                if (phase == BufferClearPhase.COMPLETED) {
+                    RecordingQuickTileStateCache.recordBufferCleared(this, operation.bufferSlot)
+                }
+                return@post
+            }
+            if (operation.bufferSlot == BufferSlot.ONE_SHOT) {
+                syncOneShotFullQuickTileOnAudioThread()
+                RecordingQuickTileStateCache.persistCurrentDurations(this)
+            } else {
+                publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
+            }
+        }
+    }
 
     inner class BackgroundRecorderBinder : Binder() {
         val service: ReverbService
@@ -3539,6 +3792,13 @@ class ReverbService : Service() {
         val sourceMode: AudioSourceMode,
         val channelMode: ChannelMode,
         val routeMode: InputRouteMode,
+    )
+
+    private data class BufferClearOperation(
+        val id: Long,
+        val bufferSlot: BufferSlot,
+        val acceptedGeneration: Long,
+        val cancelRequested: AtomicBoolean = AtomicBoolean(false),
     )
 
     private data class OperationalConfig(

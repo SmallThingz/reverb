@@ -403,6 +403,33 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun incrementalClear_partialProgressSurvivesRestartWithoutExtraCheckpoint() = withStoreRoot { root ->
+        val expected = pcmBytes(64_000)
+        val crashed = PersistentAudioChunkStore(root)
+        configure(crashed, 128 * 1024L)
+        assertEquals(expected.size, crashed.append(expected, 0, expected.size))
+        crashed.sealActiveChunk()
+        val before = requireNotNull(crashed.peekSnapshot())
+        assertTrue(before.chunkCount > 1)
+
+        val step = crashed.clearOneChunk()
+        assertFalse(step.complete)
+        assertEquals(before.chunkCount - 1, step.remainingChunkCount)
+        assertTrue(step.removedPayloadBytes > 0L)
+        assertTrue(step.remainingPayloadBytes < before.filledBytes)
+
+        val remainingAfterCancel = readAll(crashed)
+        assertTrue(expected.endsWithBytes(remainingAfterCancel))
+
+        // Reopen without closing/checkpointing the first store. Recovery must reconcile the
+        // stale pre-clear index with the durable retirement/deletion of the first chunk.
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertArrayEquals(remainingAfterCancel, readAll(reopened))
+        }
+    }
+
+    @Test
     fun clearFailsClosedWhenRetirementJournalCannotBePersisted() = withStoreRoot { root ->
         val expected = pcmBytes(8_192)
         val store = PersistentAudioChunkStore(root, overwriteOldest = true)
