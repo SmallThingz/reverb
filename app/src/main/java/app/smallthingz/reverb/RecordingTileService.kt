@@ -13,6 +13,7 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import java.util.IdentityHashMap
 import java.util.concurrent.Executors
 
 internal data class RecordingTileSnapshot(
@@ -365,7 +366,10 @@ internal fun readRecordingTileSnapshotNonBlocking(): RecordingTileSnapshot =
 
 internal object RecordingQuickTiles {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val listeningServices = java.util.WeakHashMap<RecordingTileService, Unit>()
+    // TileService has explicit start/stop/destroy callbacks, so keep strong identity keys and
+    // unregister them deterministically. WeakHashMap can mutate its table while GC clears weak
+    // keys, which makes even externally synchronized iteration unsafe on Android.
+    private val listeningServices = IdentityHashMap<RecordingTileService, Unit>()
     private data class PendingHandoff(
         val source: ReverbService.BufferSlot,
         val target: ReverbService.BufferSlot,
