@@ -7,6 +7,8 @@ import java.io.IOException
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -411,4 +413,35 @@ class RecordingWaveformTest {
         check(directory.exists() || directory.mkdirs())
         return File(directory, name)
     }
+    @Test
+    fun pcmReader_terminalCloseFailureIsVisibleAndNotRetried() {
+        val file = writePcm16Wav(
+            sampleRate = 8_000,
+            samples = shortArrayOf(1, 2, 3, 4),
+        )
+        val input = FileInputStream(file)
+        val expected = IOException("reader close failed")
+        var closeAttempts = 0
+        val reader = RecordingPcm16MonoReader(
+            channel = input.channel,
+            validateRead = { true },
+            closeAction = {
+                closeAttempts++
+                throw expected
+            },
+            layout = readWavPcmLayout(input.channel),
+        )
+        try {
+            val thrown = assertThrows(IOException::class.java) { reader.close() }
+            assertSame(expected, thrown)
+            assertEquals(1, closeAttempts)
+
+            reader.close()
+            assertEquals(1, closeAttempts)
+        } finally {
+            input.close()
+            file.delete()
+        }
+    }
+
 }

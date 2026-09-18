@@ -108,7 +108,7 @@ internal data class WavPcmLayout(
         get() = if (sampleRate > 0) frameCount.toDouble() / sampleRate.toDouble() else 0.0
 }
 
-internal class RecordingPcm16MonoReader private constructor(
+internal class RecordingPcm16MonoReader internal constructor(
     private val channel: FileChannel,
     private val validateRead: () -> Boolean,
     private val closeAction: () -> Unit,
@@ -163,7 +163,7 @@ internal class RecordingPcm16MonoReader private constructor(
                         RecordingPcm16MonoReader(
                             channel = input.channel,
                             validateRead = validateRead,
-                            closeAction = { runCatching { input.close() } },
+                            closeAction = input::close,
                             layout = layout,
                         )
                     } catch (error: Throwable) {
@@ -191,7 +191,7 @@ internal class RecordingPcm16MonoReader private constructor(
                         RecordingPcm16MonoReader(
                             channel = input.channel,
                             validateRead = { recordingContentIdentityMatches(context, recording) },
-                            closeAction = { runCatching { input.close() } },
+                            closeAction = input::close,
                             layout = layout,
                         )
                     } catch (error: Throwable) {
