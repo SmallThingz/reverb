@@ -61,13 +61,69 @@ internal fun buildWavHeaderBytes(
     return buffer.array()
 }
 
-internal class WavAudioFileWriter(
+internal interface WavSeekableOutput : Closeable {
+    fun position(position: Long)
+    fun write(buffer: ByteBuffer): Int
+    fun truncate(size: Long)
+    fun force(metadata: Boolean)
+}
+
+private class ParcelWavSeekableOutput(
+    private val stream: ParcelFileDescriptor.AutoCloseOutputStream,
+) : WavSeekableOutput {
+    private val channel: FileChannel = stream.channel
+
+    override fun position(position: Long) {
+        channel.position(position)
+    }
+
+    override fun write(buffer: ByteBuffer): Int = channel.write(buffer)
+
+    override fun truncate(size: Long) {
+        channel.truncate(size)
+    }
+
+    override fun force(metadata: Boolean) {
+        channel.force(metadata)
+    }
+
+    override fun close() {
+        stream.close()
+    }
+}
+
+private fun openWavSeekableOutput(
     context: Context,
+    target: RecordingOutputTarget,
+): WavSeekableOutput {
+    val stream = openChildOrCloseOwner(
+        openWritableParcelFileDescriptor(context, target),
+    ) { descriptor ->
+        ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+    }
+    return ParcelWavSeekableOutput(stream)
+}
+
+internal class WavAudioFileWriter internal constructor(
     val target: RecordingOutputTarget,
     private val sampleRate: Int,
     private val channelCount: Int,
     private val sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    private val output: WavSeekableOutput,
 ) : Closeable {
+    constructor(
+        context: Context,
+        target: RecordingOutputTarget,
+        sampleRate: Int,
+        channelCount: Int,
+        sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    ) : this(
+        target = target,
+        sampleRate = sampleRate,
+        channelCount = channelCount,
+        sampleFormat = sampleFormat,
+        output = openWavSeekableOutput(context, target),
+    )
     private val blockAlign: Short = run {
         require(sampleRate > 0) { "Invalid WAV sample rate: $sampleRate" }
         require(channelCount in 1..2) { "Invalid WAV channel count: $channelCount" }
@@ -80,15 +136,11 @@ internal class WavAudioFileWriter(
         require(computed in 1..0xFFFF_FFFFL) { "Invalid WAV byte rate: $computed" }
         computed.toInt()
     }
-    private val outputStream = openChildOrCloseOwner(
-        openWritableParcelFileDescriptor(context, target),
-    ) { descriptor ->
-        ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
-    }
-    private val channel: FileChannel = outputStream.channel
     private val headerSize = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) WAV_FLOAT_HEADER_SIZE else WAV_PCM_HEADER_SIZE
     private val payloadDigest = MessageDigest.getInstance("SHA-256")
     private var finalizedPayloadDigest: ByteArray? = null
+    private var payloadWriteFailure: Throwable? = null
+    private var closed = false
     @Volatile
     var totalSampleBytesWritten: Long = 0
         private set
@@ -106,7 +158,7 @@ internal class WavAudioFileWriter(
             writeHeader(dataSize = 0)
         } catch (error: Throwable) {
             throw requireNotNull(
-                closePreservingPrimaryFailure(error) { outputStream.close() },
+                closePreservingPrimaryFailure(error) { output.close() },
             )
         }
     }
@@ -117,6 +169,10 @@ internal class WavAudioFileWriter(
         offset: Int,
         count: Int,
     ) {
+        check(!closed) { "WAV writer is closed" }
+        payloadWriteFailure?.let { failure ->
+            throw IOException("WAV writer cannot continue after a payload write failure", failure)
+        }
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count) {
             "Invalid WAV write range offset=$offset count=$count size=${bytes.size}"
         }
@@ -130,9 +186,18 @@ internal class WavAudioFileWriter(
             throw IOException("WAV file exceeds RIFF size limit")
         }
         val buf = ByteBuffer.wrap(bytes, offset, count)
-        while (buf.hasRemaining()) {
-            val n = channel.write(buf)
-            if (n <= 0) throw IOException("Failed to write WAV data")
+        try {
+            while (buf.hasRemaining()) {
+                val n = output.write(buf)
+                if (n <= 0) throw IOException("Failed to write WAV data")
+            }
+        } catch (error: Throwable) {
+            // FileChannel-style writes may have advanced the physical staging object before
+            // surfacing a later failure. That prefix has no verified digest/header authority.
+            // Poison this writer so close only releases the descriptor and never truncates or
+            // rewrites those unverified bytes.
+            if (payloadWriteFailure == null) payloadWriteFailure = error
+            throw error
         }
         payloadDigest.update(bytes, offset, count)
         totalSampleBytesWritten += count.toLong()
@@ -140,24 +205,33 @@ internal class WavAudioFileWriter(
 
     @Synchronized
     override fun close() {
-        var failure: Throwable? = null
-        try {
-            val paddedDataSize = paddedDataSize(totalSampleBytesWritten)
-            if (paddedDataSize != totalSampleBytesWritten) {
-                channel.position(headerSize.toLong() + totalSampleBytesWritten)
-                val padding = ByteBuffer.wrap(byteArrayOf(0))
-                while (padding.hasRemaining()) {
-                    if (channel.write(padding) <= 0) throw IOException("Failed to pad WAV data")
+        if (closed) return
+        var failure: Throwable? = payloadWriteFailure?.let { writeFailure ->
+            IOException(
+                "WAV payload write failed; preserving unverified staging bytes without finalization",
+                writeFailure,
+            )
+        }
+        if (failure == null) {
+            try {
+                val paddedDataSize = paddedDataSize(totalSampleBytesWritten)
+                if (paddedDataSize != totalSampleBytesWritten) {
+                    output.position(headerSize.toLong() + totalSampleBytesWritten)
+                    val padding = ByteBuffer.wrap(byteArrayOf(0))
+                    while (padding.hasRemaining()) {
+                        if (output.write(padding) <= 0) throw IOException("Failed to pad WAV data")
+                    }
                 }
+                writeHeader(totalSampleBytesWritten)
+                output.truncate(headerSize.toLong() + paddedDataSize)
+                output.force(true)
+            } catch (error: Throwable) {
+                failure = error
             }
-            writeHeader(totalSampleBytesWritten)
-            channel.truncate(headerSize.toLong() + paddedDataSize)
-            channel.force(true)
-        } catch (error: Throwable) {
-            failure = error
         }
 
-        failure = closePreservingPrimaryFailure(failure) { outputStream.close() }
+        failure = closePreservingPrimaryFailure(failure) { output.close() }
+        closed = true
         failure?.let { throw it }
         finalizedPayloadDigest = payloadDigest.digest()
     }
@@ -165,9 +239,9 @@ internal class WavAudioFileWriter(
     @Synchronized
     private fun writeHeader(dataSize: Long) {
         val headerBuffer = ByteBuffer.wrap(buildWavHeaderBytes(sampleRate, channelCount, sampleFormat, dataSize))
-        channel.position(0L)
+        output.position(0L)
         while (headerBuffer.hasRemaining()) {
-            val written = channel.write(headerBuffer)
+            val written = output.write(headerBuffer)
             if (written <= 0) throw IOException("Failed to write WAV header")
         }
     }
