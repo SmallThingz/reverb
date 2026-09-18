@@ -50,6 +50,19 @@ class RangeExportEditorMathTest {
     }
 
     @Test
+    fun textFocusHandoff_commitsOnlyWhenTheOtherFieldOwnsTheDraft() {
+        val start = RangeTextEditDraft(
+            target = RangeEditTarget.START,
+            initialText = "0:12.5",
+            text = "0:13.0",
+        )
+
+        assertFalse(rangeTextEditNeedsCommitBeforeFocusHandoff(null, RangeEditTarget.END))
+        assertFalse(rangeTextEditNeedsCommitBeforeFocusHandoff(start, RangeEditTarget.START))
+        assertTrue(rangeTextEditNeedsCommitBeforeFocusHandoff(start, RangeEditTarget.END))
+    }
+
+    @Test
     fun textEditDraft_untouchedRoundedPresentationIsNotAnEdit() {
         val untouched = requireNotNull(
             beginRangeTextEditDraft(

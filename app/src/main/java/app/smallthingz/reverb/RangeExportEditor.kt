@@ -111,6 +111,11 @@ internal fun beginRangeTextEditDraft(
     else -> null
 }
 
+internal fun rangeTextEditNeedsCommitBeforeFocusHandoff(
+    active: RangeTextEditDraft?,
+    target: RangeEditTarget,
+): Boolean = active != null && active.target != target
+
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
     val commitAllowed: Boolean = false,
@@ -688,6 +693,11 @@ internal class RangeExportEditorState(
     }
 
     fun beginTextEditing(target: RangeEditTarget, draft: String): Boolean {
+        if (rangeTextEditNeedsCommitBeforeFocusHandoff(activeTextEdit, target) &&
+            !commitActiveTextEditing()
+        ) {
+            return false
+        }
         val next = beginRangeTextEditDraft(activeTextEdit, target, draft) ?: return false
         invalidateSelectionDurationCommit()
         activeTextEdit = next
