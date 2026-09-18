@@ -1023,6 +1023,108 @@ private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisp
     return false
 }
 
+internal data class DocumentPublicationObservation(
+    val displayName: String,
+    val sourceUriUnchanged: Boolean,
+    val oldSourceState: RecordingAssetState,
+    val fingerprint: StableOutputFingerprint,
+)
+
+internal fun documentPublicationMatchesExpected(
+    finalDisplayName: String,
+    expectedFingerprint: StableOutputFingerprint,
+    observation: DocumentPublicationObservation?,
+): Boolean {
+    val current = observation ?: return false
+    if (current.displayName != finalDisplayName) return false
+    return documentRenameTransitionIsSafe(
+        sourceUriUnchanged = current.sourceUriUnchanged,
+        oldUriStateAfterRename = current.oldSourceState,
+        beforeIdentity = expectedFingerprint.providerIdentity.orEmpty(),
+        afterIdentity = current.fingerprint.providerIdentity.orEmpty(),
+        beforeDigest = expectedFingerprint.digest,
+        afterDigest = current.fingerprint.digest,
+    )
+}
+
+private data class ObservedDocumentPublication(
+    val uri: Uri,
+    val state: DocumentPublicationObservation,
+)
+
+private fun readStableDocumentPublicationObservation(
+    context: Context,
+    treeUri: Uri,
+    sourceUri: Uri,
+    finalDisplayName: String,
+): ObservedDocumentPublication? {
+    fun candidate(): DocumentTreeEntry? = queryDocumentTreeEntries(context, treeUri)
+        .filter { entry -> entry.isFile && entry.name == finalDisplayName }
+        .singleOrNull()
+
+    val before = candidate() ?: return null
+    val fingerprint = readStableOutputFingerprint(
+        context,
+        RecordingStorageType.DOCUMENT,
+        before.uri.toString(),
+    ) ?: return null
+    val after = candidate() ?: return null
+    if (before.uri != after.uri) return null
+    val sourceUriUnchanged = after.uri == sourceUri
+    val oldSourceState = if (sourceUriUnchanged) {
+        RecordingAssetState.PRESENT
+    } else {
+        queryUriAssetState(
+            context = context,
+            uri = sourceUri,
+            projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+            logId = sourceUri.toString(),
+        )
+    }
+    return ObservedDocumentPublication(
+        uri = after.uri,
+        state = DocumentPublicationObservation(
+            displayName = finalDisplayName,
+            sourceUriUnchanged = sourceUriUnchanged,
+            oldSourceState = oldSourceState,
+            fingerprint = fingerprint,
+        ),
+    )
+}
+
+private fun suppressUnsafeDocumentPublication(
+    context: Context,
+    target: RecordingOutputTarget,
+    sourceUri: Uri,
+    publishedUri: Uri,
+    expectedFingerprint: StableOutputFingerprint,
+    publishedDigest: CopyDigest,
+): Boolean {
+    val sourceUriUnchanged = publishedUri == sourceUri
+    val returnedSuppressed = suppressProviderOutputWithoutDeletion(
+        context = context,
+        storageType = RecordingStorageType.DOCUMENT,
+        id = publishedUri.toString(),
+        digest = publishedDigest,
+    )
+    val sourceSuppressed = sourceUriUnchanged || suppressProviderOutputWithoutDeletion(
+        context = context,
+        storageType = RecordingStorageType.DOCUMENT,
+        id = sourceUri.toString(),
+        digest = expectedFingerprint.digest,
+    )
+    if (!returnedSuppressed || !sourceSuppressed) {
+        Log.w(TAG, "Unable to durably suppress unsafe document publish $sourceUri -> $publishedUri")
+    }
+    val recoveryRevoked = runCatching {
+        removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)
+    }.getOrDefault(false)
+    if (!recoveryRevoked) {
+        Log.w(TAG, "Unable to revoke recovery for unsafe document publish ${target.id}")
+    }
+    return returnedSuppressed && sourceSuppressed && recoveryRevoked
+}
+
 @Throws(IOException::class)
 private fun finalizeDocumentOutputTarget(
     context: Context,
@@ -1042,15 +1144,63 @@ private fun finalizeDocumentOutputTarget(
     if (!documentSupportsRename(context, sourceUri)) {
         throw IOException("Output provider cannot safely publish verified staging without rename support")
     }
-    val renamedUri = try {
+    var renameFailure: IOException? = null
+    val directRenamedUri = try {
         DocumentsContract.renameDocument(context.contentResolver, sourceUri, finalName)
+            ?: run {
+                renameFailure = IOException("Output provider failed to atomically publish recording")
+                null
+            }
     } catch (error: Exception) {
-        throw IOException("Output provider failed to atomically publish recording", error)
-    } ?: throw IOException("Output provider failed to atomically publish recording")
-    val published = readStableOutputFingerprint(context, RecordingStorageType.DOCUMENT, renamedUri.toString())
-        ?: throw IOException("Unable to verify published document recording")
-    val sourceUriUnchanged = renamedUri == sourceUri
-    val oldState = if (sourceUriUnchanged) {
+        renameFailure = IOException("Document publication result is uncertain", error)
+        null
+    }
+    var recoveredPublication: ObservedDocumentPublication? = null
+    val renamedUri = directRenamedUri ?: run {
+        val failure = requireNotNull(renameFailure)
+        val observed = runCatching {
+            readStableDocumentPublicationObservation(context, treeUri, sourceUri, finalName)
+        }.onFailure { error ->
+            Log.w(TAG, "Unable to resolve ambiguous document publication $sourceUri", error)
+        }.getOrNull()
+        if (!documentPublicationMatchesExpected(finalName, expectedFingerprint, observed?.state)) {
+            // Only suppress a discovered visible candidate when it still contains the exact
+            // verified bytes. A same-name different recording must remain untouched.
+            if (observed != null &&
+                copyDigestMatches(expectedFingerprint.digest, observed.state.fingerprint.digest)
+            ) {
+                suppressUnsafeDocumentPublication(
+                    context = context,
+                    target = target,
+                    sourceUri = sourceUri,
+                    publishedUri = observed.uri,
+                    expectedFingerprint = expectedFingerprint,
+                    publishedDigest = observed.state.fingerprint.digest,
+                )
+            }
+            throw failure
+        }
+        recoveredPublication = observed
+        requireNotNull(observed).uri
+    }
+    val published = recoveredPublication?.state?.fingerprint
+        ?: readStableOutputFingerprint(context, RecordingStorageType.DOCUMENT, renamedUri.toString())
+    if (published == null) {
+        // renameDocument() already returned a publication URI. If later provider reads lose
+        // identity/content proof, keep that visible candidate out of Library without deriving
+        // deletion authority from the failed observation.
+        suppressUnsafeDocumentPublication(
+            context = context,
+            target = target,
+            sourceUri = sourceUri,
+            publishedUri = renamedUri,
+            expectedFingerprint = expectedFingerprint,
+            publishedDigest = expectedFingerprint.digest,
+        )
+        throw IOException("Unable to verify published document recording")
+    }
+    val sourceUriUnchanged = recoveredPublication?.state?.sourceUriUnchanged ?: (renamedUri == sourceUri)
+    val oldState = recoveredPublication?.state?.oldSourceState ?: if (sourceUriUnchanged) {
         RecordingAssetState.PRESENT
     } else {
         queryUriAssetState(
@@ -1073,34 +1223,21 @@ private fun finalizeDocumentOutputTarget(
         // enough to delete it, but do keep an unsafe/copy-like result out of Reverb's Library.
         // Suppress the original staging URI too when it survived so recovery cannot repeatedly
         // invoke the same broken rename and manufacture more final-name copies.
-        val returnedSuppressed = suppressProviderOutputWithoutDeletion(
+        suppressUnsafeDocumentPublication(
             context = context,
-            storageType = RecordingStorageType.DOCUMENT,
-            id = renamedUri.toString(),
-            digest = published.digest,
+            target = target,
+            sourceUri = sourceUri,
+            publishedUri = renamedUri,
+            expectedFingerprint = expectedFingerprint,
+            publishedDigest = published.digest,
         )
-        val sourceSuppressed = sourceUriUnchanged || suppressProviderOutputWithoutDeletion(
-            context = context,
-            storageType = RecordingStorageType.DOCUMENT,
-            id = sourceUri.toString(),
-            digest = expectedFingerprint.digest,
-        )
-        if (!returnedSuppressed || !sourceSuppressed) {
-            Log.w(TAG, "Unable to durably suppress unsafe document publish $sourceUri -> $renamedUri")
-        }
-        val recoveryRevoked = runCatching {
-            removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)
-        }.getOrDefault(false)
-        if (!recoveryRevoked) {
-            Log.w(TAG, "Unable to revoke recovery for unsafe document publish ${target.id}")
-        }
         throw IOException("Published document no longer matches verified staging rename")
     }
     val publishedIdentity = published.providerIdentity
         ?.takeIf { it.isNotBlank() }
         ?: throw IOException("Published document recording has no stable identity")
-    val actualName = DocumentFile.fromSingleUri(context, renamedUri)?.name
-        ?.takeIf { it.isNotBlank() }
+    val actualName = recoveredPublication?.state?.displayName
+        ?: DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
         ?: finalName
     return target.copy(
         id = renamedUri.toString(),

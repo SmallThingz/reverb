@@ -926,6 +926,69 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun ambiguousDocumentPublish_requiresExactNameContentAndRenameContinuity() {
+        val digest = CopyDigest(5L, ByteArray(32) { 0x41 })
+        val expected = StableOutputFingerprint(
+            digest = digest,
+            fileKey = null,
+            providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:source:5:7",
+        )
+        val sameUriPublished = expected.copy(
+            providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:source:5:8",
+        )
+        val sameUri = DocumentPublicationObservation(
+            displayName = "clip.wav",
+            sourceUriUnchanged = true,
+            oldSourceState = RecordingAssetState.PRESENT,
+            fingerprint = sameUriPublished,
+        )
+        assertTrue(documentPublicationMatchesExpected("clip.wav", expected, sameUri))
+        assertFalse(documentPublicationMatchesExpected("other.wav", expected, sameUri))
+        assertFalse(
+            documentPublicationMatchesExpected(
+                "clip.wav",
+                expected,
+                sameUri.copy(
+                    fingerprint = sameUriPublished.copy(
+                        providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:other:5:8",
+                    ),
+                ),
+            ),
+        )
+
+        val changedUri = sameUri.copy(
+            sourceUriUnchanged = false,
+            oldSourceState = RecordingAssetState.MISSING,
+            fingerprint = sameUriPublished.copy(
+                providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:renamed:5:8",
+            ),
+        )
+        assertTrue(documentPublicationMatchesExpected("clip.wav", expected, changedUri))
+        assertFalse(
+            documentPublicationMatchesExpected(
+                "clip.wav", expected, changedUri.copy(oldSourceState = RecordingAssetState.PRESENT),
+            ),
+        )
+        assertFalse(
+            documentPublicationMatchesExpected(
+                "clip.wav", expected, changedUri.copy(oldSourceState = RecordingAssetState.UNAVAILABLE),
+            ),
+        )
+        assertFalse(
+            documentPublicationMatchesExpected(
+                "clip.wav",
+                expected,
+                changedUri.copy(
+                    fingerprint = changedUri.fingerprint.copy(
+                        digest = CopyDigest(5L, ByteArray(32) { 0x42 }),
+                    ),
+                ),
+            ),
+        )
+        assertFalse(documentPublicationMatchesExpected("clip.wav", expected, null))
+    }
+
+    @Test
     fun ambiguousMediaStorePublish_isAcceptedOnlyWhenExactFinalRowIsProven() {
         val digest = CopyDigest(4L, ByteArray(32) { 0x31 })
         val expected = StableOutputFingerprint(
