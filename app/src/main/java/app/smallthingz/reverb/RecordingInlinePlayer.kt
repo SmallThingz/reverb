@@ -264,14 +264,14 @@ internal class InlineTrimUiCallbackGate(
     }
 }
 
-private class InlineTrimResultReceiver(
-    context: Context,
+internal class InlineTrimResultReceiver(
     onSaved: (RecordingEntity) -> Unit,
     onFailed: (Throwable) -> Unit,
     uiVisible: Boolean,
+    private val onDetachedSuccess: (RecordingEntity) -> Unit,
+    private val onDetachedFailure: (Throwable) -> Unit,
     private val onTerminal: (InlineTrimResultReceiver) -> Unit,
 ) {
-    private val appContext = context.applicationContext
     private val uiCallbacks = InlineTrimUiCallbackGate(onSaved, onFailed, uiVisible)
     private val terminalDelivered = AtomicBoolean(false)
 
@@ -281,28 +281,28 @@ private class InlineTrimResultReceiver(
 
     fun terminal(result: Result<RecordingEntity>) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        try {
-            result.fold(
-                onSuccess = { recording ->
-                    val delivered = runCatching { uiCallbacks.saved(recording) }.getOrDefault(false)
-                    if (!delivered) {
-                        NotifyFileReceiver(appContext).fileReady(recording)
-                    }
-                },
-                onFailure = { error ->
-                    val delivered = runCatching { uiCallbacks.failed(error) }.getOrDefault(false)
-                    if (!delivered) {
-                        NotifyFileReceiver(appContext).fileFailed(
-                            appContext.getString(R.string.trim_failed),
-                            error,
+        deliverTerminalResult(
+            deliver = {
+                result.fold(
+                    onSuccess = { recording ->
+                        deliverVisibleTerminalOrFallback(
+                            deliverVisible = { uiCallbacks.saved(recording) },
+                            fallback = { onDetachedSuccess(recording) },
                         )
-                    }
-                },
-            )
-        } finally {
-            uiCallbacks.detach()
-            onTerminal(this)
-        }
+                    },
+                    onFailure = { error ->
+                        deliverVisibleTerminalOrFallback(
+                            deliverVisible = { uiCallbacks.failed(error) },
+                            fallback = { onDetachedFailure(error) },
+                        )
+                    },
+                )
+            },
+            finish = {
+                uiCallbacks.detach()
+                onTerminal(this)
+            },
+        )
     }
 }
 
@@ -1168,7 +1168,6 @@ internal fun RecordingInlinePlayer(
                             onBusyChange(true)
                             lateinit var receiver: InlineTrimResultReceiver
                             receiver = InlineTrimResultReceiver(
-                                context = appContext,
                                 onSaved = { trimmed ->
                                     trimSaving = false
                                     onBusyChange(false)
@@ -1194,6 +1193,15 @@ internal fun RecordingInlinePlayer(
                                 },
                                 uiVisible = screenActive &&
                                     lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                                onDetachedSuccess = { trimmed ->
+                                    NotifyFileReceiver(appContext).fileReady(trimmed)
+                                },
+                                onDetachedFailure = { error ->
+                                    NotifyFileReceiver(appContext).fileFailed(
+                                        appContext.getString(R.string.trim_failed),
+                                        error,
+                                    )
+                                },
                                 onTerminal = { completed ->
                                     activeTrimReceiver.compareAndSet(completed, null)
                                 },
