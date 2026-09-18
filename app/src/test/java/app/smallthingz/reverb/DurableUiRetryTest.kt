@@ -41,4 +41,28 @@ class DurableUiRetryTest {
             },
         )
     }
+
+    @Test
+    fun submittedCommittedAttempt_outlivesSubmittingCoroutine() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val terminal = CompletableDeferred<Boolean>()
+
+        val submitter = launch {
+            submitCommittedDurableUiBooleanAttempt(
+                block = {
+                    started.complete(Unit)
+                    release.await()
+                    true
+                },
+                onTerminal = terminal::complete,
+            )
+        }
+
+        submitter.join()
+        started.await()
+        release.complete(Unit)
+
+        assertTrue(terminal.await())
+    }
 }

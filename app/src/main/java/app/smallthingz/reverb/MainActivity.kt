@@ -231,26 +231,31 @@ class MainActivity : ComponentActivity() {
                         onFinish = { oneShotEnabled, loopingEnabled ->
                             if (!onboardingFinishing) {
                                 onboardingFinishing = true
-                                lifecycleScope.launch {
-                                    val finished = runCommittedDurableUiBooleanAttempt {
+                                submitCommittedDurableUiBooleanAttempt(
+                                    block = {
                                         finishOnboarding(
                                             applicationContext,
                                             oneShotEnabled,
                                             loopingEnabled,
                                         )
-                                    }
-                                    onboardingFinishing = false
-                                    if (finished) {
-                                        onboardingBufferAvailability = null
-                                        showOnboarding = false
-                                        beginPermissionFlow()
-                                    } else {
-                                        AppFeedbackCenter.post(
-                                            getString(R.string.recorder_state_persist_failed),
-                                            FeedbackTone.ERROR,
-                                        )
-                                    }
-                                }
+                                    },
+                                    onTerminal = { finished ->
+                                        runOnUiThread {
+                                            if (isFinishing || isDestroyed) return@runOnUiThread
+                                            onboardingFinishing = false
+                                            if (finished) {
+                                                onboardingBufferAvailability = null
+                                                showOnboarding = false
+                                                beginPermissionFlow()
+                                            } else {
+                                                AppFeedbackCenter.post(
+                                                    getString(R.string.recorder_state_persist_failed),
+                                                    FeedbackTone.ERROR,
+                                                )
+                                            }
+                                        }
+                                    },
+                                )
                             }
                         },
                     )
