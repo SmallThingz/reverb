@@ -1532,6 +1532,35 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun documentProviderIdentity_requiresOneCompleteMetadataObservation() {
+        val id = "content://provider/tree/root/document/clip"
+        val expected = providerRecordingIdentity(RecordingStorageType.DOCUMENT, id, 4_096L, 123L)
+
+        assertEquals(
+            expected,
+            documentProviderIdentityFromMetadata(
+                id = id,
+                sizeKnown = true,
+                sizeBytes = 4_096L,
+                modifiedKnown = true,
+                modifiedMillis = 123L,
+            ),
+        )
+        assertEquals(
+            "",
+            documentProviderIdentityFromMetadata(id, false, 4_096L, true, 123L),
+        )
+        assertEquals(
+            "",
+            documentProviderIdentityFromMetadata(id, true, 4_096L, false, 123L),
+        )
+        assertEquals(
+            "",
+            documentProviderIdentityFromMetadata(id, true, 4_096L, true, 0L),
+        )
+    }
+
+    @Test
     fun providerReadHandoff_requiresSelectedIdentityBeforeAndAfterDescriptorOpen() {
         val expected = providerRecordingIdentity(
             RecordingStorageType.MEDIASTORE,

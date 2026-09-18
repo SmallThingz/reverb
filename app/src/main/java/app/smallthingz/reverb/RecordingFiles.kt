@@ -1319,21 +1319,52 @@ internal fun providerRecordingIdentity(
     return "provider:${storageType.storageCode.toInt()}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
 }
 
+internal fun documentProviderIdentityFromMetadata(
+    id: String,
+    sizeKnown: Boolean,
+    sizeBytes: Long,
+    modifiedKnown: Boolean,
+    modifiedMillis: Long,
+): String {
+    if (!sizeKnown || !modifiedKnown) return ""
+    return providerRecordingIdentity(
+        storageType = RecordingStorageType.DOCUMENT,
+        id = id,
+        sizeBytes = sizeBytes,
+        revisionToken = modifiedMillis,
+    )
+}
+
 internal fun resolveProviderRecordingIdentity(
     context: Context,
     storageType: RecordingStorageType,
     uri: Uri,
 ): String = when (storageType) {
     RecordingStorageType.FILE -> ""
-    RecordingStorageType.DOCUMENT -> {
-        val document = runCatching { DocumentFile.fromSingleUri(context, uri) }.getOrNull() ?: return ""
-        providerRecordingIdentity(
-            storageType = storageType,
-            id = uri.toString(),
-            sizeBytes = document.length().coerceAtLeast(0L),
-            revisionToken = document.lastModified().coerceAtLeast(0L),
-        )
-    }
+    RecordingStorageType.DOCUMENT -> runCatching {
+        // Length and revision must come from one provider row observation. Separate DocumentFile
+        // calls can straddle a replacement and synthesize an identity tuple that never belonged
+        // to one object, which is unsafe when this identity later authorizes rename/delete/copy.
+        context.contentResolver.query(
+            uri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use ""
+            documentProviderIdentityFromMetadata(
+                id = uri.toString(),
+                sizeKnown = !cursor.isNull(0),
+                sizeBytes = if (cursor.isNull(0)) 0L else cursor.getLong(0).coerceAtLeast(0L),
+                modifiedKnown = !cursor.isNull(1),
+                modifiedMillis = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
+            )
+        } ?: ""
+    }.getOrDefault("")
     RecordingStorageType.MEDIASTORE -> runCatching {
         val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         val projection = if (useGeneration) {
