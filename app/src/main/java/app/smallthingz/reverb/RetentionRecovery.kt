@@ -69,16 +69,83 @@ internal fun persistRetentionTransaction(
     restoreRecovery: () -> Boolean,
     restorePreferences: () -> Boolean,
 ): Boolean = withRetentionPersistenceLock {
-    if (!writeNewRecovery()) {
-        restoreRecovery()
+    val recoveryWritten = try {
+        writeNewRecovery()
+    } catch (error: Throwable) {
+        restoreRetentionTransactionAfterException(
+            primary = error,
+            restoreRecovery = restoreRecovery,
+            restorePreferences = null,
+        )
+        throw error
+    }
+    if (!recoveryWritten) {
+        restoreRetentionTransactionAfterFailure(
+            restoreRecovery = restoreRecovery,
+            restorePreferences = null,
+        )?.let { throw it }
         return@withRetentionPersistenceLock false
     }
-    if (!commitNewPreferences()) {
-        restoreRecovery()
-        restorePreferences()
+
+    val preferencesCommitted = try {
+        commitNewPreferences()
+    } catch (error: Throwable) {
+        restoreRetentionTransactionAfterException(
+            primary = error,
+            restoreRecovery = restoreRecovery,
+            restorePreferences = restorePreferences,
+        )
+        throw error
+    }
+    if (!preferencesCommitted) {
+        restoreRetentionTransactionAfterFailure(
+            restoreRecovery = restoreRecovery,
+            restorePreferences = restorePreferences,
+        )?.let { throw it }
         return@withRetentionPersistenceLock false
     }
     true
+}
+
+private fun restoreRetentionTransactionAfterFailure(
+    restoreRecovery: () -> Boolean,
+    restorePreferences: (() -> Boolean)?,
+): Throwable? {
+    var failure: Throwable? = null
+
+    fun attempt(restore: () -> Boolean) {
+        try {
+            restore()
+        } catch (restoreError: Throwable) {
+            val primary = failure
+            if (primary == null) {
+                failure = restoreError
+            } else if (restoreError !== primary) {
+                primary.addSuppressed(restoreError)
+            }
+        }
+    }
+
+    attempt(restoreRecovery)
+    restorePreferences?.let(::attempt)
+    return failure
+}
+
+private fun restoreRetentionTransactionAfterException(
+    primary: Throwable,
+    restoreRecovery: () -> Boolean,
+    restorePreferences: (() -> Boolean)?,
+) {
+    val rollbackFailure = restoreRetentionTransactionAfterFailure(
+        restoreRecovery = restoreRecovery,
+        restorePreferences = restorePreferences,
+    ) ?: return
+    if (rollbackFailure !== primary) {
+        primary.addSuppressed(rollbackFailure)
+        rollbackFailure.suppressed.forEach { suppressed ->
+            if (suppressed !== primary && suppressed !== rollbackFailure) primary.addSuppressed(suppressed)
+        }
+    }
 }
 
 internal fun defaultRetentionConfiguration(): RetentionConfiguration = RetentionConfiguration(
