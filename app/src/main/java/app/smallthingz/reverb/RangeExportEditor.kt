@@ -95,15 +95,21 @@ internal enum class RangeEditTarget { START, END }
 
 internal data class RangeTextEditDraft(
     val target: RangeEditTarget,
+    val initialText: String,
     val text: String,
-)
+) {
+    val edited: Boolean get() = text != initialText
+}
 
 internal fun beginRangeTextEditDraft(
     active: RangeTextEditDraft?,
     target: RangeEditTarget,
     text: String,
-): RangeTextEditDraft? =
-    if (active == null || active.target == target) RangeTextEditDraft(target, text) else null
+): RangeTextEditDraft? = when {
+    active == null -> RangeTextEditDraft(target = target, initialText = text, text = text)
+    active.target == target -> active.copy(text = text)
+    else -> null
+}
 
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
@@ -695,8 +701,12 @@ internal class RangeExportEditorState(
 
     fun commitActiveTextEditing(): Boolean {
         val active = activeTextEdit ?: return true
-        val parsed = parseRangeTimeInput(active.text)?.toFloat() ?: return false
-        if (!commitTarget(active.target, parsed)) return false
+        if (active.edited) {
+            val parsed = parseRangeTimeInput(active.text)?.toFloat() ?: return false
+            if (!commitTarget(active.target, parsed)) return false
+        }
+        // The field renders a rounded presentation string. An untouched focus session must
+        // release ownership without parsing that rounded text back into the precise endpoint.
         activeTextEdit = null
         textEditGeneration++
         return true

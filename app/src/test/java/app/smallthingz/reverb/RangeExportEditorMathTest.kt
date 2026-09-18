@@ -25,7 +25,9 @@ class RangeExportEditorMathTest {
         )
 
         assertEquals(RangeEditTarget.START, updatedStart.target)
+        assertEquals("0:12.5", updatedStart.initialText)
         assertEquals("0:13.0", updatedStart.text)
+        assertTrue(updatedStart.edited)
         assertEquals(
             null,
             beginRangeTextEditDraft(
@@ -44,6 +46,39 @@ class RangeExportEditorMathTest {
         )
         assertEquals(RangeEditTarget.END, end.target)
         assertEquals("0:40.0", end.text)
+        assertFalse(end.edited)
+    }
+
+    @Test
+    fun textEditDraft_untouchedRoundedPresentationIsNotAnEdit() {
+        val untouched = requireNotNull(
+            beginRangeTextEditDraft(
+                active = null,
+                target = RangeEditTarget.START,
+                text = "47:59:59.9",
+            ),
+        )
+        assertFalse(untouched.edited)
+
+        val changed = requireNotNull(
+            beginRangeTextEditDraft(
+                active = untouched,
+                target = RangeEditTarget.START,
+                text = "47:59:59.8",
+            ),
+        )
+        assertTrue(changed.edited)
+        assertEquals("47:59:59.9", changed.initialText)
+
+        val visuallyRestored = requireNotNull(
+            beginRangeTextEditDraft(
+                active = changed,
+                target = RangeEditTarget.START,
+                text = "47:59:59.9",
+            ),
+        )
+        assertFalse(visuallyRestored.edited)
+        assertEquals("47:59:59.9", visuallyRestored.initialText)
     }
 
     @Test
