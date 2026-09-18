@@ -8,6 +8,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -112,4 +113,34 @@ class WavAudioFileWriterTest {
             access.close()
         }
     }
+
+    @Test
+    fun invalidConfiguration_doesNotAcquireWritableOutput() {
+        var opened = false
+
+        assertThrows(IllegalArgumentException::class.java) {
+            openAfterWavConfigurationValidation(
+                sampleRate = 0,
+                channelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+            ) {
+                opened = true
+                Any()
+            }
+        }
+        assertFalse(opened)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            openAfterWavConfigurationValidation(
+                sampleRate = 48_000,
+                channelCount = 3,
+                sampleFormat = PcmSampleFormat.PCM_16,
+            ) {
+                opened = true
+                Any()
+            }
+        }
+        assertFalse(opened)
+    }
+
 }

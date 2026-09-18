@@ -92,16 +92,38 @@ private class ParcelWavSeekableOutput(
     }
 }
 
+internal inline fun <T> openAfterWavConfigurationValidation(
+    sampleRate: Int,
+    channelCount: Int,
+    sampleFormat: PcmSampleFormat,
+    open: () -> T,
+): T {
+    require(sampleRate > 0) { "Invalid WAV sample rate: $sampleRate" }
+    require(channelCount in 1..2) { "Invalid WAV channel count: $channelCount" }
+    val blockAlign = channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+    require(blockAlign in 1..0xFFFFL) { "Invalid WAV block alignment: $blockAlign" }
+    val byteRate = sampleRate.toLong() * blockAlign
+    require(byteRate in 1..0xFFFF_FFFFL) { "Invalid WAV byte rate: $byteRate" }
+    return open()
+}
+
 private fun openWavSeekableOutput(
     context: Context,
     target: RecordingOutputTarget,
-): WavSeekableOutput {
+    sampleRate: Int,
+    channelCount: Int,
+    sampleFormat: PcmSampleFormat,
+): WavSeekableOutput = openAfterWavConfigurationValidation(
+    sampleRate = sampleRate,
+    channelCount = channelCount,
+    sampleFormat = sampleFormat,
+) {
     val stream = openChildOrCloseOwner(
         openWritableParcelFileDescriptor(context, target),
     ) { descriptor ->
         ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
     }
-    return ParcelWavSeekableOutput(stream)
+    ParcelWavSeekableOutput(stream)
 }
 
 internal class WavAudioFileWriter internal constructor(
@@ -122,7 +144,13 @@ internal class WavAudioFileWriter internal constructor(
         sampleRate = sampleRate,
         channelCount = channelCount,
         sampleFormat = sampleFormat,
-        output = openWavSeekableOutput(context, target),
+        output = openWavSeekableOutput(
+            context = context,
+            target = target,
+            sampleRate = sampleRate,
+            channelCount = channelCount,
+            sampleFormat = sampleFormat,
+        ),
     )
     private val blockAlign: Short = run {
         require(sampleRate > 0) { "Invalid WAV sample rate: $sampleRate" }
