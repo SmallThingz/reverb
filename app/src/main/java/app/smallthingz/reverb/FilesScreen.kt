@@ -171,27 +171,35 @@ internal class RenameResultReceiver(
 
     fun terminal(result: Result<RecordingEntity?>) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        try {
-            result.fold(
-                onSuccess = { renamed ->
-                    if (renamed != null) {
-                        if (!runCatching { uiCallbacks.renamed(renamed) }.getOrDefault(false)) {
-                            onDetachedSuccess(renamed)
+        deliverTerminalResult(
+            deliver = {
+                result.fold(
+                    onSuccess = { renamed ->
+                        if (renamed != null) {
+                            deliverVisibleTerminalOrFallback(
+                                deliverVisible = { uiCallbacks.renamed(renamed) },
+                                fallback = { onDetachedSuccess(renamed) },
+                            )
+                        } else {
+                            deliverVisibleTerminalOrFallback(
+                                deliverVisible = uiCallbacks::rejected,
+                                fallback = onDetachedFailure,
+                            )
                         }
-                    } else if (!runCatching { uiCallbacks.rejected() }.getOrDefault(false)) {
-                        onDetachedFailure()
-                    }
-                },
-                onFailure = {
-                    if (!runCatching { uiCallbacks.uncertain() }.getOrDefault(false)) {
-                        onDetachedFailure()
-                    }
-                },
-            )
-        } finally {
-            uiCallbacks.detach()
-            onTerminal(this)
-        }
+                    },
+                    onFailure = {
+                        deliverVisibleTerminalOrFallback(
+                            deliverVisible = uiCallbacks::uncertain,
+                            fallback = onDetachedFailure,
+                        )
+                    },
+                )
+            },
+            finish = {
+                uiCallbacks.detach()
+                onTerminal(this)
+            },
+        )
     }
 }
 

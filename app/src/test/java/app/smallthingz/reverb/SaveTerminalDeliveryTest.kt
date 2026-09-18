@@ -8,7 +8,7 @@ class SaveTerminalDeliveryTest {
     @Test
     fun terminalDelivery_runsCleanupAfterSuccessfulCallback() {
         val events = mutableListOf<String>()
-        val result = deliverTerminalSaveResult(
+        val result = deliverTerminalResult(
             deliver = {
                 events += "deliver"
                 7
@@ -24,7 +24,7 @@ class SaveTerminalDeliveryTest {
         val events = mutableListOf<String>()
         var threw = false
         try {
-            deliverTerminalSaveResult<Unit>(
+            deliverTerminalResult<Unit>(
                 deliver = {
                     events += "deliver"
                     error("ui callback failed")
@@ -44,7 +44,7 @@ class SaveTerminalDeliveryTest {
         val cleanup = IllegalArgumentException("terminal cleanup failed")
         var observed: Throwable? = null
         try {
-            deliverTerminalSaveResult<Unit>(
+            deliverTerminalResult<Unit>(
                 deliver = { throw primary },
                 finish = { throw cleanup },
             )
@@ -60,7 +60,7 @@ class SaveTerminalDeliveryTest {
         val cleanup = IllegalArgumentException("terminal cleanup failed")
         var observed: Throwable? = null
         try {
-            deliverTerminalSaveResult(
+            deliverTerminalResult(
                 deliver = { 7 },
                 finish = { throw cleanup },
             )
@@ -74,7 +74,7 @@ class SaveTerminalDeliveryTest {
     fun visibleTerminalFallback_runsOnlyWhenUiDeliveryDoesNotComplete() {
         val events = mutableListOf<String>()
 
-        deliverVisibleSaveTerminalOrFallback(
+        deliverVisibleTerminalOrFallback(
             deliverVisible = {
                 events += "visible"
                 true
@@ -84,7 +84,7 @@ class SaveTerminalDeliveryTest {
         assertEquals(listOf("visible"), events)
 
         events.clear()
-        deliverVisibleSaveTerminalOrFallback(
+        deliverVisibleTerminalOrFallback(
             deliverVisible = {
                 events += "detached"
                 false
@@ -101,7 +101,7 @@ class SaveTerminalDeliveryTest {
         var observed: Throwable? = null
 
         try {
-            deliverVisibleSaveTerminalOrFallback(
+            deliverVisibleTerminalOrFallback(
                 deliverVisible = {
                     events += "visible"
                     throw primary
@@ -123,7 +123,7 @@ class SaveTerminalDeliveryTest {
         var observed: Throwable? = null
 
         try {
-            deliverVisibleSaveTerminalOrFallback(
+            deliverVisibleTerminalOrFallback(
                 deliverVisible = { throw primary },
                 fallback = { throw fallback },
             )
@@ -143,9 +143,9 @@ class SaveTerminalDeliveryTest {
         var observed: Throwable? = null
 
         try {
-            deliverTerminalSaveResult(
+            deliverTerminalResult(
                 deliver = {
-                    deliverVisibleSaveTerminalOrFallback(
+                    deliverVisibleTerminalOrFallback(
                         deliverVisible = {
                             events += "visible"
                             throw primary

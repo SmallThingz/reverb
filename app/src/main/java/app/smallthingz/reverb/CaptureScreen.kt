@@ -2524,7 +2524,7 @@ private fun handleExport(
     }
 }
 
-internal inline fun <T> deliverTerminalSaveResult(
+internal inline fun <T> deliverTerminalResult(
     deliver: () -> T,
     finish: () -> Unit,
 ): T {
@@ -2547,7 +2547,7 @@ internal inline fun <T> deliverTerminalSaveResult(
     }
 }
 
-internal inline fun deliverVisibleSaveTerminalOrFallback(
+internal inline fun deliverVisibleTerminalOrFallback(
     deliverVisible: () -> Boolean,
     fallback: () -> Unit,
 ) {
@@ -2632,12 +2632,12 @@ private class SaveResultReceiver(
 
     override fun fileReady(recording: RecordingEntity) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        deliverTerminalSaveResult(
+        deliverTerminalResult(
             deliver = {
                 // Range-memory bookkeeping is convenience state; it must never suppress terminal
                 // delivery for a recording that is already durably committed.
                 runCatching { onCommitted(recording) }
-                deliverVisibleSaveTerminalOrFallback(
+                deliverVisibleTerminalOrFallback(
                     deliverVisible = { uiCallbacks.saved(recording) },
                     fallback = { NotifyFileReceiver(appContext).fileReady(recording) },
                 )
@@ -2648,10 +2648,10 @@ private class SaveResultReceiver(
 
     override fun fileFailed(message: String, error: Throwable?) {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        deliverTerminalSaveResult(
+        deliverTerminalResult(
             deliver = {
                 val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
-                deliverVisibleSaveTerminalOrFallback(
+                deliverVisibleTerminalOrFallback(
                     deliverVisible = { uiCallbacks.failed(text) },
                     fallback = { NotifyFileReceiver(appContext).fileFailed(message, error) },
                 )
@@ -2662,7 +2662,7 @@ private class SaveResultReceiver(
 
     override fun fileCancelled() {
         if (!terminalDelivered.compareAndSet(false, true)) return
-        deliverTerminalSaveResult(
+        deliverTerminalResult(
             deliver = { uiCallbacks.cancelled() },
             finish = ::finish,
         )

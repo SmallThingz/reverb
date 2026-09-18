@@ -4,6 +4,7 @@ import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -148,6 +149,65 @@ class RecordingRenameTerminalTest {
         receiver().terminal(Result.failure(IOException("uncertain")))
 
         assertTrue(failures == 2)
+    }
+
+    @Test
+    fun throwingVisibleRenameCallback_runsFallbackThenPreservesPrimaryFailure() {
+        val renamed = recording().copy(displayName = "renamed.wav")
+        val primary = IllegalStateException("ui callback failed")
+        val events = mutableListOf<String>()
+        lateinit var receiver: RenameResultReceiver
+        receiver = RenameResultReceiver(
+            onRenamed = {
+                events += "visible"
+                throw primary
+            },
+            onRejected = { error("unexpected rejection") },
+            onUncertain = { error("unexpected uncertainty") },
+            onHiddenTerminal = {},
+            isUiVisible = { true },
+            onDetachedSuccess = { events += "fallback" },
+            onDetachedFailure = { error("unexpected failure") },
+            onTerminal = { events += "finish" },
+        )
+
+        var observed: Throwable? = null
+        try {
+            receiver.terminal(Result.success(renamed))
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertEquals(listOf("visible", "fallback", "finish"), events)
+    }
+
+    @Test
+    fun throwingRenameFallback_isSuppressedOnVisibleCallbackFailure() {
+        val renamed = recording().copy(displayName = "renamed.wav")
+        val primary = IllegalStateException("ui callback failed")
+        val fallback = IllegalArgumentException("fallback failed")
+        lateinit var receiver: RenameResultReceiver
+        receiver = RenameResultReceiver(
+            onRenamed = { throw primary },
+            onRejected = { error("unexpected rejection") },
+            onUncertain = { error("unexpected uncertainty") },
+            onHiddenTerminal = {},
+            isUiVisible = { true },
+            onDetachedSuccess = { throw fallback },
+            onDetachedFailure = { error("unexpected failure") },
+            onTerminal = {},
+        )
+
+        var observed: Throwable? = null
+        try {
+            receiver.terminal(Result.success(renamed))
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertEquals(listOf(fallback), primary.suppressed.toList())
     }
 
 }
