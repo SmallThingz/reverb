@@ -1429,13 +1429,12 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun finalizeActiveLocked() {
         val record = activeRecord ?: return
         if (record.payloadBytes <= 0L) {
-            closeActiveAccessLocked()
+            val closeFailure = closeActiveAccessLocked()
             removeChunkLocked(record)
-            activeRecord = null
-            activePayloadCrc = CRC32()
-            activeDurablePayloadBytes = 0L
+            clearActiveRecordStateLocked()
             record.pendingDelete = true
             tryDeleteRetiredRecordLocked(record)
+            closeFailure?.let { throw it }
             return
         }
 
@@ -1446,13 +1445,18 @@ internal class PersistentAudioChunkStore internal constructor(
         } catch (error: Exception) {
             // Once finalization has started, do not append to this file again. The on-disk
             // header may be complete, partial, or merely unsynced depending on the failure.
-            closeActiveAccessLocked()
-            activeRecord = null
-            activePayloadCrc = CRC32()
-            activeDurablePayloadBytes = 0L
+            closeActiveAccessLocked()?.let { closeError ->
+                if (closeError !== error) error.addSuppressed(closeError)
+            }
+            clearActiveRecordStateLocked()
             throw error
         }
-        closeActiveAccessLocked()
+        val closeFailure = closeActiveAccessLocked()
+        clearActiveRecordStateLocked()
+        closeFailure?.let { throw it }
+    }
+
+    private fun clearActiveRecordStateLocked() {
         activeRecord = null
         activePayloadCrc = CRC32()
         activeDurablePayloadBytes = 0L
