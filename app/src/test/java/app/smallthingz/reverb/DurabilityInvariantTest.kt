@@ -1449,6 +1449,37 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun providerCleanup_observesPostconditionEvenWhenDeleteTransportThrows() {
+        val events = mutableListOf<String>()
+        val completed = providerDeleteAttemptCompleted(
+            delete = {
+                events += "delete"
+                throw IOException("provider failed after commit")
+            },
+            observeState = {
+                events += "observe"
+                OutputCleanupAssetState.MISSING
+            },
+            onDeleteFailure = { events += "failure" },
+        )
+
+        assertTrue(completed)
+        assertEquals(listOf("delete", "failure", "observe"), events)
+        assertFalse(
+            providerDeleteAttemptCompleted(
+                delete = { throw IOException("provider failed") },
+                observeState = { OutputCleanupAssetState.PRESENT },
+            ),
+        )
+        assertFalse(
+            providerDeleteAttemptCompleted(
+                delete = { throw IOException("provider failed") },
+                observeState = { OutputCleanupAssetState.UNAVAILABLE },
+            ),
+        )
+    }
+
+    @Test
     fun publishedOutputIdentityWinsOverLaterPathOrUriObservation() {
         val publishedProviderIdentity = providerRecordingIdentity(
             RecordingStorageType.DOCUMENT, "content://docs/clip", 4_000L, 9L,

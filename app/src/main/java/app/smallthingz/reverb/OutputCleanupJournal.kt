@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -56,6 +57,19 @@ internal enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
 
 internal fun providerOutputCleanupCompleted(observedState: OutputCleanupAssetState): Boolean =
     observedState == OutputCleanupAssetState.MISSING
+
+internal inline fun providerDeleteAttemptCompleted(
+    delete: () -> Unit,
+    observeState: () -> OutputCleanupAssetState,
+    onDeleteFailure: (Exception) -> Unit = {},
+): Boolean {
+    try {
+        delete()
+    } catch (error: Exception) {
+        runCatching { onDeleteFailure(error) }
+    }
+    return providerOutputCleanupCompleted(observeState())
+}
 
 internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord): String = buildString {
     append(OUTPUT_CLEANUP_RECORD_VERSION).append('|')
@@ -749,17 +763,27 @@ private fun deletePendingOutputAsset(
     record: PendingOutputCleanupRecord,
 ): Boolean = when (record.storageType) {
     RecordingStorageType.FILE -> deletePendingFileOutput(record)
-    RecordingStorageType.DOCUMENT -> runCatching {
-        if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
-        val document = DocumentFile.fromSingleUri(context, record.id.toUri()) ?: return@runCatching false
-        document.delete()
-        providerOutputCleanupCompleted(outputCleanupAssetState(context, record.storageType, record.id))
-    }.getOrDefault(false)
-    RecordingStorageType.MEDIASTORE -> runCatching {
-        if (!pendingProviderOutputCleanupStillMatches(context, record)) return@runCatching false
-        context.contentResolver.delete(record.id.toUri(), null, null)
-        providerOutputCleanupCompleted(outputCleanupAssetState(context, record.storageType, record.id))
-    }.getOrDefault(false)
+    RecordingStorageType.DOCUMENT -> {
+        if (!pendingProviderOutputCleanupStillMatches(context, record)) return false
+        val document = DocumentFile.fromSingleUri(context, record.id.toUri()) ?: return false
+        providerDeleteAttemptCompleted(
+            delete = { document.delete(); Unit },
+            observeState = { outputCleanupAssetState(context, record.storageType, record.id) },
+            onDeleteFailure = { error ->
+                Log.w("OutputCleanupJournal", "Document cleanup delete result was uncertain for ${record.id}", error)
+            },
+        )
+    }
+    RecordingStorageType.MEDIASTORE -> {
+        if (!pendingProviderOutputCleanupStillMatches(context, record)) return false
+        providerDeleteAttemptCompleted(
+            delete = { context.contentResolver.delete(record.id.toUri(), null, null); Unit },
+            observeState = { outputCleanupAssetState(context, record.storageType, record.id) },
+            onDeleteFailure = { error ->
+                Log.w("OutputCleanupJournal", "MediaStore cleanup delete result was uncertain for ${record.id}", error)
+            },
+        )
+    }
 }
 
 private fun pendingProviderOutputCleanupStillMatches(
