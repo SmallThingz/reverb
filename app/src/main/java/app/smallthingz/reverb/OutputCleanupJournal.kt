@@ -1,6 +1,5 @@
 package app.smallthingz.reverb
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -390,12 +389,15 @@ internal fun removeVerifiedExportStaging(
     writeVerifiedExportStagingEntriesLocked(context, updated)
 }
 
-@SuppressLint("UseKtx") // The commit() Boolean is part of the fail-closed durability contract.
 private fun writeVerifiedExportStagingEntriesLocked(context: Context, entries: Set<String>): Boolean {
-    val editor = getRecorderPreferences(context).edit()
-    if (entries.isEmpty()) editor.remove(PrefKey.VERIFIED_EXPORT_STAGING)
-    else editor.putStringSet(PrefKey.VERIFIED_EXPORT_STAGING, entries)
-    return editor.commit()
+    val preferences = getRecorderPreferences(context)
+    val current = preferences.requireDurableStringSet(PrefKey.VERIFIED_EXPORT_STAGING)
+    if (current == entries) return true
+    return preferences.commitDurableStringSetReplacement(
+        key = PrefKey.VERIFIED_EXPORT_STAGING,
+        previousEntries = current,
+        updatedEntries = entries,
+    )
 }
 
 internal fun verifiedExportStagingFingerprint(
@@ -612,9 +614,11 @@ private fun putPendingOutputCleanup(context: Context, record: PendingOutputClean
     synchronized(outputCleanupJournalLock) {
         val current = pendingOutputCleanupEntriesLocked(context)
         val raw = encodePendingOutputCleanupRecord(record)
-        getRecorderPreferences(context).edit()
-            .putStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, pendingOutputCleanupEntriesAfterAppend(current, raw))
-            .commit()
+        getRecorderPreferences(context).commitDurableStringSetReplacement(
+            key = PrefKey.PENDING_OUTPUT_CLEANUP,
+            previousEntries = current,
+            updatedEntries = pendingOutputCleanupEntriesAfterAppend(current, raw),
+        )
     }
 
 // Cleanup replay snapshots journal entries before doing slow filesystem/provider work. A newer
@@ -645,10 +649,14 @@ private fun removePendingOutputCleanupEntry(context: Context, expectedRaw: Strin
     removePendingOutputCleanupEntries(context, setOf(expectedRaw))
 
 private fun writePendingOutputCleanupEntriesLocked(context: Context, entries: Set<String>): Boolean {
-    val editor = getRecorderPreferences(context).edit()
-    if (entries.isEmpty()) editor.remove(PrefKey.PENDING_OUTPUT_CLEANUP)
-    else editor.putStringSet(PrefKey.PENDING_OUTPUT_CLEANUP, entries)
-    return editor.commit()
+    val preferences = getRecorderPreferences(context)
+    val current = preferences.requireDurableStringSet(PrefKey.PENDING_OUTPUT_CLEANUP)
+    if (current == entries) return true
+    return preferences.commitDurableStringSetReplacement(
+        key = PrefKey.PENDING_OUTPUT_CLEANUP,
+        previousEntries = current,
+        updatedEntries = entries,
+    )
 }
 
 internal fun readStableOutputFingerprint(

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.annotation.SuppressLint
 import android.content.SharedPreferences
 
 enum class PrefKey {
@@ -82,6 +83,48 @@ internal fun SharedPreferences.requireDurableStringSet(key: PrefKey): Set<String
     ) {
         getStringSet(key, emptySet())?.toSet() ?: emptySet()
     }
+
+internal inline fun commitDurablePreferenceOrRestoreInMemory(
+    commit: () -> Boolean,
+    restoreInMemory: () -> Unit,
+): Boolean {
+    val committed = try {
+        commit()
+    } catch (error: Throwable) {
+        try {
+            restoreInMemory()
+        } catch (restoreError: Throwable) {
+            if (restoreError !== error) error.addSuppressed(restoreError)
+        }
+        throw error
+    }
+    if (committed) return true
+    restoreInMemory()
+    return false
+}
+
+@SuppressLint("UseKtx") // commit() success is the durability boundary for journal authority.
+internal fun SharedPreferences.commitDurableStringSetReplacement(
+    key: PrefKey,
+    previousEntries: Set<String>,
+    updatedEntries: Set<String>,
+): Boolean {
+    val previousPresent = contains(key)
+    fun write(entries: Set<String>, present: Boolean): Boolean {
+        val editor = edit()
+        if (present) editor.putStringSet(key, entries.toSet()) else editor.remove(key)
+        return editor.commit()
+    }
+    return commitDurablePreferenceOrRestoreInMemory(
+        commit = { write(updatedEntries, updatedEntries.isNotEmpty()) },
+        // SharedPreferences commits update the process-local map before disk I/O. A failed
+        // durability boundary must therefore restore the prior map synchronously so later
+        // same-process replay cannot consume authority that was never durably published, or
+        // forget authority whose removal never became durable. The rollback commit's Boolean
+        // is intentionally not promoted to success; the original mutation still failed.
+        restoreInMemory = { write(previousEntries, previousPresent) },
+    )
+}
 fun SharedPreferences.Editor.putString(key: PrefKey, value: String): SharedPreferences.Editor =
     putString(key.name, value)
 fun SharedPreferences.Editor.putInt(key: PrefKey, value: Int): SharedPreferences.Editor = putInt(key.name, value)

@@ -477,9 +477,11 @@ object RecordingRepository {
             pendingDeletionSuppressedId(raw) == intent.id
         }
         updated += encoded
-        return getRecorderPreferences(context).edit()
-            .putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, updated)
-            .commit()
+        return getRecorderPreferences(context).commitDurableStringSetReplacement(
+            key = PrefKey.PENDING_RECORDING_DELETIONS,
+            previousEntries = current,
+            updatedEntries = updated,
+        )
     }
 
     private fun removePendingDeletionLocked(context: Context, id: String): Boolean {
@@ -494,10 +496,13 @@ object RecordingRepository {
         writePendingDeletionEntries(context, pendingDeletionEntries(context) - raw)
 
     private fun writePendingDeletionEntries(context: Context, entries: Set<String>): Boolean {
-        val editor = getRecorderPreferences(context).edit()
-        if (entries.isEmpty()) editor.remove(PrefKey.PENDING_RECORDING_DELETIONS)
-        else editor.putStringSet(PrefKey.PENDING_RECORDING_DELETIONS, entries)
-        return editor.commit()
+        val current = pendingDeletionEntries(context)
+        if (current == entries) return true
+        return getRecorderPreferences(context).commitDurableStringSetReplacement(
+            key = PrefKey.PENDING_RECORDING_DELETIONS,
+            previousEntries = current,
+            updatedEntries = entries,
+        )
     }
 
     suspend fun rename(
