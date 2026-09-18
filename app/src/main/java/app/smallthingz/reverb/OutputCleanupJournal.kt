@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.core.net.toUri
@@ -672,11 +673,19 @@ internal fun readStableOutputFingerprint(
             val uri = id.toUri()
             val before = resolveProviderRecordingIdentity(context, storageType, uri)
                 .takeIf { it.isNotBlank() } ?: return@runCatching null
-            val digest = context.contentResolver.openInputStream(uri)?.use(::sha256)
+            val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
                 ?: return@runCatching null
-            val after = resolveProviderRecordingIdentity(context, storageType, uri)
-            if (!providerRecordingIdentityMatches(before, after)) return@runCatching null
-            StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
+            val input = openChildOrCloseOwner(descriptor) { opened ->
+                ParcelFileDescriptor.AutoCloseInputStream(opened)
+            }
+            input.use { source ->
+                val afterOpen = resolveProviderRecordingIdentity(context, storageType, uri)
+                if (!providerRecordingIdentityMatches(before, afterOpen)) return@use null
+                val digest = sha256(source)
+                val afterRead = resolveProviderRecordingIdentity(context, storageType, uri)
+                if (!providerReadRemainsStable(before, afterOpen, afterRead)) return@use null
+                StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
+            }
         }
     }
 }.getOrNull()

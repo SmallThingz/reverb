@@ -1573,6 +1573,27 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun providerFingerprintRead_requiresIdentityAcrossDescriptorOpenAndHash() {
+        val before = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/11",
+            8_192L,
+            20L,
+        )
+        val changed = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/11",
+            8_192L,
+            21L,
+        )
+
+        assertTrue(providerReadRemainsStable(before, before, before))
+        assertFalse(providerReadRemainsStable(before, changed, before))
+        assertFalse(providerReadRemainsStable(before, before, changed))
+        assertFalse(providerReadRemainsStable("", before, before))
+    }
+
+    @Test
     fun pendingOutputCleanup_roundTripsAndRejectsReplacementIdentity() {
         val hash = "ab".repeat(32)
         val record = PendingOutputCleanupRecord(

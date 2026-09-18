@@ -1850,6 +1850,14 @@ internal fun providerReadHandoffMatchesExpected(
     providerRecordingIdentityMatches(expectedIdentity, beforeOpenIdentity) &&
     providerRecordingIdentityMatches(expectedIdentity, afterOpenIdentity)
 
+internal fun providerReadRemainsStable(
+    beforeOpenIdentity: String,
+    afterOpenIdentity: String,
+    afterReadIdentity: String,
+): Boolean = beforeOpenIdentity.isNotBlank() &&
+    providerRecordingIdentityMatches(beforeOpenIdentity, afterOpenIdentity) &&
+    providerRecordingIdentityMatches(beforeOpenIdentity, afterReadIdentity)
+
 private fun openVerifiedProviderInputStream(
     context: Context,
     recording: RecordingEntity,
@@ -2017,10 +2025,17 @@ internal fun verifyWavOutputTargetAndDigest(
             val before = resolveProviderRecordingIdentity(context, target.storageType, uri)
                 .takeIf { it.isNotBlank() }
                 ?: throw IOException("Unable to identify exported provider object")
-            val input = context.contentResolver.openInputStream(uri)
+            val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
                 ?: throw IOException("Unable to reopen exported recording")
-            val digest = input.use { source ->
-                verifyWavOutputStreamAndDigest(
+            val input = openChildOrCloseOwner(descriptor) { opened ->
+                ParcelFileDescriptor.AutoCloseInputStream(opened)
+            }
+            input.use { source ->
+                val afterOpen = resolveProviderRecordingIdentity(context, target.storageType, uri)
+                if (!providerRecordingIdentityMatches(before, afterOpen)) {
+                    throw IOException("Exported provider object changed while opening verification")
+                }
+                val digest = verifyWavOutputStreamAndDigest(
                     input = source,
                     expectedFileBytes = expectedFileBytes,
                     expectedPrefix = expectedPrefix,
@@ -2028,12 +2043,12 @@ internal fun verifyWavOutputTargetAndDigest(
                     payloadBytes = payloadBytes,
                     expectedPayloadSha256 = expectedPayloadSha256,
                 )
+                val afterRead = resolveProviderRecordingIdentity(context, target.storageType, uri)
+                if (!providerReadRemainsStable(before, afterOpen, afterRead)) {
+                    throw IOException("Exported provider object changed while verifying")
+                }
+                StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
             }
-            val after = resolveProviderRecordingIdentity(context, target.storageType, uri)
-            if (!providerRecordingIdentityMatches(before, after)) {
-                throw IOException("Exported provider object changed while verifying")
-            }
-            StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
         }
     }
 }
