@@ -163,7 +163,9 @@ internal class RecordingPcm16MonoReader private constructor(
                     }
                     val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
                         ?: throw IOException("Unable to open recording for reading")
-                    val input = FileInputStream(descriptor.fileDescriptor)
+                    val input = openChildOrCloseOwner(descriptor) { opened ->
+                        FileInputStream(opened.fileDescriptor)
+                    }
                     try {
                         val layout = readWavPcmLayout(input.channel)
                         if (!recordingContentIdentityMatches(context, recording)) {

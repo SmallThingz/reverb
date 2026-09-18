@@ -82,7 +82,9 @@ internal class WavAudioFileWriter(
         computed.toInt()
     }
     private val parcelFileDescriptor: ParcelFileDescriptor = openWritableParcelFileDescriptor(context, target)
-    private val outputStream = FileOutputStream(parcelFileDescriptor.fileDescriptor)
+    private val outputStream = openChildOrCloseOwner(parcelFileDescriptor) { descriptor ->
+        FileOutputStream(descriptor.fileDescriptor)
+    }
     private val channel: FileChannel = outputStream.channel
     private val headerSize = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) WAV_FLOAT_HEADER_SIZE else WAV_PCM_HEADER_SIZE
     private val payloadDigest = MessageDigest.getInstance("SHA-256")
