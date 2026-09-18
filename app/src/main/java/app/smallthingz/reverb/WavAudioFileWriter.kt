@@ -3,7 +3,6 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import java.io.Closeable
-import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -81,9 +80,10 @@ internal class WavAudioFileWriter(
         require(computed in 1..0xFFFF_FFFFL) { "Invalid WAV byte rate: $computed" }
         computed.toInt()
     }
-    private val parcelFileDescriptor: ParcelFileDescriptor = openWritableParcelFileDescriptor(context, target)
-    private val outputStream = openChildOrCloseOwner(parcelFileDescriptor) { descriptor ->
-        FileOutputStream(descriptor.fileDescriptor)
+    private val outputStream = openChildOrCloseOwner(
+        openWritableParcelFileDescriptor(context, target),
+    ) { descriptor ->
+        ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
     }
     private val channel: FileChannel = outputStream.channel
     private val headerSize = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) WAV_FLOAT_HEADER_SIZE else WAV_PCM_HEADER_SIZE
@@ -104,10 +104,10 @@ internal class WavAudioFileWriter(
     init {
         try {
             writeHeader(dataSize = 0)
-        } catch (e: Exception) {
-            runCatching { outputStream.close() }
-            runCatching { parcelFileDescriptor.close() }
-            throw e
+        } catch (error: Throwable) {
+            throw requireNotNull(
+                closePreservingPrimaryFailure(error) { outputStream.close() },
+            )
         }
     }
 
@@ -140,6 +140,7 @@ internal class WavAudioFileWriter(
 
     @Synchronized
     override fun close() {
+        var failure: Throwable? = null
         try {
             val paddedDataSize = paddedDataSize(totalSampleBytesWritten)
             if (paddedDataSize != totalSampleBytesWritten) {
@@ -152,11 +153,13 @@ internal class WavAudioFileWriter(
             writeHeader(totalSampleBytesWritten)
             channel.truncate(headerSize.toLong() + paddedDataSize)
             channel.force(true)
-            finalizedPayloadDigest = payloadDigest.digest()
-        } finally {
-            runCatching { outputStream.close() }
-            runCatching { parcelFileDescriptor.close() }
+        } catch (error: Throwable) {
+            failure = error
         }
+
+        failure = closePreservingPrimaryFailure(failure) { outputStream.close() }
+        failure?.let { throw it }
+        finalizedPayloadDigest = payloadDigest.digest()
     }
 
     @Synchronized

@@ -58,4 +58,34 @@ class CloseableOwnershipTest {
             closeFailure?.let { throw it }
         }
     }
+
+    @Test
+    fun closeFailure_becomesPrimaryWhenThereWasNoEarlierFailure() {
+        val closeFailure = IOException("close failed")
+
+        val observed = closePreservingPrimaryFailure(null) { throw closeFailure }
+
+        assertSame(closeFailure, observed)
+    }
+
+    @Test
+    fun closeFailure_isSuppressedOnExistingPrimaryFailure() {
+        val primary = IOException("write failed")
+        val closeFailure = IOException("close failed")
+
+        val observed = closePreservingPrimaryFailure(primary) { throw closeFailure }
+
+        assertSame(primary, observed)
+        assertEquals(listOf(closeFailure), primary.suppressed.toList())
+    }
+
+    @Test
+    fun successfulClose_preservesExistingPrimaryFailure() {
+        val primary = IOException("write failed")
+
+        val observed = closePreservingPrimaryFailure(primary) {}
+
+        assertSame(primary, observed)
+    }
+
 }
