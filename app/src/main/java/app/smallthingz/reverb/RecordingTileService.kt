@@ -24,6 +24,7 @@ internal data class RecordingTileSnapshot(
     val loopingEnabled: Boolean,
     val oneShotSeconds: Float = 0f,
     val loopingSeconds: Float = 0f,
+    val commandGeneration: Long = Long.MIN_VALUE,
 )
 
 internal enum class RecordingTileUiState {
@@ -90,6 +91,7 @@ internal fun recordingTileSnapshot(
     loopingEnabled: Boolean,
     oneShotSeconds: Float = 0f,
     loopingSeconds: Float = 0f,
+    commandGeneration: Long = Long.MIN_VALUE,
 ): RecordingTileSnapshot = RecordingTileSnapshot(
     listening = isTileCaptureActuallyRecording(listeningIntentEnabled, runtimeCaptureActive),
     activeBuffer = activeBuffer,
@@ -98,6 +100,7 @@ internal fun recordingTileSnapshot(
     loopingEnabled = loopingEnabled,
     oneShotSeconds = oneShotSeconds,
     loopingSeconds = loopingSeconds,
+    commandGeneration = commandGeneration,
 )
 
 internal fun recordingTileClickAction(

@@ -82,6 +82,19 @@ internal fun quickTileCommandBufferSlot(
 internal fun quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes: Int): Boolean =
     foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
 
+internal fun recorderCommandGenerationMayApply(
+    expectedGeneration: Long?,
+    currentGeneration: Long,
+): Boolean = expectedGeneration == null || expectedGeneration == currentGeneration
+
+internal fun quickTileRejectedCommandRequiresResample(
+    sampledGeneration: Long,
+    result: ReverbService.ListeningCommandResult?,
+): Boolean = result != null &&
+    !result.accepted &&
+    sampledGeneration != Long.MIN_VALUE &&
+    result.generation != sampledGeneration
+
 internal inline fun releaseTimelineSnapshotBestEffort(
     release: () -> Unit,
     onFailure: (Exception) -> Unit,
@@ -476,7 +489,10 @@ class ReverbService : Service() {
         writer.println("  rawHistoryDirectory=${BUFFER_CACHE_FOLDER_NAME}/${BUFFER_CHUNKS_FOLDER_NAME}")
     }
 
-    fun enableListening(bufferSlot: BufferSlot): ListeningCommandResult {
+    fun enableListening(
+        bufferSlot: BufferSlot,
+        expectedGeneration: Long? = null,
+    ): ListeningCommandResult {
         if (serviceDestroying) return rejectedListeningCommand()
         val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
             try {
@@ -500,14 +516,21 @@ class ReverbService : Service() {
         if (isLogicalListeningState(state, isListeningEnabled()) && activeBufferSlot != bufferSlot) {
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
-        return setListeningEnabled(enabled = true, requestedBufferSlot = bufferSlot)
+        return setListeningEnabled(
+            enabled = true,
+            requestedBufferSlot = bufferSlot,
+            expectedGeneration = expectedGeneration,
+        )
     }
 
-    fun disableListening(): ListeningCommandResult {
-        return setListeningEnabled(enabled = false)
+    fun disableListening(expectedGeneration: Long? = null): ListeningCommandResult {
+        return setListeningEnabled(enabled = false, expectedGeneration = expectedGeneration)
     }
 
-    fun selectCaptureBuffer(bufferSlot: BufferSlot): ListeningCommandResult {
+    fun selectCaptureBuffer(
+        bufferSlot: BufferSlot,
+        expectedGeneration: Long? = null,
+    ): ListeningCommandResult {
         if (serviceDestroying) return rejectedListeningCommand()
         val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
             try {
@@ -532,7 +555,13 @@ class ReverbService : Service() {
         var targetChanged = false
         var switchingWhileRecording = false
         val generation = synchronized(listeningIntentLock) {
-            if (serviceDestroying) return rejectedListeningCommand()
+            if (serviceDestroying || !recorderCommandGenerationMayApply(
+                    expectedGeneration = expectedGeneration,
+                    currentGeneration = listeningCommandGeneration.get(),
+                )
+            ) {
+                return rejectedListeningCommand()
+            }
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             previousActiveBuffer = activeBufferSlot
             val resolvedGeneration = if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
@@ -620,12 +649,19 @@ class ReverbService : Service() {
     private fun setListeningEnabled(
         enabled: Boolean,
         requestedBufferSlot: BufferSlot? = null,
+        expectedGeneration: Long? = null,
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         var stopIncidentStateFailure = false
         var stopIntentRollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
-            if (serviceDestroying) return rejectedListeningCommand()
+            if (serviceDestroying || !recorderCommandGenerationMayApply(
+                    expectedGeneration = expectedGeneration,
+                    currentGeneration = listeningCommandGeneration.get(),
+                )
+            ) {
+                return rejectedListeningCommand()
+            }
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
@@ -2420,6 +2456,10 @@ class ReverbService : Service() {
 
     private fun buildRecordingTileSnapshotOnAudioThread(): RecordingTileSnapshot {
         check(audioHandler.looper == Looper.myLooper())
+        // Bind this sample to the capture-intent epoch. A UI/binder mutation can race the
+        // remaining reads even though this method runs on the audio thread; the tile command
+        // carries this epoch back into the synchronized mutation and resamples if it changed.
+        val commandGeneration = listeningCommandGeneration.get()
         return recordingTileSnapshot(
             listeningIntentEnabled = isListeningEnabled(),
             runtimeCaptureActive = runtimeCaptureActiveOnAudioThread(),
@@ -2429,6 +2469,7 @@ class ReverbService : Service() {
             loopingEnabled = loopingBufferEnabled,
             oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat(),
             loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat(),
+            commandGeneration = commandGeneration,
         )
     }
 
@@ -2496,6 +2537,7 @@ class ReverbService : Service() {
     private fun executeQuickTileCommandOnAudioThread(
         bufferSlot: BufferSlot,
         startId: Int,
+        resampleCount: Int = 0,
     ) {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying) {
@@ -2512,10 +2554,26 @@ class ReverbService : Service() {
         }
         val action = recordingTileClickAction(bufferSlot, snapshot)
         val result = when (action) {
-            RecordingTileClickAction.START -> enableListening(bufferSlot)
-            RecordingTileClickAction.SWITCH -> selectCaptureBuffer(bufferSlot)
-            RecordingTileClickAction.STOP -> disableListening()
+            RecordingTileClickAction.START -> enableListening(
+                bufferSlot,
+                expectedGeneration = snapshot.commandGeneration,
+            )
+            RecordingTileClickAction.SWITCH -> selectCaptureBuffer(
+                bufferSlot,
+                expectedGeneration = snapshot.commandGeneration,
+            )
+            RecordingTileClickAction.STOP -> disableListening(
+                expectedGeneration = snapshot.commandGeneration,
+            )
             RecordingTileClickAction.NONE -> null
+        }
+        if (quickTileRejectedCommandRequiresResample(snapshot.commandGeneration, result) &&
+            resampleCount < QUICK_TILE_COMMAND_MAX_RESAMPLES
+        ) {
+            audioHandler.post {
+                executeQuickTileCommandOnAudioThread(bufferSlot, startId, resampleCount + 1)
+            }
+            return
         }
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         if (action == RecordingTileClickAction.NONE || result?.accepted != true) {
@@ -3507,6 +3565,7 @@ class ReverbService : Service() {
         const val INTERACTIVE_CAPTURE_READ_TARGET_MILLIS = 40L
         const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 1_000L
         const val EMPTY_READ_RETRY_MILLIS = 20L
+        const val QUICK_TILE_COMMAND_MAX_RESAMPLES = 3
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = "app.smallthingz.reverb.debug."
         val nextExportTokenId = AtomicLong(1L)

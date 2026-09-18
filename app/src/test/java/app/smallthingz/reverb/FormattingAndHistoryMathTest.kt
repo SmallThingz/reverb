@@ -1934,6 +1934,33 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileCommand_isBoundToTheRecorderGenerationItSampled() {
+        assertTrue(recorderCommandGenerationMayApply(expectedGeneration = null, currentGeneration = 8L))
+        assertTrue(recorderCommandGenerationMayApply(expectedGeneration = 8L, currentGeneration = 8L))
+        assertFalse(recorderCommandGenerationMayApply(expectedGeneration = 7L, currentGeneration = 8L))
+
+        val accepted = ReverbService.ListeningCommandResult(accepted = true, generation = 7L)
+        val rejectedSame = ReverbService.ListeningCommandResult(accepted = false, generation = 7L)
+        val rejectedSuperseded = ReverbService.ListeningCommandResult(accepted = false, generation = 8L)
+        assertFalse(quickTileRejectedCommandRequiresResample(7L, accepted))
+        assertFalse(quickTileRejectedCommandRequiresResample(7L, rejectedSame))
+        assertTrue(quickTileRejectedCommandRequiresResample(7L, rejectedSuperseded))
+        assertFalse(quickTileRejectedCommandRequiresResample(Long.MIN_VALUE, rejectedSuperseded))
+        assertFalse(quickTileRejectedCommandRequiresResample(7L, null))
+
+        val snapshot = recordingTileSnapshot(
+            listeningIntentEnabled = true,
+            runtimeCaptureActive = true,
+            activeBuffer = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotEnabled = true,
+            oneShotFull = false,
+            loopingEnabled = true,
+            commandGeneration = 42L,
+        )
+        assertEquals(42L, snapshot.commandGeneration)
+    }
+
+    @Test
     fun quickTileClick_isAlwaysRecomputedFromCurrentLiveSnapshot() {
         val oneShot = ReverbService.BufferSlot.ONE_SHOT
         val idle = RecordingTileSnapshot(
