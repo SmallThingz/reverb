@@ -1409,10 +1409,8 @@ internal fun recordingDestructiveIdentityMatches(context: Context, recording: Re
 internal fun recordingDeletionIdentityMatches(context: Context, recording: RecordingEntity): Boolean =
     recordingDestructiveIdentityMatches(context, recording)
 
-internal fun providerDeletionCompleted(
-    deleteReportedSuccess: Boolean,
-    observedState: RecordingAssetState,
-): Boolean = deleteReportedSuccess && observedState == RecordingAssetState.MISSING
+internal fun providerDeletionCompleted(observedState: RecordingAssetState): Boolean =
+    observedState == RecordingAssetState.MISSING
 
 internal fun resolveFileIdentity(file: File): String {
     val attributes = runCatching {
@@ -1601,15 +1599,28 @@ internal fun deleteVerifiedRecordingAsset(
             false
         }
 
-        RecordingStorageType.DOCUMENT -> runCatching {
-            val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
-            val deleted = document?.delete() == true
-            providerDeletionCompleted(deleted, recordingAssetState(context, recording))
-        }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
-        RecordingStorageType.MEDIASTORE -> runCatching {
-            val deleted = context.contentResolver.delete(recording.id.toUri(), null, null) > 0
-            providerDeletionCompleted(deleted, recordingAssetState(context, recording))
-        }.onFailure { Log.w(TAG, "Unable to delete recording ${recording.id}", it) }.getOrDefault(false)
+        RecordingStorageType.DOCUMENT -> {
+            val deleteFailure = runCatching {
+                val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
+                    ?: throw IOException("Unable to resolve recording for deletion")
+                document.delete()
+            }.exceptionOrNull()
+            val observedState = recordingAssetState(context, recording)
+            deleteFailure?.let {
+                Log.w(TAG, "Document delete result was uncertain; observed $observedState for ${recording.id}", it)
+            }
+            providerDeletionCompleted(observedState)
+        }
+        RecordingStorageType.MEDIASTORE -> {
+            val deleteFailure = runCatching {
+                context.contentResolver.delete(recording.id.toUri(), null, null)
+            }.exceptionOrNull()
+            val observedState = recordingAssetState(context, recording)
+            deleteFailure?.let {
+                Log.w(TAG, "MediaStore delete result was uncertain; observed $observedState for ${recording.id}", it)
+            }
+            providerDeletionCompleted(observedState)
+        }
     }
 }
 
