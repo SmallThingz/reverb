@@ -8,6 +8,45 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun textEditDraftOwnership_blocksCrossFieldOverwriteUntilPreviousEditFinishes() {
+        val start = requireNotNull(
+            beginRangeTextEditDraft(
+                active = null,
+                target = RangeEditTarget.START,
+                text = "0:12.5",
+            ),
+        )
+        val updatedStart = requireNotNull(
+            beginRangeTextEditDraft(
+                active = start,
+                target = RangeEditTarget.START,
+                text = "0:13.0",
+            ),
+        )
+
+        assertEquals(RangeEditTarget.START, updatedStart.target)
+        assertEquals("0:13.0", updatedStart.text)
+        assertEquals(
+            null,
+            beginRangeTextEditDraft(
+                active = updatedStart,
+                target = RangeEditTarget.END,
+                text = "0:40.0",
+            ),
+        )
+
+        val end = requireNotNull(
+            beginRangeTextEditDraft(
+                active = null,
+                target = RangeEditTarget.END,
+                text = "0:40.0",
+            ),
+        )
+        assertEquals(RangeEditTarget.END, end.target)
+        assertEquals("0:40.0", end.text)
+    }
+
+    @Test
     fun previewExecutorRejection_isALifecycleNoOpInsteadOfCallerCrash() {
         var ran = false
         val direct = java.util.concurrent.Executor { task -> task.run() }

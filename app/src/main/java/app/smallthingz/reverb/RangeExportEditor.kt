@@ -93,6 +93,18 @@ import kotlin.math.tanh
 
 internal enum class RangeEditTarget { START, END }
 
+internal data class RangeTextEditDraft(
+    val target: RangeEditTarget,
+    val text: String,
+)
+
+internal fun beginRangeTextEditDraft(
+    active: RangeTextEditDraft?,
+    target: RangeEditTarget,
+    text: String,
+): RangeTextEditDraft? =
+    if (active == null || active.target == target) RangeTextEditDraft(target, text) else null
+
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
     val commitAllowed: Boolean = false,
@@ -586,8 +598,7 @@ internal class RangeExportEditorState(
         private set
     var textEditGeneration by mutableLongStateOf(0L)
         private set
-    private var activeTextTarget: RangeEditTarget? = null
-    private var activeTextDraft: String? = null
+    private var activeTextEdit: RangeTextEditDraft? = null
     private var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
 
     val selectionDurationEditing: Boolean
@@ -670,29 +681,35 @@ internal class RangeExportEditorState(
         waveformLoading = false
     }
 
-    fun beginTextEditing(target: RangeEditTarget, draft: String) {
+    fun beginTextEditing(target: RangeEditTarget, draft: String): Boolean {
+        val next = beginRangeTextEditDraft(activeTextEdit, target, draft) ?: return false
         invalidateSelectionDurationCommit()
-        activeTextTarget = target
-        activeTextDraft = draft
+        activeTextEdit = next
+        return true
     }
 
     fun updateTextDraft(target: RangeEditTarget, draft: String) {
-        if (activeTextTarget == target) activeTextDraft = draft
+        val active = activeTextEdit ?: return
+        if (active.target == target) activeTextEdit = active.copy(text = draft)
     }
 
     fun commitActiveTextEditing(): Boolean {
-        val target = activeTextTarget ?: return true
-        val parsed = parseRangeTimeInput(activeTextDraft.orEmpty())?.toFloat() ?: return false
-        if (!commitTarget(target, parsed)) return false
-        activeTextTarget = null
-        activeTextDraft = null
+        val active = activeTextEdit ?: return true
+        val parsed = parseRangeTimeInput(active.text)?.toFloat() ?: return false
+        if (!commitTarget(active.target, parsed)) return false
+        activeTextEdit = null
         textEditGeneration++
         return true
     }
 
+    fun commitTextEditingOnBlur(target: RangeEditTarget): Boolean {
+        val active = activeTextEdit ?: return true
+        if (active.target != target) return true
+        return commitActiveTextEditing()
+    }
+
     fun invalidateTextEditing() {
-        activeTextTarget = null
-        activeTextDraft = null
+        activeTextEdit = null
         textEditGeneration++
     }
 
@@ -717,7 +734,7 @@ internal class RangeExportEditorState(
         // Native wheel state settles after the pointer is released. Pin the edit owner now so
         // the delayed terminal commit and reachable cap belong to this exact interaction.
         selectionDurationInteraction = selectionDurationInteraction.begin(lastTarget)
-        if (activeTextTarget != null || activeTextDraft != null) {
+        if (activeTextEdit != null) {
             invalidateTextEditing()
         }
         pausePreview()
@@ -1583,14 +1600,23 @@ private fun TimelineTimeInput(
                     .padding(horizontal = 7.dp)
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused && !wasFocused) {
-                            wasFocused = true
-                            focusGeneration = editGeneration
-                            editorState.beginTextEditing(target, text)
-                            onFocus()
+                            if (editorState.beginTextEditing(target, text)) {
+                                wasFocused = true
+                                focusGeneration = editorState.textEditGeneration
+                                onFocus()
+                            } else {
+                                // Another field still owns an invalid draft. Never overwrite it
+                                // merely because focus briefly moved to this field.
+                                focusManager.clearFocus(force = true)
+                            }
                         } else if (!focusState.isFocused && wasFocused) {
                             wasFocused = false
                             if (focusGeneration != editorState.textEditGeneration) {
                                 text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble())
+                            } else if (!editorState.commitTextEditingOnBlur(target)) {
+                                // Preserve the invalid draft under its original owner so tapping
+                                // the other field cannot silently discard the user's text.
+                                invalid = true
                             }
                         }
                     },
