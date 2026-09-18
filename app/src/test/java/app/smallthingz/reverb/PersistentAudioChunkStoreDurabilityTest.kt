@@ -11,6 +11,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1511,6 +1512,75 @@ class PersistentAudioChunkStoreDurabilityTest {
                 lease.close()
             }
             assertArrayEquals(expected, readAll(store))
+        }
+    }
+
+    @Test
+    fun waveformSampling_surfacesTerminalReaderCloseFailureWithoutRetry() = withStoreRoot { root ->
+        val expectedBytes = pcmBytes(24_000)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expectedBytes.size, store.append(expectedBytes, 0, expectedBytes.size))
+            store.sealActiveChunk()
+            val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            val closeFailure = IOException("Injected waveform reader close failure")
+            var closeAttempts = 0
+            try {
+                val thrown = assertThrows(IOException::class.java) {
+                    lease.sampleWaveformEnvelopeProgressive(
+                        bucketCount = 16,
+                        accessCloser = { access ->
+                            closeAttempts++
+                            access.close()
+                            throw closeFailure
+                        },
+                    ) { _, _ -> true }
+                }
+                assertSame(closeFailure, thrown)
+                assertEquals(1, closeAttempts)
+            } finally {
+                lease.close()
+            }
+            assertArrayEquals(expectedBytes, readAll(store))
+        }
+    }
+
+    @Test
+    fun waveformSampling_preservesReadFailureAndSuppressesTerminalCloseFailure() = withStoreRoot { root ->
+        val expectedBytes = pcmBytes(24_000)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expectedBytes.size, store.append(expectedBytes, 0, expectedBytes.size))
+            store.sealActiveChunk()
+            val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            val readFailure = IOException("Injected waveform read failure")
+            val closeFailure = IOException("Injected waveform reader close failure")
+            var closeAttempts = 0
+            try {
+                val thrown = assertThrows(IOException::class.java) {
+                    lease.sampleWaveformEnvelopeProgressive(
+                        bucketCount = 16,
+                        accessFactory = { file ->
+                            object : RandomAccessFile(file, "r") {
+                                override fun seek(pos: Long) {
+                                    throw readFailure
+                                }
+                            }
+                        },
+                        accessCloser = { access ->
+                            closeAttempts++
+                            access.close()
+                            throw closeFailure
+                        },
+                    ) { _, _ -> true }
+                }
+                assertSame(readFailure, thrown)
+                assertEquals(listOf(closeFailure), readFailure.suppressed.toList())
+                assertEquals(1, closeAttempts)
+            } finally {
+                lease.close()
+            }
+            assertArrayEquals(expectedBytes, readAll(store))
         }
     }
 

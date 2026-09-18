@@ -934,6 +934,8 @@ internal class PersistentAudioChunkStore internal constructor(
             bucketCount: Int,
             probesPerBucket: Int = 2,
             framesPerProbe: Int = 24,
+            accessFactory: (File) -> RandomAccessFile = { file -> RandomAccessFile(file, "r") },
+            accessCloser: (RandomAccessFile) -> Unit = RandomAccessFile::close,
             onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
         ): FloatArray {
             check(!closedLease) { "RangeLease is closed" }
@@ -946,6 +948,15 @@ internal class PersistentAudioChunkStore internal constructor(
             val scratch = ByteArray(frames * MAX_CHANNEL_COUNT * PcmSampleFormat.PCM_FLOAT.bytesPerSample)
             var currentFile: File? = null
             var currentAccess: RandomAccessFile? = null
+            fun closeCurrentAccess(primaryFailure: Throwable? = null): Throwable? {
+                val access = currentAccess ?: return primaryFailure
+                // Transfer ownership out before close. A failed close is terminal for this handle
+                // and must never be retried from finally against uncertain ownership.
+                currentAccess = null
+                currentFile = null
+                return closePreservingPrimaryFailure(primaryFailure) { accessCloser(access) }
+            }
+            var primaryFailure: Throwable? = null
             try {
                 for (bucket in 0 until buckets) {
                     val bucketStart = durationSeconds * bucket.toDouble() / buckets.toDouble()
@@ -977,9 +988,9 @@ internal class PersistentAudioChunkStore internal constructor(
                         }
 
                         if (currentFile != record.file) {
-                            runCatching { currentAccess?.close() }
+                            closeCurrentAccess()?.let { throw it }
                             currentFile = record.file
-                            currentAccess = RandomAccessFile(record.file, "r")
+                            currentAccess = accessFactory(record.file)
                         }
                         val access = currentAccess ?: return@repeat
                         access.seek(segment.payloadOffsetBytes + byteOffset)
@@ -996,8 +1007,12 @@ internal class PersistentAudioChunkStore internal constructor(
                     envelope[bucket] = value
                     if (!onBucket(bucket, value)) break
                 }
+            } catch (error: Throwable) {
+                primaryFailure = error
+                throw error
             } finally {
-                runCatching { currentAccess?.close() }
+                val terminalFailure = closeCurrentAccess(primaryFailure)
+                if (primaryFailure == null && terminalFailure != null) throw terminalFailure
             }
             return envelope
         }
