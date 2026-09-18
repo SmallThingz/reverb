@@ -339,6 +339,225 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun deferredLoopingRetention_shrinksOneChunkPerMaintenanceStepAndKeepsNewestAudio() =
+        withStoreRoot { root ->
+            val first = pcmBytes(16_000)
+            val second = first.map { byte -> (byte.toInt() xor 0x33).toByte() }.toByteArray()
+            val third = first.map { byte -> (byte.toInt() xor 0x66).toByte() }.toByteArray()
+            PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second, third)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                assertEquals(3, requireNotNull(store.peekSnapshot()).chunkCount)
+
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = third.size.toLong(),
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+                assertEquals(3, requireNotNull(store.peekSnapshot()).chunkCount)
+                assertTrue(store.retentionMaintenanceNeeded())
+
+                val firstStep = store.performRetentionMaintenanceStep()
+                assertTrue(firstStep.progressed)
+                assertTrue(firstStep.needsMore)
+                assertFalse(firstStep.blocked)
+                assertEquals(2, requireNotNull(store.peekSnapshot()).chunkCount)
+
+                val secondStep = store.performRetentionMaintenanceStep()
+                assertTrue(secondStep.progressed)
+                assertFalse(secondStep.needsMore)
+                assertEquals(1, requireNotNull(store.peekSnapshot()).chunkCount)
+                assertFalse(store.retentionMaintenanceNeeded())
+                assertArrayEquals(third, readAll(store))
+            }
+        }
+
+    @Test
+    fun deferredOneShotRetention_shrinksOneChunkPerMaintenanceStepAndKeepsOldestAudio() =
+        withStoreRoot { root ->
+            val first = pcmBytes(16_000)
+            val second = first.map { byte -> (byte.toInt() xor 0x33).toByte() }.toByteArray()
+            val third = first.map { byte -> (byte.toInt() xor 0x66).toByte() }.toByteArray()
+            PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second, third)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                assertEquals(3, requireNotNull(store.peekSnapshot()).chunkCount)
+
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = first.size.toLong(),
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+                assertEquals(3, requireNotNull(store.peekSnapshot()).chunkCount)
+                assertTrue(store.retentionMaintenanceNeeded())
+
+                val firstStep = store.performRetentionMaintenanceStep()
+                assertTrue(firstStep.progressed)
+                assertTrue(firstStep.needsMore)
+                assertFalse(firstStep.blocked)
+                assertEquals(2, requireNotNull(store.peekSnapshot()).chunkCount)
+
+                val secondStep = store.performRetentionMaintenanceStep()
+                assertTrue(secondStep.progressed)
+                assertFalse(secondStep.needsMore)
+                assertEquals(1, requireNotNull(store.peekSnapshot()).chunkCount)
+                assertFalse(store.retentionMaintenanceNeeded())
+                assertArrayEquals(first, readAll(store))
+            }
+        }
+
+    @Test
+    fun deferredRetention_partialBoundaryKeepsNewestLoopingAndOldestOneShot() =
+        withStoreRoot { root ->
+            val first = pcmBytes(16_000)
+            val second = first.map { byte -> (byte.toInt() xor 0x5a).toByte() }.toByteArray()
+            val retentionBytes = 24_000L
+
+            PersistentAudioChunkStore(File(root, "looping"), overwriteOldest = true).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = retentionBytes,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+
+                val step = store.performRetentionMaintenanceStep()
+                assertTrue(step.progressed)
+                assertFalse(step.needsMore)
+                assertArrayEquals(first.copyOfRange(8_000, first.size) + second, readAll(store))
+            }
+
+            PersistentAudioChunkStore(File(root, "one-shot"), overwriteOldest = false).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = retentionBytes,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+
+                val step = store.performRetentionMaintenanceStep()
+                assertTrue(step.progressed)
+                assertFalse(step.needsMore)
+                assertArrayEquals(first + second.copyOfRange(0, 8_000), readAll(store))
+            }
+        }
+
+    @Test
+    fun deferredTimeRetention_preservesCorrectPartialBoundaryForBothBuffers() =
+        withStoreRoot { root ->
+            // 8 kHz mono PCM16: 12,000 bytes = 0.75 seconds. Two chunks total 1.5 s,
+            // so a 1-second limit requires an exact 0.5-second boundary trim.
+            val first = pcmBytes(12_000)
+            val second = first.map { byte -> (byte.toInt() xor 0x47).toByte() }.toByteArray()
+
+            PersistentAudioChunkStore(File(root, "looping-time"), overwriteOldest = true).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                store.configure(
+                    requestedRetentionMode = RetentionMode.TIME,
+                    requestedRetentionValue = 1L,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+
+                val step = store.performRetentionMaintenanceStep()
+                assertTrue(step.progressed)
+                assertFalse(step.needsMore)
+                assertArrayEquals(first.copyOfRange(8_000, first.size) + second, readAll(store))
+            }
+
+            PersistentAudioChunkStore(File(root, "one-shot-time"), overwriteOldest = false).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                store.configure(
+                    requestedRetentionMode = RetentionMode.TIME,
+                    requestedRetentionValue = 1L,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+
+                val step = store.performRetentionMaintenanceStep()
+                assertTrue(step.progressed)
+                assertFalse(step.needsMore)
+                assertArrayEquals(first + second.copyOfRange(0, 4_000), readAll(store))
+            }
+        }
+
+    @Test
+    fun deferredRetention_leaseReleaseOnlyUnblocksMaintenanceWithoutDoingCleanupInline() =
+        withStoreRoot { root ->
+            val first = pcmBytes(16_000)
+            val second = first.map { byte -> (byte.toInt() xor 0x2d).toByte() }.toByteArray()
+            PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
+                configure(store, 512 * 1024L)
+                for (chunk in listOf(first, second)) {
+                    assertEquals(chunk.size, store.append(chunk, 0, chunk.size))
+                    store.sealActiveChunk()
+                }
+                val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = 24_000L,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    deferRetentionCleanup = true,
+                )
+
+                val blocked = store.performRetentionMaintenanceStep()
+                assertFalse(blocked.progressed)
+                assertTrue(blocked.needsMore)
+                assertTrue(blocked.blocked)
+                assertEquals(2, requireNotNull(store.peekSnapshot()).chunkCount)
+
+                lease.close()
+                assertEquals(2, requireNotNull(store.peekSnapshot()).chunkCount)
+                assertTrue(store.retentionMaintenanceNeeded())
+
+                val resumed = store.performRetentionMaintenanceStep()
+                assertTrue(resumed.progressed)
+                assertFalse(resumed.needsMore)
+                assertArrayEquals(first.copyOfRange(8_000, first.size) + second, readAll(store))
+            }
+        }
+
+    @Test
     fun repeatedRestartsAndIndexLoss_preserveTheEntireObservableTimeline() = withStoreRoot { root ->
         val expected = ByteArrayOutputStream()
         repeat(24) { iteration ->

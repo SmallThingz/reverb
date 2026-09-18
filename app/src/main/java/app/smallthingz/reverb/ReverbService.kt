@@ -284,6 +284,8 @@ class ReverbService : Service() {
     private val nextBufferClearOperationId = AtomicLong(1L)
     @Volatile private var bufferClearStatus: BufferClearStatus? = null
     private var activeBufferClearOperation: BufferClearOperation? = null
+    private val retentionMaintenanceActive = AtomicBoolean(false)
+    private val retentionMaintenancePassQueued = AtomicBoolean(false)
     @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
@@ -389,6 +391,7 @@ class ReverbService : Service() {
         if (cancelActiveBufferClearForTeardown()) {
             AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
         }
+        retentionMaintenanceActive.set(false)
         if (::bufferClearExecutor.isInitialized) {
             // Do not interrupt a durability-critical chunk retirement already in flight.
             // Cancellation is observed between chunk steps; store close waits for the current
@@ -1615,6 +1618,10 @@ class ReverbService : Service() {
             ensureBufferClearOnlyForegroundIfNeeded()
             return
         }
+        if (retentionMaintenanceActive.get()) {
+            stopForegroundTracked()
+            return
+        }
         stopForegroundTracked()
         stopSelf()
     }
@@ -1686,6 +1693,10 @@ class ReverbService : Service() {
                 ensureBufferClearOnlyForegroundIfNeeded()
                 return@post
             }
+            if (retentionMaintenanceActive.get()) {
+                stopForegroundTracked()
+                return@post
+            }
             stopForegroundTracked()
             // The export keepalive itself started this service. If capture cannot be
             // restored to an active microphone foreground service, always release that
@@ -1711,6 +1722,10 @@ class ReverbService : Service() {
             }
             if (hasActiveExport()) {
                 ensureExportOnlyForegroundIfNeeded()
+                return@post
+            }
+            if (retentionMaintenanceActive.get()) {
+                stopForegroundTracked()
                 return@post
             }
             stopForegroundTracked()
@@ -2298,6 +2313,7 @@ class ReverbService : Service() {
 
     private fun sealActiveChunks() {
         forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
+        scheduleRetentionMaintenanceIfNeeded()
     }
 
     private fun requestDurabilitySyncIfDue(nowNanos: Long = System.nanoTime()) {
@@ -2332,6 +2348,7 @@ class ReverbService : Service() {
             pauseListeningAfterPersistenceFailure("payload sync", error)
             return
         }
+        scheduleRetentionMaintenanceIfNeeded()
         if (RecordingQuickTiles.hasListeningServices()) {
             audioHandler.post {
                 if (state == STATE_LISTENING) {
@@ -2731,7 +2748,8 @@ class ReverbService : Service() {
             isListeningEnabled() ||
             state == STATE_LISTENING ||
             hasActiveExport() ||
-            hasActiveBufferClear()
+            hasActiveBufferClear() ||
+            retentionMaintenanceActive.get()
         ) {
             return
         }
@@ -3255,6 +3273,95 @@ class ReverbService : Service() {
         }
     }
 
+    private fun scheduleRetentionMaintenanceIfNeeded() {
+        if (serviceDestroying || !::bufferClearExecutor.isInitialized) return
+        if (retentionMaintenancePassQueued.get()) {
+            retentionMaintenanceActive.set(true)
+            return
+        }
+        val needed = try {
+            loopingAudioChunkStore.retentionMaintenanceNeeded() ||
+                oneShotAudioChunkStore.retentionMaintenanceNeeded()
+        } catch (error: Exception) {
+            retentionMaintenanceActive.set(false)
+            pauseListeningAfterPersistenceFailure("inspect retention maintenance", error)
+            return
+        }
+        if (!needed) {
+            retentionMaintenanceActive.set(false)
+            return
+        }
+        retentionMaintenanceActive.set(true)
+        enqueueRetentionMaintenancePass()
+    }
+
+    private fun enqueueRetentionMaintenancePass() {
+        if (serviceDestroying || !retentionMaintenanceActive.get()) return
+        if (!retentionMaintenancePassQueued.compareAndSet(false, true)) return
+        try {
+            bufferClearExecutor.execute(::runRetentionMaintenancePass)
+        } catch (error: RejectedExecutionException) {
+            retentionMaintenancePassQueued.set(false)
+            retentionMaintenanceActive.set(false)
+            if (!serviceDestroying) {
+                pauseListeningAfterPersistenceFailure("schedule retention maintenance", error)
+            }
+        }
+    }
+
+    private fun runRetentionMaintenancePass() {
+        if (serviceDestroying) {
+            retentionMaintenancePassQueued.set(false)
+            retentionMaintenanceActive.set(false)
+            return
+        }
+        var needsMore = false
+        var blocked = false
+        try {
+            val loopingStep = loopingAudioChunkStore.performRetentionMaintenanceStep()
+            val oneShotStep = oneShotAudioChunkStore.performRetentionMaintenanceStep()
+            needsMore = loopingStep.needsMore || oneShotStep.needsMore
+            blocked = (loopingStep.blocked && !loopingStep.progressed) ||
+                (oneShotStep.blocked && !oneShotStep.progressed)
+        } catch (error: Exception) {
+            retentionMaintenancePassQueued.set(false)
+            retentionMaintenanceActive.set(false)
+            if (!serviceDestroying) {
+                pauseListeningAfterPersistenceFailure("apply retention maintenance", error)
+            }
+            return
+        }
+
+        retentionMaintenancePassQueued.set(false)
+        if (needsMore && !serviceDestroying) {
+            retentionMaintenanceActive.set(true)
+            if (blocked) {
+                mainHandler.postDelayed(
+                    { enqueueRetentionMaintenancePass() },
+                    RETENTION_MAINTENANCE_BLOCKED_RETRY_MILLIS,
+                )
+            } else {
+                enqueueRetentionMaintenancePass()
+            }
+            return
+        }
+
+        retentionMaintenanceActive.set(false)
+        if (serviceDestroying) return
+
+        // A capture append can cross the limit after the last store step but before this
+        // worker clears its active flag. Recheck after releasing the queued-pass ownership so
+        // that exact boundary cannot lose the wake-up.
+        scheduleRetentionMaintenanceIfNeeded()
+        if (!retentionMaintenanceActive.get()) {
+            mainHandler.post {
+                if (!serviceDestroying && state != STATE_LISTENING) {
+                    requestServiceStopWhenExportIdle()
+                }
+            }
+        }
+    }
+
     private fun currentBufferClearRemainingBytes(operation: BufferClearOperation, fallback: Long): Long =
         bufferClearStatus
             ?.takeIf { it.operationId == operation.id }
@@ -3589,6 +3696,7 @@ class ReverbService : Service() {
             requestedSampleRate = sampleRate,
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
+            deferRetentionCleanup = true,
         )
         val oneShotRetentionValue = normalizeRetentionValue(
             mode,
@@ -3605,8 +3713,10 @@ class ReverbService : Service() {
             requestedSampleRate = sampleRate,
             requestedChannelCount = channelMode.channelCount,
             sampleFormat = pcmSampleFormat,
+            deferRetentionCleanup = true,
         )
         configuredRetentionMode = mode
+        scheduleRetentionMaintenanceIfNeeded()
         if (
             (loopingAudioChunkStore.hasData() || oneShotAudioChunkStore.hasData()) &&
             !isListeningEnabled() &&
@@ -4057,6 +4167,7 @@ class ReverbService : Service() {
         const val INTERACTIVE_CAPTURE_READ_TARGET_MILLIS = 40L
         const val BACKGROUND_CAPTURE_READ_TARGET_MILLIS = 1_000L
         const val EMPTY_READ_RETRY_MILLIS = 20L
+        const val RETENTION_MAINTENANCE_BLOCKED_RETRY_MILLIS = 50L
         const val QUICK_TILE_COMMAND_MAX_RESAMPLES = 3
         const val FULL_BUFFER_SECONDS = 60f * 60f * 24f * 365f
         const val DEBUG_ACTION_PREFIX = "app.smallthingz.reverb.debug."
