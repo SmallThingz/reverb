@@ -1427,6 +1427,34 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun providerReadHandoff_requiresSelectedIdentityBeforeAndAfterDescriptorOpen() {
+        val expected = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/7",
+            4_000L,
+            10L,
+        )
+        val changedRevision = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/7",
+            4_000L,
+            11L,
+        )
+        val replacement = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/8",
+            4_000L,
+            10L,
+        )
+
+        assertTrue(providerReadHandoffMatchesExpected(expected, expected, expected))
+        assertFalse(providerReadHandoffMatchesExpected(expected, changedRevision, expected))
+        assertFalse(providerReadHandoffMatchesExpected(expected, expected, changedRevision))
+        assertFalse(providerReadHandoffMatchesExpected(expected, expected, replacement))
+        assertFalse(providerReadHandoffMatchesExpected("", expected, expected))
+    }
+
+    @Test
     fun documentRename_requiresSameObjectOrVerifiedUriHandoff() {
         val before = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
         val same = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))

@@ -1842,16 +1842,41 @@ internal fun sha256(input: InputStream, bufferSize: Int = FILE_COPY_BUFFER_BYTES
     return CopyDigest(total, digest.digest())
 }
 
+internal fun providerReadHandoffMatchesExpected(
+    expectedIdentity: String,
+    beforeOpenIdentity: String,
+    afterOpenIdentity: String,
+): Boolean = expectedIdentity.isNotBlank() &&
+    providerRecordingIdentityMatches(expectedIdentity, beforeOpenIdentity) &&
+    providerRecordingIdentityMatches(expectedIdentity, afterOpenIdentity)
+
+private fun openVerifiedProviderInputStream(
+    context: Context,
+    recording: RecordingEntity,
+): InputStream? {
+    val expectedIdentity = recording.fileIdentity.takeIf { it.isNotBlank() } ?: return null
+    val uri = recording.id.toUri()
+    val before = resolveProviderRecordingIdentity(context, recording.storageType, uri)
+    if (!providerRecordingIdentityMatches(expectedIdentity, before)) return null
+
+    val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+    val input = openChildOrCloseOwner(descriptor) { opened ->
+        ParcelFileDescriptor.AutoCloseInputStream(opened)
+    }
+    val after = resolveProviderRecordingIdentity(context, recording.storageType, uri)
+    if (!providerReadHandoffMatchesExpected(expectedIdentity, before, after)) {
+        closePreservingPrimaryFailure(null) { input.close() }?.let { throw it }
+        return null
+    }
+    return input
+}
+
 internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
     when (recording.storageType) {
         RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> if (recordingContentIdentityMatches(context, recording)) {
-            context.contentResolver.openInputStream(recording.id.toUri())
-        } else {
-            null
-        }
+        -> openVerifiedProviderInputStream(context, recording)
     }
 
 internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputStream? {
