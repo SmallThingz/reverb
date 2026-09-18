@@ -459,19 +459,29 @@ internal fun restoreRetentionConfigurationToPreferences(
 private fun retentionRecoveryFile(context: Context): File =
     File(context.noBackupFilesDir, RETENTION_RECOVERY_FILE_NAME)
 
+internal inline fun durableBarrierAndCloseSucceeded(
+    barrier: () -> Unit,
+    close: () -> Unit,
+): Boolean {
+    var failure: Throwable? = null
+    try {
+        barrier()
+    } catch (error: Throwable) {
+        failure = error
+    }
+    failure = closePreservingPrimaryFailure(failure, close)
+    return failure == null
+}
+
 private fun syncRetentionRecoveryDirectory(context: Context): Boolean {
     val directory = context.noBackupFilesDir
     val descriptor = runCatching {
         Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
     }.getOrNull() ?: return false
-    return try {
-        Os.fsync(descriptor)
-        true
-    } catch (_: Exception) {
-        false
-    } finally {
-        runCatching { Os.close(descriptor) }
-    }
+    return durableBarrierAndCloseSucceeded(
+        barrier = { Os.fsync(descriptor) },
+        close = { Os.close(descriptor) },
+    )
 }
 
 private fun crc32(bytes: ByteArray, offset: Int, count: Int): Int = CRC32().run {

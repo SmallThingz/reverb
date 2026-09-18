@@ -131,4 +131,40 @@ class RetentionTransactionFailureTest {
         assertEquals(listOf("recovery:old", "preferences:old"), events)
     }
 
+    @Test
+    fun durabilityBarrier_requiresBothFsyncAndDescriptorClose() {
+        val events = mutableListOf<String>()
+        assertEquals(
+            true,
+            durableBarrierAndCloseSucceeded(
+                barrier = { events += "fsync" },
+                close = { events += "close" },
+            ),
+        )
+        assertEquals(listOf("fsync", "close"), events)
+
+        events.clear()
+        assertEquals(
+            false,
+            durableBarrierAndCloseSucceeded(
+                barrier = { events += "fsync" },
+                close = { events += "close"; throw IllegalStateException("close failed") },
+            ),
+        )
+        assertEquals(listOf("fsync", "close"), events)
+    }
+
+    @Test
+    fun durabilityBarrier_attemptsCloseAfterFsyncFailure() {
+        val events = mutableListOf<String>()
+        assertEquals(
+            false,
+            durableBarrierAndCloseSucceeded(
+                barrier = { events += "fsync"; throw IllegalStateException("fsync failed") },
+                close = { events += "close" },
+            ),
+        )
+        assertEquals(listOf("fsync", "close"), events)
+    }
+
 }
