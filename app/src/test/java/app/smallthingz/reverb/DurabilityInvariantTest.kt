@@ -926,6 +926,61 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun newProviderOutput_requiresExactEmptyStagingObjectBeforeWrite() {
+        val document = NewlyCreatedOutputObservation(
+            displayName = "reverb-partial-token.wav",
+            sizeBytes = 0L,
+            sizeKnown = true,
+            isFile = true,
+            pending = null,
+            directoryMatches = true,
+        )
+        assertTrue(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = false, document,
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-other.wav", requirePending = false, document,
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = false, document.copy(sizeKnown = false),
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = false, document.copy(sizeBytes = 1L),
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = false, document.copy(isFile = false),
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = false, document.copy(directoryMatches = false),
+            ),
+        )
+
+        val mediaStore = document.copy(pending = true)
+        assertTrue(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = true, mediaStore,
+            ),
+        )
+        assertFalse(
+            newlyCreatedOutputMayBeWritten(
+                "reverb-partial-token.wav", requirePending = true, mediaStore.copy(pending = false),
+            ),
+        )
+        assertFalse(newlyCreatedOutputMayBeWritten("reverb-partial-token.wav", true, null))
+    }
+
+    @Test
     fun ambiguousDocumentPublish_requiresExactNameContentAndRenameContinuity() {
         val digest = CopyDigest(5L, ByteArray(32) { 0x41 })
         val expected = StableOutputFingerprint(

@@ -2089,6 +2089,7 @@ private data class DocumentTreeEntry(
     val name: String?,
     val mimeType: String?,
     val sizeBytes: Long,
+    val sizeKnown: Boolean,
     val modifiedMillis: Long,
     val isFile: Boolean,
 )
@@ -2126,6 +2127,7 @@ private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<Docum
                         name = if (rows.isNull(nameIndex)) null else rows.getString(nameIndex),
                         mimeType = mimeType,
                         sizeBytes = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex).coerceAtLeast(0L),
+                        sizeKnown = !rows.isNull(sizeIndex),
                         modifiedMillis = if (rows.isNull(modifiedIndex)) 0L else rows.getLong(modifiedIndex).coerceAtLeast(0L),
                         isFile = mimeType != null && mimeType != DocumentsContract.Document.MIME_TYPE_DIR,
                     ),
@@ -3166,6 +3168,64 @@ private fun renameDocumentRecording(
     )
 }
 
+internal data class NewlyCreatedOutputObservation(
+    val displayName: String?,
+    val sizeBytes: Long,
+    val sizeKnown: Boolean,
+    val isFile: Boolean,
+    val pending: Boolean?,
+    val directoryMatches: Boolean,
+)
+
+internal fun newlyCreatedOutputMayBeWritten(
+    expectedDisplayName: String,
+    requirePending: Boolean,
+    observation: NewlyCreatedOutputObservation?,
+): Boolean {
+    val current = observation ?: return false
+    return current.displayName == expectedDisplayName &&
+        current.sizeKnown &&
+        current.sizeBytes == 0L &&
+        current.isFile &&
+        current.directoryMatches &&
+        (!requirePending || current.pending == true)
+}
+
+private fun queryCreatedMediaStoreOutput(
+    context: Context,
+    uri: Uri,
+): NewlyCreatedOutputObservation? {
+    val projection = arrayOf(
+        MediaStore.MediaColumns.DISPLAY_NAME,
+        MediaStore.MediaColumns.MIME_TYPE,
+        MediaStore.MediaColumns.SIZE,
+        MediaStore.MediaColumns.IS_PENDING,
+        MediaStore.MediaColumns.RELATIVE_PATH,
+    )
+    val cursor = try {
+        context.contentResolver.query(uri, projection, null, null, null)
+    } catch (error: Exception) {
+        throw IOException("Unable to verify created MediaStore output $uri", error)
+    } ?: throw IOException("Created MediaStore output returned no verification cursor: $uri")
+    return cursor.use { rows ->
+        if (!rows.moveToFirst()) return@use null
+        val nameIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+        val mimeIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+        val sizeIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+        val pendingIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
+        val pathIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+        val mimeType = if (rows.isNull(mimeIndex)) null else rows.getString(mimeIndex)
+        NewlyCreatedOutputObservation(
+            displayName = if (rows.isNull(nameIndex)) null else rows.getString(nameIndex),
+            sizeBytes = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex).coerceAtLeast(0L),
+            sizeKnown = !rows.isNull(sizeIndex),
+            isFile = !mimeType.isNullOrBlank(),
+            pending = if (rows.isNull(pendingIndex)) null else rows.getInt(pendingIndex) != 0,
+            directoryMatches = !rows.isNull(pathIndex) && rows.getString(pathIndex) == MEDIA_STORE_RELATIVE_PATH,
+        )
+    }
+}
+
 private fun createMediaStoreOutputTarget(
     context: Context,
     requestedDisplayName: String,
@@ -3187,6 +3247,13 @@ private fun createMediaStoreOutputTarget(
     }
     val uri = context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
         ?: throw IOException("Unable to create MediaStore recording")
+    val observation = queryCreatedMediaStoreOutput(context, uri)
+    if (!newlyCreatedOutputMayBeWritten(stagingName, requirePending = true, observation)) {
+        // The returned URI is not enough authority to truncate/write an arbitrary provider row.
+        // Preserve an unproven object untouched; pending/staging naming keeps a genuine partial
+        // creation out of Library recovery until a later pass can prove its ownership/content.
+        throw IOException("MediaStore returned an unverified output row: $uri")
+    }
     return RecordingOutputTarget(
         id = uri.toString(),
         displayName = uniqueName,
@@ -3220,6 +3287,23 @@ private fun createDocumentOutputTarget(
         mimeType,
         stagingName,
     ) ?: throw IOException("Unable to create output document")
+    val createdEntry = queryDocumentTreeEntries(context, treeUri)
+        .singleOrNull { entry -> entry.uri == documentUri }
+    val observation = createdEntry?.let { entry ->
+        NewlyCreatedOutputObservation(
+            displayName = entry.name,
+            sizeBytes = entry.sizeBytes,
+            sizeKnown = entry.sizeKnown,
+            isFile = entry.isFile,
+            pending = null,
+            directoryMatches = true,
+        )
+    }
+    if (!newlyCreatedOutputMayBeWritten(stagingName, requirePending = false, observation)) {
+        // Never open a provider-returned URI with truncating write mode until the strict tree
+        // listing proves that it is the exact new, empty high-entropy staging child we requested.
+        throw IOException("Document provider returned an unverified output document: $documentUri")
+    }
 
     return RecordingOutputTarget(
         id = documentUri.toString(),
