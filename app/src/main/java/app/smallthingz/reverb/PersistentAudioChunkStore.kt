@@ -124,6 +124,32 @@ private fun forceAudioStoreDirectoryDurable(directory: File) {
     }
 }
 
+internal enum class AtomicChunkReplacementState { ORIGINAL, REPLACEMENT, UNCERTAIN }
+
+internal fun classifyAtomicChunkReplacementAfterFailure(
+    original: CopyDigest,
+    replacement: CopyDigest,
+    observedTarget: CopyDigest?,
+): AtomicChunkReplacementState = when {
+    observedTarget == null -> AtomicChunkReplacementState.UNCERTAIN
+    copyDigestMatches(replacement, observedTarget) -> AtomicChunkReplacementState.REPLACEMENT
+    copyDigestMatches(original, observedTarget) -> AtomicChunkReplacementState.ORIGINAL
+    else -> AtomicChunkReplacementState.UNCERTAIN
+}
+
+internal fun replaceAudioChunkAtomically(source: File, target: File) {
+    try {
+        Files.move(
+            source.toPath(),
+            target.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    } catch (error: AtomicMoveNotSupportedException) {
+        throw IOException("Atomic audio-chunk replacement is unavailable", error)
+    }
+}
+
 /**
  * Disk-backed append-only PCM timeline.
  *
@@ -135,6 +161,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val legacyDirectory: File?,
     private val overwriteOldest: Boolean,
     private val directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
+    private val atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
 ) : Closeable {
     constructor(
         context: Context,
@@ -151,8 +178,13 @@ internal class PersistentAudioChunkStore internal constructor(
         rootDirectory: File,
         overwriteOldest: Boolean = true,
         directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
+        atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
     ) : this(
-        rootDirectory, legacyDirectory = null, overwriteOldest = overwriteOldest, directorySync = directorySync,
+        rootDirectory,
+        legacyDirectory = null,
+        overwriteOldest = overwriteOldest,
+        directorySync = directorySync,
+        atomicChunkReplace = atomicChunkReplace,
     )
 
     private val chunksDirectory = File(rootDirectory, BUFFER_CHUNKS_FOLDER_NAME)
@@ -187,6 +219,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private var activePayloadCrc = CRC32()
     private var activeDurablePayloadBytes = 0L
     private var activeAppendBoundaryFailure: IOException? = null
+    private var terminalStorageFailure: IOException? = null
     private var lastWriteAtMillis = 0L
 
     data class Snapshot(
@@ -666,6 +699,13 @@ internal class PersistentAudioChunkStore internal constructor(
     @Synchronized
     override fun close() {
         if (closed) return
+        terminalStorageFailure?.let { terminal ->
+            closeActiveAccessLocked()?.let { closeError ->
+                if (closeError !== terminal) terminal.addSuppressed(closeError)
+            }
+            closed = true
+            throw terminal
+        }
         var failure: Exception? = null
         fun recordFailure(error: Exception) {
             val previous = failure
@@ -1022,6 +1062,9 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun ensureLoadedLocked() {
         check(!closed) { "PersistentAudioChunkStore is closed" }
+        terminalStorageFailure?.let { failure ->
+            throw IOException("Persistent audio store state is uncertain", failure)
+        }
         if (loaded) return
 
         val rootExisted = rootDirectory.exists()
@@ -1725,6 +1768,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
         if (record === activeRecord) finalizeActiveLocked()
         requireFinalizedChunkPayloadIntegrityLocked(record)
+        val originalFileDigest = FileInputStream(record.file).use(::sha256)
         val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
         if (temp.exists()) {
             preserveUnrecognizedChunkLocked(temp, "stale-truncation")
@@ -1770,22 +1814,36 @@ internal class PersistentAudioChunkStore internal constructor(
             writeMutableChunkSlot(replacement, access = output, forceToDisk = true)
             output.close()
             output = null
+            val replacementFileDigest = FileInputStream(temp).use(::sha256)
             try {
-                Files.move(
-                    temp.toPath(),
-                    record.file.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (error: AtomicMoveNotSupportedException) {
-                // Never replace the only live audio chunk through a non-atomic fallback.
-                // If this filesystem cannot provide atomic same-directory replacement,
-                // fail closed and leave the original chunk untouched.
-                throw IOException("Atomic audio-chunk replacement is unavailable", error)
+                atomicChunkReplace(temp, record.file)
+            } catch (moveError: Exception) {
+                val observedTarget = runCatching { FileInputStream(record.file).use(::sha256) }.getOrNull()
+                when (
+                    classifyAtomicChunkReplacementAfterFailure(
+                        original = originalFileDigest,
+                        replacement = replacementFileDigest,
+                        observedTarget = observedTarget,
+                    )
+                ) {
+                    AtomicChunkReplacementState.REPLACEMENT -> Unit
+                    AtomicChunkReplacementState.ORIGINAL -> throw moveError
+                    AtomicChunkReplacementState.UNCERTAIN -> {
+                        val uncertain = IOException(
+                            "Audio chunk replacement result is uncertain for ${record.id}",
+                            moveError,
+                        )
+                        terminalStorageFailure = uncertain
+                        throw uncertain
+                    }
+                }
             }
         } catch (error: Exception) {
-            runCatching { output?.close() }
-            runCatching { temp.delete() }
+            closePreservingPrimaryFailure(error) { output?.close() }
+            // If the replacement boundary itself is uncertain, the temp artifact may be the
+            // only provable copy of either side. Preserve it and poison this store instance so
+            // no stale in-memory geometry can touch storage again before recovery reopens it.
+            if (terminalStorageFailure !== error) runCatching { temp.delete() }
             throw error
         }
 
@@ -1973,6 +2031,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun releaseRecordLocked(record: ChunkRecord) {
         check(record.refCount > 0) { "Chunk refCount underflow for ${record.id}" }
         record.refCount--
+        if (terminalStorageFailure != null) return
         if (record.refCount == 0 && record.pendingDelete) {
             tryDeleteRetiredRecordLocked(record)
         }

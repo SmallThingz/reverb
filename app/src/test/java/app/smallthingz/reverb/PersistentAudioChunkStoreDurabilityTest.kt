@@ -659,6 +659,104 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
     }
     @Test
+    fun oneShotShrink_recoversAtomicReplacementThatThrowsAfterCommit() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            atomicChunkReplace = { source, target ->
+                Files.move(
+                    source.toPath(),
+                    target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+                throw IOException("Injected post-commit atomic move failure")
+            },
+        )
+        configure(store, 8_192L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+
+        configure(store, 4_100L)
+        assertEquals(4_100L, store.countFilledBytes())
+        assertArrayEquals(expected.copyOf(4_100), readAll(store))
+        store.close()
+
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            configure(reopened, 4_100L)
+            assertArrayEquals(expected.copyOf(4_100), readAll(reopened))
+        }
+    }
+
+    @Test
+    fun oneShotShrink_failedAtomicReplacementLeavesOriginalAuthoritative() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            atomicChunkReplace = { _, _ -> throw IOException("Injected pre-commit atomic move failure") },
+        )
+        configure(store, 8_192L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+
+        assertThrows(IOException::class.java) { configure(store, 4_100L) }
+        assertEquals(expected.size.toLong(), store.countFilledBytes())
+        assertArrayEquals(expected, readAll(store))
+        store.close()
+    }
+
+    @Test
+    fun oneShotShrink_uncertainReplacementPoisonsStoreAndPreservesTemp() = withStoreRoot { root ->
+        val expected = pcmBytes(8_192)
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            atomicChunkReplace = { _, target ->
+                target.writeBytes(byteArrayOf(1, 2, 3, 4))
+                throw IOException("Injected ambiguous atomic move failure")
+            },
+        )
+        configure(store, 8_192L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+
+        val failure = assertThrows(IOException::class.java) { configure(store, 4_100L) }
+        assertTrue(failure.message?.contains("replacement result is uncertain") == true)
+        assertThrows(IOException::class.java) { store.hasData() }
+        assertTrue(
+            File(root, BUFFER_CHUNKS_FOLDER_NAME).listFiles().orEmpty()
+                .any { it.isFile && it.name.endsWith(".truncate.tmp") },
+        )
+        assertThrows(IOException::class.java) { store.close() }
+    }
+
+    @Test
+    fun atomicChunkReplacementClassification_acceptsOnlyExactKnownSide() {
+        val original = CopyDigest(4L, byteArrayOf(1, 2, 3, 4))
+        val replacement = CopyDigest(2L, byteArrayOf(5, 6, 7, 8))
+        assertEquals(
+            AtomicChunkReplacementState.ORIGINAL,
+            classifyAtomicChunkReplacementAfterFailure(original, replacement, original),
+        )
+        assertEquals(
+            AtomicChunkReplacementState.REPLACEMENT,
+            classifyAtomicChunkReplacementAfterFailure(original, replacement, replacement),
+        )
+        assertEquals(
+            AtomicChunkReplacementState.UNCERTAIN,
+            classifyAtomicChunkReplacementAfterFailure(
+                original, replacement, CopyDigest(4L, byteArrayOf(9, 9, 9, 9)),
+            ),
+        )
+        assertEquals(
+            AtomicChunkReplacementState.UNCERTAIN,
+            classifyAtomicChunkReplacementAfterFailure(original, replacement, null),
+        )
+    }
+
+    @Test
     fun retirementTombstone_neverFallsBackToNonAtomicReplacement() = withStoreRoot { root ->
         val retired = File(root, "retired").apply { mkdirs() }
         val target = File(retired, "7").apply { writeText("old") }
