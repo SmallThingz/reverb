@@ -203,10 +203,23 @@ internal fun readWavPcm16MonoRange(
 
     val firstFrame = floor(start * layout.sampleRate.toDouble()).toLong()
         .coerceIn(0L, layout.frameCount - 1L)
-    val lastNeededExclusive = (ceil(end * layout.sampleRate.toDouble()).toLong() + 1L)
-        .coerceIn(firstFrame + 1L, layout.frameCount)
-    val sourceFrames = (lastNeededExclusive - firstFrame).toInt()
-    val sourceBytes = ByteArray(sourceFrames * layout.frameBytes)
+    val endFrameCeil = ceil(end * layout.sampleRate.toDouble()).toLong()
+    val lastNeededExclusive = if (endFrameCeil >= layout.frameCount) {
+        layout.frameCount
+    } else {
+        (endFrameCeil + 1L).coerceAtLeast(firstFrame + 1L)
+    }
+    val sourceFrameCount = lastNeededExclusive - firstFrame
+    val sourceByteCount = sourceFrameCount * layout.frameBytes.toLong()
+    if (sourceByteCount > Int.MAX_VALUE.toLong()) {
+        throw IOException("Requested PCM source range is too large")
+    }
+    val requestedOutputFrames = ceil((end - start) * targetSampleRate.toDouble())
+    if (!requestedOutputFrames.isFinite() || requestedOutputFrames > Int.MAX_VALUE.toDouble() / 2.0) {
+        throw IOException("Requested PCM output range is too large")
+    }
+    val sourceFrames = sourceFrameCount.toInt()
+    val sourceBytes = ByteArray(sourceByteCount.toInt())
     requireReadAt(
         channel = channel,
         position = layout.dataOffsetBytes + firstFrame * layout.frameBytes.toLong(),
@@ -214,9 +227,7 @@ internal fun readWavPcm16MonoRange(
         count = sourceBytes.size,
     )
 
-    val outputFrames = ceil((end - start) * targetSampleRate.toDouble())
-        .toInt()
-        .coerceAtLeast(1)
+    val outputFrames = requestedOutputFrames.toInt().coerceAtLeast(1)
     val output = ByteArray(outputFrames * 2)
     val sourceStartPosition = start * layout.sampleRate.toDouble() - firstFrame.toDouble()
     val sourceStep = layout.sampleRate.toDouble() / targetSampleRate.toDouble()

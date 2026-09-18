@@ -54,6 +54,66 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun savedRecordingPcmRangeRejectsOversizedSourceBeforeAllocation() {
+        val file = testFile("oversized-source-${System.nanoTime()}.wav")
+        file.writeBytes(byteArrayOf(0, 0))
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = WavPcmLayout(
+                    sampleRate = 1,
+                    channelCount = 2,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    dataOffsetBytes = 0L,
+                    dataBytes = Int.MAX_VALUE.toLong() + 1L,
+                )
+                val failure = runCatching {
+                    readWavPcm16MonoRange(
+                        channel = channel,
+                        layout = layout,
+                        startSeconds = 0.0,
+                        endSeconds = layout.durationSeconds,
+                        targetSampleRate = 1,
+                    )
+                }.exceptionOrNull()
+                assertTrue(failure is IOException)
+                assertEquals("Requested PCM source range is too large", failure?.message)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun savedRecordingPcmRangeRejectsOversizedOutputBeforeAllocation() {
+        val file = testFile("oversized-output-${System.nanoTime()}.wav")
+        file.writeBytes(byteArrayOf(0, 0))
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = WavPcmLayout(
+                    sampleRate = 1,
+                    channelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                    dataOffsetBytes = 0L,
+                    dataBytes = 2L,
+                )
+                val failure = runCatching {
+                    readWavPcm16MonoRange(
+                        channel = channel,
+                        layout = layout,
+                        startSeconds = 0.0,
+                        endSeconds = 1.0,
+                        targetSampleRate = Int.MAX_VALUE,
+                    )
+                }.exceptionOrNull()
+                assertTrue(failure is IOException)
+                assertEquals("Requested PCM output range is too large", failure?.message)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun savedRecordingWaveformUsesRangeExportShapeAndFindsLouderRegion() {
         val samples = ShortArray(12_000) { index ->
             if (index < 6_000) 500 else 28_000
