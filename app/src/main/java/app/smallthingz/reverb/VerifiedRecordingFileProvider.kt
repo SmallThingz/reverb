@@ -45,8 +45,11 @@ class VerifiedRecordingFileProvider : FileProvider() {
             ?: throw FileNotFoundException("Unable to open recording")
         val currentIdentity = resolveFileDescriptorIdentity(descriptor.fileDescriptor)
         if (!fileDescriptorIdentityMatches(expectedIdentity, currentIdentity)) {
-            runCatching { descriptor.close() }
-            throw FileNotFoundException("Recording changed before it was opened")
+            throwAfterClosePreservingPrimary(
+                FileNotFoundException("Recording changed before it was opened"),
+            ) {
+                descriptor.close()
+            }
         }
         return descriptor
     }

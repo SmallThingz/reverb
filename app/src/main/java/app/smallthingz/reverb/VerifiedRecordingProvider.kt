@@ -120,8 +120,11 @@ class VerifiedRecordingProvider : ContentProvider() {
         if (!providerRecordingIdentityMatches(request.expectedIdentity, after) ||
             !providerRecordingIdentityMatches(before, after)
         ) {
-            runCatching { descriptor.close() }
-            throw FileNotFoundException("Recording changed while it was opened")
+            throwAfterClosePreservingPrimary(
+                FileNotFoundException("Recording changed while it was opened"),
+            ) {
+                descriptor.close()
+            }
         }
         return descriptor
     }

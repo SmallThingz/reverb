@@ -88,4 +88,17 @@ class CloseableOwnershipTest {
         assertSame(primary, observed)
     }
 
+    @Test
+    fun rejectedOwner_closeFailureIsSuppressedOnPrimaryRejection() {
+        val primary = IOException("identity changed")
+        val closeFailure = IOException("descriptor close failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            throwAfterClosePreservingPrimary(primary) { throw closeFailure }
+        }
+
+        assertSame(primary, thrown)
+        assertEquals(listOf(closeFailure), primary.suppressed.toList())
+    }
+
 }

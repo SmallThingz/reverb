@@ -33,3 +33,9 @@ internal inline fun closePreservingPrimaryFailure(
     }
     return failure
 }
+internal inline fun throwAfterClosePreservingPrimary(
+    primaryFailure: Throwable,
+    close: () -> Unit,
+): Nothing {
+    throw requireNotNull(closePreservingPrimaryFailure(primaryFailure, close))
+}

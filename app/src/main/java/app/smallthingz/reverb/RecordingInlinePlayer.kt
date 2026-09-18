@@ -196,8 +196,11 @@ private fun openInlinePlayerMediaSource(
         val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
             ?: throw IllegalStateException("Recording unavailable in provider")
         if (!recordingContentIdentityMatches(context, recording)) {
-            runCatching { descriptor.close() }
-            throw IllegalStateException("Recording changed in provider while opening")
+            throwAfterClosePreservingPrimary(
+                IllegalStateException("Recording changed in provider while opening"),
+            ) {
+                descriptor.close()
+            }
         }
         InlinePlayerMediaSource(descriptor.fileDescriptor, descriptor)
     }
