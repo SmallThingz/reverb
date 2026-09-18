@@ -127,4 +127,10 @@ class BufferClearProgressTest {
         )
     }
 
+    @Test
+    fun inFlightStepFailure_isNeverDowngradedToNeutralCancellation() {
+        assertEquals(BufferClearPhase.FAILED, bufferClearTerminalAfterStepFailure())
+        assertEquals(BufferClearPhase.CANCELLED, bufferClearCancellationTerminal(reportFailure = false))
+    }
+
 }

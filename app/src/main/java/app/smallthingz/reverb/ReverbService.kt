@@ -3230,20 +3230,20 @@ class ReverbService : Service() {
                 }
             }
         } catch (error: Exception) {
-            val cancelled = operation.cancelRequested.get() || serviceDestroying
+            // Cancel/teardown flags are observed between retirement steps. Once a step has
+            // started, an exception from that step is a storage failure even if cancellation
+            // arrived while it was in flight; never relabel a failed destructive step as neutral.
             finishBufferClearOperation(
                 operation = operation,
-                phase = if (cancelled) bufferClearCancellationPhase(operation) else BufferClearPhase.FAILED,
+                phase = bufferClearTerminalAfterStepFailure(),
                 totalBytes = totalBytes,
                 remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
                 totalChunks = totalChunks,
                 remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
             )
-            if (!cancelled) {
-                reportPersistentStoreFailure("clear history", error)
-                if (!appUiForeground) {
-                    AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
-                }
+            reportPersistentStoreFailure("clear history", error)
+            if (!appUiForeground) {
+                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
             }
         }
     }
