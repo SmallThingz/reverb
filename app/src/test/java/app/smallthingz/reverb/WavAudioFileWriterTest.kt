@@ -114,6 +114,54 @@ class WavAudioFileWriterTest {
         }
     }
 
+    private class DiscardingWavOutput : WavSeekableOutput {
+        override fun position(position: Long) = Unit
+
+        override fun write(buffer: ByteBuffer): Int {
+            val count = buffer.remaining()
+            buffer.position(buffer.limit())
+            return count
+        }
+
+        override fun truncate(size: Long) = Unit
+        override fun force(metadata: Boolean) = Unit
+        override fun close() = Unit
+    }
+
+    @Test
+    fun riffLimitAllowsLastFrameThatFitsChunkSize() {
+        val target = RecordingOutputTarget(
+            id = "discard",
+            displayName = "discard.wav",
+            mimeType = "audio/wav",
+            storageType = RecordingStorageType.FILE,
+            directoryId = "discard",
+            startedAtMillis = 1L,
+            staging = true,
+        )
+        val writer = WavAudioFileWriter(
+            target = target,
+            sampleRate = 8_000,
+            channelCount = 1,
+            sampleFormat = PcmSampleFormat.PCM_16,
+            output = DiscardingWavOutput(),
+        )
+        val maxRiffDataBytes = 0xFFFF_FFFFL - (44L - 8L)
+        val maxAlignedDataBytes = maxRiffDataBytes - maxRiffDataBytes % 2L
+        val writtenField = WavAudioFileWriter::class.java.getDeclaredField("totalSampleBytesWritten")
+        writtenField.isAccessible = true
+        writtenField.setLong(writer, maxAlignedDataBytes - 2L)
+
+        writer.write(byteArrayOf(1, 2), 0, 2)
+        assertEquals(maxAlignedDataBytes, writer.totalSampleBytesWritten)
+
+        val failure = assertThrows(IOException::class.java) {
+            writer.write(byteArrayOf(3, 4), 0, 2)
+        }
+        assertEquals("WAV file exceeds RIFF size limit", failure.message)
+        writer.close()
+    }
+
     @Test
     fun invalidConfiguration_doesNotAcquireWritableOutput() {
         var opened = false

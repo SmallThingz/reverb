@@ -275,7 +275,7 @@ internal class WavAudioFileWriter internal constructor(
     }
 
     private val maxPayloadBytes: Long
-        get() = 0xFFFF_FFFFL - headerSize.toLong()
+        get() = 0xFFFF_FFFFL - (headerSize.toLong() - 8L)
 
     private fun paddedDataSize(dataSize: Long): Long = dataSize + (dataSize and 1L)
 
