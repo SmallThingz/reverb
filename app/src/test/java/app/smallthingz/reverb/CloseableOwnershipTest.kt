@@ -101,4 +101,24 @@ class CloseableOwnershipTest {
         assertEquals(listOf(closeFailure), primary.suppressed.toList())
     }
 
+    @Test
+    fun rejectedOwnerWithoutPrimary_surfacesCloseFailure() {
+        val closeFailure = IOException("descriptor close failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            closeRejectedOwnerOrThrow { throw closeFailure }
+        }
+
+        assertSame(closeFailure, thrown)
+    }
+
+    @Test
+    fun rejectedOwnerWithoutPrimary_acceptsSuccessfulClose() {
+        var closed = false
+
+        closeRejectedOwnerOrThrow { closed = true }
+
+        assertTrue(closed)
+    }
+
 }

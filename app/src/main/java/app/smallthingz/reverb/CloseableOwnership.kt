@@ -39,3 +39,6 @@ internal inline fun throwAfterClosePreservingPrimary(
 ): Nothing {
     throw requireNotNull(closePreservingPrimaryFailure(primaryFailure, close))
 }
+internal inline fun closeRejectedOwnerOrThrow(close: () -> Unit) {
+    closePreservingPrimaryFailure(null, close)?.let { throw it }
+}

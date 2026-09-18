@@ -1951,7 +1951,7 @@ private fun openVerifiedProviderInputStream(
     }
     val after = resolveProviderRecordingIdentity(context, recording.storageType, uri)
     if (!providerReadHandoffMatchesExpected(expectedIdentity, before, after)) {
-        closePreservingPrimaryFailure(null) { input.close() }?.let { throw it }
+        closeRejectedOwnerOrThrow { input.close() }
         return null
     }
     return input
@@ -1974,7 +1974,7 @@ internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputS
     }
     val openedIdentity = resolveFileDescriptorIdentity(stream.fd)
     if (!fileDescriptorIdentityMatches(recording.fileIdentity, openedIdentity)) {
-        runCatching { stream.close() }
+        closeRejectedOwnerOrThrow { stream.close() }
         return null
     }
     return stream
