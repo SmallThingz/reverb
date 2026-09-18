@@ -96,6 +96,16 @@ internal fun recorderCommandGenerationMayApply(
     currentGeneration: Long,
 ): Boolean = expectedGeneration == null || expectedGeneration == currentGeneration
 
+internal inline fun commitRecorderPreferenceMutation(
+    commit: () -> Boolean,
+    onException: (Throwable) -> Unit = {},
+): Boolean = try {
+    commit()
+} catch (error: Throwable) {
+    runCatching { onException(error) }
+    false
+}
+
 internal fun quickTileRejectedCommandRequiresResample(
     sampledGeneration: Long,
     result: ReverbService.ListeningCommandResult?,
@@ -603,7 +613,13 @@ class ReverbService : Service() {
                     prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
                 )
                 listeningCommandGeneration.incrementAndGet()
-            } else if (!prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()) {
+            } else if (!commitRecorderPreferenceMutation(
+                    commit = {
+                        prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()
+                    },
+                    onException = { error -> Log.e(TAG, "Capture destination commit threw", error) },
+                )
+            ) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed selection")
                 }
@@ -714,7 +730,11 @@ class ReverbService : Service() {
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
                 if (enabled) editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.storageCode.toInt())
-                if (!editor.commit()) {
+                if (!commitRecorderPreferenceMutation(
+                        commit = editor::commit,
+                        onException = { error -> Log.e(TAG, "Recorder intent commit threw", error) },
+                    )
+                ) {
                     val rollbackPersisted = restoreCaptureIntentPreferences(
                         prefs = prefs,
                         previousEnabled = previousEnabled,
@@ -820,7 +840,10 @@ class ReverbService : Service() {
         if (previousEnabled != null) editor.putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled)
         if (previousStoredSlot == null) editor.remove(PrefKey.CAPTURE_BUFFER_SLOT)
         else editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot.storageCode.toInt())
-        return editor.commit()
+        return commitRecorderPreferenceMutation(
+            commit = editor::commit,
+            onException = { error -> Log.e(TAG, "Recorder intent rollback commit threw", error) },
+        )
     }
 
     private fun isListeningEnabled(): Boolean = synchronized(listeningIntentLock) {
@@ -883,7 +906,12 @@ class ReverbService : Service() {
             val listeningEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
             failedWhileListening = isLogicalListeningState(state, listeningEnabled)
             if (captureSlotNeedsPersistence(previousStoredSlot, resolved) &&
-                !prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, resolved.storageCode.toInt()).commit()
+                !commitRecorderPreferenceMutation(
+                    commit = {
+                        prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, resolved.storageCode.toInt()).commit()
+                    },
+                    onException = { error -> Log.e(TAG, "Capture handoff commit threw", error) },
+                )
             ) {
                 if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
@@ -2137,12 +2165,19 @@ class ReverbService : Service() {
             ) return
             val prefs = getRecorderPreferences(this)
             val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            val committed = commitRecorderPreferenceMutation(
+                commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
+                onException = { error -> Log.e(TAG, "Automatic Stop commit threw", error) },
+            )
             if (!committed) {
                 // commit() already changed this process' in-memory preferences. Restore the
                 // previous intent as well as we can so a failed planned stop cannot silently
                 // become a durable Stop or masquerade as one in this process.
-                if (!prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit()) {
+                if (!commitRecorderPreferenceMutation(
+                        commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit() },
+                        onException = { error -> Log.e(TAG, "Automatic Stop rollback commit threw", error) },
+                    )
+                ) {
                     Log.e(TAG, "Unable to restore listening intent after failed automatic stop")
                 }
                 persistenceFailureBlocked = true
@@ -2441,7 +2476,12 @@ class ReverbService : Service() {
         val persisted = synchronized(listeningIntentLock) {
             if (serviceDestroying || generation != listeningCommandGeneration.get()) return
             val prefs = getRecorderPreferences(this)
-            val committed = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit()
+            val committed = commitRecorderPreferenceMutation(
+                commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
+                onException = { commitError ->
+                    Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
+                },
+            )
             // A fatal recorder failure must invalidate the active capture even if the
             // preference write cannot reach disk. SharedPreferences has already applied
             // the value to its in-memory map when commit() returns false, so rolling it

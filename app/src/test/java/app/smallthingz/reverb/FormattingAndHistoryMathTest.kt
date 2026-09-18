@@ -6,6 +6,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1292,6 +1293,22 @@ class FormattingAndHistoryMathTest {
             addAll(AppThemeMode.entries.map { it.storageCode })
         }
         assertTrue(codes.all { it.toInt() in 0..255 })
+    }
+
+    @Test
+    fun recorderPreferenceCommitException_isConvertedToFailedTransaction() {
+        val expected = IllegalStateException("disk unavailable")
+        var reported: Throwable? = null
+
+        assertFalse(
+            commitRecorderPreferenceMutation(
+                commit = { throw expected },
+                onException = { reported = it },
+            ),
+        )
+        assertSame(expected, reported)
+        assertTrue(commitRecorderPreferenceMutation(commit = { true }))
+        assertFalse(commitRecorderPreferenceMutation(commit = { false }))
     }
 
     @Test
