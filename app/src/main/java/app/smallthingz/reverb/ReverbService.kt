@@ -82,6 +82,17 @@ internal fun quickTileCommandBufferSlot(
 internal fun quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes: Int): Boolean =
     foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
 
+internal inline fun releaseTimelineSnapshotBestEffort(
+    release: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        release()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
+
 internal fun releaseExportLeaseOnceBestEffort(
     released: AtomicBoolean,
     release: () -> Unit,
@@ -1385,7 +1396,9 @@ class ReverbService : Service() {
         val exportConfig = getConfigurationSnapshot()
         val exportToken = beginExport(receiver)
         if (exportToken == null) {
-            snapshot.close()
+            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+                reportPersistentStoreFailure("release export-range snapshot", error)
+            }
             notifyReceiverFailure(
                 receiver,
                 getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
@@ -1393,7 +1406,9 @@ class ReverbService : Service() {
             return
         }
         if (!ensureExportForegroundLifetime(exportToken, receiver)) {
-            snapshot.close()
+            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+                reportPersistentStoreFailure("release export-range snapshot", error)
+            }
             return
         }
 
@@ -1415,8 +1430,9 @@ class ReverbService : Service() {
             finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
             return
         } finally {
-            runCatching { snapshot.close() }
-                .onFailure { error -> Log.w(TAG, "Unable to release export-range snapshot", error) }
+            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+                reportPersistentStoreFailure("release export-range snapshot", error)
+            }
         }
         if (lease == null) {
             clearExportState(exportToken)

@@ -54,4 +54,33 @@ class TimelineSnapshotDeliveryTest {
 
         assertEquals(listOf("first", "second"), events)
     }
+
+    @Test
+    fun serviceSnapshotRelease_failureDoesNotEscapeOrSuppressFollowingTerminal() {
+        val expected = IOException("release failed")
+        var observed: Exception? = null
+        var terminalDelivered = false
+
+        releaseTimelineSnapshotBestEffort(
+            release = { throw expected },
+            onFailure = { observed = it },
+        )
+        terminalDelivered = true
+
+        assertSame(expected, observed)
+        assertTrue(terminalDelivered)
+    }
+
+    @Test
+    fun serviceSnapshotRelease_failureReporterCannotEscapeCleanupBoundary() {
+        var terminalDelivered = false
+
+        releaseTimelineSnapshotBestEffort(
+            release = { throw IOException("release failed") },
+            onFailure = { throw IllegalStateException("report failed") },
+        )
+        terminalDelivered = true
+
+        assertTrue(terminalDelivered)
+    }
 }
