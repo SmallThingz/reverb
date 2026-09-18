@@ -107,6 +107,8 @@ data class RecordingOutputTarget(
     val file: File? = null,
     val uri: Uri? = null,
     val staging: Boolean,
+    val stagingDisplayName: String = "",
+    val stagingIdentity: String = "",
     val publishedIdentity: String = "",
 )
 
@@ -592,22 +594,38 @@ fun openWritableParcelFileDescriptor(
     context: Context,
     target: RecordingOutputTarget,
 ): ParcelFileDescriptor {
-    return when (target.storageType) {
-        RecordingStorageType.FILE -> {
-            ParcelFileDescriptor.open(
-                requireNotNull(target.file),
-                ParcelFileDescriptor.MODE_CREATE or
-                    ParcelFileDescriptor.MODE_TRUNCATE or
-                    ParcelFileDescriptor.MODE_READ_WRITE,
-            )
-        }
-
+    requireWritableStagingTargetStillEmpty(context, target)
+    val descriptor = when (target.storageType) {
+        RecordingStorageType.FILE -> ParcelFileDescriptor.open(
+            requireNotNull(target.file),
+            // The target was atomically created as an empty staging file. Never use CREATE or
+            // TRUNCATE here: if the path was replaced after creation, opening it must not mutate
+            // replacement bytes before identity/size verification below.
+            ParcelFileDescriptor.MODE_READ_WRITE,
+        )
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> {
-            context.contentResolver.openFileDescriptor(requireNotNull(target.uri), "rw")
-                ?: throw IOException("Unable to open output document: ${target.id}")
+        -> context.contentResolver.openFileDescriptor(requireNotNull(target.uri), "rw")
+            ?: throw IOException("Unable to open output document: ${target.id}")
+    }
+    try {
+        if (descriptor.statSize != 0L) {
+            throw IOException("Output staging descriptor is no longer empty: ${target.id}")
         }
+        requireWritableStagingTargetStillEmpty(context, target)
+        if (target.storageType == RecordingStorageType.FILE &&
+            !stagingFileDescriptorMatchesCreation(
+                expectedIdentity = target.stagingIdentity,
+                currentPathIdentity = resolveFileIdentity(requireNotNull(target.file)),
+                descriptorIdentity = resolveFileDescriptorIdentity(descriptor.fileDescriptor),
+                descriptorSize = descriptor.statSize,
+            )
+        ) {
+            throw IOException("Output staging file changed before write: ${target.id}")
+        }
+        return descriptor
+    } catch (error: Throwable) {
+        throw requireNotNull(closePreservingPrimaryFailure(error) { descriptor.close() })
     }
 }
 
@@ -1665,27 +1683,14 @@ fun copyRecordingToDirectory(
             ?: throw IOException("Unable to open source recording: ${recording.storageType}")
         lateinit var sourceDigest: CopyDigest
         input.use { source ->
-            when (resolvedTarget.storageType) {
-                RecordingStorageType.FILE -> {
-                    FileOutputStream(requireNotNull(resolvedTarget.file)).use { output ->
-                        sourceDigest = copyWithSha256(source, output)
-                        output.fd.sync()
-                    }
-                }
-
-                RecordingStorageType.DOCUMENT,
-                RecordingStorageType.MEDIASTORE,
-                -> {
-                    val output = openChildOrCloseOwner(
-                        openWritableParcelFileDescriptor(context, resolvedTarget),
-                    ) { descriptor ->
-                        ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
-                    }
-                    output.use { ownedOutput ->
-                        sourceDigest = copyWithSha256(source, ownedOutput)
-                        ownedOutput.fd.sync()
-                    }
-                }
+            val output = openChildOrCloseOwner(
+                openWritableParcelFileDescriptor(context, resolvedTarget),
+            ) { descriptor ->
+                ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+            }
+            output.use { ownedOutput ->
+                sourceDigest = copyWithSha256(source, ownedOutput)
+                ownedOutput.fd.sync()
             }
         }
         val copiedBytes = sourceDigest.byteCount
@@ -2711,6 +2716,8 @@ private fun createLocalOutputTarget(
         }
         break
     }
+    val stagingIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() }
+        ?: throw IOException("Unable to bind new output staging file to a stable identity")
     return RecordingOutputTarget(
         id = file.absolutePath,
         displayName = uniqueName,
@@ -2720,6 +2727,8 @@ private fun createLocalOutputTarget(
         startedAtMillis = startedAtMillis,
         file = file,
         staging = true,
+        stagingDisplayName = file.name,
+        stagingIdentity = stagingIdentity,
     )
 }
 
@@ -3191,6 +3200,100 @@ internal fun newlyCreatedOutputMayBeWritten(
         (!requirePending || current.pending == true)
 }
 
+internal fun stagingFileDescriptorMatchesCreation(
+    expectedIdentity: String,
+    currentPathIdentity: String,
+    descriptorIdentity: String,
+    descriptorSize: Long,
+): Boolean = descriptorSize == 0L &&
+    fileIdentityMatches(expectedIdentity, currentPathIdentity) &&
+    fileDescriptorIdentityMatches(expectedIdentity, descriptorIdentity)
+
+private fun queryCreatedFileOutput(target: RecordingOutputTarget): NewlyCreatedOutputObservation? {
+    val file = target.file ?: return null
+    val attributes = try {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+    } catch (_: Exception) {
+        return null
+    }
+    return NewlyCreatedOutputObservation(
+        displayName = file.name,
+        sizeBytes = attributes.size().coerceAtLeast(0L),
+        sizeKnown = true,
+        isFile = attributes.isRegularFile,
+        pending = null,
+        directoryMatches = file.parentFile?.absolutePath == target.directoryId,
+    )
+}
+
+private fun queryCreatedDocumentOutput(
+    context: Context,
+    treeUri: Uri,
+    documentUri: Uri,
+): NewlyCreatedOutputObservation? {
+    val entry = queryDocumentTreeEntries(context, treeUri)
+        .singleOrNull { candidate -> candidate.uri == documentUri }
+        ?: return null
+    return NewlyCreatedOutputObservation(
+        displayName = entry.name,
+        sizeBytes = entry.sizeBytes,
+        sizeKnown = entry.sizeKnown,
+        isFile = entry.isFile,
+        pending = null,
+        directoryMatches = true,
+    )
+}
+
+private fun requireWritableStagingTargetStillEmpty(
+    context: Context,
+    target: RecordingOutputTarget,
+) {
+    if (!target.staging || target.stagingDisplayName.isBlank()) {
+        throw IOException("Output write requires owned staging metadata: ${target.id}")
+    }
+    val observation = when (target.storageType) {
+        RecordingStorageType.FILE -> queryCreatedFileOutput(target)
+        RecordingStorageType.DOCUMENT -> queryCreatedDocumentOutput(
+            context,
+            target.directoryId.toUri(),
+            requireNotNull(target.uri),
+        )
+        RecordingStorageType.MEDIASTORE -> queryCreatedMediaStoreOutput(
+            context,
+            requireNotNull(target.uri),
+        )
+    }
+    if (!newlyCreatedOutputMayBeWritten(
+            expectedDisplayName = target.stagingDisplayName,
+            requirePending = target.storageType == RecordingStorageType.MEDIASTORE,
+            observation = observation,
+        )
+    ) {
+        throw IOException("Output staging changed before write: ${target.id}")
+    }
+    when (target.storageType) {
+        RecordingStorageType.FILE -> {
+            if (target.stagingIdentity.isBlank() ||
+                !fileIdentityMatches(target.stagingIdentity, resolveFileIdentity(requireNotNull(target.file)))
+            ) {
+                throw IOException("Output staging file identity changed before write: ${target.id}")
+            }
+        }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> if (target.stagingIdentity.isNotBlank()) {
+            val current = resolveProviderRecordingIdentity(
+                context,
+                target.storageType,
+                requireNotNull(target.uri),
+            )
+            if (!sameProviderObjectAcrossMutation(target.stagingIdentity, current)) {
+                throw IOException("Output staging provider identity changed before write: ${target.id}")
+            }
+        }
+    }
+}
+
 private fun queryCreatedMediaStoreOutput(
     context: Context,
     uri: Uri,
@@ -3263,6 +3366,8 @@ private fun createMediaStoreOutputTarget(
         startedAtMillis = startedAtMillis,
         uri = uri,
         staging = true,
+        stagingDisplayName = stagingName,
+        stagingIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri),
     )
 }
 
@@ -3287,18 +3392,7 @@ private fun createDocumentOutputTarget(
         mimeType,
         stagingName,
     ) ?: throw IOException("Unable to create output document")
-    val createdEntry = queryDocumentTreeEntries(context, treeUri)
-        .singleOrNull { entry -> entry.uri == documentUri }
-    val observation = createdEntry?.let { entry ->
-        NewlyCreatedOutputObservation(
-            displayName = entry.name,
-            sizeBytes = entry.sizeBytes,
-            sizeKnown = entry.sizeKnown,
-            isFile = entry.isFile,
-            pending = null,
-            directoryMatches = true,
-        )
-    }
+    val observation = queryCreatedDocumentOutput(context, treeUri, documentUri)
     if (!newlyCreatedOutputMayBeWritten(stagingName, requirePending = false, observation)) {
         // Never open a provider-returned URI with truncating write mode until the strict tree
         // listing proves that it is the exact new, empty high-entropy staging child we requested.
@@ -3314,6 +3408,8 @@ private fun createDocumentOutputTarget(
         startedAtMillis = startedAtMillis,
         uri = documentUri,
         staging = true,
+        stagingDisplayName = stagingName,
+        stagingIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, documentUri),
     )
 }
 

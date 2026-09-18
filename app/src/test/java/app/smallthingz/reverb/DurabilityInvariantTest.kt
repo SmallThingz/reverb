@@ -926,6 +926,31 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun stagingFileWrite_requiresOriginalEmptyObjectAtDescriptorHandoff() {
+        val expected = "stat:1:2:100:5:77"
+        val descriptor = "statfd:1:2:100:5"
+        assertTrue(stagingFileDescriptorMatchesCreation(expected, expected, descriptor, 0L))
+        assertFalse(
+            stagingFileDescriptorMatchesCreation(
+                expected,
+                "stat:1:3:100:5:78",
+                descriptor,
+                0L,
+            ),
+        )
+        assertFalse(
+            stagingFileDescriptorMatchesCreation(
+                expected,
+                expected,
+                "statfd:1:3:100:5",
+                0L,
+            ),
+        )
+        assertFalse(stagingFileDescriptorMatchesCreation(expected, expected, descriptor, 1L))
+        assertFalse(stagingFileDescriptorMatchesCreation("", expected, descriptor, 0L))
+    }
+
+    @Test
     fun newProviderOutput_requiresExactEmptyStagingObjectBeforeWrite() {
         val document = NewlyCreatedOutputObservation(
             displayName = "reverb-partial-token.wav",
