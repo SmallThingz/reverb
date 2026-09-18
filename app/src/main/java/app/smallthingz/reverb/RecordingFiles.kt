@@ -2900,6 +2900,40 @@ internal fun providerRenameStateIsUncertain(
 internal fun fileRenameMoveFailureIsUncertain(error: Throwable): Boolean =
     error is IOException && error !is FileAlreadyExistsException
 
+internal data class MediaStoreRenameObservation(
+    val displayName: String,
+    val fingerprint: StableOutputFingerprint,
+)
+
+internal fun mediaStoreRenameObservationMatchesExpected(
+    expectedDisplayName: String,
+    beforeIdentity: String,
+    beforeDigest: CopyDigest,
+    observation: MediaStoreRenameObservation?,
+): Boolean {
+    val current = observation ?: return false
+    if (current.displayName != expectedDisplayName) return false
+    return sameProviderObjectAcrossMutation(
+        beforeIdentity,
+        current.fingerprint.providerIdentity.orEmpty(),
+    ) && copyDigestMatches(beforeDigest, current.fingerprint.digest)
+}
+
+private fun readStableMediaStoreRenameObservation(
+    context: Context,
+    uri: Uri,
+): MediaStoreRenameObservation? {
+    val beforeName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: return null
+    val fingerprint = readStableOutputFingerprint(
+        context,
+        RecordingStorageType.MEDIASTORE,
+        uri.toString(),
+    ) ?: return null
+    val afterName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: return null
+    if (beforeName != afterName) return null
+    return MediaStoreRenameObservation(afterName, fingerprint)
+}
+
 private fun renameMediaStoreRecording(
     context: Context,
     recording: RecordingEntity,
@@ -2913,16 +2947,47 @@ private fun renameMediaStoreRecording(
         if (uniqueName == recording.displayName) return recording
         val beforeDigest = sha256StableRecording(context, recording) ?: return null
         val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName) }
+        var updateFailure: Throwable? = null
         val updated = try {
             context.contentResolver.update(uri, values, null, null)
         } catch (error: Exception) {
-            // A remote provider may have committed the update before binder/transport failure.
+            updateFailure = error
+            -1
+        }
+        if (updated <= 0) {
+            // A remote provider may commit metadata before binder/transport failure, and a buggy
+            // provider may even report zero rows after doing so. Re-observe the exact selected
+            // object and accept only a byte-identical same-object result under the requested name.
+            val observed = readStableMediaStoreRenameObservation(context, uri)
+            if (mediaStoreRenameObservationMatchesExpected(
+                    expectedDisplayName = uniqueName,
+                    beforeIdentity = recording.fileIdentity,
+                    beforeDigest = beforeDigest,
+                    observation = observed,
+                )
+            ) {
+                val recovered = recording.copy(
+                    displayName = uniqueName,
+                    fileIdentity = requireNotNull(observed).fingerprint.providerIdentity.orEmpty(),
+                )
+                return rebindRecordingWaveformCache(recording, recovered)
+            }
+            if (mediaStoreRenameObservationMatchesExpected(
+                    expectedDisplayName = recording.displayName,
+                    beforeIdentity = recording.fileIdentity,
+                    beforeDigest = beforeDigest,
+                    observation = observed,
+                )
+            ) {
+                // The selected object is positively unchanged. This was a definite no-op, not an
+                // uncertain mutation, even if the transport itself threw.
+                return null
+            }
             throw RecordingRenameStateUncertainException(
                 "MediaStore rename result is uncertain: ${recording.id}",
-                error,
+                updateFailure,
             )
         }
-        if (updated <= 0) return null
 
         val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
         val sameObject = sameProviderObjectAcrossMutation(recording.fileIdentity, renamedIdentity)
@@ -3000,15 +3065,57 @@ private fun renameDocumentRecording(
         // Pin the selected bytes before mutation so a URI-changing result can be proven to
         // represent the same recording rather than an unrelated equal-looking document.
         val beforeDigest = sha256StableRecording(context, recording) ?: return@runCatching null
-        val renamedUri = try {
+        var renameFailure: Throwable? = null
+        val directRenamedUri = try {
             DocumentsContract.renameDocument(context.contentResolver, sourceUri, uniqueName)
         } catch (error: Exception) {
-            // Provider-side rename can commit before the binder call reports failure.
-            throw RecordingRenameStateUncertainException(
-                "Document rename result is uncertain: ${recording.id}",
-                error,
+            renameFailure = error
+            null
+        }
+        val renamedUri = directRenamedUri ?: run {
+            val expectedFingerprint = StableOutputFingerprint(
+                digest = beforeDigest,
+                fileKey = null,
+                providerIdentity = recording.fileIdentity,
             )
-        } ?: return@runCatching null
+            val observed = runCatching {
+                readStableDocumentPublicationObservation(
+                    context = context,
+                    treeUri = recording.directoryId.toUri(),
+                    sourceUri = sourceUri,
+                    finalDisplayName = uniqueName,
+                )
+            }.onFailure { error ->
+                Log.w(TAG, "Unable to resolve ambiguous document rename $sourceUri", error)
+            }.getOrNull()
+            if (documentPublicationMatchesExpected(uniqueName, expectedFingerprint, observed?.state)) {
+                val recovered = recording.copy(
+                    id = requireNotNull(observed).uri.toString(),
+                    displayName = uniqueName,
+                    fileIdentity = observed.state.fingerprint.providerIdentity.orEmpty(),
+                )
+                return@runCatching rebindRecordingWaveformCache(recording, recovered)
+            }
+            if (observed != null &&
+                observed.uri != sourceUri &&
+                copyDigestMatches(beforeDigest, observed.state.fingerprint.digest) &&
+                !suppressProviderOutputWithoutDeletion(
+                    context = context,
+                    storageType = RecordingStorageType.DOCUMENT,
+                    id = observed.uri.toString(),
+                    digest = beforeDigest,
+                )
+            ) {
+                Log.w(TAG, "Unable to suppress rejected ambiguous document rename result ${observed.uri}")
+            }
+            if (renameFailure != null || observed != null) {
+                throw RecordingRenameStateUncertainException(
+                    "Document rename result is uncertain: ${recording.id}",
+                    renameFailure,
+                )
+            }
+            return@runCatching null
+        }
         val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri)
         val renamed = recording.copy(
             id = renamedUri.toString(),
