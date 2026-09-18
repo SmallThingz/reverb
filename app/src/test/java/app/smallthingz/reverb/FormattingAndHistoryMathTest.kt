@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -2232,14 +2233,50 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun wavExportSizeLimit_isJustUnderFourGiB() {
+    fun wavExportSizeLimit_usesFullRiffChunkBudget() {
         val limit = exportFileSizeLimitBytes(ExportFormat.WAV)
-        assertEquals(0xFFFF_FFFFL, limit)
-        assertEquals(0xFFFF_FFFFL - 44L, exportPayloadLimitBytes(ExportFormat.WAV))
+        assertEquals(0x1_0000_0007L, limit)
+        assertEquals(0xFFFF_FFFFL - (44L - 8L), exportPayloadLimitBytes(ExportFormat.WAV))
         assertEquals(
-            0xFFFF_FFFFL - 58L,
+            0xFFFF_FFFFL - (58L - 8L),
             exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_FLOAT),
         )
+        assertEquals(
+            0xFFFF_FFFFL - (44L - 8L) - 1L,
+            exportPayloadLimitBytes(ExportFormat.WAV, PcmSampleFormat.PCM_8),
+        )
+    }
+
+    @Test
+    fun wavExportPayloadLimit_matchesWriterRiffBoundary() {
+        listOf(
+            PcmSampleFormat.PCM_8,
+            PcmSampleFormat.PCM_16,
+            PcmSampleFormat.PCM_FLOAT,
+        ).forEach { sampleFormat ->
+            val frameBytes = sampleFormat.bytesPerSample.toLong()
+            val payloadBudget = exportPayloadLimitBytes(ExportFormat.WAV, sampleFormat)
+            val alignedPayload = payloadBudget - payloadBudget % frameBytes
+            val header = buildWavHeaderBytes(
+                sampleRate = 8_000,
+                channelCount = 1,
+                sampleFormat = sampleFormat,
+                dataSize = alignedPayload,
+            )
+            val paddedPayload = alignedPayload + (alignedPayload and 1L)
+            val fileBytes = header.size.toLong() + paddedPayload
+            assertTrue(fileBytes <= exportFileSizeLimitBytes(ExportFormat.WAV))
+
+            val nextPayload = alignedPayload + frameBytes
+            assertThrows(IllegalArgumentException::class.java) {
+                buildWavHeaderBytes(
+                    sampleRate = 8_000,
+                    channelCount = 1,
+                    sampleFormat = sampleFormat,
+                    dataSize = nextPayload,
+                )
+            }
+        }
     }
 
     @Test

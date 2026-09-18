@@ -22,7 +22,8 @@ import kotlin.math.max
 
 private const val PCM_WAV_HEADER_BYTES = 44L
 private const val FLOAT_WAV_HEADER_BYTES = 58L
-private const val WAV_MAX_FILE_BYTES = 0xFFFF_FFFFL
+private const val WAV_MAX_RIFF_CHUNK_BYTES = 0xFFFF_FFFFL
+private const val WAV_RIFF_SIZE_EXCLUDED_PREFIX_BYTES = 8L
 
 private val STANDARD_SAMPLE_RATES =
     listOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
@@ -661,7 +662,10 @@ fun estimateExportDurationSeconds(
     return duration
 }
 
-fun exportFileSizeLimitBytes(format: ExportFormat): Long = WAV_MAX_FILE_BYTES
+fun exportFileSizeLimitBytes(format: ExportFormat): Long =
+    // RIFF ChunkSize is fileSize - 8, so a max unsigned-32 ChunkSize permits eight
+    // additional physical file bytes beyond 0xFFFF_FFFF.
+    WAV_MAX_RIFF_CHUNK_BYTES + WAV_RIFF_SIZE_EXCLUDED_PREFIX_BYTES
 
 fun exportPayloadLimitBytes(
     format: ExportFormat,
