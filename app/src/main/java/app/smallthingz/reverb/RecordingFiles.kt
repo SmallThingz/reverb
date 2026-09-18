@@ -1335,6 +1335,29 @@ internal fun documentProviderIdentityFromMetadata(
     )
 }
 
+internal fun mediaStoreProviderIdentityFromMetadata(
+    id: String,
+    sizeKnown: Boolean,
+    sizeBytes: Long,
+    modifiedKnown: Boolean,
+    modifiedSeconds: Long,
+    generationKnown: Boolean,
+    generationModified: Long,
+): String {
+    if (!sizeKnown) return ""
+    val revision = generationModified.takeIf { generationKnown && it > 0L }
+        ?: modifiedSeconds.takeIf { modifiedKnown && it > 0L }?.let { seconds ->
+            if (seconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE else seconds * 1000L
+        }
+        ?: return ""
+    return providerRecordingIdentity(
+        storageType = RecordingStorageType.MEDIASTORE,
+        id = id,
+        sizeBytes = sizeBytes,
+        revisionToken = revision,
+    )
+}
+
 internal fun resolveProviderRecordingIdentity(
     context: Context,
     storageType: RecordingStorageType,
@@ -1378,16 +1401,18 @@ internal fun resolveProviderRecordingIdentity(
         }
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) return@use ""
-            val sizeBytes = cursor.getLong(0).coerceAtLeast(0L)
-            val modifiedSeconds = cursor.getLong(1).coerceAtLeast(0L)
-            val revision = if (useGeneration) cursor.getLong(2).coerceAtLeast(0L) else 0L
-            val fallbackRevision = if (modifiedSeconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE
-            else modifiedSeconds * 1000L
-            providerRecordingIdentity(
-                storageType,
-                uri.toString(),
-                sizeBytes,
-                revision.takeIf { it > 0L } ?: fallbackRevision,
+            mediaStoreProviderIdentityFromMetadata(
+                id = uri.toString(),
+                sizeKnown = !cursor.isNull(0),
+                sizeBytes = if (cursor.isNull(0)) 0L else cursor.getLong(0).coerceAtLeast(0L),
+                modifiedKnown = !cursor.isNull(1),
+                modifiedSeconds = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
+                generationKnown = useGeneration && !cursor.isNull(2),
+                generationModified = if (useGeneration && !cursor.isNull(2)) {
+                    cursor.getLong(2).coerceAtLeast(0L)
+                } else {
+                    0L
+                },
             )
         } ?: ""
     }.getOrDefault("")

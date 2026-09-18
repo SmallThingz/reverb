@@ -1532,6 +1532,30 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun mediaStoreProviderIdentity_requiresKnownSizeAndRealRevision() {
+        val id = "content://media/external/audio/media/9"
+        val generationIdentity = providerRecordingIdentity(RecordingStorageType.MEDIASTORE, id, 7_000L, 42L)
+        val modifiedIdentity = providerRecordingIdentity(RecordingStorageType.MEDIASTORE, id, 7_000L, 123_000L)
+
+        assertEquals(
+            generationIdentity,
+            mediaStoreProviderIdentityFromMetadata(id, true, 7_000L, false, 0L, true, 42L),
+        )
+        assertEquals(
+            modifiedIdentity,
+            mediaStoreProviderIdentityFromMetadata(id, true, 7_000L, true, 123L, false, 0L),
+        )
+        assertEquals(
+            "",
+            mediaStoreProviderIdentityFromMetadata(id, false, 7_000L, true, 123L, true, 42L),
+        )
+        assertEquals(
+            "",
+            mediaStoreProviderIdentityFromMetadata(id, true, 7_000L, false, 0L, false, 0L),
+        )
+    }
+
+    @Test
     fun documentProviderIdentity_requiresOneCompleteMetadataObservation() {
         val id = "content://provider/tree/root/document/clip"
         val expected = providerRecordingIdentity(RecordingStorageType.DOCUMENT, id, 4_096L, 123L)
