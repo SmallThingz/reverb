@@ -82,6 +82,19 @@ internal fun quickTileCommandBufferSlot(
 internal fun quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes: Int): Boolean =
     foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
 
+internal fun releaseExportLeaseOnceBestEffort(
+    released: AtomicBoolean,
+    release: () -> Unit,
+): Exception? {
+    if (!released.compareAndSet(false, true)) return null
+    return try {
+        release()
+        null
+    } catch (error: Exception) {
+        error
+    }
+}
+
 internal class IdentityOwnerRegistry<T : Any> {
     private val owners = ArrayList<T>()
 
@@ -1567,13 +1580,15 @@ class ReverbService : Service() {
         exportToken: ExportCancellationToken,
         exportConfig: RecorderConfigurationSnapshot = getConfigurationSnapshot(),
     ) {
-        if (!isExportPending(exportToken)) {
-            lease.close()
-            return
-        }
         val leaseClosed = AtomicBoolean(false)
         fun closeLeaseOnce() {
-            if (leaseClosed.compareAndSet(false, true)) lease.close()
+            releaseExportLeaseOnceBestEffort(leaseClosed, lease::close)?.let { error ->
+                reportPersistentStoreFailure("release export range", error)
+            }
+        }
+        if (!isExportPending(exportToken)) {
+            closeLeaseOnce()
+            return
         }
         val startedAtMillis = lease.startedAtMillis
         val endedAtMillis = lease.endedAtMillis.takeIf { it > 0L }
