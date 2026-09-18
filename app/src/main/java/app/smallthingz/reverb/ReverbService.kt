@@ -284,8 +284,7 @@ class ReverbService : Service() {
     private val nextBufferClearOperationId = AtomicLong(1L)
     @Volatile private var bufferClearStatus: BufferClearStatus? = null
     private var activeBufferClearOperation: BufferClearOperation? = null
-    private val retentionMaintenanceActive = AtomicBoolean(false)
-    private val retentionMaintenancePassQueued = AtomicBoolean(false)
+    private val retentionMaintenanceState = RetentionMaintenanceSchedulerState()
     @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
@@ -391,7 +390,7 @@ class ReverbService : Service() {
         if (cancelActiveBufferClearForTeardown()) {
             AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
         }
-        retentionMaintenanceActive.set(false)
+        retentionMaintenanceState.clear()
         if (::bufferClearExecutor.isInitialized) {
             // Do not interrupt a durability-critical chunk retirement already in flight.
             // Cancellation is observed between chunk steps; store close waits for the current
@@ -1618,7 +1617,7 @@ class ReverbService : Service() {
             ensureBufferClearOnlyForegroundIfNeeded()
             return
         }
-        if (retentionMaintenanceActive.get()) {
+        if (retentionMaintenanceState.isActive()) {
             stopForegroundTracked()
             return
         }
@@ -1693,7 +1692,7 @@ class ReverbService : Service() {
                 ensureBufferClearOnlyForegroundIfNeeded()
                 return@post
             }
-            if (retentionMaintenanceActive.get()) {
+            if (retentionMaintenanceState.isActive()) {
                 stopForegroundTracked()
                 return@post
             }
@@ -1724,7 +1723,7 @@ class ReverbService : Service() {
                 ensureExportOnlyForegroundIfNeeded()
                 return@post
             }
-            if (retentionMaintenanceActive.get()) {
+            if (retentionMaintenanceState.isActive()) {
                 stopForegroundTracked()
                 return@post
             }
@@ -2749,7 +2748,7 @@ class ReverbService : Service() {
             state == STATE_LISTENING ||
             hasActiveExport() ||
             hasActiveBufferClear() ||
-            retentionMaintenanceActive.get()
+            retentionMaintenanceState.isActive()
         ) {
             return
         }
@@ -3275,34 +3274,31 @@ class ReverbService : Service() {
 
     private fun scheduleRetentionMaintenanceIfNeeded() {
         if (serviceDestroying || !::bufferClearExecutor.isInitialized) return
-        if (retentionMaintenancePassQueued.get()) {
-            retentionMaintenanceActive.set(true)
-            return
-        }
         val needed = try {
             loopingAudioChunkStore.retentionMaintenanceNeeded() ||
                 oneShotAudioChunkStore.retentionMaintenanceNeeded()
         } catch (error: Exception) {
-            retentionMaintenanceActive.set(false)
+            retentionMaintenanceState.clear()
             pauseListeningAfterPersistenceFailure("inspect retention maintenance", error)
             return
         }
-        if (!needed) {
-            retentionMaintenanceActive.set(false)
-            return
+        if (retentionMaintenanceState.claimObservedNeed(needed)) {
+            submitClaimedRetentionMaintenancePass()
         }
-        retentionMaintenanceActive.set(true)
-        enqueueRetentionMaintenancePass()
     }
 
     private fun enqueueRetentionMaintenancePass() {
-        if (serviceDestroying || !retentionMaintenanceActive.get()) return
-        if (!retentionMaintenancePassQueued.compareAndSet(false, true)) return
+        if (serviceDestroying) return
+        if (retentionMaintenanceState.claimActiveRetry()) {
+            submitClaimedRetentionMaintenancePass()
+        }
+    }
+
+    private fun submitClaimedRetentionMaintenancePass() {
         try {
             bufferClearExecutor.execute(::runRetentionMaintenancePass)
         } catch (error: RejectedExecutionException) {
-            retentionMaintenancePassQueued.set(false)
-            retentionMaintenanceActive.set(false)
+            retentionMaintenanceState.clear()
             if (!serviceDestroying) {
                 pauseListeningAfterPersistenceFailure("schedule retention maintenance", error)
             }
@@ -3311,8 +3307,7 @@ class ReverbService : Service() {
 
     private fun runRetentionMaintenancePass() {
         if (serviceDestroying) {
-            retentionMaintenancePassQueued.set(false)
-            retentionMaintenanceActive.set(false)
+            retentionMaintenanceState.clear()
             return
         }
         var needsMore = false
@@ -3321,20 +3316,21 @@ class ReverbService : Service() {
             val loopingStep = loopingAudioChunkStore.performRetentionMaintenanceStep()
             val oneShotStep = oneShotAudioChunkStore.performRetentionMaintenanceStep()
             needsMore = loopingStep.needsMore || oneShotStep.needsMore
-            blocked = (loopingStep.blocked && !loopingStep.progressed) ||
-                (oneShotStep.blocked && !oneShotStep.progressed)
+            blocked = loopingStep.blocked || oneShotStep.blocked
         } catch (error: Exception) {
-            retentionMaintenancePassQueued.set(false)
-            retentionMaintenanceActive.set(false)
+            retentionMaintenanceState.clear()
             if (!serviceDestroying) {
                 pauseListeningAfterPersistenceFailure("apply retention maintenance", error)
             }
             return
         }
 
-        retentionMaintenancePassQueued.set(false)
-        if (needsMore && !serviceDestroying) {
-            retentionMaintenanceActive.set(true)
+        if (serviceDestroying) {
+            retentionMaintenanceState.clear()
+            return
+        }
+        retentionMaintenanceState.completePass(needsMore)
+        if (needsMore) {
             if (blocked) {
                 mainHandler.postDelayed(
                     { enqueueRetentionMaintenancePass() },
@@ -3346,14 +3342,12 @@ class ReverbService : Service() {
             return
         }
 
-        retentionMaintenanceActive.set(false)
         if (serviceDestroying) return
 
-        // A capture append can cross the limit after the last store step but before this
-        // worker clears its active flag. Recheck after releasing the queued-pass ownership so
-        // that exact boundary cannot lose the wake-up.
+        // A capture append can cross the limit after the pass releases scheduler ownership.
+        // Re-observe both stores so that exact completion boundary cannot lose a wake-up.
         scheduleRetentionMaintenanceIfNeeded()
-        if (!retentionMaintenanceActive.get()) {
+        if (!retentionMaintenanceState.isActive()) {
             mainHandler.post {
                 if (!serviceDestroying && state != STATE_LISTENING) {
                     requestServiceStopWhenExportIdle()
