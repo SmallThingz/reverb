@@ -144,6 +144,7 @@
     <string name="share_recordings_title">Share recordings</string>
     <string name="share_recording_failed">Couldn\'t share recording.</string>
     <string name="recording_unavailable">Recording changed or is no longer available.</string>
+    <string name="recording_read_cleanup_failed">Couldn\'t finish reading recording.</string>
     <string name="recording_info">Info</string>
     <string name="about_version">Version %1$s</string>
     <string name="github_repo">GitHub repository</string>

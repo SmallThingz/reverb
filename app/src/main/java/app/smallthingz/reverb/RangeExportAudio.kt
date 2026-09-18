@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
@@ -347,6 +348,17 @@ internal class PlaybackHeadFrameCounter {
     }
 }
 
+internal inline fun closeShuttleSourceReportingFailure(
+    close: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        close()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
+
 internal fun executeIfAccepted(executor: Executor, task: Runnable): Boolean = try {
     executor.execute(task)
     true
@@ -536,6 +548,7 @@ internal class TimelineAudioPreviewController : Closeable {
             sourceFactory = { TimelineShuttlePcmSource(snapshot) },
             onStarted = null,
             onFailureAfterStart = null,
+            onSourceCloseFailure = {},
         )
     }
 
@@ -546,15 +559,24 @@ internal class TimelineAudioPreviewController : Closeable {
         rate: Float,
         onStarted: () -> Unit = {},
         onFailureAfterStart: () -> Unit = {},
+        onSourceCloseFailure: ((Exception) -> Unit)? = null,
     ) {
+        val appContext = context.applicationContext
         startShuttleInternal(
             // Catalog duration can lag MediaPlayer/the opened WAV. The source thread owns the
             // authoritative upper bound, avoiding a wrong first grain then an audible jump.
             atSeconds = sanitizedShuttlePositionSeconds(atSeconds),
             rate = rate,
-            sourceFactory = { RecordingShuttlePcmSource(context.applicationContext, recording) },
+            sourceFactory = { RecordingShuttlePcmSource(appContext, recording) },
             onStarted = onStarted,
             onFailureAfterStart = onFailureAfterStart,
+            onSourceCloseFailure = onSourceCloseFailure ?: { error ->
+                Log.e("ReverbRangeAudio", "Saved recording shuttle source close failed", error)
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.recording_read_cleanup_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
         )
     }
 
@@ -564,6 +586,7 @@ internal class TimelineAudioPreviewController : Closeable {
         sourceFactory: () -> ShuttlePcmSource,
         onStarted: (() -> Unit)?,
         onFailureAfterStart: (() -> Unit)?,
+        onSourceCloseFailure: (Exception) -> Unit,
     ) {
         if (closed) return
         cancelCurrent()
@@ -583,7 +606,13 @@ internal class TimelineAudioPreviewController : Closeable {
                 if (activeShuttleToken == token) activeShuttleToken = 0L
                 return@enqueueLatest
             }
-            shuttle(token, source, onStarted, onFailureAfterStart)
+            shuttle(
+                token = token,
+                source = source,
+                onStarted = onStarted,
+                onFailureAfterStart = onFailureAfterStart,
+                onSourceCloseFailure = onSourceCloseFailure,
+            )
         }
     }
 
@@ -655,6 +684,7 @@ internal class TimelineAudioPreviewController : Closeable {
         source: ShuttlePcmSource,
         onStarted: (() -> Unit)?,
         onFailureAfterStart: (() -> Unit)?,
+        onSourceCloseFailure: (Exception) -> Unit,
     ) {
         var track: AudioTrack? = null
         var startedCallbackSent = false
@@ -849,7 +879,10 @@ internal class TimelineAudioPreviewController : Closeable {
                 }
                 releaseTrackOnce(track)
             }
-            runCatching { source.close() }
+            closeShuttleSourceReportingFailure(
+                close = source::close,
+                onFailure = onSourceCloseFailure,
+            )
         }
     }
 

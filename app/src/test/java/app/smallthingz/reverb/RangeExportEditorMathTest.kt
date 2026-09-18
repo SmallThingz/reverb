@@ -1,8 +1,10 @@
 package app.smallthingz.reverb
 
 import androidx.compose.ui.geometry.Rect
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -92,6 +94,27 @@ class RangeExportEditorMathTest {
         )
         assertFalse(visuallyRestored.edited)
         assertEquals("47:59:59.9", visuallyRestored.initialText)
+    }
+
+    @Test
+    fun shuttleSourceCloseFailure_isReportedWithoutEscapingCleanup() {
+        val expected = IOException("close failed")
+        var observed: Exception? = null
+
+        closeShuttleSourceReportingFailure(
+            close = { throw expected },
+            onFailure = { observed = it },
+        )
+
+        assertSame(expected, observed)
+    }
+
+    @Test
+    fun shuttleSourceCloseReporterFailure_cannotEscapeCleanup() {
+        closeShuttleSourceReportingFailure(
+            close = { throw IOException("close failed") },
+            onFailure = { throw IllegalStateException("report failed") },
+        )
     }
 
     @Test
