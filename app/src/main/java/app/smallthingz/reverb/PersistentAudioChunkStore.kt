@@ -186,6 +186,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private var activeAccess: RandomAccessFile? = null
     private var activePayloadCrc = CRC32()
     private var activeDurablePayloadBytes = 0L
+    private var activeAppendBoundaryFailure: IOException? = null
     private var lastWriteAtMillis = 0L
 
     data class Snapshot(
@@ -276,6 +277,10 @@ internal class PersistentAudioChunkStore internal constructor(
         if (count == 0) return 0
         ensureLoadedLocked()
 
+        activeAppendBoundaryFailure?.let { failure ->
+            throw IOException("Active chunk append boundary is uncertain", failure)
+        }
+
         val frameBytes = configuredFrameBytesLocked()
         if (frameBytes <= 0 || retentionValue <= 0L) return 0
         require(count % frameBytes == 0) {
@@ -312,18 +317,42 @@ internal class PersistentAudioChunkStore internal constructor(
             }
 
             val access = requireNotNull(activeAccess)
-            access.write(array, sourceOffset, alignedWriteCount)
-            activePayloadCrc.update(array, sourceOffset, alignedWriteCount)
+            val writeStart = record.payloadOffsetBytes + record.payloadBytes
+            val physicalLength = access.length()
+            if (physicalLength != writeStart) {
+                throw markActiveAppendBoundaryFailureLocked(
+                    IOException(
+                        "Active chunk length no longer matches tracked payload: " +
+                            "expected=$writeStart actual=$physicalLength",
+                    ),
+                )
+            }
+            access.seek(writeStart)
+            try {
+                access.write(array, sourceOffset, alignedWriteCount)
+            } catch (error: IOException) {
+                recoverPartialAppendAfterFailureLocked(
+                    record = record,
+                    access = access,
+                    array = array,
+                    sourceOffset = sourceOffset,
+                    requestedBytes = alignedWriteCount,
+                    frameBytes = frameBytes,
+                )?.let { recoveryError ->
+                    if (recoveryError !== error) error.addSuppressed(recoveryError)
+                }
+                throw error
+            }
+            commitAppendedFramesLocked(
+                record = record,
+                array = array,
+                sourceOffset = sourceOffset,
+                count = alignedWriteCount,
+                frameBytes = frameBytes,
+            )
 
-            record.payloadBytes += alignedWriteCount.toLong()
-            val writtenFrames = alignedWriteCount.toLong() / frameBytes
-            record.sampleFrames += writtenFrames
-            record.payloadChecksum = activePayloadCrc.value.toInt()
-            retainedPayloadBytes = safeAdd(retainedPayloadBytes, alignedWriteCount.toLong())
-            addRetainedDurationLocked(writtenFrames.toDouble() / record.sampleRate.toDouble())
             sourceOffset += alignedWriteCount
             remaining -= alignedWriteCount
-            lastWriteAtMillis = System.currentTimeMillis()
 
             // Finalize a full replacement before evicting anything it displaced. For a
             // partial active chunk, force its payload durable before retiring an older
@@ -337,6 +366,104 @@ internal class PersistentAudioChunkStore internal constructor(
             }
         }
         return count - remaining
+    }
+
+    private fun commitAppendedFramesLocked(
+        record: ChunkRecord,
+        array: ByteArray,
+        sourceOffset: Int,
+        count: Int,
+        frameBytes: Int,
+    ) {
+        if (count <= 0) return
+        require(count % frameBytes == 0) { "Committed append must be frame aligned" }
+        activePayloadCrc.update(array, sourceOffset, count)
+        record.payloadBytes += count.toLong()
+        val writtenFrames = count.toLong() / frameBytes.toLong()
+        record.sampleFrames += writtenFrames
+        record.payloadChecksum = activePayloadCrc.value.toInt()
+        retainedPayloadBytes = safeAdd(retainedPayloadBytes, count.toLong())
+        addRetainedDurationLocked(writtenFrames.toDouble() / record.sampleRate.toDouble())
+        lastWriteAtMillis = System.currentTimeMillis()
+    }
+
+    private fun recoverPartialAppendAfterFailureLocked(
+        record: ChunkRecord,
+        access: RandomAccessFile,
+        array: ByteArray,
+        sourceOffset: Int,
+        requestedBytes: Int,
+        frameBytes: Int,
+    ): IOException? {
+        val writeStart = record.payloadOffsetBytes + record.payloadBytes
+        val observedEnd = try {
+            access.filePointer
+        } catch (error: Exception) {
+            return markActiveAppendBoundaryFailureLocked(
+                IOException("Unable to inspect active chunk after failed append", error),
+            )
+        }
+        val observedBytes = observedEnd - writeStart
+        if (observedBytes !in 0L..requestedBytes.toLong()) {
+            return markActiveAppendBoundaryFailureLocked(
+                IOException(
+                    "Active chunk position is outside failed append bounds: " +
+                        "start=$writeStart end=$observedEnd requested=$requestedBytes",
+                ),
+            )
+        }
+
+        val completeBytes = observedBytes - observedBytes % frameBytes.toLong()
+        if (completeBytes > 0L) {
+            commitAppendedFramesLocked(
+                record = record,
+                array = array,
+                sourceOffset = sourceOffset,
+                count = completeBytes.toInt(),
+                frameBytes = frameBytes,
+            )
+        }
+
+        val accountedEnd = writeStart + completeBytes
+        if (observedEnd != accountedEnd) {
+            try {
+                // Preserve even an undecodable torn frame before trimming it, matching crash
+                // recovery's no-silent-destruction rule. Chunks are capped at 1 MiB.
+                preserveFileCopyLocked(record.file, "partial-append")
+            } catch (error: Exception) {
+                return markActiveAppendBoundaryFailureLocked(
+                    IOException("Unable to preserve torn partial append", error),
+                )
+            }
+        }
+
+        return try {
+            access.setLength(accountedEnd)
+            access.seek(accountedEnd)
+            val restoredLength = access.length()
+            val restoredPosition = access.filePointer
+            if (restoredLength != accountedEnd || restoredPosition != accountedEnd) {
+                throw IOException(
+                    "Unable to restore active chunk append boundary: " +
+                        "expected=$accountedEnd length=$restoredLength position=$restoredPosition",
+                )
+            }
+            null
+        } catch (error: Exception) {
+            markActiveAppendBoundaryFailureLocked(
+                IOException("Unable to restore active chunk after failed append", error),
+            )
+        }
+    }
+
+    private fun markActiveAppendBoundaryFailureLocked(error: IOException): IOException {
+        val previous = activeAppendBoundaryFailure
+        if (previous == null) {
+            activeAppendBoundaryFailure = error
+            return error
+        }
+        if (error !== previous) previous.addSuppressed(error)
+        return previous
     }
 
     @Synchronized
@@ -460,6 +587,9 @@ internal class PersistentAudioChunkStore internal constructor(
         val snapshot = synchronized(this) {
             if (closed) return 0L
             ensureLoadedLocked()
+            activeAppendBoundaryFailure?.let { failure ->
+                throw IOException("Cannot sync active chunk with an uncertain append boundary", failure)
+            }
             val record = activeRecord ?: return 0L
             if (record.payloadBytes <= activeDurablePayloadBytes) return 0L
             ActivePayloadSyncSnapshot(
@@ -1422,12 +1552,16 @@ internal class PersistentAudioChunkStore internal constructor(
         activeRecord = record
         activePayloadCrc = CRC32()
         activeDurablePayloadBytes = 0L
+        activeAppendBoundaryFailure = null
         activeAccess = access
         return record
     }
 
     private fun finalizeActiveLocked() {
         val record = activeRecord ?: return
+        activeAppendBoundaryFailure?.let { failure ->
+            throw IOException("Cannot finalize active chunk with an uncertain append boundary", failure)
+        }
         if (record.payloadBytes <= 0L) {
             val closeFailure = closeActiveAccessLocked()
             removeChunkLocked(record)
@@ -1460,10 +1594,14 @@ internal class PersistentAudioChunkStore internal constructor(
         activeRecord = null
         activePayloadCrc = CRC32()
         activeDurablePayloadBytes = 0L
+        activeAppendBoundaryFailure = null
     }
 
     private fun syncActivePayloadLocked() {
         val record = activeRecord ?: return
+        activeAppendBoundaryFailure?.let { failure ->
+            throw IOException("Cannot sync active chunk with an uncertain append boundary", failure)
+        }
         if (record.payloadBytes <= activeDurablePayloadBytes) return
         requireNotNull(activeAccess).fd.sync()
         activeDurablePayloadBytes = record.payloadBytes
@@ -1471,6 +1609,9 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun writeActiveHeaderLocked() {
         val record = activeRecord ?: return
+        activeAppendBoundaryFailure?.let { failure ->
+            throw IOException("Cannot checkpoint active chunk with an uncertain append boundary", failure)
+        }
         record.payloadChecksum = activePayloadCrc.value.toInt()
         writeMutableChunkSlot(record, access = activeAccess, forceToDisk = true)
         activeDurablePayloadBytes = record.payloadBytes

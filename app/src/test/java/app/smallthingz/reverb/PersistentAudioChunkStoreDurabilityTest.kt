@@ -511,6 +511,79 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun append_partialWriteThenFailure_salvagesCompleteFramesAndDropsTornTail() = withStoreRoot { root ->
+        val prefix = pcmBytes(4_096)
+        val attempted = pcmBytes(8)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(prefix.size, store.append(prefix, 0, prefix.size))
+        replaceActiveAccessWithPartialWriteFailure(store, bytesBeforeFailure = 7)
+
+        val error = assertThrows(IOException::class.java) {
+            store.append(attempted, 0, attempted.size)
+        }
+        assertTrue(error.message?.contains("Injected partial append failure") == true)
+
+        val expected = prefix + attempted.copyOf(6)
+        assertEquals(expected.size.toLong(), store.countFilledBytes())
+        store.sealActiveChunk()
+        assertArrayEquals(expected, readAll(store))
+        val preserved = File(root, "preserved").listFiles().orEmpty()
+            .singleOrNull { ".partial-append" in it.name }
+        assertNotNull(preserved)
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
+    fun append_partialWriteWithUnpreservableTornTail_blocksFinalizationAndRecoversAfterRestart() =
+        withStoreRoot { root ->
+            val prefix = pcmBytes(4_096)
+            val attempted = pcmBytes(8)
+            var failPreservedDirectorySync = false
+            val store = PersistentAudioChunkStore(
+                rootDirectory = root,
+                directorySync = { directory ->
+                    if (failPreservedDirectorySync && directory.name == "preserved") {
+                        throw IOException("Injected preserved-directory sync failure")
+                    }
+                },
+            )
+            configure(store, 128 * 1024L)
+            assertEquals(prefix.size, store.append(prefix, 0, prefix.size))
+            replaceActiveAccessWithPartialWriteFailure(store, bytesBeforeFailure = 7)
+
+            failPreservedDirectorySync = true
+            val error = assertThrows(IOException::class.java) {
+                store.append(attempted, 0, attempted.size)
+            }
+            assertTrue(error.message?.contains("Injected partial append failure") == true)
+            assertTrue(
+                error.suppressed.any { suppressed ->
+                    suppressed.message?.contains("Unable to preserve torn partial append") == true
+                },
+            )
+            assertEquals((prefix.size + 6).toLong(), store.countFilledBytes())
+            assertThrows(IOException::class.java) { store.sealActiveChunk() }
+
+            simulateAbruptProcessDeathWithoutSync(store)
+            failPreservedDirectorySync = false
+
+            val expected = prefix + attempted.copyOf(6)
+            PersistentAudioChunkStore(root).use { reopened ->
+                configure(reopened, 128 * 1024L)
+                assertArrayEquals(expected, readAll(reopened))
+            }
+            val preserved = File(root, "preserved").listFiles().orEmpty()
+                .singleOrNull { ".partial-frame" in it.name }
+            assertNotNull(preserved)
+        }
+
+    @Test
     fun close_surfacesActiveAccessCloseFailureWhileLeavingAudioRecoverable() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         val store = PersistentAudioChunkStore(root)
@@ -1137,6 +1210,29 @@ class PersistentAudioChunkStoreDurabilityTest {
             if (this[start + index] != suffix[index]) return false
         }
         return true
+    }
+
+    private fun replaceActiveAccessWithPartialWriteFailure(
+        store: PersistentAudioChunkStore,
+        bytesBeforeFailure: Int,
+    ) {
+        require(bytesBeforeFailure > 0)
+        val recordField = PersistentAudioChunkStore::class.java.getDeclaredField("activeRecord")
+        recordField.isAccessible = true
+        val record = requireNotNull(recordField.get(store) as? PersistentAudioChunkStore.ChunkRecord)
+
+        val accessField = PersistentAudioChunkStore::class.java.getDeclaredField("activeAccess")
+        accessField.isAccessible = true
+        val previous = requireNotNull(accessField.get(store) as? RandomAccessFile)
+        previous.close()
+        val failing = object : RandomAccessFile(record.file, "rw") {
+            override fun write(bytes: ByteArray, offset: Int, count: Int) {
+                super.write(bytes, offset, minOf(bytesBeforeFailure, count))
+                throw IOException("Injected partial append failure")
+            }
+        }
+        failing.seek(record.payloadOffsetBytes + record.payloadBytes)
+        accessField.set(store, failing)
     }
 
     private fun replaceActiveAccessWithFailingClose(store: PersistentAudioChunkStore) {
