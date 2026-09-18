@@ -311,4 +311,11 @@ class RecordingIncidentStoreTest {
 
         assertTrue(mutationRan)
     }
+
+    @Test
+    fun atomicReadMiss_isAbsenceOnlyWhenEveryBackingPathIsMissing() {
+        assertTrue(atomicReadMissIsAuthoritativeAbsence(StoragePathState.MISSING))
+        assertFalse(atomicReadMissIsAuthoritativeAbsence(StoragePathState.PRESENT))
+        assertFalse(atomicReadMissIsAuthoritativeAbsence(StoragePathState.UNAVAILABLE))
+    }
 }

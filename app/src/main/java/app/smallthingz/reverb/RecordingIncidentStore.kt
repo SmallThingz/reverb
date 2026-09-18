@@ -30,6 +30,9 @@ internal const val MAX_PENDING_INCIDENT_SESSIONS = 128
 internal fun pendingIncidentQueueCanAppend(existingCount: Int): Boolean =
     existingCount in 0 until MAX_PENDING_INCIDENT_SESSIONS
 
+internal fun atomicReadMissIsAuthoritativeAbsence(backingState: StoragePathState): Boolean =
+    backingState == StoragePathState.MISSING
+
 internal enum class RecordingIncidentKind(val storageCode: Byte) {
     UNEXPECTED_SHUTDOWN(1),
     ;
@@ -1094,8 +1097,10 @@ internal object RecordingIncidentStore {
     ): T? {
         val stream = try {
             file.openRead()
-        } catch (_: FileNotFoundException) {
-            return null
+        } catch (error: FileNotFoundException) {
+            val backingState = atomicFileBackingState(file.baseFile)
+            if (atomicReadMissIsAuthoritativeAbsence(backingState)) return null
+            throw IOException("Unable to read $label while AtomicFile backing state is $backingState", error)
         }
         return try {
             DataInputStream(BufferedInputStream(stream)).use(block)
