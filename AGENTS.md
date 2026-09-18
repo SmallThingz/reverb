@@ -144,6 +144,7 @@
 - MediaStore rename may refresh revision metadata, but catalog rebind requires the same stable provider object ID before/after the mutation; never adopt whatever object happens to occupy the URI after a rename race.
 - A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed.
 - Corrupt catalog preservation stages into a `.partial` recovery directory, verifies the frozen DB/sidecar membership and content digests before and after copy, and atomically publishes plus fsyncs the recovery parent before the active database may be reset.
+- Corrupt-catalog singleton reset clears the `RecordingDatabase` owner only after its close succeeds. A close failure leaves the exact helper retained and propagates so recovery cannot open a second helper over an uncertain still-owned SQLite handle.
 - Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
 - Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
 - Range preview/shuttle disposal may race a final UI gesture: rejected worker submissions are lifecycle no-ops, and AudioTrack release fallback stays off the caller thread instead of surfacing `RejectedExecutionException` or blocking UI.
