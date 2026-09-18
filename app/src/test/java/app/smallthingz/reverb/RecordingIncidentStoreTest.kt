@@ -1,8 +1,10 @@
 package app.smallthingz.reverb
 
 import android.app.ApplicationExitInfo
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -280,5 +282,33 @@ class RecordingIncidentStoreTest {
         assertTrue(recordingIncidentDowntimeMillis(incident) == 5_250L)
         assertTrue(recordingExitReasonLabel(incident.exitReason) == "Signaled")
         assertTrue(recordingIncidentDowntimeMillis(incident.copy(resumedAtMillis = 0L)) == null)
+    }
+
+    @Test
+    fun incidentHistoryMutation_reportsFailureWithoutEscapingProcessOwner() {
+        val expected = IOException("history unavailable")
+        var observed: Exception? = null
+
+        runIncidentHistoryMutation(
+            mutation = { throw expected },
+            onFailure = { observed = it },
+        )
+
+        assertSame(expected, observed)
+    }
+
+    @Test
+    fun incidentHistoryMutation_failureReporterCannotKillProcessOwner() {
+        var mutationRan = false
+
+        runIncidentHistoryMutation(
+            mutation = {
+                mutationRan = true
+                throw IOException("history unavailable")
+            },
+            onFailure = { throw IllegalStateException("feedback unavailable") },
+        )
+
+        assertTrue(mutationRan)
     }
 }

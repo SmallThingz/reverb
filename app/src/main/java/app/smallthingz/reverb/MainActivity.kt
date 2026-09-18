@@ -956,18 +956,9 @@ private fun MainScreen(
     }
 
     fun toggleIncidentAcknowledged(incident: RecordingIncident) {
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { RecordingIncidentStore.toggleIncidentAcknowledged(context, incident) }
-            }
-            // The store signals historyRevision only after the durable history write. Let that
-            // single stream own UI convergence: two rapid toggles may finish their launch
-            // coroutines out of order, so applying each returned list directly can resurrect an
-            // older checked state after the newer durable toggle already won.
-            result.onFailure {
-                AppFeedbackCenter.post(context.getString(R.string.incident_update_failed), FeedbackTone.ERROR)
-            }
-        }
+        // The store owns this accepted user mutation past Activity/Compose lifetime. Its durable
+        // revision stream remains the sole source of UI convergence for rapid toggles.
+        RecordingIncidentStore.toggleIncidentAcknowledgedInBackground(context, incident)
     }
 
     fun openIncidents() {

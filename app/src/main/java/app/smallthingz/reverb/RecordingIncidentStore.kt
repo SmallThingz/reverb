@@ -8,9 +8,13 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.AtomicFile
 import androidx.annotation.RequiresApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -60,6 +64,17 @@ internal fun toggleRecordingIncidentAcknowledgement(
 ): RecordingIncident = incident.copy(
     acknowledgedAtMillis = if (incident.acknowledged) 0L else acknowledgedAtMillis.coerceAtLeast(1L),
 )
+
+internal inline fun runIncidentHistoryMutation(
+    mutation: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        mutation()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
 
 internal fun recordingIncidentsShareCaptureSession(
     left: RecordingIncident,
@@ -205,6 +220,7 @@ internal object RecordingIncidentStore {
 
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
+    private val historyMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pendingServiceStopIncidentRetries = mutableListOf<PendingServiceStopIncidentRetry>()
     private val pendingCaptureInterruptionRetries = mutableListOf<PendingCaptureInterruptionRetry>()
 
@@ -486,6 +502,24 @@ internal object RecordingIncidentStore {
         // failure can leave an armed previous-process marker invisible until capture starts again.
         recoverPriorSessionIfNeeded(appContext)
         return readHistory(historyFile(appContext))
+    }
+
+    fun toggleIncidentAcknowledgedInBackground(context: Context, incident: RecordingIncident) {
+        val appContext = context.applicationContext
+        // The card tap has already committed a durable-history mutation from the user's
+        // perspective. Transfer it to process lifetime before returning to the UI; Activity or
+        // Compose disposal may cancel presentation work but must not revoke this accepted toggle.
+        historyMutationScope.launch {
+            runIncidentHistoryMutation(
+                mutation = { toggleIncidentAcknowledged(appContext, incident) },
+                onFailure = {
+                    AppFeedbackCenter.post(
+                        appContext.getString(R.string.incident_update_failed),
+                        FeedbackTone.ERROR,
+                    )
+                },
+            )
+        }
     }
 
     @Synchronized
