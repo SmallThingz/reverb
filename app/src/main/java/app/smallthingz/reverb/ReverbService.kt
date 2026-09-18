@@ -1602,6 +1602,10 @@ class ReverbService : Service() {
             ensureExportOnlyForegroundIfNeeded()
             return
         }
+        if (hasActiveBufferClear()) {
+            ensureBufferClearOnlyForegroundIfNeeded()
+            return
+        }
         stopForegroundTracked()
         stopSelf()
     }
@@ -1619,6 +1623,35 @@ class ReverbService : Service() {
             // The export remains protected rather than being destroyed with the service.
             Log.e(TAG, "Unable to switch foreground service to export mode", error)
             reportError(userFacingError(getString(R.string.save_failed), error))
+        }
+    }
+
+    private fun ensureBufferClearOnlyForegroundIfNeeded() {
+        if (serviceDestroying || !hasActiveBufferClear()) return
+        if (
+            state == STATE_LISTENING &&
+            isListeningEnabled() &&
+            foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0
+        ) {
+            return
+        }
+        if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) return
+        try {
+            promoteForeground(
+                foregroundServiceTypesForWork(
+                    listening = false,
+                    exporting = false,
+                    clearing = true,
+                ),
+                exporting = false,
+                clearing = true,
+            )
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Unable to switch foreground service to buffer-clear mode", error)
+            reportError(userFacingError(getString(R.string.clear_buffer_failed), error))
+            if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
+                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+            }
         }
     }
 
@@ -1640,10 +1673,37 @@ class ReverbService : Service() {
                 }
                 return@post
             }
+            if (hasActiveBufferClear()) {
+                ensureBufferClearOnlyForegroundIfNeeded()
+                return@post
+            }
             stopForegroundTracked()
             // The export keepalive itself started this service. If capture cannot be
             // restored to an active microphone foreground service, always release that
             // started lifetime; a live UI binding may still keep the service instance.
+            stopSelf()
+        }
+    }
+
+    private fun refreshForegroundAfterBufferClear() {
+        mainHandler.post {
+            if (serviceDestroying || hasActiveBufferClear()) return@post
+            if (state == STATE_LISTENING && isListeningEnabled() && !foregroundStartBlocked) {
+                try {
+                    promoteForeground(
+                        foregroundServiceTypesForWork(listening = true, exporting = false),
+                        exporting = false,
+                    )
+                } catch (error: RuntimeException) {
+                    Log.e(TAG, "Unable to restore microphone foreground state after buffer Clear", error)
+                }
+                return@post
+            }
+            if (hasActiveExport()) {
+                ensureExportOnlyForegroundIfNeeded()
+                return@post
+            }
+            stopForegroundTracked()
             stopSelf()
         }
     }
@@ -2656,7 +2716,15 @@ class ReverbService : Service() {
     }
 
     private fun releaseQuickTileStartedLifetimeIfIdle(startId: Int) {
-        if (serviceDestroying || isListeningEnabled() || state == STATE_LISTENING || hasActiveExport()) return
+        if (
+            serviceDestroying ||
+            isListeningEnabled() ||
+            state == STATE_LISTENING ||
+            hasActiveExport() ||
+            hasActiveBufferClear()
+        ) {
+            return
+        }
         stopForegroundTracked()
         stopSelfResult(startId)
     }
@@ -2907,6 +2975,39 @@ class ReverbService : Service() {
 
     internal fun currentBufferClearStatus(): BufferClearStatus? = bufferClearStatus
 
+    private fun hasActiveBufferClear(): Boolean = synchronized(bufferClearLock) {
+        activeBufferClearOperation != null
+    }
+
+    private fun bufferClearOperationIsCurrent(operation: BufferClearOperation): Boolean =
+        synchronized(bufferClearLock) { activeBufferClearOperation === operation }
+
+    private fun ensureBufferClearForegroundLifetime(operation: BufferClearOperation): Boolean {
+        if (serviceDestroying || !bufferClearOperationIsCurrent(operation)) return false
+        if (foregroundServiceTypes != 0) return true
+        foregroundServiceTimedOut = false
+        return try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, javaClass).setAction(ACTION_BUFFER_CLEAR_KEEPALIVE),
+            )
+            promoteForeground(
+                foregroundServiceTypesForWork(
+                    listening = false,
+                    exporting = false,
+                    clearing = true,
+                ),
+                exporting = false,
+                clearing = true,
+            )
+            true
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Unable to protect buffer Clear with a foreground service", error)
+            reportError(userFacingError(getString(R.string.clear_buffer_failed), error))
+            false
+        }
+    }
+
     fun startClearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Long? {
         val operation = synchronized(listeningIntentLock) intentLock@{
             if (!serviceCommandMayQueue(serviceDestroying) || !::bufferClearExecutor.isInitialized) {
@@ -2940,21 +3041,36 @@ class ReverbService : Service() {
             }
         } ?: return null
 
+        if (!ensureBufferClearForegroundLifetime(operation)) {
+            finishBufferClearOperation(
+                operation = operation,
+                phase = BufferClearPhase.FAILED,
+                totalBytes = 0L,
+                remainingBytes = 0L,
+                totalChunks = 0,
+                remainingChunks = 0,
+            )
+            return null
+        }
+
         return try {
             bufferClearExecutor.execute { runBufferClear(operation) }
             operation.id
         } catch (error: RejectedExecutionException) {
-            synchronized(bufferClearLock) {
-                if (activeBufferClearOperation === operation) {
-                    activeBufferClearOperation = null
-                    bufferClearStatus = BufferClearStatus(
-                        operationId = operation.id,
-                        bufferSlot = operation.bufferSlot,
-                        phase = BufferClearPhase.FAILED,
-                    )
+            finishBufferClearOperation(
+                operation = operation,
+                phase = BufferClearPhase.FAILED,
+                totalBytes = 0L,
+                remainingBytes = 0L,
+                totalChunks = 0,
+                remainingChunks = 0,
+            )
+            if (!serviceDestroying) {
+                reportPersistentStoreFailure("start clear history", error)
+                if (!appUiForeground) {
+                    AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
                 }
             }
-            if (!serviceDestroying) reportPersistentStoreFailure("start clear history", error)
             null
         }
     }
@@ -2962,26 +3078,33 @@ class ReverbService : Service() {
     fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
         startClearBuffer(bufferSlot) != null
 
-    fun cancelBufferClear(operationId: Long): Boolean = synchronized(bufferClearLock) {
+    fun cancelBufferClear(operationId: Long): Boolean =
+        requestBufferClearCancellation(
+            operationId = operationId,
+            reportFailure = false,
+        )
+
+    private fun requestBufferClearCancellation(
+        operationId: Long? = null,
+        reportFailure: Boolean,
+    ): Boolean = synchronized(bufferClearLock) {
         val operation = activeBufferClearOperation
-            ?.takeIf { it.id == operationId }
+            ?.takeIf { operationId == null || it.id == operationId }
             ?: return@synchronized false
+        if (reportFailure) operation.cancellationReportsFailure.set(true)
         operation.cancelRequested.set(true)
         bufferClearStatus = bufferClearStatus
-            ?.takeIf { it.operationId == operationId }
+            ?.takeIf { it.operationId == operation.id }
             ?.copy(phase = BufferClearPhase.CANCELLING)
         true
     }
 
     private fun cancelActiveBufferClearForTeardown() {
-        synchronized(bufferClearLock) {
-            val operation = activeBufferClearOperation ?: return
-            operation.cancelRequested.set(true)
-            bufferClearStatus = bufferClearStatus
-                ?.takeIf { it.operationId == operation.id }
-                ?.copy(phase = BufferClearPhase.CANCELLING)
-        }
+        requestBufferClearCancellation(reportFailure = false)
     }
+
+    private fun bufferClearCancellationPhase(operation: BufferClearOperation): BufferClearPhase =
+        bufferClearCancellationTerminal(operation.cancellationReportsFailure.get())
 
     private fun runBufferClear(operation: BufferClearOperation) {
         val store = chunkStore(operation.bufferSlot)
@@ -2991,7 +3114,7 @@ class ReverbService : Service() {
             if (operation.cancelRequested.get() || serviceDestroying) {
                 finishBufferClearOperation(
                     operation = operation,
-                    phase = BufferClearPhase.CANCELLED,
+                    phase = bufferClearCancellationPhase(operation),
                     totalBytes = 0L,
                     remainingBytes = 0L,
                     totalChunks = 0,
@@ -3030,7 +3153,7 @@ class ReverbService : Service() {
                 if (operation.cancelRequested.get() || serviceDestroying) {
                     finishBufferClearOperation(
                         operation = operation,
-                        phase = BufferClearPhase.CANCELLED,
+                        phase = bufferClearCancellationPhase(operation),
                         totalBytes = totalBytes,
                         remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
                         totalChunks = totalChunks,
@@ -3059,7 +3182,7 @@ class ReverbService : Service() {
                 if (step == null) {
                     finishBufferClearOperation(
                         operation = operation,
-                        phase = BufferClearPhase.CANCELLED,
+                        phase = bufferClearCancellationPhase(operation),
                         totalBytes = totalBytes,
                         remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
                         totalChunks = totalChunks,
@@ -3097,13 +3220,18 @@ class ReverbService : Service() {
             val cancelled = operation.cancelRequested.get() || serviceDestroying
             finishBufferClearOperation(
                 operation = operation,
-                phase = if (cancelled) BufferClearPhase.CANCELLED else BufferClearPhase.FAILED,
+                phase = if (cancelled) bufferClearCancellationPhase(operation) else BufferClearPhase.FAILED,
                 totalBytes = totalBytes,
                 remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
                 totalChunks = totalChunks,
                 remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
             )
-            if (!cancelled) reportPersistentStoreFailure("clear history", error)
+            if (!cancelled) {
+                reportPersistentStoreFailure("clear history", error)
+                if (!appUiForeground) {
+                    AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+                }
+            }
         }
     }
 
@@ -3165,6 +3293,7 @@ class ReverbService : Service() {
         }
         if (!finished) return
         publishBufferClearTerminalState(operation, phase)
+        refreshForegroundAfterBufferClear()
     }
 
     private fun publishBufferClearTerminalState(
@@ -3210,6 +3339,10 @@ class ReverbService : Service() {
         }
         if (intent?.action == ACTION_EXPORT_KEEPALIVE) {
             if (!hasActiveExport()) requestServiceStopWhenExportIdle()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_BUFFER_CLEAR_KEEPALIVE) {
+            if (!hasActiveBufferClear()) requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_QUICK_TILE_COMMAND) {
@@ -3293,11 +3426,14 @@ class ReverbService : Service() {
             "Foreground service timed out while capture was running",
         )
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
-            Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified export output")
+            Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified output")
             requestExportCancellation(
                 preserveVerifiedOutput = true,
                 reportFailure = true,
             )
+            if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
+                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+            }
         }
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
@@ -3311,13 +3447,21 @@ class ReverbService : Service() {
         stopSelf()
     }
 
-    private fun buildNotification(exporting: Boolean = false): Notification {
+    private fun buildNotification(
+        exporting: Boolean = false,
+        clearing: Boolean = false,
+    ): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        val contentText = when {
+            clearing -> R.string.clearing_buffer
+            exporting -> R.string.saving
+            else -> R.string.quick_tile_recording
+        }
 
         return NotificationCompat.Builder(this, BACKGROUND_NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText(getString(if (exporting) R.string.saving else R.string.quick_tile_recording))
+            .setContentText(getString(contentText))
             .setSmallIcon(R.drawable.ic_notification_recording)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -3325,12 +3469,16 @@ class ReverbService : Service() {
             .build()
     }
 
-    private fun promoteForeground(types: Int, exporting: Boolean) {
+    private fun promoteForeground(
+        types: Int,
+        exporting: Boolean,
+        clearing: Boolean = false,
+    ) {
         require(types != 0) { "Foreground service requires at least one active type" }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting), types)
+            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting, clearing), types)
         } else {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting))
+            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(exporting, clearing))
         }
         foregroundServiceTypes = types
     }
@@ -3839,6 +3987,7 @@ class ReverbService : Service() {
         val bufferSlot: BufferSlot,
         val acceptedGeneration: Long,
         val cancelRequested: AtomicBoolean = AtomicBoolean(false),
+        val cancellationReportsFailure: AtomicBoolean = AtomicBoolean(false),
     )
 
     private data class OperationalConfig(
@@ -3886,6 +4035,7 @@ class ReverbService : Service() {
         val nextExportTokenId = AtomicLong(1L)
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
+        const val ACTION_BUFFER_CLEAR_KEEPALIVE = "app.smallthingz.reverb.BUFFER_CLEAR_KEEPALIVE"
         const val ACTION_QUICK_TILE_COMMAND = "app.smallthingz.reverb.QUICK_TILE_COMMAND"
         const val EXTRA_QUICK_TILE_BUFFER_SLOT = "bufferSlot"
         const val ACTION_DEBUG_ENABLE_LISTENING = "${DEBUG_ACTION_PREFIX}ENABLE_LISTENING"
@@ -3935,12 +4085,13 @@ internal fun captureReadByteCount(
 internal fun foregroundServiceTypesForWork(
     listening: Boolean,
     exporting: Boolean,
+    clearing: Boolean = false,
 ): Int = when {
     // Never combine the limited dataSync type with long-lived microphone capture.
     // The microphone FGS already owns the service lifetime while recording; if capture
-    // stops during an export we switch to dataSync at that boundary.
+    // stops during data-sync work we switch to dataSync at that boundary.
     listening -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    exporting -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    exporting || clearing -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
     else -> 0
 }
 

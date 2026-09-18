@@ -1362,7 +1362,7 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun foregroundServiceTypes_coverRecorderAndExportLifetimeIndependently() {
+    fun foregroundServiceTypes_coverRecorderAndDataSyncLifetimesIndependently() {
         assertEquals(0, foregroundServiceTypesForWork(listening = false, exporting = false))
         assertEquals(
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
@@ -1373,8 +1373,12 @@ class FormattingAndHistoryMathTest {
             foregroundServiceTypesForWork(listening = false, exporting = true),
         )
         assertEquals(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            foregroundServiceTypesForWork(listening = false, exporting = false, clearing = true),
+        )
+        assertEquals(
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-            foregroundServiceTypesForWork(listening = true, exporting = true),
+            foregroundServiceTypesForWork(listening = true, exporting = true, clearing = true),
         )
     }
 

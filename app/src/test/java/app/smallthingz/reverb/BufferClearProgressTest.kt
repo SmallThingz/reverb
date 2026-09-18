@@ -99,4 +99,10 @@ class BufferClearProgressTest {
             ),
         )
     }
+    @Test
+    fun platformCancellation_isFailureWhileUserCancellationIsNeutral() {
+        assertEquals(BufferClearPhase.CANCELLED, bufferClearCancellationTerminal(reportFailure = false))
+        assertEquals(BufferClearPhase.FAILED, bufferClearCancellationTerminal(reportFailure = true))
+    }
+
 }

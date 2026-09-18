@@ -42,6 +42,9 @@ internal fun bufferClearProgressFraction(status: BufferClearStatus): Float? {
     return null
 }
 
+internal fun bufferClearCancellationTerminal(reportFailure: Boolean): BufferClearPhase =
+    if (reportFailure) BufferClearPhase.FAILED else BufferClearPhase.CANCELLED
+
 internal fun bufferClearCanContinue(
     cancelRequested: Boolean,
     serviceDestroying: Boolean,
