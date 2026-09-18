@@ -1689,10 +1689,11 @@ class ReverbService : Service() {
         mainHandler.post {
             if (serviceDestroying || hasActiveBufferClear()) return@post
             if (state == STATE_LISTENING && isListeningEnabled() && !foregroundStartBlocked) {
+                val exporting = hasActiveExport()
                 try {
                     promoteForeground(
-                        foregroundServiceTypesForWork(listening = true, exporting = false),
-                        exporting = false,
+                        foregroundServiceTypesForWork(listening = true, exporting = exporting),
+                        exporting = exporting,
                     )
                 } catch (error: RuntimeException) {
                     Log.e(TAG, "Unable to restore microphone foreground state after buffer Clear", error)
