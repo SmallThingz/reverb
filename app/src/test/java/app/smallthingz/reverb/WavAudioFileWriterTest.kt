@@ -163,6 +163,26 @@ class WavAudioFileWriterTest {
     }
 
     @Test
+    fun wavHeaderRejectsOverflowingRiffGeometry() {
+        assertThrows(IllegalArgumentException::class.java) {
+            buildWavHeaderBytes(
+                sampleRate = 8_000,
+                channelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+                dataSize = Long.MAX_VALUE,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            buildWavHeaderBytes(
+                sampleRate = 8_000,
+                channelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+                dataSize = Long.MAX_VALUE - 1L,
+            )
+        }
+    }
+
+    @Test
     fun invalidConfiguration_doesNotAcquireWritableOutput() {
         var opened = false
 

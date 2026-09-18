@@ -36,7 +36,7 @@ internal fun buildWavHeaderBytes(
     val headerSize = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) WAV_FLOAT_HEADER_SIZE else WAV_PCM_HEADER_SIZE
     val paddedDataSize = dataSize + (dataSize and 1L)
     val chunkSize = headerSize.toLong() - 8L + paddedDataSize
-    require(chunkSize <= 0xFFFF_FFFFL)
+    require(chunkSize in 0L..0xFFFF_FFFFL)
 
     val buffer = ByteBuffer.allocate(headerSize).order(ByteOrder.LITTLE_ENDIAN)
     buffer.put(WAV_RIFF_BYTES)
