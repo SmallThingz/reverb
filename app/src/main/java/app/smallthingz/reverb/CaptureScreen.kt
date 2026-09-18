@@ -98,11 +98,23 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.Closeable
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private const val RECORDING_SAVED_NOTIFICATION_ID = 43
 private const val RECORDING_SAVE_FAILED_NOTIFICATION_ID = 44
+private const val RECORDING_SAVED_NOTIFICATION_TAG_PREFIX = "recording-saved:"
+private const val RECORDING_SAVED_NOTIFICATION_ACTION_PREFIX = ".action.OPEN_SAVED_RECORDING."
+
+internal fun recordingSavedNotificationKey(recordingId: String): String =
+    UUID.nameUUIDFromBytes(recordingId.toByteArray(Charsets.UTF_8)).toString()
+
+internal fun recordingSavedNotificationTag(recordingId: String): String =
+    RECORDING_SAVED_NOTIFICATION_TAG_PREFIX + recordingSavedNotificationKey(recordingId)
+
+internal fun recordingSavedPendingIntentAction(packageName: String, recordingId: String): String =
+    packageName + RECORDING_SAVED_NOTIFICATION_ACTION_PREFIX + recordingSavedNotificationKey(recordingId)
 
 internal fun closeCaptureSnapshotsBestEffort(vararg snapshots: Closeable?) {
     snapshots.forEach { snapshot ->
@@ -175,6 +187,7 @@ class NotifyFileReceiver(
                 },
                 notify = {
                     NotificationManagerCompat.from(appContext).notify(
+                        recordingSavedNotificationTag(recording.id),
                         RECORDING_SAVED_NOTIFICATION_ID,
                         buildCaptureNotification(appContext, recording),
                     )
@@ -213,7 +226,9 @@ internal fun normalizedCaptureSaveFailureMessage(message: String, fallback: Stri
 
 fun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {
     ensureCaptureResultNotificationChannel(context)
-    val intent = RecordingOpenActivity.intentFor(context, recording)
+    val intent = RecordingOpenActivity.intentFor(context, recording).apply {
+        action = recordingSavedPendingIntentAction(context.packageName, recording.id)
+    }
     val pendingIntent = PendingIntent.getActivity(
         context,
         0,

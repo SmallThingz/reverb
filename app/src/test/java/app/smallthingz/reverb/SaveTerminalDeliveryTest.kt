@@ -163,4 +163,21 @@ class SaveTerminalDeliveryTest {
         assertEquals(listOf("visible", "fallback", "finish"), events)
     }
 
+
+    @Test
+    fun detachedSaveNotificationIdentity_isStableAndDistinctPerRecording() {
+        // "FB" and "Ea" deliberately collide under String.hashCode(); notification identity
+        // must not collapse to a 32-bit request-code/hash scheme.
+        assertEquals("FB".hashCode(), "Ea".hashCode())
+
+        val firstKey = recordingSavedNotificationKey("FB")
+        val secondKey = recordingSavedNotificationKey("Ea")
+        assertEquals(firstKey, recordingSavedNotificationKey("FB"))
+        assertTrue(firstKey != secondKey)
+        assertTrue(recordingSavedNotificationTag("FB") != recordingSavedNotificationTag("Ea"))
+        assertTrue(
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "FB") !=
+                recordingSavedPendingIntentAction("app.smallthingz.reverb", "Ea"),
+        )
+    }
 }
