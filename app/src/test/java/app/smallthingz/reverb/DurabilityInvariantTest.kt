@@ -1309,6 +1309,7 @@ class DurabilityInvariantTest {
             storageType = RecordingStorageType.DOCUMENT,
             directoryId = "content://docs/tree",
             startedAtMillis = 1L,
+            staging = false,
             publishedIdentity = publishedProviderIdentity,
         )
         assertEquals(
@@ -1641,6 +1642,7 @@ class DurabilityInvariantTest {
                 storageType = RecordingStorageType.MEDIASTORE,
                 directoryId = MEDIA_STORE_DIRECTORY_ID,
                 startedAtMillis = 1L,
+                staging = false,
                 publishedIdentity = requireNotNull(providerPublished.providerIdentity),
             ),
             providerFingerprint,

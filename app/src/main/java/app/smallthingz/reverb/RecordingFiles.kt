@@ -106,7 +106,7 @@ data class RecordingOutputTarget(
     val startedAtMillis: Long,
     val file: File? = null,
     val uri: Uri? = null,
-    val staging: Boolean = false,
+    val staging: Boolean,
     val publishedIdentity: String = "",
 )
 
@@ -646,6 +646,7 @@ internal fun finalizeOutputTarget(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
+    require(target.staging) { "Output finalization requires a staging target" }
     return when (target.storageType) {
         RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target, expectedFingerprint)
         RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint)
@@ -731,10 +732,6 @@ private fun finalizeMediaStoreOutputTarget(
     expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
     val uri = requireNotNull(target.uri)
-    if (!target.staging) {
-        publishMediaStoreUri(context, uri)
-        return target
-    }
     requireCurrentOutputFingerprint(context, target, expectedFingerprint)
     val finalName = findAvailableDisplayName(target.displayName) { candidate ->
         mediaStoreNameExists(context, candidate)
@@ -820,14 +817,6 @@ private fun finalizeFileOutputTarget(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
-    if (!target.staging) {
-        target.file?.let { file ->
-            if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
-                MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(target.mimeType), null)
-            }
-        }
-        return target
-    }
     val source = requireNotNull(target.file)
     val current = readStableFileOutputFingerprint(source)
         ?: throw IOException("Unable to bind output staging to a stable file")
@@ -1131,7 +1120,6 @@ private fun finalizeDocumentOutputTarget(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
-    if (!target.staging) return target
     val sourceUri = requireNotNull(target.uri)
     requireCurrentOutputFingerprint(context, target, expectedFingerprint)
     val treeUri = target.directoryId.toUri()
@@ -2605,13 +2593,6 @@ private fun queryContentDisplayName(context: Context, uri: Uri): String? = runCa
     )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 }.getOrNull()
 
-private fun publishMediaStoreUri(context: Context, uri: Uri) {
-    if (!usesMediaStoreDefaultStorage()) return
-    val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-    if (context.contentResolver.update(uri, values, null, null) <= 0) {
-        throw IOException("Unable to publish MediaStore recording: $uri")
-    }
-}
 
 internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGING_OUTPUT_PREFIX)
 
