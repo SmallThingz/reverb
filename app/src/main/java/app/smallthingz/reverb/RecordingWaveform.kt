@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import androidx.core.net.toUri
 import java.io.Closeable
 import java.io.FileInputStream
@@ -164,7 +165,7 @@ internal class RecordingPcm16MonoReader private constructor(
                     val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
                         ?: throw IOException("Unable to open recording for reading")
                     val input = openChildOrCloseOwner(descriptor) { opened ->
-                        FileInputStream(opened.fileDescriptor)
+                        ParcelFileDescriptor.AutoCloseInputStream(opened)
                     }
                     try {
                         val layout = readWavPcmLayout(input.channel)
@@ -174,15 +175,11 @@ internal class RecordingPcm16MonoReader private constructor(
                         RecordingPcm16MonoReader(
                             channel = input.channel,
                             validateRead = { recordingContentIdentityMatches(context, recording) },
-                            closeAction = {
-                                runCatching { input.close() }
-                                runCatching { descriptor.close() }
-                            },
+                            closeAction = { runCatching { input.close() } },
                             layout = layout,
                         )
                     } catch (error: Throwable) {
-                        runCatching { input.close() }
-                        runCatching { descriptor.close() }
+                        closePreservingPrimaryFailure(error) { input.close() }
                         throw error
                     }
                 }
@@ -292,14 +289,15 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
         val uri = recording.id.toUri()
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
             ?: throw IOException("Unable to open recording for reading")
-        descriptor.use { opened ->
-            FileInputStream(opened.fileDescriptor).channel.use { channel ->
-                val sourceStillCurrent = { recordingContentIdentityMatches(context, recording) }
-                if (!sourceStillCurrent()) {
-                    throw IOException("Recording changed in provider while opening")
-                }
-                block(channel, sourceStillCurrent)
+        val input = openChildOrCloseOwner(descriptor) { opened ->
+            ParcelFileDescriptor.AutoCloseInputStream(opened)
+        }
+        input.use { source ->
+            val sourceStillCurrent = { recordingContentIdentityMatches(context, recording) }
+            if (!sourceStillCurrent()) {
+                throw IOException("Recording changed in provider while opening")
             }
+            block(source.channel, sourceStillCurrent)
         }
     }
 }

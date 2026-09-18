@@ -1676,11 +1676,14 @@ fun copyRecordingToDirectory(
                 RecordingStorageType.DOCUMENT,
                 RecordingStorageType.MEDIASTORE,
                 -> {
-                    openWritableParcelFileDescriptor(context, resolvedTarget).use { descriptor ->
-                        FileOutputStream(descriptor.fileDescriptor).use { output ->
-                            sourceDigest = copyWithSha256(source, output)
-                            output.fd.sync()
-                        }
+                    val output = openChildOrCloseOwner(
+                        openWritableParcelFileDescriptor(context, resolvedTarget),
+                    ) { descriptor ->
+                        ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+                    }
+                    output.use { ownedOutput ->
+                        sourceDigest = copyWithSha256(source, ownedOutput)
+                        ownedOutput.fd.sync()
                     }
                 }
             }
