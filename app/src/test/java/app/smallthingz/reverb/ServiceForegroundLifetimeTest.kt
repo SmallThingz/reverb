@@ -32,6 +32,94 @@ class ServiceForegroundLifetimeTest {
     }
 
     @Test
+    fun retentionDoesNotBorrowUnacquiredHigherPriorityLifetime() {
+        assertFalse(
+            retentionMaintenanceHasProtectedLifetime(
+                healthyListeningLifetime = false,
+                higherPriorityWorkActive = true,
+                foregroundServiceTypes = 0,
+            ),
+        )
+        assertTrue(
+            retentionMaintenanceHasProtectedLifetime(
+                healthyListeningLifetime = false,
+                higherPriorityWorkActive = true,
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            ),
+        )
+        assertTrue(
+            retentionMaintenanceHasProtectedLifetime(
+                healthyListeningLifetime = true,
+                higherPriorityWorkActive = false,
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            ),
+        )
+        assertFalse(
+            retentionMaintenanceHasProtectedLifetime(
+                healthyListeningLifetime = false,
+                higherPriorityWorkActive = false,
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            ),
+        )
+    }
+
+    @Test
+    fun dataSyncNotificationHandoffKeepsHigherPriorityWorkVisible() {
+        assertTrue(exportShouldRefreshDataSyncNotification(0))
+        assertTrue(
+            exportShouldRefreshDataSyncNotification(
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            ),
+        )
+        assertFalse(
+            exportShouldRefreshDataSyncNotification(
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            ),
+        )
+
+        assertTrue(
+            clearShouldRefreshDataSyncNotification(
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                exportActive = false,
+            ),
+        )
+        assertFalse(
+            clearShouldRefreshDataSyncNotification(
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                exportActive = true,
+            ),
+        )
+        assertFalse(
+            clearShouldRefreshDataSyncNotification(
+                foregroundServiceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                exportActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun foregroundTimeoutBlocksRetentionRestartUntilServiceRecovery() {
+        assertTrue(
+            retentionMaintenanceMayRun(
+                serviceDestroying = false,
+                foregroundServiceTimedOut = false,
+            ),
+        )
+        assertFalse(
+            retentionMaintenanceMayRun(
+                serviceDestroying = false,
+                foregroundServiceTimedOut = true,
+            ),
+        )
+        assertFalse(
+            retentionMaintenanceMayRun(
+                serviceDestroying = true,
+                foregroundServiceTimedOut = false,
+            ),
+        )
+    }
+
+    @Test
     fun staleKeepaliveCannotStopHealthyListeningLifetime() {
         assertTrue(
             serviceHasHealthyListeningLifetime(
