@@ -83,4 +83,44 @@ class TimelineSnapshotDeliveryTest {
 
         assertTrue(terminalDelivered)
     }
+
+    @Test
+    fun teardownDelivery_reportsReleaseFailureAndStillDeliversNull() {
+        val expected = IOException("release failed")
+        var observed: Exception? = null
+        var delivered: Closeable? = Closeable {}
+
+        deliverTimelineSnapshotAtServiceBoundary(
+            serviceDestroying = true,
+            snapshot = Closeable { throw expected },
+            callback = { delivered = it },
+            onReleaseFailure = { observed = it },
+        )
+
+        assertSame(expected, observed)
+        assertEquals(null, delivered)
+    }
+
+    @Test
+    fun callbackFailure_keepsCallbackPrimaryAndSuppressesReleaseFailure() {
+        val callbackFailure = IllegalStateException("callback failed")
+        val releaseFailure = IOException("release failed")
+        var reported: Exception? = null
+
+        val thrown = try {
+            deliverTimelineSnapshotAtServiceBoundary(
+                serviceDestroying = false,
+                snapshot = Closeable { throw releaseFailure },
+                callback = { throw callbackFailure },
+                onReleaseFailure = { reported = it },
+            )
+            null
+        } catch (error: Throwable) {
+            error
+        }
+
+        assertSame(callbackFailure, thrown)
+        assertSame(releaseFailure, reported)
+        assertTrue(callbackFailure.suppressed.contains(releaseFailure))
+    }
 }

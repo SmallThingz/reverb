@@ -1376,14 +1376,23 @@ class ReverbService : Service() {
         callback: (TimelineSnapshot?) -> Unit,
         snapshot: TimelineSnapshot?,
     ) {
+        val onReleaseFailure: (Exception) -> Unit = { error ->
+            reportPersistentStoreFailure("release timeline snapshot", error)
+        }
         val posted = mainHandler.post {
             deliverTimelineSnapshotAtServiceBoundary(
                 serviceDestroying = serviceDestroying,
                 snapshot = snapshot,
                 callback = callback,
+                onReleaseFailure = onReleaseFailure,
             )
         }
-        if (!posted) runCatching { snapshot?.close() }
+        if (!posted) {
+            releaseTimelineSnapshotBestEffort(
+                release = { snapshot?.close() },
+                onFailure = onReleaseFailure,
+            )
+        }
     }
 
     fun dumpRecordingRange(
@@ -3688,16 +3697,30 @@ internal fun serviceRuntimeReadMayExecute(serviceDestroying: Boolean): Boolean =
 internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
     serviceDestroying: Boolean,
     snapshot: T?,
+    onReleaseFailure: (Exception) -> Unit = {},
     callback: (T?) -> Unit,
 ) {
     if (serviceDestroying) {
-        runCatching { snapshot?.close() }
+        releaseTimelineSnapshotBestEffort(
+            release = { snapshot?.close() },
+            onFailure = onReleaseFailure,
+        )
         callback(null)
     } else {
         try {
             callback(snapshot)
         } catch (error: Throwable) {
-            runCatching { snapshot?.close() }
+            var releaseFailure: Exception? = null
+            releaseTimelineSnapshotBestEffort(
+                release = { snapshot?.close() },
+                onFailure = { closeError ->
+                    releaseFailure = closeError
+                    onReleaseFailure(closeError)
+                },
+            )
+            releaseFailure?.let { closeError ->
+                if (closeError !== error) error.addSuppressed(closeError)
+            }
             throw error
         }
     }
