@@ -779,12 +779,20 @@ internal fun publishStagedFile(
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
+    moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
+    readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): File = publishStagedFileResult(
     source = source,
     finalDisplayName = finalDisplayName,
     expectedFingerprint = expectedFingerprint,
     onUnexpectedPublishedFile = onUnexpectedPublishedFile,
+    moveFile = moveFile,
+    readFingerprint = readFingerprint,
 ).file
+
+private fun moveFileWithoutOverwrite(source: File, destination: File) {
+    Files.move(source.toPath(), destination.toPath())
+}
 
 @Throws(IOException::class)
 private fun publishStagedFileResult(
@@ -792,6 +800,8 @@ private fun publishStagedFileResult(
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
+    moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
+    readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): PublishedStagedFile {
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
     if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
@@ -803,9 +813,9 @@ private fun publishStagedFileResult(
         try {
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
             // when a racing destination exists its replacement semantics are provider-specific.
-            Files.move(source.toPath(), destination.toPath())
+            moveFile(source, destination)
             val publishedIdentity = if (expectedFingerprint != null) {
-                val published = readStableFileOutputFingerprint(destination)
+                val published = readFingerprint(destination)
                 if (published == null || !verifiedFilePublishMatches(expectedFingerprint, published)) {
                     val suppressionDigest = published?.digest ?: runCatching {
                         FileInputStream(destination).use(::sha256)
@@ -834,7 +844,47 @@ private fun publishStagedFileResult(
             return PublishedStagedFile(destination, publishedIdentity)
         } catch (_: FileAlreadyExistsException) {
             continue
+        } catch (error: IOException) {
+            if (expectedFingerprint != null) {
+                protectAmbiguousPublishedFile(
+                    source = source,
+                    destination = destination,
+                    finalDisplayName = finalDisplayName,
+                    expectedFingerprint = expectedFingerprint,
+                    onUnexpectedPublishedFile = onUnexpectedPublishedFile,
+                    readFingerprint = readFingerprint,
+                )
+            }
+            throw error
         }
+    }
+}
+
+private fun protectAmbiguousPublishedFile(
+    source: File,
+    destination: File,
+    finalDisplayName: String,
+    expectedFingerprint: StableOutputFingerprint,
+    onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)?,
+    readFingerprint: (File) -> StableOutputFingerprint?,
+) {
+    val expectedIdentity = expectedFingerprint.fileKey?.takeIf { it.isNotBlank() } ?: return
+    val published = readFingerprint(destination) ?: return
+    val publishedIdentity = published.fileKey?.takeIf { it.isNotBlank() } ?: return
+    if (!sameFileObjectAcrossRename(expectedIdentity, publishedIdentity)) return
+
+    // Files.move() may become visible before surfacing an I/O failure. Once the exact staging
+    // object is proven at the final path, suppress it before rollback so a failed directory
+    // durability barrier cannot expose a failed publication as a normal Library recording.
+    val suppressed = onUnexpectedPublishedFile != null &&
+        runCatching { onUnexpectedPublishedFile(destination, published.digest) }.getOrDefault(false)
+    val hiddenStateDurable = preserveUnexpectedPublishedFile(
+        source = source,
+        moved = destination,
+        finalDisplayName = finalDisplayName,
+    )
+    if (!suppressed && !hiddenStateDurable) {
+        Log.e(TAG, "Ambiguous published file could not be durably suppressed or hidden: $destination")
     }
 }
 

@@ -947,6 +947,59 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun stagedFilePublish_moveThatCommitsBeforeFailure_isSuppressedAndReturnedToStaging() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "publish-ambiguous-").toFile()
+        try {
+            val stagedBytes = byteArrayOf(3, 1, 4, 1, 5, 9)
+            val staged = File(directory, stagingOutputName("clip.wav", "ambiguous-token")).apply {
+                writeBytes(stagedBytes)
+            }
+            val expected = StableOutputFingerprint(
+                digest = sha256(ByteArrayInputStream(stagedBytes)),
+                fileKey = resolveFileIdentity(staged).takeIf { it.isNotBlank() } ?: "stat:1:2:3:4:5",
+                providerIdentity = null,
+            )
+            var suppressed: PendingOutputCleanupRecord? = null
+            val transportFailure = IOException("move transport failed after commit")
+
+            val observed = assertThrows(IOException::class.java) {
+                publishStagedFile(
+                    source = staged,
+                    finalDisplayName = "clip.wav",
+                    expectedFingerprint = expected,
+                    onUnexpectedPublishedFile = { published, digest ->
+                        suppressionOnlyFileOutputRecord(published.absolutePath, digest)
+                            ?.also { suppressed = it } != null
+                    },
+                    moveFile = { source, destination ->
+                        Files.move(source.toPath(), destination.toPath())
+                        throw transportFailure
+                    },
+                    readFingerprint = { published ->
+                        if (!published.isFile) null else StableOutputFingerprint(
+                            digest = sha256(ByteArrayInputStream(published.readBytes())),
+                            fileKey = expected.fileKey,
+                            providerIdentity = null,
+                        )
+                    },
+                )
+            }
+
+            assertTrue(observed === transportFailure)
+            val protected = requireNotNull(suppressed)
+            assertEquals(File(directory, "clip.wav").absolutePath, protected.id)
+            assertEquals(stagedBytes.size.toLong(), protected.byteCount)
+            assertEquals(null, protected.fileKey)
+            assertTrue(staged.isFile)
+            assertArrayEquals(stagedBytes, staged.readBytes())
+            assertFalse(File(directory, "clip.wav").exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun stagedFilePublish_rejectsObjectThatReplacedVerifiedStagingPath() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "publish-race-").toFile()
