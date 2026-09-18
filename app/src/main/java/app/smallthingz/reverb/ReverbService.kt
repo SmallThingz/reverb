@@ -386,7 +386,9 @@ class ReverbService : Service() {
             appUiForegroundOwners.clear()
             appUiForeground = false
         }
-        cancelActiveBufferClearForTeardown()
+        if (cancelActiveBufferClearForTeardown()) {
+            AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+        }
         if (::bufferClearExecutor.isInitialized) {
             // Do not interrupt a durability-critical chunk retirement already in flight.
             // Cancellation is observed between chunk steps; store close waits for the current
@@ -3100,8 +3102,18 @@ class ReverbService : Service() {
         true
     }
 
-    private fun cancelActiveBufferClearForTeardown() {
-        requestBufferClearCancellation(reportFailure = false)
+    private fun cancelActiveBufferClearForTeardown(): Boolean = synchronized(bufferClearLock) {
+        val operation = activeBufferClearOperation ?: return@synchronized false
+        val reportFailure = bufferClearTeardownBeginsFailure(
+            cancelRequested = operation.cancelRequested.get(),
+            failureAlreadyRequested = operation.cancellationReportsFailure.get(),
+        )
+        if (reportFailure) operation.cancellationReportsFailure.set(true)
+        operation.cancelRequested.set(true)
+        bufferClearStatus = bufferClearStatus
+            ?.takeIf { it.operationId == operation.id }
+            ?.copy(phase = BufferClearPhase.CANCELLING)
+        reportFailure
     }
 
     private fun bufferClearCancellationPhase(operation: BufferClearOperation): BufferClearPhase =

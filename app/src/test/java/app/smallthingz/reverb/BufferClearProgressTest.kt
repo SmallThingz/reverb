@@ -105,4 +105,26 @@ class BufferClearProgressTest {
         assertEquals(BufferClearPhase.FAILED, bufferClearCancellationTerminal(reportFailure = true))
     }
 
+    @Test
+    fun teardownFailsOnlyAnOtherwiseLiveClear() {
+        assertTrue(
+            bufferClearTeardownBeginsFailure(
+                cancelRequested = false,
+                failureAlreadyRequested = false,
+            ),
+        )
+        assertFalse(
+            bufferClearTeardownBeginsFailure(
+                cancelRequested = true,
+                failureAlreadyRequested = false,
+            ),
+        )
+        assertFalse(
+            bufferClearTeardownBeginsFailure(
+                cancelRequested = true,
+                failureAlreadyRequested = true,
+            ),
+        )
+    }
+
 }
