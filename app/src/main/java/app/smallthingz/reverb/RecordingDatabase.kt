@@ -221,13 +221,24 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
 
         internal fun resetAfterCorruption() {
             synchronized(this) {
-                runCatching { instance?.close() }
-                instance = null
+                val current = instance ?: return
+                closeBeforeClearingDatabaseSingleton(
+                    close = current::close,
+                    clear = { instance = null },
+                )
             }
         }
     }
 }
 
+
+internal inline fun closeBeforeClearingDatabaseSingleton(
+    close: () -> Unit,
+    clear: () -> Unit,
+) {
+    close()
+    clear()
+}
 
 private class PreservingRecordingDatabaseErrorHandler(
     private val context: Context,
