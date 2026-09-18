@@ -1,10 +1,40 @@
 package app.smallthingz.reverb
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Test
 
 class RetentionTransactionFailureTest {
+    @Test
+    fun atomicWriteFailure_successfulRollbackKeepsBooleanFailureContract() {
+        val events = mutableListOf<String>()
+
+        val result = atomicWriteFailureResult(
+            primary = IllegalStateException("write failed"),
+            rollback = { events += "rollback" },
+        )
+
+        assertFalse(result)
+        assertEquals(listOf("rollback"), events)
+    }
+
+    @Test
+    fun atomicWriteFailure_failedRollbackKeepsWriteFailurePrimary() {
+        val primary = IllegalStateException("write failed")
+        val rollback = IllegalArgumentException("rollback failed")
+        var observed: Throwable? = null
+
+        try {
+            atomicWriteFailureResult(primary) { throw rollback }
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertEquals(listOf(rollback), primary.suppressed.toList())
+    }
+
     @Test
     fun recoveryWriteException_restoresRecoveryAndPreservesPrimaryFailure() {
         val primary = IllegalStateException("recovery write failed")

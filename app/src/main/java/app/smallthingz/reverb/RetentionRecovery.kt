@@ -423,6 +423,19 @@ internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
     return RetentionRecoveryRead(RetentionRecoveryReadState.VALID, configuration)
 }
 
+internal inline fun atomicWriteFailureResult(
+    primary: Exception,
+    rollback: () -> Unit,
+): Boolean {
+    try {
+        rollback()
+    } catch (rollbackError: Exception) {
+        if (rollbackError !== primary) primary.addSuppressed(rollbackError)
+        throw primary
+    }
+    return false
+}
+
 internal fun writeRetentionRecoveryConfiguration(
     context: Context,
     configuration: RetentionConfiguration,
@@ -437,9 +450,11 @@ internal fun writeRetentionRecoveryConfiguration(
         atomicFile.finishWrite(output)
         output = null
         syncRetentionRecoveryDirectory(context)
-    } catch (_: Exception) {
-        output?.let(atomicFile::failWrite)
-        false
+    } catch (error: Exception) {
+        val failedOutput = output
+        atomicWriteFailureResult(error) {
+            if (failedOutput != null) atomicFile.failWrite(failedOutput)
+        }
     }
 }
 
