@@ -39,6 +39,17 @@ internal class RecordingCatalogIdentityChangedException(
 internal fun catalogRegistrationFailureAllowsVerifiedSaveSuccess(error: Throwable): Boolean =
     error !is RecordingCatalogIdentityChangedException
 
+internal inline fun <T> attemptRenameRecoveryPreservingPrimaryFailure(
+    primaryFailure: Throwable,
+    fallback: T,
+    recover: () -> T,
+): T = try {
+    recover()
+} catch (recoveryError: Throwable) {
+    if (recoveryError !== primaryFailure) primaryFailure.addSuppressed(recoveryError)
+    fallback
+}
+
 internal fun catalogRegistrationFailureAfterIdentityRecheck(
     error: Exception,
     stableIdentityAvailable: Boolean,
@@ -546,11 +557,19 @@ object RecordingRepository {
                         // possible (for example the old path was reused concurrently), never keep
                         // a stale catalog row that could now address unrelated bytes. A refresh can
                         // rediscover both the renamed recording and any replacement independently.
-                        val rolledBack = runCatching {
+                        val rolledBack = attemptRenameRecoveryPreservingPrimaryFailure(
+                            primaryFailure = error,
+                            fallback = null,
+                        ) {
                             renameRecordingAsset(context, renamed, tracked.displayName)
-                        }.getOrNull()
+                        }
                         if (rolledBack?.id != tracked.id) {
-                            runCatching { dao.deleteById(tracked.id) }
+                            attemptRenameRecoveryPreservingPrimaryFailure(
+                                primaryFailure = error,
+                                fallback = Unit,
+                            ) {
+                                dao.deleteById(tracked.id)
+                            }
                         }
                         throw error
                     }

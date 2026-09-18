@@ -152,6 +152,29 @@ class RecordingRenameTerminalTest {
     }
 
     @Test
+    fun renameRecoveryFailures_areSuppressedOnCatalogCommitFailure() {
+        val primary = IOException("catalog commit failed")
+        val rollbackFailure = IOException("physical rollback failed")
+        val cleanupFailure = IOException("stale row cleanup failed")
+
+        val rolledBack: String? = attemptRenameRecoveryPreservingPrimaryFailure(
+            primaryFailure = primary,
+            fallback = null,
+        ) {
+            throw rollbackFailure
+        }
+        attemptRenameRecoveryPreservingPrimaryFailure(
+            primaryFailure = primary,
+            fallback = Unit,
+        ) {
+            throw cleanupFailure
+        }
+
+        assertEquals(null, rolledBack)
+        assertEquals(listOf(rollbackFailure, cleanupFailure), primary.suppressed.toList())
+    }
+
+    @Test
     fun throwingVisibleRenameCallback_runsFallbackThenPreservesPrimaryFailure() {
         val renamed = recording().copy(displayName = "renamed.wav")
         val primary = IllegalStateException("ui callback failed")
