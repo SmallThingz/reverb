@@ -134,17 +134,30 @@ fun getConfiguredExportTreeUri(context: Context): Uri? {
     return raw.takeIf { it.isNotBlank() }?.toUri()
 }
 
+internal inline fun commitConfiguredExportTreeUriChange(
+    previousValue: String?,
+    updatedValue: String?,
+    write: (String?) -> Boolean,
+): Boolean = commitDurablePreferenceOrRestoreInMemory(
+    commit = { write(updatedValue) },
+    restoreInMemory = { write(previousValue) },
+)
+
 fun setConfiguredExportTreeUri(
     context: Context,
     treeUri: Uri?,
 ): Boolean {
-    val editor = getRecorderPreferences(context).edit()
-    if (treeUri != null) {
-        editor.putString(PrefKey.EXPORT_DIRECTORY_URI, treeUri.toString())
-    } else {
-        editor.remove(PrefKey.EXPORT_DIRECTORY_URI)
+    val preferences = getRecorderPreferences(context)
+    val previousValue = preferences.safeString(PrefKey.EXPORT_DIRECTORY_URI)
+    return commitConfiguredExportTreeUriChange(
+        previousValue = previousValue,
+        updatedValue = treeUri?.toString(),
+    ) { value ->
+        val editor = preferences.edit()
+        if (value != null) editor.putString(PrefKey.EXPORT_DIRECTORY_URI, value)
+        else editor.remove(PrefKey.EXPORT_DIRECTORY_URI)
+        editor.commit()
     }
-    return editor.commit()
 }
 
 fun getConfiguredOutputDirectoryId(context: Context): String {

@@ -34,6 +34,44 @@ class DurablePreferenceMutationTest {
     }
 
     @Test
+    fun failedExportDirectoryCommit_restoresPreviousProcessValue() {
+        var processValue: String? = "content://old"
+        val writes = mutableListOf<String?>()
+
+        val committed = commitConfiguredExportTreeUriChange(
+            previousValue = processValue,
+            updatedValue = "content://new",
+        ) { value ->
+            processValue = value
+            writes += value
+            value != "content://new"
+        }
+
+        assertFalse(committed)
+        assertEquals("content://old", processValue)
+        assertEquals(listOf("content://new", "content://old"), writes)
+    }
+
+    @Test
+    fun failedExportDirectoryRemoval_restoresPreviousProcessValue() {
+        var processValue: String? = "content://old"
+        val writes = mutableListOf<String?>()
+
+        val committed = commitConfiguredExportTreeUriChange(
+            previousValue = processValue,
+            updatedValue = null,
+        ) { value ->
+            processValue = value
+            writes += value
+            value != null
+        }
+
+        assertFalse(committed)
+        assertEquals("content://old", processValue)
+        assertEquals(listOf(null, "content://old"), writes)
+    }
+
+    @Test
     fun throwingDurableCommit_restoresStateAndPreservesPrimaryFailure() {
         val primary = IllegalStateException("commit failed")
         val rollback = IllegalArgumentException("restore failed")
