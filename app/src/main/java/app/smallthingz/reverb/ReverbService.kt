@@ -1453,7 +1453,14 @@ class ReverbService : Service() {
                 flushAudioRecord()
                 val duration = availableBufferedDurationSeconds(bufferSlot)
                 if (duration > 0.0) {
-                    chunkStore(bufferSlot).acquireRange(0.0, duration)?.let(::TimelineSnapshot)
+                    chunkStore(bufferSlot).acquireRange(0.0, duration)?.let { lease ->
+                        TimelineSnapshot(
+                            lease = lease,
+                            onChildReleaseFailure = { error ->
+                                reportPersistentStoreFailure("release timeline child range", error)
+                            },
+                        )
+                    }
                 } else {
                     null
                 }
@@ -3923,12 +3930,20 @@ class ReverbService : Service() {
 
     class TimelineSnapshot internal constructor(
         private val lease: PersistentAudioChunkStore.RangeLease,
+        private val onChildReleaseFailure: (Exception) -> Unit = {},
     ) : java.io.Closeable {
         val durationSeconds: Double
             get() = lease.durationSeconds
 
         internal fun acquireRange(startSeconds: Double, endSeconds: Double): PersistentAudioChunkStore.RangeLease? =
             lease.acquireSubRange(startSeconds, endSeconds)
+
+        internal fun releaseChildRangeBestEffort(child: PersistentAudioChunkStore.RangeLease?) {
+            releaseTimelineSnapshotBestEffort(
+                release = { child?.close() },
+                onFailure = onChildReleaseFailure,
+            )
+        }
 
         internal fun sampleWaveformEnvelopeProgressive(
             bucketCount: Int,

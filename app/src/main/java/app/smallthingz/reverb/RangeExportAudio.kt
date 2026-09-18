@@ -429,7 +429,7 @@ internal class TimelineAudioPreviewController : Closeable {
                     count
                 }
             } finally {
-                lease.close()
+                snapshot.releaseChildRangeBestEffort(lease)
             }
             return raw.toByteArray().takeIf { it.isNotEmpty() }
         }
@@ -943,7 +943,7 @@ internal class TimelineAudioPreviewController : Closeable {
         } catch (error: Exception) {
             if (isCurrent(token)) postIfCurrent(token) { onError(error) }
         } finally {
-            runCatching { child?.close() }
+            snapshot.releaseChildRangeBestEffort(child)
             if (track != null) {
                 synchronized(trackLock) {
                     if (activeTrack === track) activeTrack = null
