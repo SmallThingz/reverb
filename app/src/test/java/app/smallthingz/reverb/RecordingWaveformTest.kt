@@ -241,6 +241,39 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun fileReadIdentity_requiresPinnedDescriptorAndCurrentPath() {
+        val expected = "stat:1:2:100:5:77"
+        assertTrue(
+            fileReadIdentityRemainsCurrent(
+                expectedIdentity = expected,
+                descriptorIdentity = "statfd:1:2:100:5",
+                pathIdentity = expected,
+            ),
+        )
+        assertFalse(
+            fileReadIdentityRemainsCurrent(
+                expectedIdentity = expected,
+                descriptorIdentity = "statfd:1:9:100:5",
+                pathIdentity = expected,
+            ),
+        )
+        assertFalse(
+            fileReadIdentityRemainsCurrent(
+                expectedIdentity = expected,
+                descriptorIdentity = "statfd:1:2:100:5",
+                pathIdentity = "stat:1:9:100:5:77",
+            ),
+        )
+        assertFalse(
+            fileReadIdentityRemainsCurrent(
+                expectedIdentity = expected,
+                descriptorIdentity = "statfd:1:2:100:5",
+                pathIdentity = "",
+            ),
+        )
+    }
+
+    @Test
     fun waveformCacheValidationRejectsWrongRevisionMalformedPayloadAndMissingRows() {
         val recording = RecordingEntity(
             id = "id", displayName = "clip.wav", mimeType = "audio/wav",

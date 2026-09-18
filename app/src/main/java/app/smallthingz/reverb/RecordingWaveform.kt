@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.ParcelFileDescriptor
 import androidx.core.net.toUri
 import java.io.Closeable
+import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -86,6 +87,14 @@ internal fun coarseWaveformFromDetail(detail: FloatArray): FloatArray {
     }
 }
 
+internal fun fileReadIdentityRemainsCurrent(
+    expectedIdentity: String,
+    descriptorIdentity: String,
+    pathIdentity: String,
+): Boolean =
+    fileDescriptorIdentityMatches(expectedIdentity, descriptorIdentity) &&
+        fileIdentityMatches(expectedIdentity, pathIdentity)
+
 internal data class WavPcmLayout(
     val sampleRate: Int,
     val channelCount: Int,
@@ -140,16 +149,22 @@ internal class RecordingPcm16MonoReader private constructor(
                     val input = openVerifiedFileInputStream(recording)
                         ?: throw IOException("Recording changed on disk")
                     try {
+                        val validateRead = {
+                            fileReadIdentityRemainsCurrent(
+                                expectedIdentity = recording.fileIdentity,
+                                descriptorIdentity = resolveFileDescriptorIdentity(input.fd),
+                                pathIdentity = resolveFileIdentity(File(recording.id)),
+                            )
+                        }
+                        val layout = readWavPcmLayout(input.channel)
+                        if (!validateRead()) {
+                            throw IOException("Recording changed on disk while opening")
+                        }
                         RecordingPcm16MonoReader(
                             channel = input.channel,
-                            validateRead = {
-                                fileDescriptorIdentityMatches(
-                                    recording.fileIdentity,
-                                    resolveFileDescriptorIdentity(input.fd),
-                                )
-                            },
+                            validateRead = validateRead,
                             closeAction = { runCatching { input.close() } },
-                            layout = readWavPcmLayout(input.channel),
+                            layout = layout,
                         )
                     } catch (error: Throwable) {
                         runCatching { input.close() }
@@ -283,10 +298,14 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
             ?: throw IOException("Recording changed on disk")
         input.use { source ->
             val sourceStillCurrent = {
-                fileDescriptorIdentityMatches(
-                    recording.fileIdentity,
-                    resolveFileDescriptorIdentity(input.fd),
+                fileReadIdentityRemainsCurrent(
+                    expectedIdentity = recording.fileIdentity,
+                    descriptorIdentity = resolveFileDescriptorIdentity(input.fd),
+                    pathIdentity = resolveFileIdentity(File(recording.id)),
                 )
+            }
+            if (!sourceStillCurrent()) {
+                throw IOException("Recording changed on disk while opening")
             }
             block(source.channel, sourceStillCurrent)
         }
