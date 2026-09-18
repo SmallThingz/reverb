@@ -1609,17 +1609,23 @@ internal class PersistentAudioChunkStore internal constructor(
             payloadOffsetBytes = CHUNK_HEADER_BYTES.toLong(),
         )
         var openedAccess: RandomAccessFile? = null
+        var createdFile = false
         val access = try {
             if (!file.createNewFile()) {
                 throw IOException("Unable to create chunk file: ${file.absolutePath}")
             }
+            createdFile = true
             openedAccess = RandomAccessFile(file, "rw")
             writeInitialChunkHeader(record, access = requireNotNull(openedAccess))
             forceDirectoryDurable(chunksDirectory)
             requireNotNull(openedAccess)
         } catch (error: Exception) {
-            runCatching { openedAccess?.close() }
-            runCatching { file.delete() }
+            closePreservingPrimaryFailure(error) { openedAccess?.close() }
+            if (createdFile && !deleteChunkFileDurablyLocked(file)) {
+                error.addSuppressed(
+                    IOException("Unable to durably clean failed chunk creation: ${file.absolutePath}"),
+                )
+            }
             throw error
         }
 

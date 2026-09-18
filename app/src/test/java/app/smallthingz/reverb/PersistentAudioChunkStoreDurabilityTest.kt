@@ -538,6 +538,40 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun activeChunkCreationFailure_reportsUncertainCleanupAndRecoversEmpty() = withStoreRoot { root ->
+        var failChunkDirectorySync = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            directorySync = { directory ->
+                if (failChunkDirectorySync && directory.name == BUFFER_CHUNKS_FOLDER_NAME) {
+                    throw IOException("Injected active chunk creation directory sync failure")
+                }
+            },
+        )
+        configure(store, 128 * 1024L)
+
+        val attempted = pcmBytes(4_096)
+        failChunkDirectorySync = true
+        val error = assertThrows(IOException::class.java) {
+            store.append(attempted, 0, attempted.size)
+        }
+        assertTrue(error.message?.contains("Injected active chunk creation directory sync failure") == true)
+        assertTrue(
+            error.suppressed.any { suppressed ->
+                suppressed.message?.contains("Unable to durably clean failed chunk creation") == true
+            },
+        )
+        assertFalse(store.hasData())
+
+        failChunkDirectorySync = false
+        store.close()
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertFalse(reopened.hasData())
+        }
+    }
+
+    @Test
     fun append_partialWriteThenFailure_salvagesCompleteFramesAndDropsTornTail() = withStoreRoot { root ->
         val prefix = pcmBytes(4_096)
         val attempted = pcmBytes(8)
