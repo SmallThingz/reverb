@@ -1714,6 +1714,9 @@ fun copyRecordingToDirectory(
             resolvedTarget.storageType,
             resolvedTarget.id,
         ) ?: throw IOException("Unable to bind copied recording to a stable output object")
+        if (!stagingFingerprintMatchesCreatedObject(resolvedTarget, targetFingerprint)) {
+            throw IOException("Copied recording no longer matches the created staging object")
+        }
         if (!copyDigestMatches(sourceDigest, targetFingerprint.digest)) {
             throw IOException("Recording copy content verification failed")
         }
@@ -1858,6 +1861,25 @@ internal fun providerReadRemainsStable(
     providerRecordingIdentityMatches(beforeOpenIdentity, afterOpenIdentity) &&
     providerRecordingIdentityMatches(beforeOpenIdentity, afterReadIdentity)
 
+internal fun stagingFingerprintMatchesCreatedObject(
+    target: RecordingOutputTarget,
+    fingerprint: StableOutputFingerprint,
+): Boolean {
+    if (!target.staging) return false
+    return when (target.storageType) {
+        RecordingStorageType.FILE -> sameFileObjectAcrossRename(
+            target.stagingIdentity,
+            fingerprint.fileKey.orEmpty(),
+        )
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> target.stagingIdentity.isBlank() || sameProviderObjectAcrossMutation(
+            target.stagingIdentity,
+            fingerprint.providerIdentity,
+        )
+    }
+}
+
 private fun openVerifiedProviderInputStream(
     context: Context,
     recording: RecordingEntity,
@@ -1991,7 +2013,7 @@ internal fun verifyWavOutputTargetAndDigest(
     payloadBytes: Long,
     expectedPayloadSha256: ByteArray,
 ): StableOutputFingerprint {
-    return when (target.storageType) {
+    val fingerprint = when (target.storageType) {
         RecordingStorageType.FILE -> {
             val file = requireNotNull(target.file)
             FileInputStream(file).use { source ->
@@ -2051,6 +2073,10 @@ internal fun verifyWavOutputTargetAndDigest(
             }
         }
     }
+    if (!stagingFingerprintMatchesCreatedObject(target, fingerprint)) {
+        throw IOException("Verified output no longer matches the created staging object")
+    }
+    return fingerprint
 }
 
 internal fun listOutputDirectoryRecordings(

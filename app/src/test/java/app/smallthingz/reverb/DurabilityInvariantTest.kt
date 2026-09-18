@@ -926,6 +926,80 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun verifiedStagingFingerprint_staysBoundToTheObjectCreatedBeforeWrite() {
+        val digest = CopyDigest(4L, ByteArray(32) { 0x22 })
+        val fileTarget = RecordingOutputTarget(
+            id = "/tmp/reverb-partial.wav",
+            displayName = "recording.wav",
+            mimeType = "audio/wav",
+            storageType = RecordingStorageType.FILE,
+            directoryId = "/tmp",
+            startedAtMillis = 1L,
+            staging = true,
+            stagingIdentity = "stat:1:2:100:5:77",
+        )
+        assertTrue(
+            stagingFingerprintMatchesCreatedObject(
+                fileTarget,
+                StableOutputFingerprint(digest, "stat:1:2:101:6:77", null),
+            ),
+        )
+        assertFalse(
+            stagingFingerprintMatchesCreatedObject(
+                fileTarget,
+                StableOutputFingerprint(digest, "stat:1:3:101:6:78", null),
+            ),
+        )
+
+        val providerBefore = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/17",
+            0L,
+            10L,
+        )
+        val providerAfterWrite = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/17",
+            4L,
+            11L,
+        )
+        val providerReplacement = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/external/audio/media/18",
+            4L,
+            11L,
+        )
+        val providerTarget = fileTarget.copy(
+            id = "content://media/external/audio/media/17",
+            storageType = RecordingStorageType.MEDIASTORE,
+            directoryId = "mediastore",
+            stagingIdentity = providerBefore,
+        )
+        assertTrue(
+            stagingFingerprintMatchesCreatedObject(
+                providerTarget,
+                StableOutputFingerprint(digest, null, providerAfterWrite),
+            ),
+        )
+        assertFalse(
+            stagingFingerprintMatchesCreatedObject(
+                providerTarget,
+                StableOutputFingerprint(digest, null, providerReplacement),
+            ),
+        )
+        // Some SAF providers do not expose a usable revision while an empty child exists. The
+        // strict high-entropy name/tree/zero-size creation proof remains the pre-write authority
+        // in that compatibility case; once an identity exists it must stay bound as above.
+        assertTrue(
+            stagingFingerprintMatchesCreatedObject(
+                providerTarget.copy(stagingIdentity = ""),
+                StableOutputFingerprint(digest, null, providerAfterWrite),
+            ),
+        )
+        assertFalse(stagingFingerprintMatchesCreatedObject(fileTarget.copy(staging = false), StableOutputFingerprint(digest, fileTarget.stagingIdentity, null)))
+    }
+
+    @Test
     fun stagingFileWrite_requiresOriginalEmptyObjectAtDescriptorHandoff() {
         val expected = "stat:1:2:100:5:77"
         val descriptor = "statfd:1:2:100:5"
