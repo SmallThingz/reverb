@@ -97,11 +97,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
 private val backgroundRecordingResultScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private const val RECORDING_SAVED_NOTIFICATION_ID = 43
 private const val RECORDING_SAVE_FAILED_NOTIFICATION_ID = 44
+
+internal fun closeCaptureSnapshotsBestEffort(vararg snapshots: Closeable?) {
+    snapshots.forEach { snapshot ->
+        runCatching { snapshot?.close() }
+    }
+}
 
 internal fun detachedSaveSuccessNeedsInAppFallback(
     notificationsEnabled: Boolean,
@@ -552,8 +559,7 @@ fun CaptureScreen(
     DisposableEffect(Unit) {
         onDispose {
             screenAlive.set(false)
-            rangeSnapshot?.close()
-            pendingExportSnapshot?.close()
+            closeCaptureSnapshotsBestEffort(rangeSnapshot, pendingExportSnapshot)
         }
     }
 
@@ -561,10 +567,9 @@ fun CaptureScreen(
         var boundConnection: ServiceConnection? = null
 
         fun clearConnectedServiceState(markSavingAsCancelRequested: Boolean) {
-            rangeSnapshot?.close()
+            closeCaptureSnapshotsBestEffort(rangeSnapshot, pendingExportSnapshot)
             rangeSnapshot = null
             rangeSnapshotBuffer = null
-            pendingExportSnapshot?.close()
             pendingExportSnapshot = null
             pendingExportRange = null
             showExportClampDialog = false
@@ -826,7 +831,7 @@ fun CaptureScreen(
                 onDismiss = {
                     showExportClampDialog = false
                     pendingExportRange = null
-                    pendingExportSnapshot?.close()
+                    closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
                     pendingExportSnapshot = null
                 },
             )
@@ -887,16 +892,16 @@ fun CaptureScreen(
                                 bookkeeping.timelineSnapshotRequestGeneration,
                             )
                         ) {
-                            snapshot?.close()
+                            closeCaptureSnapshotsBestEffort(snapshot)
                             return@acquireTimelineSnapshot
                         }
                         isPreparingRange = false
                         if (!screenAlive.get() || service !== s) {
-                            snapshot?.close()
+                            closeCaptureSnapshotsBestEffort(snapshot)
                             return@acquireTimelineSnapshot
                         }
                         if (snapshot == null || snapshot.durationSeconds <= 0.0) {
-                            snapshot?.close()
+                            closeCaptureSnapshotsBestEffort(snapshot)
                             AppFeedbackCenter.post(
                                 resources.getString(R.string.nothing_to_export),
                                 FeedbackTone.INFO,
@@ -910,7 +915,7 @@ fun CaptureScreen(
                             if (range.warningDurationSeconds != null) {
                                 clampWarningSeconds = range.warningDurationSeconds
                                 pendingExportRange = range
-                                pendingExportSnapshot?.close()
+                                closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
                                 pendingExportSnapshot = snapshot
                                 showExportClampDialog = true
                             } else {
@@ -963,7 +968,7 @@ fun CaptureScreen(
                                     selectedBuffer = selectedBufferState.value,
                                 )
                                 if (!currentRequest) {
-                                    snapshot?.close()
+                                    closeCaptureSnapshotsBestEffort(snapshot)
                                     if (requestGeneration == bookkeeping.timelineSnapshotRequestGeneration) {
                                         bookkeeping.pendingCustomRangeBuffer = null
                                         isPreparingRange = false
@@ -973,13 +978,13 @@ fun CaptureScreen(
                                 bookkeeping.pendingCustomRangeBuffer = null
                                 isPreparingRange = false
                                 if (!screenAlive.get() || service !== s) {
-                                    snapshot?.close()
+                                    closeCaptureSnapshotsBestEffort(snapshot)
                                 } else if (snapshot != null && snapshot.durationSeconds > 0.0) {
-                                    rangeSnapshot?.close()
+                                    closeCaptureSnapshotsBestEffort(rangeSnapshot)
                                     rangeSnapshot = snapshot
                                     rangeSnapshotBuffer = bufferSlot
                                 } else {
-                                    snapshot?.close()
+                                    closeCaptureSnapshotsBestEffort(snapshot)
                                     rangeSnapshotBuffer = null
                                     AppFeedbackCenter.post(
                                         resources.getString(R.string.nothing_to_export),
@@ -1006,7 +1011,7 @@ fun CaptureScreen(
             rangeConfig.sampleFormat,
         )
         val dismissRangeExport: () -> Unit = {
-            rangeSnapshot?.close()
+            closeCaptureSnapshotsBestEffort(rangeSnapshot)
             rangeSnapshot = null
             rangeSnapshotBuffer = null
             invalidateTimelineSnapshotPreparation()
@@ -1032,7 +1037,7 @@ fun CaptureScreen(
             if (range.warningDurationSeconds != null) {
                 clampWarningSeconds = range.warningDurationSeconds
                 pendingExportRange = range
-                pendingExportSnapshot?.close()
+                closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
                 pendingExportSnapshot = snapshot
                 showExportClampDialog = true
             } else {
@@ -2271,7 +2276,7 @@ private fun startExport(
     onReceiverTerminal: (SaveResultReceiver) -> Unit = {},
 ) {
     val recorder = service ?: run {
-        snapshot?.close()
+        closeCaptureSnapshotsBestEffort(snapshot)
         setSaving(false)
         onStatus(null)
         onError(context.getString(R.string.save_failed))
@@ -2308,7 +2313,7 @@ private fun startExport(
             recorder.dumpRecordingRange(range.startSeconds, range.endSeconds, receiver, "")
         }
     } catch (error: Exception) {
-        runCatching { snapshot?.close() }
+        closeCaptureSnapshotsBestEffort(snapshot)
         receiver.fileFailed(context.getString(R.string.save_failed), error)
     }
 }

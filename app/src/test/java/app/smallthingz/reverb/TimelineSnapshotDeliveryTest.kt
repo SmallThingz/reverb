@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import java.io.Closeable
+import java.io.IOException
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -37,5 +39,19 @@ class TimelineSnapshotDeliveryTest {
 
         assertTrue(threw)
         assertTrue(closed)
+    }
+
+    @Test
+    fun captureSnapshotCleanup_attemptsEveryCloseAfterEarlierFailure() {
+        val events = mutableListOf<String>()
+        val first = Closeable {
+            events += "first"
+            throw IOException("release failed")
+        }
+        val second = Closeable { events += "second" }
+
+        closeCaptureSnapshotsBestEffort(first, second)
+
+        assertEquals(listOf("first", "second"), events)
     }
 }
