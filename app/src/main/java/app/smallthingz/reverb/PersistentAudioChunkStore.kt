@@ -557,7 +557,7 @@ internal class PersistentAudioChunkStore internal constructor(
             } catch (error: Exception) {
                 recordFailure(error)
             }
-            closeActiveAccessLocked()
+            closeActiveAccessLocked()?.let(::recordFailure)
         }
         closed = true
         failure?.let { throw it }
@@ -1472,9 +1472,15 @@ internal class PersistentAudioChunkStore internal constructor(
         activeDurablePayloadBytes = record.payloadBytes
     }
 
-    private fun closeActiveAccessLocked() {
-        runCatching { activeAccess?.close() }
+    private fun closeActiveAccessLocked(): Exception? {
+        val access = activeAccess
         activeAccess = null
+        return try {
+            access?.close()
+            null
+        } catch (error: Exception) {
+            error
+        }
     }
 
     private fun truncateOneShotRetentionLocked(): Boolean {

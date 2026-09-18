@@ -466,6 +466,26 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun close_surfacesActiveAccessCloseFailureWhileLeavingAudioRecoverable() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        replaceActiveAccessWithFailingClose(store)
+
+        val error = assertThrows(IOException::class.java) { store.close() }
+        assertTrue(
+            error.message?.contains("Injected active access close failure") == true ||
+                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
+        )
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun close_surfacesCheckpointFailureWhileLeavingAudioRecoverable() = withStoreRoot { root ->
         val expected = pcmBytes(8_192)
         val store = PersistentAudioChunkStore(root)
@@ -1072,6 +1092,26 @@ class PersistentAudioChunkStoreDurabilityTest {
             if (this[start + index] != suffix[index]) return false
         }
         return true
+    }
+
+    private fun replaceActiveAccessWithFailingClose(store: PersistentAudioChunkStore) {
+        val recordField = PersistentAudioChunkStore::class.java.getDeclaredField("activeRecord")
+        recordField.isAccessible = true
+        val record = requireNotNull(recordField.get(store) as? PersistentAudioChunkStore.ChunkRecord)
+
+        val accessField = PersistentAudioChunkStore::class.java.getDeclaredField("activeAccess")
+        accessField.isAccessible = true
+        val previous = requireNotNull(accessField.get(store) as? RandomAccessFile)
+        previous.close()
+        accessField.set(
+            store,
+            object : RandomAccessFile(record.file, "rw") {
+                override fun close() {
+                    super.close()
+                    throw IOException("Injected active access close failure")
+                }
+            },
+        )
     }
 
     private fun simulateAbruptProcessDeathWithoutSync(store: PersistentAudioChunkStore) {
