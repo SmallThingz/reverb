@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.util.Log
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -69,6 +70,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private const val INLINE_PROGRESS_UPDATE_INTERVAL_MS = 48L
+private const val INLINE_PLAYER_TAG = "ReverbInlinePlayer"
 
 internal fun canEnterInlineTrim(prepared: Boolean, durationMillis: Int): Boolean =
     prepared && durationMillis > 0
@@ -211,6 +213,17 @@ internal fun inlineShuttleFailureShouldResume(
     resumeAfterScrub: Boolean,
     lifecycleResumed: Boolean,
 ): Boolean = shuttleActive && resumeAfterScrub && lifecycleResumed
+
+internal inline fun closeInlinePlaybackSourceReportingFailure(
+    close: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        close()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
 
 internal inline fun handleInlinePlaybackError(
     shouldReportFailure: Boolean,
@@ -418,6 +431,14 @@ internal fun RecordingInlinePlayer(
     val trimBackProgress = if (trimMode) backProgress else 0f
     val collapseBackProgress = if (!trimMode) backProgress else 0f
 
+    fun reportPlaybackSourceCloseFailure(error: Exception) {
+        Log.e(INLINE_PLAYER_TAG, "Saved recording playback source close failed", error)
+        AppFeedbackCenter.post(
+            appContext.getString(R.string.recording_read_cleanup_failed),
+            FeedbackTone.ERROR,
+        )
+    }
+
     fun releasePlayer() {
         if (playbackBookkeeping.released) return
         playbackBookkeeping.released = true
@@ -425,7 +446,10 @@ internal fun RecordingInlinePlayer(
         mediaPlayer = null
         player?.runCatching { stop() }
         player?.runCatching { release() }
-        runCatching { pinnedMediaSource.getAndSet(null)?.close() }
+        closeInlinePlaybackSourceReportingFailure(
+            close = { pinnedMediaSource.getAndSet(null)?.close() },
+            onFailure = ::reportPlaybackSourceCloseFailure,
+        )
         prepared = false
         isPlaying = false
     }
@@ -701,7 +725,10 @@ internal fun RecordingInlinePlayer(
             }
             if (playbackBookkeeping.released || mediaPlayer !== player) return@LaunchedEffect
             openedRef.compareAndSet(opened, null)
-            runCatching { pinnedMediaSource.getAndSet(opened)?.close() }
+            closeInlinePlaybackSourceReportingFailure(
+                close = { pinnedMediaSource.getAndSet(opened)?.close() },
+                onFailure = ::reportPlaybackSourceCloseFailure,
+            )
             player.setDataSource(opened.descriptor)
             player.prepareAsync()
         } catch (cancelled: CancellationException) {
@@ -712,7 +739,10 @@ internal fun RecordingInlinePlayer(
                 onPlaybackFailed()
             }
         } finally {
-            runCatching { openedRef.getAndSet(null)?.close() }
+            closeInlinePlaybackSourceReportingFailure(
+                close = { openedRef.getAndSet(null)?.close() },
+                onFailure = ::reportPlaybackSourceCloseFailure,
+            )
         }
     }
 
