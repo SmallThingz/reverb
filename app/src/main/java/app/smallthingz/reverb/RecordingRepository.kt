@@ -31,10 +31,25 @@ internal class CatalogFirstPaintUnavailableException : IOException(
     "Recording catalog was reset after corruption and requires storage reconciliation",
 )
 
-internal class RecordingCatalogIdentityChangedException(message: String) : IOException(message)
+internal class RecordingCatalogIdentityChangedException(
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
 
 internal fun catalogRegistrationFailureAllowsVerifiedSaveSuccess(error: Throwable): Boolean =
     error !is RecordingCatalogIdentityChangedException
+
+internal fun catalogRegistrationFailureAfterIdentityRecheck(
+    error: Exception,
+    stableIdentityAvailable: Boolean,
+    currentIdentityMatches: Boolean,
+): Exception {
+    if (recordingCatalogIdentityIsCurrent(stableIdentityAvailable, currentIdentityMatches)) return error
+    return RecordingCatalogIdentityChangedException(
+        "Recording changed while catalog registration failed",
+        error,
+    )
+}
 
 internal suspend fun <T> recoverCatalogAfterCorruption(
     mode: CatalogCorruptionRecoveryMode,
@@ -189,22 +204,34 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
+                val currentIdentityMatches = stableIdentityAvailable && runCatching {
+                    recordingContentIdentityMatches(context, recording)
+                }.getOrDefault(false)
                 if (!recordingCatalogIdentityIsCurrent(
                         stableIdentityAvailable = stableIdentityAvailable,
-                        currentIdentityMatches = stableIdentityAvailable &&
-                            recordingContentIdentityMatches(context, recording),
+                        currentIdentityMatches = currentIdentityMatches,
                     )
                 ) {
                     throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
                 }
                 val dao = dao(context)
-                val existing = dao.findById(recording.id)
-                val presentRecording = mergeObservedRecording(
-                    existing = existing, observed = recording,
-                    nowMillis = System.currentTimeMillis(),
-                )
-                dao.upsert(presentRecording)
-                presentRecording
+                try {
+                    val existing = dao.findById(recording.id)
+                    val presentRecording = mergeObservedRecording(
+                        existing = existing, observed = recording,
+                        nowMillis = System.currentTimeMillis(),
+                    )
+                    dao.upsert(presentRecording)
+                    presentRecording
+                } catch (error: Exception) {
+                    throw catalogRegistrationFailureAfterIdentityRecheck(
+                        error = error,
+                        stableIdentityAvailable = stableIdentityAvailable,
+                        currentIdentityMatches = stableIdentityAvailable && runCatching {
+                            recordingContentIdentityMatches(context, recording)
+                        }.getOrDefault(false),
+                    )
+                }
             }
         }
     }
