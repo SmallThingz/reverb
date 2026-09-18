@@ -232,14 +232,12 @@ class MainActivity : ComponentActivity() {
                             if (!onboardingFinishing) {
                                 onboardingFinishing = true
                                 lifecycleScope.launch {
-                                    val finished = runDurableUiBooleanAttempt {
-                                        withContext(Dispatchers.IO) {
-                                            finishOnboarding(
-                                                this@MainActivity,
-                                                oneShotEnabled,
-                                                loopingEnabled,
-                                            )
-                                        }
+                                    val finished = runCommittedDurableUiBooleanAttempt {
+                                        finishOnboarding(
+                                            applicationContext,
+                                            oneShotEnabled,
+                                            loopingEnabled,
+                                        )
                                     }
                                     onboardingFinishing = false
                                     if (finished) {
