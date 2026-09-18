@@ -22,6 +22,24 @@ class RetentionMaintenanceSchedulerTest {
     }
 
     @Test
+    fun staleNoWorkObservationCannotRevokeKnownBacklogBetweenPasses() {
+        val state = RetentionMaintenanceSchedulerState()
+
+        assertTrue(state.claimObservedNeed(needed = true))
+        state.completePass(needsMore = true)
+        assertTrue(state.isActive())
+
+        // This result may have been sampled before completePass(true) published known backlog.
+        assertFalse(state.claimObservedNeed(needed = false))
+        assertTrue(state.isActive())
+
+        assertTrue(state.claimActiveRetry())
+        assertTrue(state.isActive())
+        state.completePass(needsMore = false)
+        assertFalse(state.isActive())
+    }
+
+    @Test
     fun blockedBacklogCanBeReclaimedExactlyOnce() {
         val state = RetentionMaintenanceSchedulerState()
 

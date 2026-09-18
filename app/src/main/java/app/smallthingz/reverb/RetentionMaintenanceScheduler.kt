@@ -17,18 +17,21 @@ internal class RetentionMaintenanceSchedulerState {
     /**
      * Reconciles a fresh store observation with scheduler ownership.
      *
-     * A queued/running pass always wins over the observation: the observation may have been
-     * sampled before that pass crossed its mutation boundary, so it cannot revoke accepted work.
+     * Queued/running work and a previously proven backlog both outrank a later negative
+     * observation: that observation may have been sampled before the previous pass published
+     * needsMore=true. Only completePass(false) or explicit clear() may retire known backlog.
      */
     fun claimObservedNeed(needed: Boolean): Boolean = synchronized(lock) {
         if (passQueued) {
             active = true
             return@synchronized false
         }
-        if (!needed) {
-            active = false
-            return@synchronized false
+        if (active) {
+            if (!needed) return@synchronized false
+            passQueued = true
+            return@synchronized true
         }
+        if (!needed) return@synchronized false
         active = true
         passQueued = true
         true
