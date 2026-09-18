@@ -666,6 +666,64 @@ private fun requireCurrentOutputFingerprint(
     }
 }
 
+internal data class MediaStorePublicationObservation(
+    val displayName: String,
+    val pending: Boolean,
+    val fingerprint: StableOutputFingerprint,
+)
+
+internal fun mediaStorePublicationMatchesExpected(
+    finalDisplayName: String,
+    expectedFingerprint: StableOutputFingerprint,
+    observation: MediaStorePublicationObservation?,
+): Boolean {
+    val current = observation ?: return false
+    return !current.pending &&
+        current.displayName == finalDisplayName &&
+        verifiedProviderPublicationMatches(expectedFingerprint, current.fingerprint)
+}
+
+private data class MediaStorePublicationMetadata(
+    val displayName: String,
+    val pending: Boolean,
+)
+
+private fun queryMediaStorePublicationMetadata(
+    context: Context,
+    uri: Uri,
+): MediaStorePublicationMetadata? = runCatching {
+    context.contentResolver.query(
+        uri,
+        arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.IS_PENDING),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val name = cursor.getString(0)?.takeIf { it.isNotBlank() } ?: return@use null
+        MediaStorePublicationMetadata(name, cursor.getInt(1) != 0)
+    }
+}.getOrNull()
+
+private fun readStableMediaStorePublicationObservation(
+    context: Context,
+    uri: Uri,
+): MediaStorePublicationObservation? {
+    val before = queryMediaStorePublicationMetadata(context, uri) ?: return null
+    val fingerprint = readStableOutputFingerprint(
+        context,
+        RecordingStorageType.MEDIASTORE,
+        uri.toString(),
+    ) ?: return null
+    val after = queryMediaStorePublicationMetadata(context, uri) ?: return null
+    if (before != after) return null
+    return MediaStorePublicationObservation(
+        displayName = after.displayName,
+        pending = after.pending,
+        fingerprint = fingerprint,
+    )
+}
+
 @Throws(IOException::class)
 private fun finalizeMediaStoreOutputTarget(
     context: Context,
@@ -685,10 +743,41 @@ private fun finalizeMediaStoreOutputTarget(
         put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
         put(MediaStore.MediaColumns.IS_PENDING, 0)
     }
-    if (context.contentResolver.update(uri, values, null, null) <= 0) {
-        throw IOException("Unable to publish MediaStore recording: $uri")
+    val updateFailure = try {
+        if (context.contentResolver.update(uri, values, null, null) > 0) null
+        else IOException("Unable to publish MediaStore recording: $uri")
+    } catch (error: Exception) {
+        IOException("MediaStore publication result is uncertain: $uri", error)
     }
-    val published = readStableOutputFingerprint(context, RecordingStorageType.MEDIASTORE, uri.toString())
+    var recoveredPublication: MediaStorePublicationObservation? = null
+    if (updateFailure != null) {
+        val observation = readStableMediaStorePublicationObservation(context, uri)
+        if (!mediaStorePublicationMatchesExpected(finalName, expectedFingerprint, observation)) {
+            // Binder/provider calls can fail after committing an update. If the row is already
+            // visible but cannot be proven to be the exact verified staging object under the
+            // requested final name, keep that URI out of Reverb's Library without granting
+            // deletion authority. A still-pending row remains hidden and keeps its recovery marker.
+            if (observation?.pending == false) {
+                val suppressed = suppressProviderOutputWithoutDeletion(
+                    context = context,
+                    storageType = RecordingStorageType.MEDIASTORE,
+                    id = uri.toString(),
+                    digest = expectedFingerprint.digest,
+                )
+                if (suppressed) {
+                    if (!removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)) {
+                        Log.w(TAG, "Unable to revoke recovery for ambiguous MediaStore publish ${target.id}")
+                    }
+                } else {
+                    Log.w(TAG, "Unable to durably suppress ambiguous MediaStore publish $uri")
+                }
+            }
+            throw updateFailure
+        }
+        recoveredPublication = observation
+    }
+    val published = recoveredPublication?.fingerprint
+        ?: readStableOutputFingerprint(context, RecordingStorageType.MEDIASTORE, uri.toString())
     if (published == null || !verifiedProviderPublicationMatches(expectedFingerprint, published)) {
         // The provider already crossed the visibility boundary. Equal bytes are not proof that
         // the object at this URI is still the staging object we verified, so never manufacture
@@ -715,7 +804,9 @@ private fun finalizeMediaStoreOutputTarget(
     val publishedIdentity = published.providerIdentity
         ?.takeIf { it.isNotBlank() }
         ?: throw IOException("Published MediaStore recording has no stable identity")
-    val actualName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: finalName
+    val actualName = recoveredPublication?.displayName
+        ?: queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() }
+        ?: finalName
     return target.copy(
         displayName = actualName,
         staging = false,

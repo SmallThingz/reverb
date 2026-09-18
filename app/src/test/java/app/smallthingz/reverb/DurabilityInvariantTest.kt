@@ -926,6 +926,40 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun ambiguousMediaStorePublish_isAcceptedOnlyWhenExactFinalRowIsProven() {
+        val digest = CopyDigest(4L, ByteArray(32) { 0x31 })
+        val expected = StableOutputFingerprint(
+            digest = digest,
+            fileKey = null,
+            providerIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:4:7",
+        )
+        val published = expected.copy(
+            providerIdentity = "provider:${RecordingStorageType.MEDIASTORE.storageCode.toInt()}:item:4:8",
+        )
+        val exact = MediaStorePublicationObservation(
+            displayName = "clip.wav",
+            pending = false,
+            fingerprint = published,
+        )
+
+        assertTrue(mediaStorePublicationMatchesExpected("clip.wav", expected, exact))
+        assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, exact.copy(pending = true)))
+        assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, exact.copy(displayName = "other.wav")))
+        assertFalse(
+            mediaStorePublicationMatchesExpected(
+                "clip.wav",
+                expected,
+                exact.copy(
+                    fingerprint = published.copy(
+                        digest = CopyDigest(4L, ByteArray(32) { 0x32 }),
+                    ),
+                ),
+            ),
+        )
+        assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, null))
+    }
+
+    @Test
     fun stagedFilePublish_neverOverwritesAnExistingRecording() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "publish-").toFile()
