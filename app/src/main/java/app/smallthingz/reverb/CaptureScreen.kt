@@ -46,6 +46,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -423,6 +424,8 @@ fun CaptureScreen(
     val latestBlobActivity = remember { FloatArray(2) }
 
     var pendingClearBuffer by remember { mutableStateOf<ReverbService.BufferSlot?>(null) }
+    var activeClearOperationId by remember { mutableStateOf<Long?>(null) }
+    var bufferClearStatus by remember { mutableStateOf<BufferClearStatus?>(null) }
     var showExportClampDialog by remember { mutableStateOf(false) }
     var clampWarningSeconds by remember { mutableFloatStateOf(0f) }
     var pendingExportRange by remember { mutableStateOf<ExportRange?>(null) } // Not saveable — non-serializable
@@ -589,6 +592,8 @@ fun CaptureScreen(
             pendingExportRange = null
             showExportClampDialog = false
             pendingClearBuffer = null
+            activeClearOperationId = null
+            bufferClearStatus = null
             invalidateTimelineSnapshotPreparation()
             if (markSavingAsCancelRequested && isSaving) {
                 // Service teardown does not cancel already-started export work. Keep the
@@ -637,6 +642,12 @@ fun CaptureScreen(
                     bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
                     serviceStateHydrated = false
                     service = connectedService
+                    connectedService.currentBufferClearStatus()
+                        ?.takeIf { it.phase.isActive }
+                        ?.let { clearStatus ->
+                            activeClearOperationId = clearStatus.operationId
+                            bufferClearStatus = clearStatus
+                        }
                     requestRecorderState(connectedService)
                 }
 
@@ -805,16 +816,77 @@ fun CaptureScreen(
         }
     }
 
+    LaunchedEffect(service, activeClearOperationId) {
+        val recorder = service ?: return@LaunchedEffect
+        val operationId = activeClearOperationId ?: return@LaunchedEffect
+        while (service === recorder && activeClearOperationId == operationId) {
+            val status = recorder.currentBufferClearStatus()
+            if (status?.operationId != operationId) {
+                activeClearOperationId = null
+                bufferClearStatus = null
+                requestRecorderState(recorder)
+                return@LaunchedEffect
+            }
+            bufferClearStatus = status
+            if (status.phase.isTerminal) {
+                requestRecorderState(recorder)
+                when (status.phase) {
+                    BufferClearPhase.CANCELLED -> AppFeedbackCenter.post(
+                        resources.getString(R.string.clear_buffer_cancelled),
+                        FeedbackTone.INFO,
+                    )
+                    BufferClearPhase.FAILED -> {
+                        val clearError = recorder.consumePendingError()
+                        if (clearError != null) {
+                            errorMessage = clearError
+                        } else if (errorMessage == null) {
+                            errorMessage = resources.getString(R.string.clear_buffer_failed)
+                        }
+                    }
+                    else -> Unit
+                }
+                activeClearOperationId = null
+                bufferClearStatus = null
+                return@LaunchedEffect
+            }
+            delay(100L)
+        }
+    }
+
     pendingClearBuffer?.let { bufferSlot ->
         ClearBufferSheet(
             bufferSlot = bufferSlot,
             onConfirm = {
+                val recorder = service
+                val operationId = recorder?.startClearBuffer(bufferSlot)
                 pendingClearBuffer = null
-                if (service?.clearBuffer(bufferSlot) != true) {
-                    errorMessage = resources.getString(R.string.recorder_state_persist_failed)
+                if (recorder == null || operationId == null) {
+                    errorMessage = resources.getString(R.string.clear_buffer_failed)
+                } else {
+                    activeClearOperationId = operationId
+                    bufferClearStatus = recorder.currentBufferClearStatus()
+                        ?: BufferClearStatus(
+                            operationId = operationId,
+                            bufferSlot = bufferSlot,
+                            phase = BufferClearPhase.STARTING,
+                        )
                 }
             },
             onDismiss = { pendingClearBuffer = null },
+        )
+    }
+
+    val clearStatus = bufferClearStatus
+    val clearOperationId = activeClearOperationId
+    if (clearStatus != null && clearOperationId == clearStatus.operationId) {
+        ClearBufferProgressSheet(
+            status = clearStatus,
+            onCancel = {
+                val recorder = service
+                if (recorder != null && recorder.cancelBufferClear(clearOperationId)) {
+                    bufferClearStatus = clearStatus.copy(phase = BufferClearPhase.CANCELLING)
+                }
+            },
         )
     }
 
@@ -887,9 +959,15 @@ fun CaptureScreen(
                 }
             }
         }
-        val onClearBuffer = remember(isSaving, service, serviceStateHydrated) {
+        val onClearBuffer = remember(
+            isSaving, service, serviceStateHydrated, activeClearOperationId,
+        ) {
             { bufferSlot: ReverbService.BufferSlot ->
-                if (captureServiceInteractionReady(service != null, serviceStateHydrated) && !isSaving) {
+                if (
+                    captureServiceInteractionReady(service != null, serviceStateHydrated) &&
+                    !isSaving &&
+                    activeClearOperationId == null
+                ) {
                     pendingClearBuffer = bufferSlot
                 }
             }
@@ -2249,6 +2327,67 @@ private fun ClearBufferSheet(
                 )
                 Spacer(Modifier.width(7.dp))
                 Text(stringResource(R.string.clear_buffer))
+            }
+        },
+    )
+}
+
+@Composable
+private fun ClearBufferProgressSheet(
+    status: BufferClearStatus,
+    onCancel: () -> Unit,
+) {
+    val title = when (status.bufferSlot) {
+        ReverbService.BufferSlot.ONE_SHOT -> stringResource(R.string.clear_one_shot_progress_title)
+        ReverbService.BufferSlot.LOOPING -> stringResource(R.string.clear_loop_progress_title)
+    }
+    val progress = bufferClearProgressFraction(status)
+    val cancelling = status.phase == BufferClearPhase.CANCELLING
+    ReverbActionSheet(
+        title = title,
+        onDismiss = {},
+        content = {
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Spacer(Modifier.height(12.dp))
+            val detail = if (status.totalBytes > 0L) {
+                val percent = ((progress ?: 0f) * 100f).toInt().coerceIn(0, 100)
+                stringResource(
+                    R.string.clear_buffer_progress_detail,
+                    percent,
+                    formatShortFileSize(status.remainingBytes),
+                )
+            } else {
+                stringResource(R.string.clear_buffer_progress_starting)
+            }
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.clear_buffer_cancel_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        actions = {
+            TextButton(
+                onClick = onCancel,
+                enabled = !cancelling,
+            ) {
+                Text(
+                    stringResource(
+                        if (cancelling) R.string.clear_buffer_cancelling else R.string.cancel,
+                    ),
+                )
             }
         },
     )

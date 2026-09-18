@@ -9,6 +9,14 @@
     <string name="clear_one_shot_title">Discard one-shot?</string>
     <string name="clear_loop_title">Discard loop?</string>
     <string name="clear_buffer_confirmation">This permanently removes the buffered audio.</string>
+    <string name="clear_one_shot_progress_title">Clearing one-shot…</string>
+    <string name="clear_loop_progress_title">Clearing loop…</string>
+    <string name="clear_buffer_progress_starting">Preparing…</string>
+    <string name="clear_buffer_progress_detail">%1$d%% · %2$s remaining</string>
+    <string name="clear_buffer_cancel_note">Cancel stops after the current deletion step. Audio already cleared can’t be restored.</string>
+    <string name="clear_buffer_cancelling">Cancelling…</string>
+    <string name="clear_buffer_cancelled">Clear cancelled.</string>
+    <string name="clear_buffer_failed">Couldn’t clear buffer.</string>
     <string name="buffer_one_shot">One-shot</string>
     <string name="buffer_loop">Looping</string>
     <string name="buffer_disabled">Off</string>
