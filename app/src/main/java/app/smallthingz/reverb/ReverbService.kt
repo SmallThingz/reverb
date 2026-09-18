@@ -82,6 +82,15 @@ internal fun quickTileCommandBufferSlot(
 internal fun quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes: Int): Boolean =
     foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
 
+internal fun combineRecorderTerminalFailureMessages(
+    primary: String,
+    secondary: String?,
+): String {
+    val detail = secondary?.trim().orEmpty()
+    if (detail.isBlank() || primary.contains(detail)) return primary
+    return "$primary $detail"
+}
+
 internal fun recorderCommandGenerationMayApply(
     expectedGeneration: Long?,
     currentGeneration: Long,
@@ -2429,15 +2438,20 @@ class ReverbService : Service() {
             "Capture stopped after audio input failure",
         )
         audioHandler.removeCallbacks(audioReader)
-        runCatching { sealActiveChunks() }
+        val sealFailure = runCatching { sealActiveChunks() }.exceptionOrNull()
+        if (sealFailure != null) {
+            reportPersistentStoreFailure("seal after audio input failure", sealFailure)
+        }
         releaseAudioRecord()
         updateWakeLockState()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
-        reportError(
-            if (!persisted) getString(R.string.recorder_state_persist_failed)
-            else if (error == null) message
-            else userFacingError(message, error),
-        )
+        val primaryFailure = if (!persisted) getString(R.string.recorder_state_persist_failed)
+        else if (error == null) message
+        else userFacingError(message, error)
+        val sealMessage = sealFailure?.let {
+            userFacingError(getString(R.string.recorder_state_persist_failed), it)
+        }
+        reportError(combineRecorderTerminalFailureMessages(primaryFailure, sealMessage))
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             requestServiceStopWhenExportIdle()
@@ -2995,6 +3009,7 @@ class ReverbService : Service() {
         audioHandler.post {
             audioHandler.removeCallbacks(audioReader)
             runCatching { sealActiveChunks() }
+                .onFailure { error -> reportPersistentStoreFailure("seal after foreground timeout", error) }
             releaseAudioRecord()
             updateWakeLockState()
             publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)

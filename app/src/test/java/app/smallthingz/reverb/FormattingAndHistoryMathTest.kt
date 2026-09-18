@@ -11,6 +11,22 @@ import org.junit.Test
 
 class FormattingAndHistoryMathTest {
     @Test
+    fun recorderTerminalFailure_keepsSealFailureVisibleWithoutDuplicatingText() {
+        assertEquals(
+            "Microphone failed. Storage failed.",
+            combineRecorderTerminalFailureMessages("Microphone failed.", "Storage failed."),
+        )
+        assertEquals(
+            "Storage failed.",
+            combineRecorderTerminalFailureMessages("Storage failed.", "Storage failed."),
+        )
+        assertEquals(
+            "Microphone failed.",
+            combineRecorderTerminalFailureMessages("Microphone failed.", null),
+        )
+    }
+
+    @Test
     fun feedbackQueue_preservesUnacknowledgedHeadUnderCapacityPressure() {
         val first = FeedbackEvent(1L, "first", FeedbackTone.INFO)
         val second = FeedbackEvent(2L, "second", FeedbackTone.ERROR)
