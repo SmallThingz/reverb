@@ -237,6 +237,9 @@ class ReverbService : Service() {
     private val captureContinuityGeneration = AtomicLong()
     @Volatile private var serviceDestroying = false
     private val listeningIntentLock = Any()
+    @Volatile private var durableListeningIntentEnabled = false
+    @Volatile private var durableCaptureBufferSlot: BufferSlot? = null
+    private var durableCaptureIntentAuthorityValid = false
 
     @Volatile
     private var foregroundStartBlocked = false
@@ -348,6 +351,12 @@ class ReverbService : Service() {
             }, "reverb-buffer-clear").apply {
                 isDaemon = true
             }
+        }
+        try {
+            loadDurableCaptureIntentPreferences()
+        } catch (error: Exception) {
+            synchronized(listeningIntentLock) { persistenceFailureBlocked = true }
+            reportPersistentStoreFailure("load durable capture intent", error)
         }
         audioHandler.post {
             try {
@@ -623,7 +632,8 @@ class ReverbService : Service() {
             ) {
                 return rejectedListeningCommand()
             }
-            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
+            if (!durableCaptureIntentAuthorityValid) return@synchronized null
+            val previousStoredSlot = durableCaptureBufferSlot
             previousActiveBuffer = activeBufferSlot
             val resolvedGeneration = if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
@@ -632,7 +642,7 @@ class ReverbService : Service() {
                 targetChanged = true
                 switchingWhileRecording = isLogicalListeningState(
                     state,
-                    prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+                    durableListeningIntentEnabled,
                 )
                 listeningCommandGeneration.incrementAndGet()
             } else if (!commitRecorderPreferenceMutation(
@@ -658,12 +668,15 @@ class ReverbService : Service() {
                 targetChanged = true
                 switchingWhileRecording = isLogicalListeningState(
                     state,
-                    prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false),
+                    durableListeningIntentEnabled,
                 )
                 // Target selection is observable state even while idle, so version it too. The
                 // stop path follows the durable listening=false intent and is intentionally not
                 // cancelled by an unrelated target version change.
                 listeningCommandGeneration.incrementAndGet()
+            }
+            if (resolvedGeneration != null && targetChanged) {
+                durableCaptureBufferSlot = bufferSlot
             }
             if (resolvedGeneration != null && targetChanged && switchingWhileRecording) {
                 // Keep the QS handoff marker ordered with the slot transaction. A later automatic
@@ -744,12 +757,14 @@ class ReverbService : Service() {
             ) {
                 return rejectedListeningCommand()
             }
-            val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
+            val authorityWasValid = durableCaptureIntentAuthorityValid
+            val previousEnabled = durableListeningIntentEnabled
+            val previousStoredSlot = durableCaptureBufferSlot
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
             val stopIntentChanged = !enabled && previousEnabled
-            val needsPersistence = captureIntentNeedsPersistence(
+            val needsPersistence = captureIntentPersistenceRequired(
+                authorityValid = authorityWasValid,
                 previousEnabled = previousEnabled,
                 requestedEnabled = enabled,
                 previousStoredSlot = previousStoredSlot,
@@ -766,13 +781,15 @@ class ReverbService : Service() {
                 else listeningCommandGeneration.get()
             } else {
                 val editor = prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, enabled)
-                if (enabled) editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.storageCode.toInt())
+                if (enabled || !authorityWasValid) {
+                    editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, requestedSlot.storageCode.toInt())
+                }
                 if (!commitRecorderPreferenceMutation(
                         commit = editor::commit,
                         onException = { error -> Log.e(TAG, "Recorder intent commit threw", error) },
                     )
                 ) {
-                    val rollbackPersisted = restoreCaptureIntentPreferences(
+                    val rollbackPersisted = authorityWasValid && restoreCaptureIntentPreferences(
                         prefs = prefs,
                         previousEnabled = previousEnabled,
                         previousStoredSlot = previousStoredSlot,
@@ -785,6 +802,9 @@ class ReverbService : Service() {
                     }
                     null
                 } else if (enabled) {
+                    durableCaptureIntentAuthorityValid = true
+                    durableListeningIntentEnabled = true
+                    durableCaptureBufferSlot = requestedSlot
                     activeBufferSlot = requestedSlot
                     foregroundStartBlocked = false
                     foregroundServiceTimedOut = false
@@ -807,6 +827,9 @@ class ReverbService : Service() {
                     )
                 ) {
                     ExplicitCaptureStopDisposition.KNOWN_STOP -> {
+                        durableCaptureIntentAuthorityValid = true
+                        durableListeningIntentEnabled = false
+                        durableCaptureBufferSlot = requestedSlot
                         captureContinuityGeneration.incrementAndGet()
                         if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
                     }
@@ -825,6 +848,9 @@ class ReverbService : Service() {
                         null
                     }
                     ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
+                        durableCaptureIntentAuthorityValid = true
+                        durableListeningIntentEnabled = false
+                        durableCaptureBufferSlot = requestedSlot
                         // Continuing with uncertain or already-disabled incident state can make a
                         // later process death invisible. Honor the Stop, but classify the
                         // bookkeeping loss as an interruption instead of pretending it was known.
@@ -882,11 +908,11 @@ class ReverbService : Service() {
     }
 
     private fun isListeningEnabled(): Boolean = synchronized(listeningIntentLock) {
-        getRecorderPreferences(this).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+        durableListeningIntentEnabled
     }
 
     private fun persistedCaptureBufferSlot(): BufferSlot? = synchronized(listeningIntentLock) {
-        readCaptureBufferSlotPreference(getRecorderPreferences(this))
+        durableCaptureBufferSlot
     }
 
     private fun resolveConfiguredCaptureBufferSlot(): BufferSlot {
@@ -934,12 +960,13 @@ class ReverbService : Service() {
 
         val accepted = synchronized(listeningIntentLock) {
             if (serviceDestroying) return@synchronized false
+            if (!durableCaptureIntentAuthorityValid) return@synchronized false
             val resolved = resolveTargetLocked() ?: return@synchronized false
             if (activeBufferSlot == resolved) return@synchronized true
 
             val prefs = getRecorderPreferences(this)
-            val previousStoredSlot = readCaptureBufferSlotPreference(prefs)
-            val listeningEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            val previousStoredSlot = durableCaptureBufferSlot
+            val listeningEnabled = durableListeningIntentEnabled
             failedWhileListening = isLogicalListeningState(state, listeningEnabled)
             if (captureSlotNeedsPersistence(previousStoredSlot, resolved) &&
                 !commitRecorderPreferenceMutation(
@@ -961,6 +988,7 @@ class ReverbService : Service() {
                 return@synchronized false
             }
 
+            durableCaptureBufferSlot = resolved
             previousActiveBuffer = activeBufferSlot
             switchingWhileRecording = isLogicalListeningState(state, listeningEnabled)
             activeBufferSlot = resolved
@@ -1020,6 +1048,15 @@ class ReverbService : Service() {
             channelMode = getConfiguredChannelMode(this),
             routeMode = getConfiguredInputRouteMode(this),
         )
+    }
+
+    private fun loadDurableCaptureIntentPreferences() {
+        val decoded = readDurableCaptureIntentPreferences(getRecorderPreferences(this))
+        synchronized(listeningIntentLock) {
+            durableListeningIntentEnabled = decoded.enabled
+            durableCaptureBufferSlot = decoded.bufferSlot
+            durableCaptureIntentAuthorityValid = true
+        }
     }
 
     private fun loadConfiguredPreferences() {
@@ -2391,7 +2428,7 @@ class ReverbService : Service() {
                 )
             ) return
             val prefs = getRecorderPreferences(this)
-            val previousEnabled = prefs.safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            val previousEnabled = durableListeningIntentEnabled
             val committed = commitRecorderPreferenceMutation(
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
                 onException = { error -> Log.e(TAG, "Automatic Stop commit threw", error) },
@@ -2409,6 +2446,7 @@ class ReverbService : Service() {
                 }
                 persistenceFailureBlocked = true
             }
+            if (committed) durableListeningIntentEnabled = false
             // Keep known-Stop incident state in the same lifetime transaction as the intent.
             // onDestroy takes this lock before it can classify an armed marker as interrupted.
             val incidentStopPersisted = committed &&
@@ -2711,6 +2749,7 @@ class ReverbService : Service() {
                     Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
                 },
             )
+            durableListeningIntentEnabled = false
             // A fatal recorder failure must invalidate the active capture even if the
             // preference write cannot reach disk. SharedPreferences has already applied
             // the value to its in-memory map when commit() returns false, so rolling it

@@ -1312,6 +1312,79 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun durableCaptureIntentDecode_distinguishesMissingCurrentAndLegacyValues() {
+        assertEquals(
+            DurableCaptureIntentPreferences(enabled = false, bufferSlot = null),
+            decodeDurableCaptureIntentPreferences(emptyMap()),
+        )
+        assertEquals(
+            DurableCaptureIntentPreferences(enabled = true, bufferSlot = ReverbService.BufferSlot.LOOPING),
+            decodeDurableCaptureIntentPreferences(
+                mapOf(
+                    PrefKey.AUDIO_MEMORY_ENABLED.name to true,
+                    PrefKey.CAPTURE_BUFFER_SLOT.name to ReverbService.BufferSlot.LOOPING.storageCode.toInt(),
+                ),
+            ),
+        )
+        assertEquals(
+            DurableCaptureIntentPreferences(enabled = true, bufferSlot = ReverbService.BufferSlot.ONE_SHOT),
+            decodeDurableCaptureIntentPreferences(
+                mapOf(
+                    PrefKey.AUDIO_MEMORY_ENABLED.name to true,
+                    PrefKey.CAPTURE_BUFFER_SLOT.name to "ONE_SHOT",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun durableCaptureIntentDecode_rejectsMalformedAuthorityInsteadOfInventingStopOrSlot() {
+        assertThrows(IllegalStateException::class.java) {
+            decodeDurableCaptureIntentPreferences(
+                mapOf(PrefKey.AUDIO_MEMORY_ENABLED.name to "false"),
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            decodeDurableCaptureIntentPreferences(
+                mapOf(PrefKey.CAPTURE_BUFFER_SLOT.name to 99),
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            decodeDurableCaptureIntentPreferences(
+                mapOf(PrefKey.CAPTURE_BUFFER_SLOT.name to "garbage"),
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            decodeDurableCaptureIntentPreferences(
+                mapOf(PrefKey.CAPTURE_BUFFER_SLOT.name to 1L),
+            )
+        }
+    }
+
+    @Test
+    fun invalidCaptureIntentAuthority_forcesCanonicalPersistenceRepair() {
+        val looping = ReverbService.BufferSlot.LOOPING
+        assertTrue(
+            captureIntentPersistenceRequired(
+                authorityValid = false,
+                previousEnabled = false,
+                requestedEnabled = false,
+                previousStoredSlot = null,
+                requestedSlot = looping,
+            ),
+        )
+        assertFalse(
+            captureIntentPersistenceRequired(
+                authorityValid = true,
+                previousEnabled = false,
+                requestedEnabled = false,
+                previousStoredSlot = looping,
+                requestedSlot = looping,
+            ),
+        )
+    }
+
+    @Test
     fun recorderIntentPersistence_onlyWritesWhenDurableIntentChanges() {
         assertFalse(
             captureSlotNeedsPersistence(

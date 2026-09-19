@@ -288,6 +288,38 @@ internal fun rememberSuccessfulRangeExport(
     }
 }
 
+internal data class DurableCaptureIntentPreferences(
+    val enabled: Boolean,
+    val bufferSlot: ReverbService.BufferSlot?,
+)
+
+internal fun decodeDurableCaptureIntentPreferences(
+    rawPreferences: Map<String, *>,
+): DurableCaptureIntentPreferences {
+    val enabled = when (val raw = rawPreferences[PrefKey.AUDIO_MEMORY_ENABLED.name]) {
+        null -> false
+        is Boolean -> raw
+        else -> throw IllegalStateException(
+            "Unreadable durable preference ${PrefKey.AUDIO_MEMORY_ENABLED.name}: ${raw::class.java.simpleName}",
+        )
+    }
+    val bufferSlot = when (val raw = rawPreferences[PrefKey.CAPTURE_BUFFER_SLOT.name]) {
+        null -> null
+        is Int -> ReverbService.BufferSlot.fromStorageCode(raw)
+            ?: throw IllegalStateException("Unknown durable capture buffer slot code: $raw")
+        is String -> ReverbService.BufferSlot.fromLegacyName(raw)
+            ?: throw IllegalStateException("Unknown legacy durable capture buffer slot: $raw")
+        else -> throw IllegalStateException(
+            "Unreadable durable preference ${PrefKey.CAPTURE_BUFFER_SLOT.name}: ${raw::class.java.simpleName}",
+        )
+    }
+    return DurableCaptureIntentPreferences(enabled = enabled, bufferSlot = bufferSlot)
+}
+
+internal fun readDurableCaptureIntentPreferences(
+    prefs: SharedPreferences,
+): DurableCaptureIntentPreferences = decodeDurableCaptureIntentPreferences(prefs.all)
+
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
     val encoded = prefs.safeInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE)
     if (encoded != Int.MIN_VALUE) {
@@ -887,3 +919,16 @@ fun orderSampleRatesByPreference(
     lower.sortByDescending { it }
     return exact + higher + lower
 }
+
+internal fun captureIntentPersistenceRequired(
+    authorityValid: Boolean,
+    previousEnabled: Boolean,
+    requestedEnabled: Boolean,
+    previousStoredSlot: ReverbService.BufferSlot?,
+    requestedSlot: ReverbService.BufferSlot,
+): Boolean = !authorityValid || captureIntentNeedsPersistence(
+    previousEnabled = previousEnabled,
+    requestedEnabled = requestedEnabled,
+    previousStoredSlot = previousStoredSlot,
+    requestedSlot = requestedSlot,
+)
