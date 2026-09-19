@@ -63,6 +63,13 @@ class JournalTargetValidationTest {
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(wrongMediaAuthority)))
         val wrongMediaCollection = staging.copy(id = "content://media/external/images/media/7")
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(wrongMediaCollection)))
+        val canonicalMediaRow = staging.copy(id = "content://media/external/audio/media/7")
+        assertEquals(
+            canonicalMediaRow,
+            decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(canonicalMediaRow)),
+        )
+        val modifiedMediaRow = staging.copy(id = "content://media/external/audio/media/7?includePending=1")
+        assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(modifiedMediaRow)))
     }
 
     @Test

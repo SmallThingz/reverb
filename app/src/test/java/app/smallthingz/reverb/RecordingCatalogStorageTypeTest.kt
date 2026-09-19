@@ -212,6 +212,15 @@ class RecordingCatalogStorageTypeTest {
                 "content://media/external/audio/media/1",
             ),
         )
+        listOf(
+            "content://media/external/audio/media/1?includePending=1",
+            "content://media/external/audio/media/1#fragment",
+            "content://media/external/audio/media/1/",
+            "content://media//external/audio/media/1",
+            "content://media/external/audio/media/%31",
+        ).forEach { id ->
+            assertFalse(recordingStorageIdIsValid(RecordingStorageType.MEDIASTORE, id))
+        }
         assertFalse(
             recordingStorageIdIsValid(
                 RecordingStorageType.DOCUMENT,
