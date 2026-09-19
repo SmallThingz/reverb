@@ -98,6 +98,7 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
         else -> null
     } ?: return null
     val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
+    if (!recordingStorageIdIsValid(storageType, id)) return null
     val byteCount = parts[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
     val sha256Hex = parts[4].lowercase()
     if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
@@ -129,6 +130,7 @@ internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagi
         else -> null
     } ?: return null
     val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
+    if (!recordingStorageIdIsValid(storageType, id)) return null
     val byteCount = parts[3].toLongOrNull()?.takeIf { it > 0L } ?: return null
     val sha256Hex = parts[4].lowercase()
     if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null

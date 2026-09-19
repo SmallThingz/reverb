@@ -130,4 +130,29 @@ class RecordingCatalogStorageTypeTest {
         )
     }
 
+    @Test
+    fun storageObjectId_requiresAbsoluteFilesOrContentUris() {
+        assertTrue(recordingStorageIdIsValid(RecordingStorageType.FILE, "/recordings/a.wav"))
+        assertFalse(recordingStorageIdIsValid(RecordingStorageType.FILE, "relative/a.wav"))
+        assertTrue(
+            recordingStorageIdIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/document/1",
+            ),
+        )
+        assertTrue(
+            recordingStorageIdIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external/audio/media/1",
+            ),
+        )
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.DOCUMENT,
+                "file:///recordings/a.wav",
+            ),
+        )
+        assertFalse(recordingStorageIdIsValid(RecordingStorageType.MEDIASTORE, "relative"))
+    }
+
 }

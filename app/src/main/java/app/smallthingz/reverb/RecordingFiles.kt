@@ -25,6 +25,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
@@ -88,6 +89,22 @@ enum class RecordingStorageType(val storageCode: Byte) {
             entries.firstOrNull { it.storageCode.toInt() == value }
 
         fun fromLegacyName(value: String?): RecordingStorageType? = entries.firstOrNull { it.name == value }
+    }
+}
+
+internal fun recordingStorageIdIsValid(
+    storageType: RecordingStorageType,
+    id: String,
+): Boolean {
+    if (id.isBlank()) return false
+    return when (storageType) {
+        RecordingStorageType.FILE -> File(id).let { file -> file.isAbsolute && file.parentFile != null }
+        RecordingStorageType.DOCUMENT,
+        RecordingStorageType.MEDIASTORE,
+        -> runCatching {
+            val uri = URI(id)
+            uri.scheme.equals("content", ignoreCase = true) && !uri.authority.isNullOrBlank()
+        }.getOrDefault(false)
     }
 }
 

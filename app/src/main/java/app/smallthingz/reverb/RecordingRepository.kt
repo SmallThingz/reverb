@@ -1155,6 +1155,7 @@ private fun decodePendingDeletionV4(raw: String): PendingDeletionIntent? {
     if (parts.size != 11 || parts[0] != "v4") return null
     val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
     val sourceStorage = parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
+    if (!recordingStorageIdIsValid(sourceStorage, common.first)) return null
     val claimToken: String?
     val sourceIdentity: String?
     if (sourceStorage == RecordingStorageType.FILE) {
@@ -1169,6 +1170,7 @@ private fun decodePendingDeletionV4(raw: String): PendingDeletionIntent? {
     }
     val targetStorage = parts[8].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
     val targetId = decodePendingDeletionField(parts[9]) ?: return null
+    if (!recordingStorageIdIsValid(targetStorage, targetId)) return null
     val targetIdentity = decodePendingDeletionField(parts[10]) ?: return null
     return PendingDeletionIntent(
         id = common.first,
@@ -1190,6 +1192,7 @@ private fun decodePendingDeletionClaim(
 ): PendingDeletionIntent? {
     if (storage != RecordingStorageType.FILE) return null
     val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
+    if (!recordingStorageIdIsValid(storage, common.first)) return null
     val token = parts[6].takeIf { it.isNotBlank() }?.let { value ->
         runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
     }

@@ -13,7 +13,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -613,16 +612,14 @@ internal fun recordingCatalogLocationIsValid(
     RecordingStorageType.FILE -> {
         val file = File(id)
         val directory = File(directoryId)
-        file.isAbsolute && directory.isAbsolute && file.parentFile?.absolutePath == directory.absolutePath
+        recordingStorageIdIsValid(storageType, id) && directory.isAbsolute &&
+            file.parentFile?.absolutePath == directory.absolutePath
     }
-    RecordingStorageType.DOCUMENT -> isContentUri(id) && isContentUri(directoryId)
-    RecordingStorageType.MEDIASTORE -> isContentUri(id) && directoryId == MEDIA_STORE_DIRECTORY_ID
+    RecordingStorageType.DOCUMENT -> recordingStorageIdIsValid(storageType, id) &&
+        recordingStorageIdIsValid(RecordingStorageType.DOCUMENT, directoryId)
+    RecordingStorageType.MEDIASTORE -> recordingStorageIdIsValid(storageType, id) &&
+        directoryId == MEDIA_STORE_DIRECTORY_ID
 }
-
-private fun isContentUri(value: String): Boolean = runCatching {
-    val uri = URI(value)
-    uri.scheme.equals("content", ignoreCase = true) && !uri.authority.isNullOrBlank()
-}.getOrDefault(false)
 
 private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val idIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_ID)
