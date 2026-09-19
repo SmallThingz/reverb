@@ -671,6 +671,16 @@ internal const val MAX_RECORDING_CATALOG_INITIAL_CAPACITY = 1_024
 internal fun recordingCatalogInitialCapacity(rowCount: Int): Int =
     rowCount.coerceIn(0, MAX_RECORDING_CATALOG_INITIAL_CAPACITY)
 
+internal inline fun recordingCatalogIntegerColumn(
+    fieldType: Int,
+    read: () -> Long,
+): Long? = if (fieldType == Cursor.FIELD_TYPE_INTEGER) read() else null
+
+internal inline fun recordingCatalogTextColumn(
+    fieldType: Int,
+    read: () -> String?,
+): String? = if (fieldType == Cursor.FIELD_TYPE_STRING) read() else null
+
 internal fun recordingCatalogCoreFieldsAreValid(
     id: String?,
     displayName: String?,
@@ -730,19 +740,35 @@ private fun readRecordings(
     val createdAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_CREATED_AT_MILLIS)
     val lastSeenAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS)
     val missingSinceMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS)
+
+    fun textColumn(index: Int): String? =
+        recordingCatalogTextColumn(cursor.getType(index)) { cursor.getString(index) }
+
+    fun integerColumn(index: Int): Long? =
+        recordingCatalogIntegerColumn(cursor.getType(index)) { cursor.getLong(index) }
+
     val result = ArrayList<RecordingEntity>(recordingCatalogInitialCapacity(cursor.count))
     while (cursor.moveToNext()) {
-        val id = cursor.getString(idIndex)
-        val displayName = cursor.getString(displayNameIndex)
-        val directoryId = cursor.getString(directoryIdIndex)
-        val startedAtMillis = cursor.getLong(startedAtMillisIndex)
-        val durationMillis = cursor.getLong(durationMillisIndex)
-        val sizeBytes = cursor.getLong(sizeBytesIndex)
-        val createdAtMillis = cursor.getLong(createdAtMillisIndex)
-        val lastSeenAtMillis = cursor.getLong(lastSeenAtMillisIndex)
-        val missingSinceMillis =
-            if (cursor.isNull(missingSinceMillisIndex)) null else cursor.getLong(missingSinceMillisIndex)
-        if (!recordingCatalogCoreFieldsAreValid(
+        val id = textColumn(idIndex)
+        val displayName = textColumn(displayNameIndex)
+        val directoryId = textColumn(directoryIdIndex)
+        val startedAtMillis = integerColumn(startedAtMillisIndex)
+        val durationMillis = integerColumn(durationMillisIndex)
+        val sizeBytes = integerColumn(sizeBytesIndex)
+        val createdAtMillis = integerColumn(createdAtMillisIndex)
+        val lastSeenAtMillis = integerColumn(lastSeenAtMillisIndex)
+        val missingSinceMillis = when (cursor.getType(missingSinceMillisIndex)) {
+            Cursor.FIELD_TYPE_NULL -> null
+            Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(missingSinceMillisIndex)
+            else -> {
+                Log.w("RecordingDatabase", "Skipping catalog row with malformed missing timestamp")
+                continue
+            }
+        }
+
+        if (startedAtMillis == null || durationMillis == null || sizeBytes == null ||
+            createdAtMillis == null || lastSeenAtMillis == null ||
+            !recordingCatalogCoreFieldsAreValid(
                 id = id,
                 displayName = displayName,
                 directoryId = directoryId,
@@ -757,9 +783,23 @@ private fun readRecordings(
             Log.w("RecordingDatabase", "Skipping catalog row with malformed core fields")
             continue
         }
+
+        val storageCode = integerColumn(storageTypeCodeIndex)
+        if (storageCode == null || storageCode !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+            Log.w("RecordingDatabase", "Skipping catalog row with malformed storage code: $id")
+            continue
+        }
+        val legacyStorageType = when (cursor.getType(storageTypeIndex)) {
+            Cursor.FIELD_TYPE_NULL -> null
+            Cursor.FIELD_TYPE_STRING -> cursor.getString(storageTypeIndex)
+            else -> {
+                Log.w("RecordingDatabase", "Skipping catalog row with malformed legacy storage type: $id")
+                continue
+            }
+        }
         val storage = resolveRecordingCatalogStorageType(
-            storageCode = cursor.getInt(storageTypeCodeIndex),
-            legacyValue = cursor.getString(storageTypeIndex),
+            storageCode = storageCode.toInt(),
+            legacyValue = legacyStorageType,
         )
         if (storage == null) {
             Log.w("RecordingDatabase", "Skipping catalog row with malformed storage type: $id")
@@ -775,20 +815,21 @@ private fun readRecordings(
             Log.w("RecordingDatabase", "Skipping catalog row with malformed storage location: $id")
             continue
         }
+
         result.add(
             RecordingEntity(
                 id = requireNotNull(id),
                 displayName = requireNotNull(displayName),
-                mimeType = cursor.getString(mimeTypeIndex)?.takeIf { it.isNotBlank() } ?: FALLBACK_MIME_TYPE_AUDIO,
+                mimeType = textColumn(mimeTypeIndex)?.takeIf { it.isNotBlank() } ?: FALLBACK_MIME_TYPE_AUDIO,
                 startedAtMillis = startedAtMillis,
                 durationMillis = durationMillis,
                 sizeBytes = sizeBytes,
-                codecSummary = cursor.getString(codecSummaryIndex).orEmpty(),
+                codecSummary = textColumn(codecSummaryIndex).orEmpty(),
                 storageType = storage,
                 directoryId = requireNotNull(directoryId),
-                fileIdentity = cursor.getString(fileIdentityIndex).orEmpty(),
-                waveformData = cursor.getString(waveformDataIndex).orEmpty(),
-                waveformRevision = cursor.getString(waveformRevisionIndex).orEmpty(),
+                fileIdentity = textColumn(fileIdentityIndex).orEmpty(),
+                waveformData = textColumn(waveformDataIndex).orEmpty(),
+                waveformRevision = textColumn(waveformRevisionIndex).orEmpty(),
                 createdAtMillis = createdAtMillis,
                 lastSeenAtMillis = lastSeenAtMillis,
                 missingSinceMillis = missingSinceMillis,
