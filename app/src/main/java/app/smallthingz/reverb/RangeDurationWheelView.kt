@@ -19,6 +19,11 @@ import kotlin.math.min
 import kotlin.math.round
 import kotlin.math.sin
 
+internal fun rangeDurationWheelInputAllowed(
+    enabled: Boolean,
+    interactionAlreadyActive: Boolean,
+): Boolean = enabled || interactionAlreadyActive
+
 internal class RangeDurationWheelView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -254,6 +259,12 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // View.dispatchTouchEvent can still reach an overridden onTouchEvent while disabled.
+        // Block new input, but let an interaction accepted while enabled receive its terminal
+        // UP/CANCEL so Compose cannot be left holding the native wheel edit lock.
+        if (!rangeDurationWheelInputAllowed(isEnabled, activeWheelIndex != NO_WHEEL)) {
+            return false
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val index = wheelIndexAt(event.x)
@@ -312,6 +323,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!rangeDurationWheelInputAllowed(isEnabled, interactionAlreadyActive = false)) return false
         if (event.action == MotionEvent.ACTION_SCROLL &&
             event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
         ) {
