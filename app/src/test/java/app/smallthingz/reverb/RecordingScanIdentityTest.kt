@@ -73,7 +73,10 @@ class RecordingScanIdentityTest {
         assertTrue(scannedProviderRecordingIdentityRemainsCurrent(before, before, before))
         assertFalse(scannedProviderRecordingIdentityRemainsCurrent(before, changed, before))
         assertFalse(scannedProviderRecordingIdentityRemainsCurrent(before, before, changed))
-        assertTrue(scannedProviderRecordingIdentityRemainsCurrent("", changed, before))
+        assertFalse(scannedProviderRecordingIdentityRemainsCurrent("", changed, before))
+        assertTrue(scannedProviderRecordingIdentityRemainsCurrent("", before, before))
+        assertFalse(scannedProviderRecordingIdentityRemainsCurrent("", before, ""))
+        assertTrue(scannedProviderRecordingIdentityRemainsCurrent("", "", ""))
     }
 
     @Test

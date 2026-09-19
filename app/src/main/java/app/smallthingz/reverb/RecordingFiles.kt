@@ -1982,8 +1982,16 @@ internal fun scannedProviderRecordingIdentityRemainsCurrent(
     beforeOpenIdentity: String,
     afterOpenIdentity: String,
     afterReadIdentity: String,
-): Boolean = beforeOpenIdentity.isBlank() ||
-    providerReadRemainsStable(beforeOpenIdentity, afterOpenIdentity, afterReadIdentity)
+): Boolean {
+    if (beforeOpenIdentity.isBlank()) {
+        // Identity-less rows remain non-authoritative, but any identity that becomes available
+        // after descriptor acquisition must stay bound to one provider revision through the read.
+        if (afterOpenIdentity.isBlank() != afterReadIdentity.isBlank()) return false
+        return afterOpenIdentity.isBlank() ||
+            providerRecordingIdentityMatches(afterOpenIdentity, afterReadIdentity)
+    }
+    return providerReadRemainsStable(beforeOpenIdentity, afterOpenIdentity, afterReadIdentity)
+}
 
 internal fun stagingFingerprintMatchesCreatedObject(
     target: RecordingOutputTarget,
