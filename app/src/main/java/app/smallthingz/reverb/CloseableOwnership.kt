@@ -16,6 +16,19 @@ internal inline fun <Owner : Closeable, Child> openChildOrCloseOwner(
     throw error
 }
 
+internal inline fun <Owner> configureOwnedResourceOrRelease(
+    owner: Owner,
+    release: (Owner) -> Unit,
+    configure: (Owner) -> Unit,
+): Owner = try {
+    configure(owner)
+    owner
+} catch (error: Throwable) {
+    throw requireNotNull(
+        closePreservingPrimaryFailure(error) { release(owner) },
+    )
+}
+
 internal inline fun closePreservingPrimaryFailure(
     primaryFailure: Throwable?,
     close: () -> Unit,

@@ -47,6 +47,68 @@ class CloseableOwnershipTest {
         assertFalse(owner.closed)
     }
 
+    @Test
+    fun configurationFailure_releasesNonCloseableOwner() {
+        val owner = TestOwnedResource()
+        val primary = IOException("configure failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            configureOwnedResourceOrRelease(
+                owner = owner,
+                configure = { throw primary },
+                release = { it.release() },
+            )
+        }
+
+        assertSame(primary, thrown)
+        assertTrue(owner.released)
+    }
+
+    @Test
+    fun releaseFailure_isSuppressedOnConfigurationFailure() {
+        val releaseFailure = IOException("release failed")
+        val owner = TestOwnedResource(releaseFailure)
+        val primary = IOException("configure failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            configureOwnedResourceOrRelease(
+                owner = owner,
+                configure = { throw primary },
+                release = { it.release() },
+            )
+        }
+
+        assertSame(primary, thrown)
+        assertEquals(listOf(releaseFailure), thrown.suppressed.toList())
+        assertTrue(owner.released)
+    }
+
+    @Test
+    fun successfulConfiguration_transfersOwnerWithoutRelease() {
+        val owner = TestOwnedResource()
+
+        val configured = configureOwnedResourceOrRelease(
+            owner = owner,
+            configure = {},
+            release = { it.release() },
+        )
+
+        assertSame(owner, configured)
+        assertFalse(owner.released)
+    }
+
+    private class TestOwnedResource(
+        private val releaseFailure: IOException? = null,
+    ) {
+        var released = false
+            private set
+
+        fun release() {
+            released = true
+            releaseFailure?.let { throw it }
+        }
+    }
+
     private class TestCloseable(
         private val closeFailure: IOException? = null,
     ) : Closeable {

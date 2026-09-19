@@ -997,7 +997,7 @@ internal class TimelineAudioPreviewController : Closeable {
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         ).coerceAtLeast(minimumBufferBytes)
-        return AudioTrack.Builder()
+        val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -1017,7 +1017,15 @@ internal class TimelineAudioPreviewController : Closeable {
                 if (lowLatency) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
             .build()
-            .also { it.setVolume(volume.coerceIn(0f, 1f)) }
+        return configureOwnedResourceOrRelease(
+            owner = track,
+            release = { it.release() },
+        ) { configured ->
+            val result = configured.setVolume(volume.coerceIn(0f, 1f))
+            if (result != AudioTrack.SUCCESS) {
+                throw IOException("Unable to configure audio preview volume: $result")
+            }
+        }
     }
 
     private fun releaseTrackOnce(track: AudioTrack) {

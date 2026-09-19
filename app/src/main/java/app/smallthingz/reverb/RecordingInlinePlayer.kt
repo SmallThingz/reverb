@@ -631,80 +631,84 @@ internal fun RecordingInlinePlayer(
         var disposed = false
         playbackBookkeeping.released = false
         playbackBookkeeping.initialAutoStartPending = true
-        val player = MediaPlayer()
-        player.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .build(),
-        )
-        player.setOnPreparedListener { preparedPlayer ->
-            if (!inlinePlaybackCallbackIsCurrent(
-                    released = playbackBookkeeping.released,
-                    disposed = disposed,
-                    samePlayer = mediaPlayer === preparedPlayer,
-                )
-            ) {
-                return@setOnPreparedListener
-            }
-            prepared = true
-            val previousDuration = duration
-            duration = preparedPlayer.duration.coerceAtLeast(1)
-            if (!trimMode || trimEndMillis >= previousDuration - 1) trimEndMillis = duration
-            currentPosition = currentPosition.coerceIn(0, duration)
-            if (inlinePlaybackShouldAutoStart(
-                    prepared = true,
-                    initialAutoStartPending = playbackBookkeeping.initialAutoStartPending,
-                    lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
-                )
-            ) {
-                runCatching { preparedPlayer.start() }
-                    .onSuccess {
-                        playbackBookkeeping.initialAutoStartPending = false
-                        isPlaying = true
-                    }
-                    .onFailure {
-                        releasePlayer()
-                        onPlaybackFailed()
-                    }
-            }
-        }
-        player.setOnSeekCompleteListener { activePlayer ->
-            if (
-                inlinePlaybackCallbackIsCurrent(
-                    released = playbackBookkeeping.released,
-                    disposed = disposed,
-                    samePlayer = mediaPlayer === activePlayer,
-                ) &&
-                !isScrubbing
-            ) {
-                currentPosition = runCatching { activePlayer.currentPosition.coerceAtLeast(0) }
-                    .getOrDefault(currentPosition)
-            }
-        }
-        player.setOnCompletionListener { completedPlayer ->
-            if (inlinePlaybackCallbackIsCurrent(
-                    released = playbackBookkeeping.released,
-                    disposed = disposed,
-                    samePlayer = mediaPlayer === completedPlayer,
-                )
-            ) {
-                isPlaying = false
-                currentPosition = duration
-            }
-        }
-        player.setOnErrorListener { errorPlayer, _, _ ->
-            val shouldReportFailure = inlinePlaybackCallbackIsCurrent(
-                released = playbackBookkeeping.released,
-                disposed = disposed,
-                samePlayer = mediaPlayer === errorPlayer,
+        val player = configureOwnedResourceOrRelease(
+            owner = MediaPlayer(),
+            release = { it.release() },
+        ) { configuredPlayer ->
+            configuredPlayer.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .build(),
             )
-            handleInlinePlaybackError(
-                shouldReportFailure = shouldReportFailure,
-                releaseResources = ::releasePlayer,
-                reportFailure = onPlaybackFailed,
-            )
-            true
+            configuredPlayer.setOnPreparedListener { preparedPlayer ->
+                if (!inlinePlaybackCallbackIsCurrent(
+                        released = playbackBookkeeping.released,
+                        disposed = disposed,
+                        samePlayer = mediaPlayer === preparedPlayer,
+                    )
+                ) {
+                    return@setOnPreparedListener
+                }
+                prepared = true
+                val previousDuration = duration
+                duration = preparedPlayer.duration.coerceAtLeast(1)
+                if (!trimMode || trimEndMillis >= previousDuration - 1) trimEndMillis = duration
+                currentPosition = currentPosition.coerceIn(0, duration)
+                if (inlinePlaybackShouldAutoStart(
+                        prepared = true,
+                        initialAutoStartPending = playbackBookkeeping.initialAutoStartPending,
+                        lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                    )
+                ) {
+                    runCatching { preparedPlayer.start() }
+                        .onSuccess {
+                            playbackBookkeeping.initialAutoStartPending = false
+                            isPlaying = true
+                        }
+                        .onFailure {
+                            releasePlayer()
+                            onPlaybackFailed()
+                        }
+                }
+            }
+            configuredPlayer.setOnSeekCompleteListener { activePlayer ->
+                if (
+                    inlinePlaybackCallbackIsCurrent(
+                        released = playbackBookkeeping.released,
+                        disposed = disposed,
+                        samePlayer = mediaPlayer === activePlayer,
+                    ) &&
+                    !isScrubbing
+                ) {
+                    currentPosition = runCatching { activePlayer.currentPosition.coerceAtLeast(0) }
+                        .getOrDefault(currentPosition)
+                }
+            }
+            configuredPlayer.setOnCompletionListener { completedPlayer ->
+                if (inlinePlaybackCallbackIsCurrent(
+                        released = playbackBookkeeping.released,
+                        disposed = disposed,
+                        samePlayer = mediaPlayer === completedPlayer,
+                    )
+                ) {
+                    isPlaying = false
+                    currentPosition = duration
+                }
+            }
+            configuredPlayer.setOnErrorListener { errorPlayer, _, _ ->
+                val shouldReportFailure = inlinePlaybackCallbackIsCurrent(
+                    released = playbackBookkeeping.released,
+                    disposed = disposed,
+                    samePlayer = mediaPlayer === errorPlayer,
+                )
+                handleInlinePlaybackError(
+                    shouldReportFailure = shouldReportFailure,
+                    releaseResources = ::releasePlayer,
+                    reportFailure = onPlaybackFailed,
+                )
+                true
+            }
         }
         mediaPlayer = player
 
