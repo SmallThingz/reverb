@@ -39,6 +39,26 @@ class RecordingScanIdentityTest {
     }
 
     @Test
+    fun providerScanIdentity_requiresStableDescriptorHandoffForKnownRevision() {
+        val before = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/1",
+            100L,
+            9L,
+        )
+        val changed = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/1",
+            101L,
+            10L,
+        )
+        assertTrue(scannedProviderRecordingIdentityRemainsCurrent(before, before, before))
+        assertFalse(scannedProviderRecordingIdentityRemainsCurrent(before, changed, before))
+        assertFalse(scannedProviderRecordingIdentityRemainsCurrent(before, before, changed))
+        assertTrue(scannedProviderRecordingIdentityRemainsCurrent("", changed, before))
+    }
+
+    @Test
     fun scanIdentity_requiresStableKnownRevisionAcrossValidation() {
         val file = "stat:1:2:3:4:5"
         assertTrue(scannedRecordingIdentityRemainsCurrent(RecordingStorageType.FILE, file, file))

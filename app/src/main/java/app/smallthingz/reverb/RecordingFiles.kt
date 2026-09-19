@@ -1963,6 +1963,13 @@ internal fun providerReadRemainsStable(
     providerRecordingIdentityMatches(beforeOpenIdentity, afterOpenIdentity) &&
     providerRecordingIdentityMatches(beforeOpenIdentity, afterReadIdentity)
 
+internal fun scannedProviderRecordingIdentityRemainsCurrent(
+    beforeOpenIdentity: String,
+    afterOpenIdentity: String,
+    afterReadIdentity: String,
+): Boolean = beforeOpenIdentity.isBlank() ||
+    providerReadRemainsStable(beforeOpenIdentity, afterOpenIdentity, afterReadIdentity)
+
 internal fun stagingFingerprintMatchesCreatedObject(
     target: RecordingOutputTarget,
     fingerprint: StableOutputFingerprint,
@@ -2503,6 +2510,57 @@ private data class ScannedFileRecording(
     val afterReadDescriptorIdentity: String,
 )
 
+private data class ScannedProviderRecording(
+    val strictDurationMillis: Long,
+    val media: RecordingMediaMetadata,
+)
+
+private fun scanProviderRecording(
+    context: Context,
+    storageType: RecordingStorageType,
+    uri: Uri,
+    displayName: String,
+    beforeIdentity: String,
+): ScannedProviderRecording {
+    val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
+        ?: throw IOException("Unable to open discovered recording $uri")
+    val input = openChildOrCloseOwner(descriptor) { opened ->
+        ParcelFileDescriptor.AutoCloseInputStream(opened)
+    }
+    return input.use { source ->
+        val afterOpenIdentity = resolveProviderRecordingIdentity(context, storageType, uri)
+        if (
+            beforeIdentity.isNotBlank() &&
+            !providerRecordingIdentityMatches(beforeIdentity, afterOpenIdentity)
+        ) {
+            throw IOException("Recording changed while opening scan descriptor $uri")
+        }
+        val strictDuration = structurallyCompleteRecordingDurationMillis(displayName, source)
+        val media = if (strictDuration > 0L) {
+            inspectRecordingMedia(
+                descriptor = source.fd,
+                displayName = displayName,
+                fallbackDurationMillis = strictDuration,
+            )
+        } else {
+            RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
+        }
+        val afterReadIdentity = resolveProviderRecordingIdentity(context, storageType, uri)
+        if (!scannedProviderRecordingIdentityRemainsCurrent(
+                beforeOpenIdentity = beforeIdentity,
+                afterOpenIdentity = afterOpenIdentity,
+                afterReadIdentity = afterReadIdentity,
+            )
+        ) {
+            throw IOException("Recording changed while scanning $uri")
+        }
+        ScannedProviderRecording(
+            strictDurationMillis = strictDuration,
+            media = media,
+        )
+    }
+}
+
 private fun listDocumentTreeRecordings(
     context: Context,
     treeUri: Uri,
@@ -2533,31 +2591,25 @@ private fun listDocumentTreeRecordings(
             ) {
                 existing
             } else {
-                val strictDuration = try {
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        structurallyCompleteRecordingDurationMillis(name, input)
-                    } ?: throw IOException("Unable to open discovered recording $uri")
+                val scan = try {
+                    scanProviderRecording(
+                        context = context,
+                        storageType = RecordingStorageType.DOCUMENT,
+                        uri = uri,
+                        displayName = name,
+                        beforeIdentity = identity,
+                    )
                 } catch (error: Exception) {
                     throw IOException("Unable to validate discovered recording $uri", error)
                 }
-                if (strictDuration <= 0L) return@mapNotNull null
-                val media = inspectRecordingMedia(context, uri, name)
-                if (!scannedRecordingIdentityRemainsCurrent(
-                        storageType = RecordingStorageType.DOCUMENT,
-                        beforeValidation = identity,
-                        afterValidation = resolveProviderRecordingIdentity(
-                            context, RecordingStorageType.DOCUMENT, uri,
-                        ),
-                    )
-                ) {
-                    throw IOException("Recording changed while scanning $uri")
-                }
+                if (scan.strictDurationMillis <= 0L) return@mapNotNull null
+                val media = scan.media
                 RecordingEntity(
                     id = uri.toString(),
                     displayName = name,
                     mimeType = file.mimeType ?: guessMimeType(name),
                     startedAtMillis = resolveRecordingStartTimeMillis(name, modifiedMillis),
-                    durationMillis = strictDuration,
+                    durationMillis = scan.strictDurationMillis,
                     sizeBytes = size,
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.DOCUMENT,
@@ -2706,26 +2758,20 @@ private fun listMediaStoreRecordings(
                         // new or changed row pays this read, while identity-stable rows above stay
                         // on the no-I/O fast path. Transport/read uncertainty aborts this scan
                         // scope so existing catalog state is preserved rather than treated empty.
-                        val strictDuration = try {
-                            resolver.openInputStream(uri)?.use { input ->
-                                structurallyCompleteRecordingDurationMillis(name, input)
-                            } ?: throw IOException("Unable to open discovered MediaStore recording $uri")
+                        val scan = try {
+                            scanProviderRecording(
+                                context = context,
+                                storageType = RecordingStorageType.MEDIASTORE,
+                                uri = uri,
+                                displayName = name,
+                                beforeIdentity = identity,
+                            )
                         } catch (error: Exception) {
                             throw IOException("Unable to validate discovered MediaStore recording $uri", error)
                         }
-                        if (strictDuration <= 0L) continue
-                        durationMillis = strictDuration
-                        media = inspectRecordingMedia(context, uri, name)
-                        if (!scannedRecordingIdentityRemainsCurrent(
-                                storageType = RecordingStorageType.MEDIASTORE,
-                                beforeValidation = identity,
-                                afterValidation = resolveProviderRecordingIdentity(
-                                    context, RecordingStorageType.MEDIASTORE, uri,
-                                ),
-                            )
-                        ) {
-                            throw IOException("Recording changed while scanning $uri")
-                        }
+                        if (scan.strictDurationMillis <= 0L) continue
+                        durationMillis = scan.strictDurationMillis
+                        media = scan.media
                     }
                     add(
                         RecordingEntity(
