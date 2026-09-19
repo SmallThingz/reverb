@@ -2297,12 +2297,98 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             retirementTombstoneDurabilityPending.remove(record.id)
         }
-        val chunkDeleted = deleteChunkFileDurablyLocked(record.file)
-        if (!chunkDeleted) {
+
+        when (storagePathState(record.file)) {
+            StoragePathState.MISSING -> {
+                val absenceDurable = runCatching {
+                    forceDirectoryDurable(chunksDirectory)
+                    true
+                }.getOrDefault(false)
+                if (!absenceDurable) {
+                    retiredById[record.id] = record
+                    return false
+                }
+                return finishRetiredRecordMarkerLocked(record)
+            }
+            StoragePathState.UNAVAILABLE -> {
+                retiredById[record.id] = record
+                return false
+            }
+            StoragePathState.PRESENT -> Unit
+        }
+        if (!record.file.isFile) {
             retiredById[record.id] = record
             return false
         }
 
+        val verifiedIdentity = try {
+            verifiedRetiredChunkIdentityLocked(record)
+        } catch (_: IOException) {
+            retiredById[record.id] = record
+            return false
+        } catch (_: SecurityException) {
+            retiredById[record.id] = record
+            return false
+        }
+        if (verifiedIdentity == null) {
+            return preserveChangedRetiredChunkLocked(record)
+        }
+        val identityAtDelete = resolveFileIdentity(record.file)
+        if (!fileIdentityMatches(verifiedIdentity, identityAtDelete)) {
+            return preserveChangedRetiredChunkLocked(record)
+        }
+        if (!deleteChunkFileDurablyLocked(record.file)) {
+            retiredById[record.id] = record
+            return false
+        }
+        return finishRetiredRecordMarkerLocked(record)
+    }
+
+    private fun verifiedRetiredChunkIdentityLocked(record: ChunkRecord): String? {
+        if (record.state != ChunkState.FINALIZED) return null
+        val beforeIdentity = resolveFileIdentity(record.file)
+        if (beforeIdentity.isBlank()) {
+            throw IOException("Unable to identify retired chunk ${record.id}")
+        }
+        val header = readChunkHeader(record.file) ?: return null
+        if (
+            header.id != record.id ||
+            header.state != ChunkState.FINALIZED ||
+            header.generation != record.headerGeneration ||
+            header.createdAtMillis != record.createdAtMillis ||
+            header.payloadBytes != record.payloadBytes ||
+            header.sampleFrames != record.sampleFrames ||
+            header.sampleRate != record.sampleRate ||
+            header.channelCount != record.channelCount ||
+            header.sampleFormat != record.sampleFormat ||
+            header.payloadChecksum != record.payloadChecksum ||
+            header.payloadOffsetBytes != record.payloadOffsetBytes
+        ) {
+            return null
+        }
+        val expectedLength = Math.addExact(record.payloadOffsetBytes, record.payloadBytes)
+        if (Files.size(record.file.toPath()) != expectedLength) return null
+        if (crc32FilePayload(record.file, record.payloadOffsetBytes, record.payloadBytes) != record.payloadChecksum) {
+            return null
+        }
+        val afterIdentity = resolveFileIdentity(record.file)
+        if (afterIdentity.isBlank() || !fileIdentityMatches(beforeIdentity, afterIdentity)) return null
+        return afterIdentity
+    }
+
+    private fun preserveChangedRetiredChunkLocked(record: ChunkRecord): Boolean {
+        val preserved = runCatching {
+            preserveUnrecognizedChunkLocked(record.file, "retired-changed")
+            true
+        }.getOrDefault(false)
+        if (!preserved) {
+            retiredById[record.id] = record
+            return false
+        }
+        return finishRetiredRecordMarkerLocked(record)
+    }
+
+    private fun finishRetiredRecordMarkerLocked(record: ChunkRecord): Boolean {
         val markerDeletedDurably = deleteRetirementTombstoneLocked(record.id)
         if (markerDeletedDurably) {
             retiredById.remove(record.id)

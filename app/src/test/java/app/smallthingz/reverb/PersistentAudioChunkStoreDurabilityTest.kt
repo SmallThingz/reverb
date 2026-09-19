@@ -1376,6 +1376,35 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retiredLeaseChunk_preservesChangedPathBeforeDelayedDeletion() = withStoreRoot { root ->
+        val expected = pcmBytes(32_000)
+        val replacement = ByteArray(257) { index -> ((index * 31 + 5) and 0xff).toByte() }
+        val store = PersistentAudioChunkStore(root)
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+
+        store.clear()
+        assertFalse(store.hasData())
+        assertArrayEquals(expected, readLease(lease))
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val marker = File(root, "retired/0")
+        assertTrue(chunk.isFile)
+        assertTrue(marker.isFile)
+
+        chunk.writeBytes(replacement)
+        lease.close()
+
+        assertFalse(chunk.exists())
+        assertFalse(marker.exists())
+        val preserved = File(root, "preserved").listFiles().orEmpty()
+            .single { ".retired-changed" in it.name }
+        assertArrayEquals(replacement, preserved.readBytes())
+        store.close()
+    }
+
+    @Test
     fun loopingExplicitShrink_retainsExactNewestBytesAfterBoundaryLeaseReleases() = withStoreRoot { root ->
         val expected = pcmBytes(30_000)
         val store = PersistentAudioChunkStore(root, overwriteOldest = true)
