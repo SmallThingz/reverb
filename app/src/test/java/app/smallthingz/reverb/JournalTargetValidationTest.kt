@@ -70,6 +70,8 @@ class JournalTargetValidationTest {
         )
         val modifiedMediaRow = staging.copy(id = "content://media/external/audio/media/7?includePending=1")
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(modifiedMediaRow)))
+        val aliasedMediaRow = staging.copy(id = "content://media/external/audio/media/007")
+        assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(aliasedMediaRow)))
     }
 
     @Test

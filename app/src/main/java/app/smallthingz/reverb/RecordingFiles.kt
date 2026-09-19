@@ -158,6 +158,8 @@ internal fun documentRecordingBelongsToTree(
 internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {
     val uri = URI(id)
     val segments = uri.rawPath.orEmpty().split('/')
+    val rowIdText = segments.getOrNull(4).orEmpty()
+    val rowId = rowIdText.toLongOrNull()
     uri.scheme.equals("content", ignoreCase = true) &&
         uri.authority == MediaStore.AUTHORITY &&
         uri.rawQuery == null &&
@@ -167,8 +169,8 @@ internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {
         segments[1].isNotBlank() &&
         segments[2] == "audio" &&
         segments[3] == "media" &&
-        segments[4].isNotEmpty() &&
-        segments[4].all(Char::isDigit)
+        rowId != null &&
+        rowId.toString() == rowIdText
 }.getOrDefault(false)
 
 internal fun managedRecordingFileDirectoryIds(context: Context): Set<String> = setOf(
