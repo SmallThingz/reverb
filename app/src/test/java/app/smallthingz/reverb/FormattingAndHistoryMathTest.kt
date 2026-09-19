@@ -1315,7 +1315,7 @@ class FormattingAndHistoryMathTest {
     fun durableCaptureIntentDecode_distinguishesMissingCurrentAndLegacyValues() {
         assertEquals(
             DurableCaptureIntentPreferences(enabled = false, bufferSlot = null),
-            decodeDurableCaptureIntentPreferences(emptyMap()),
+            decodeDurableCaptureIntentPreferences(emptyMap<String, Any?>()),
         )
         assertEquals(
             DurableCaptureIntentPreferences(enabled = true, bufferSlot = ReverbService.BufferSlot.LOOPING),
