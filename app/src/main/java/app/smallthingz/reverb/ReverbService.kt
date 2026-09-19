@@ -284,6 +284,7 @@ class ReverbService : Service() {
     private val nextBufferClearOperationId = AtomicLong(1L)
     @Volatile private var bufferClearStatus: BufferClearStatus? = null
     private var activeBufferClearOperation: BufferClearOperation? = null
+    private val settingsRuntimeLifetime = SettingsRuntimeLifetime()
     private val retentionMaintenanceState = RetentionMaintenanceSchedulerState()
     @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
@@ -1629,6 +1630,10 @@ class ReverbService : Service() {
             ensureBufferClearOnlyForegroundIfNeeded()
             return
         }
+        if (settingsRuntimeLifetime.isActive()) {
+            stopForegroundTracked()
+            return
+        }
         if (retentionMaintenanceState.isActive()) {
             ensureRetentionMaintenanceOnlyForegroundIfNeeded()
             return
@@ -1758,19 +1763,9 @@ class ReverbService : Service() {
                 }
                 return@post
             }
-            if (hasActiveBufferClear()) {
-                ensureBufferClearOnlyForegroundIfNeeded()
-                return@post
-            }
-            if (retentionMaintenanceState.isActive()) {
-                ensureRetentionMaintenanceOnlyForegroundIfNeeded()
-                return@post
-            }
-            stopForegroundTracked()
-            // The export keepalive itself started this service. If capture cannot be
-            // restored to an active microphone foreground service, always release that
-            // started lifetime; a live UI binding may still keep the service instance.
-            stopSelf()
+            // Re-converge through the shared arbiter so overlapping Clear, Settings,
+            // or retention work keeps its own started/foreground lifetime.
+            requestServiceStopWhenExportIdle()
         }
     }
 
@@ -1789,16 +1784,9 @@ class ReverbService : Service() {
                 }
                 return@post
             }
-            if (hasActiveExport()) {
-                ensureExportOnlyForegroundIfNeeded()
-                return@post
-            }
-            if (retentionMaintenanceState.isActive()) {
-                ensureRetentionMaintenanceOnlyForegroundIfNeeded()
-                return@post
-            }
-            stopForegroundTracked()
-            stopSelf()
+            // Re-converge through the shared arbiter so overlapping Export, Settings,
+            // or retention work keeps its own started/foreground lifetime.
+            requestServiceStopWhenExportIdle()
         }
     }
 
@@ -2106,19 +2094,54 @@ class ReverbService : Service() {
         return true
     }
 
-    fun applyUpdatedPreferences(): Boolean = synchronized(listeningIntentLock) {
-        // Settings treats true as acceptance of the committed runtime reload. Serialize that
-        // acceptance with onDestroy(): an accepted task is queued before terminal store close;
-        // once teardown owns the lifetime, reject so Settings can use its stopped/restart fallback.
-        if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
-        audioHandler.post {
-            try {
-                applyConfiguredPreferencesOnAudioThread()
-            } catch (error: Exception) {
-                pauseListeningAfterPersistenceFailure("apply recorder settings", error)
+    private fun finishSettingsRuntimeLifetime() {
+        if (!settingsRuntimeLifetime.finish()) return
+        mainHandler.post {
+            if (!serviceDestroying && state != STATE_LISTENING) {
+                requestServiceStopWhenExportIdle()
             }
         }
     }
+
+    fun applyUpdatedPreferences(): Boolean =
+        queueUpdatedPreferences(startedLifetimeAlreadyOwned = false)
+
+    private fun applyUpdatedPreferencesFromStartCommand(): Boolean =
+        queueUpdatedPreferences(startedLifetimeAlreadyOwned = true)
+
+    private fun queueUpdatedPreferences(startedLifetimeAlreadyOwned: Boolean): Boolean =
+        synchronized(listeningIntentLock) {
+            // Returning true transfers this committed Settings reload out of the UI/bind lifetime.
+            // A bound-only stopped recorder must become started before Activity teardown can unbind it.
+            if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
+            settingsRuntimeLifetime.begin()
+            if (!startedLifetimeAlreadyOwned) {
+                val started = try {
+                    startService(
+                        Intent(this, javaClass).setAction(ACTION_SETTINGS_RUNTIME_KEEPALIVE),
+                    ) != null
+                } catch (error: RuntimeException) {
+                    Log.e(TAG, "Unable to retain Settings runtime-apply service lifetime", error)
+                    false
+                }
+                if (!started) {
+                    settingsRuntimeLifetime.finish()
+                    return@synchronized false
+                }
+            }
+
+            val posted = audioHandler.post {
+                try {
+                    applyConfiguredPreferencesOnAudioThread()
+                } catch (error: Exception) {
+                    pauseListeningAfterPersistenceFailure("apply recorder settings", error)
+                } finally {
+                    finishSettingsRuntimeLifetime()
+                }
+            }
+            if (!posted) finishSettingsRuntimeLifetime()
+            posted
+        }
 
     private fun applyConfiguredPreferencesOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
@@ -3546,7 +3569,21 @@ class ReverbService : Service() {
         startId: Int,
     ): Int {
         if (intent?.action == ACTION_APPLY_SETTINGS) {
-            applyUpdatedPreferences()
+            applyUpdatedPreferencesFromStartCommand()
+        }
+        if (intent?.action == ACTION_SETTINGS_RUNTIME_KEEPALIVE) {
+            if (!settingsRuntimeLifetime.isActive()) requestServiceStopWhenExportIdle()
+            return if (settingsRuntimeKeepaliveShouldBeSticky(
+                    listeningIntentEnabled = isListeningEnabled(),
+                    foregroundStartBlocked = foregroundStartBlocked,
+                    foregroundServiceTimedOut = foregroundServiceTimedOut,
+                    persistenceFailureBlocked = persistenceFailureBlocked,
+                )
+            ) {
+                START_STICKY
+            } else {
+                START_NOT_STICKY
+            }
         }
         if (intent?.action == ACTION_EXPORT_KEEPALIVE) {
             if (!hasActiveExport()) requestServiceStopWhenExportIdle()
@@ -4279,6 +4316,7 @@ class ReverbService : Service() {
         const val DEBUG_ACTION_PREFIX = "app.smallthingz.reverb.debug."
         val nextExportTokenId = AtomicLong(1L)
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
+        const val ACTION_SETTINGS_RUNTIME_KEEPALIVE = "app.smallthingz.reverb.SETTINGS_RUNTIME_KEEPALIVE"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
         const val ACTION_BUFFER_CLEAR_KEEPALIVE = "app.smallthingz.reverb.BUFFER_CLEAR_KEEPALIVE"
         const val ACTION_RETENTION_MAINTENANCE_KEEPALIVE =
