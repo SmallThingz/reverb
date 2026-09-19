@@ -656,6 +656,10 @@ class ReverbService : Service() {
                     prefs,
                     previousStoredSlot = previousStoredSlot,
                 )
+                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+                    authorityWasValid = true,
+                    rollbackPersisted = rollbackPersisted,
+                )
                 if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed selection")
                     rollbackFailure = IOException(
@@ -794,6 +798,10 @@ class ReverbService : Service() {
                         previousEnabled = previousEnabled,
                         previousStoredSlot = previousStoredSlot,
                     )
+                    durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+                        authorityWasValid = authorityWasValid,
+                        rollbackPersisted = rollbackPersisted,
+                    )
                     if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                         Log.e(TAG, "Unable to durably restore recorder intent after failed command")
                         intentRollbackFailure = IOException(
@@ -845,6 +853,10 @@ class ReverbService : Service() {
                             prefs = prefs,
                             previousEnabled = previousEnabled,
                             previousStoredSlot = previousStoredSlot,
+                        )
+                        durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+                            authorityWasValid = authorityWasValid,
+                            rollbackPersisted = rollbackPersisted,
                         )
                         if (!rollbackPersisted) {
                             Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
@@ -986,6 +998,10 @@ class ReverbService : Service() {
                 val rollbackPersisted = restoreCaptureIntentPreferences(
                     prefs,
                     previousStoredSlot = previousStoredSlot,
+                )
+                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+                    authorityWasValid = true,
+                    rollbackPersisted = rollbackPersisted,
                 )
                 rollbackFailed = captureCommandRollbackRequiresFailClosed(rollbackPersisted)
                 if (rollbackFailed) {
@@ -2444,11 +2460,15 @@ class ReverbService : Service() {
                 // commit() already changed this process' in-memory preferences. Restore the
                 // previous intent as well as we can so a failed planned stop cannot silently
                 // become a durable Stop or masquerade as one in this process.
-                if (!commitRecorderPreferenceMutation(
-                        commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit() },
-                        onException = { error -> Log.e(TAG, "Automatic Stop rollback commit threw", error) },
-                    )
-                ) {
+                val rollbackPersisted = commitRecorderPreferenceMutation(
+                    commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit() },
+                    onException = { error -> Log.e(TAG, "Automatic Stop rollback commit threw", error) },
+                )
+                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+                    authorityWasValid = durableCaptureIntentAuthorityValid,
+                    rollbackPersisted = rollbackPersisted,
+                )
+                if (!rollbackPersisted) {
                     Log.e(TAG, "Unable to restore listening intent after failed automatic stop")
                 }
                 persistenceFailureBlocked = true
@@ -2756,6 +2776,7 @@ class ReverbService : Service() {
                     Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
                 },
             )
+            if (!committed) durableCaptureIntentAuthorityValid = false
             durableListeningIntentEnabled = false
             // A fatal recorder failure must invalidate the active capture even if the
             // preference write cannot reach disk. SharedPreferences has already applied
@@ -4587,6 +4608,11 @@ internal enum class ExplicitCaptureStopDisposition {
 internal fun captureCommandRollbackRequiresFailClosed(
     rollbackPersisted: Boolean,
 ): Boolean = !rollbackPersisted
+
+internal fun captureIntentAuthorityAfterRollback(
+    authorityWasValid: Boolean,
+    rollbackPersisted: Boolean,
+): Boolean = authorityWasValid && rollbackPersisted
 
 internal fun captureIntentRepairClearsPersistenceBlock(
     authorityWasValid: Boolean,

@@ -949,6 +949,34 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun failedCaptureAuthorityRollback_revokesAuthorityUnlessPriorStateWasDurablyRestored() {
+        assertTrue(
+            captureIntentAuthorityAfterRollback(
+                authorityWasValid = true,
+                rollbackPersisted = true,
+            ),
+        )
+        assertFalse(
+            captureIntentAuthorityAfterRollback(
+                authorityWasValid = true,
+                rollbackPersisted = false,
+            ),
+        )
+        assertFalse(
+            captureIntentAuthorityAfterRollback(
+                authorityWasValid = false,
+                rollbackPersisted = true,
+            ),
+        )
+        assertFalse(
+            captureIntentAuthorityAfterRollback(
+                authorityWasValid = false,
+                rollbackPersisted = false,
+            ),
+        )
+    }
+
+    @Test
     fun captureIntentStopRepair_clearsOnlyAuthorityOriginatedPersistenceBlock() {
         assertTrue(
             captureIntentRepairClearsPersistenceBlock(
