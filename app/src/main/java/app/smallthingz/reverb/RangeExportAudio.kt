@@ -44,6 +44,18 @@ private const val SHUTTLE_CACHE_HALF_SPAN_SECONDS =
 
 internal const val RANGE_WAVEFORM_COARSE_BUCKETS = 96
 internal const val RANGE_WAVEFORM_DETAIL_BUCKETS = 512
+
+internal fun resolvePreviewAudioTrackBufferBytes(
+    reportedMinBufferBytes: Int,
+    minimumBufferBytes: Int,
+): Int {
+    require(minimumBufferBytes > 0) { "Preview buffer floor must be positive" }
+    if (reportedMinBufferBytes <= 0) {
+        throw IOException("AudioTrack minimum buffer query failed: $reportedMinBufferBytes")
+    }
+    return maxOf(reportedMinBufferBytes, minimumBufferBytes)
+}
+
 private const val RANGE_WAVEFORM_COARSE_PROBES = 2
 private const val RANGE_WAVEFORM_COARSE_FRAMES_PER_PROBE = 20
 private const val RANGE_WAVEFORM_DETAIL_PROBES = 3
@@ -1005,11 +1017,14 @@ internal class TimelineAudioPreviewController(
         lowLatency: Boolean = false,
         sampleRate: Int = PREVIEW_SAMPLE_RATE,
     ): AudioTrack {
-        val minBuffer = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        ).coerceAtLeast(minimumBufferBytes)
+        val minBuffer = resolvePreviewAudioTrackBufferBytes(
+            reportedMinBufferBytes = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+            ),
+            minimumBufferBytes = minimumBufferBytes,
+        )
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -1034,6 +1049,9 @@ internal class TimelineAudioPreviewController(
             owner = track,
             release = { it.release() },
         ) { configured ->
+            check(configured.state == AudioTrack.STATE_INITIALIZED) {
+                "AudioTrack failed to initialize"
+            }
             val result = configured.setVolume(volume.coerceIn(0f, 1f))
             if (result != AudioTrack.SUCCESS) {
                 throw IOException("Unable to configure audio preview volume: $result")
