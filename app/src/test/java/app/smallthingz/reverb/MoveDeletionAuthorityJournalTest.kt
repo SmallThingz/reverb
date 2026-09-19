@@ -68,7 +68,7 @@ class MoveDeletionAuthorityJournalTest {
     @Test
     fun claimedMoveSource_isRestoredWhenTargetAuthorityIsLost() {
         withClaimedMoveSource("00000000-0000-0000-0000-000000000202") { source, claim, bytes, intent ->
-            val result = replayClaimedFileDeletion(intent, claim) { false }
+            val result = replayWithDescriptorBoundAuthority(intent, claim, bytes) { false }
             assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
             assertTrue(source.isFile)
             assertArrayEquals(bytes, source.readBytes())
@@ -78,8 +78,8 @@ class MoveDeletionAuthorityJournalTest {
 
     @Test
     fun claimedMoveSource_isDeletedOnlyWhileTargetAuthorityRemainsCurrent() {
-        withClaimedMoveSource("00000000-0000-0000-0000-000000000203") { source, claim, _, intent ->
-            val result = replayClaimedFileDeletion(intent, claim) { true }
+        withClaimedMoveSource("00000000-0000-0000-0000-000000000203") { source, claim, bytes, intent ->
+            val result = replayWithDescriptorBoundAuthority(intent, claim, bytes) { true }
             assertEquals(FileDeletionClaimResult.DELETED, result)
             assertFalse(source.exists())
             assertFalse(claim.exists())
@@ -89,7 +89,7 @@ class MoveDeletionAuthorityJournalTest {
     @Test
     fun claimedMoveSource_withoutTargetValidatorFailsSafe() {
         withClaimedMoveSource("00000000-0000-0000-0000-000000000204") { source, claim, bytes, intent ->
-            val result = replayClaimedFileDeletion(intent, claim)
+            val result = replayWithDescriptorBoundAuthority(intent, claim, bytes, null)
             assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
             assertTrue(source.isFile)
             assertArrayEquals(bytes, source.readBytes())
@@ -100,7 +100,7 @@ class MoveDeletionAuthorityJournalTest {
     @Test
     fun claimedMoveSource_targetValidationFailureFailsSafe() {
         withClaimedMoveSource("00000000-0000-0000-0000-000000000205") { source, claim, bytes, intent ->
-            val result = replayClaimedFileDeletion(intent, claim) { error("provider unavailable") }
+            val result = replayWithDescriptorBoundAuthority(intent, claim, bytes) { error("provider unavailable") }
             assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
             assertTrue(source.isFile)
             assertArrayEquals(bytes, source.readBytes())
@@ -121,6 +121,29 @@ class MoveDeletionAuthorityJournalTest {
             moveTargetStorageType = RecordingStorageType.FILE,
         )
         assertEquals("", encodePendingDeletionIntent(partial))
+    }
+
+    private fun replayWithDescriptorBoundAuthority(
+        intent: PendingDeletionIntent,
+        claim: File,
+        bytes: ByteArray,
+        moveTargetStillCurrent: (() -> Boolean)?,
+    ): FileDeletionClaimResult {
+        val descriptorBoundIdentity = "stat:101:202:303:404:505"
+        val digest = sha256(ByteArrayInputStream(bytes))
+        return replayClaimedFileDeletion(
+            intent = intent.copy(fileIdentity = descriptorBoundIdentity),
+            claim = claim,
+            readClaimFingerprint = { _, _ ->
+                StableOutputFingerprint(
+                    digest = digest,
+                    fileKey = descriptorBoundIdentity,
+                    providerIdentity = null,
+                )
+            },
+            identityBeforeDelete = { descriptorBoundIdentity },
+            moveTargetStillCurrent = moveTargetStillCurrent,
+        )
     }
 
     private inline fun withClaimedMoveSource(

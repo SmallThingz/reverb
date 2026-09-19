@@ -1394,22 +1394,18 @@ internal fun deleteClaimedFile(
     )
 }
 
+internal fun deletionClaimIdentityHasPinnedDescriptorAuthority(identity: String): Boolean {
+    val parts = identity.split(':')
+    return parts.size == 6 && parts[0] == "stat" &&
+        parts.drop(1).all { component -> component.toLongOrNull() != null }
+}
+
 internal fun readStableDeletionClaimFingerprint(
     file: File,
     expectedIdentity: String,
 ): StableOutputFingerprint? {
-    if (expectedIdentity.startsWith("stat:")) {
-        return readStableFileOutputFingerprint(file)
-    }
-    val before = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return null
-    val digest = runCatching { FileInputStream(file).use(::sha256) }.getOrNull() ?: return null
-    val after = resolveFileIdentity(file)
-    if (!fileIdentityMatches(before, after)) return null
-    return StableOutputFingerprint(
-        digest = digest,
-        fileKey = after,
-        providerIdentity = null,
-    )
+    if (!deletionClaimIdentityHasPinnedDescriptorAuthority(expectedIdentity)) return null
+    return readStableFileOutputFingerprint(file)
 }
 
 internal fun replayClaimedFileDeletion(
@@ -1421,6 +1417,10 @@ internal fun replayClaimedFileDeletion(
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
     val expectedIdentity = intent.fileIdentity ?: return FileDeletionClaimResult.RETRY
+    if (!deletionClaimIdentityHasPinnedDescriptorAuthority(expectedIdentity)) {
+        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
+        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+    }
     val verifiedClaim = readClaimFingerprint(resolvedClaim, expectedIdentity)
         ?: return FileDeletionClaimResult.RETRY
     val verifiedIdentity = verifiedClaim.fileKey ?: return FileDeletionClaimResult.RETRY

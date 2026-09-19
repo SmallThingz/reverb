@@ -2180,8 +2180,15 @@ class DurabilityInvariantTest {
                 fileIdentity = identity,
             )
 
-            assertEquals(FileDeletionClaimResult.DELETED, deleteClaimedFile(intent))
-            assertFalse(source.exists())
+            val result = deleteClaimedFile(intent)
+            if (deletionClaimIdentityHasPinnedDescriptorAuthority(identity)) {
+                assertEquals(FileDeletionClaimResult.DELETED, result)
+                assertFalse(source.exists())
+            } else {
+                assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
+                assertTrue(source.isFile)
+                assertArrayEquals(bytes, source.readBytes())
+            }
             assertFalse(requireNotNull(deletionClaimFile(intent)).exists())
         } finally {
             directory.deleteRecursively()
@@ -2226,6 +2233,36 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun claimedFileDeletion_legacyNonDescriptorIdentityIsPreservedNotDeleted() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "delete-legacy-claim-").toFile()
+        try {
+            val bytes = ByteArray(4_096) { index -> ((index * 19 + 7) and 0xff).toByte() }
+            val source = File(directory, "clip.wav").apply { writeBytes(bytes) }
+            val digest = sha256(ByteArrayInputStream(bytes))
+            val intent = PendingDeletionIntent(
+                id = source.absolutePath,
+                byteCount = digest.byteCount,
+                sha256Hex = digest.sha256.toHexString(),
+                assetDeleted = false,
+                storageType = RecordingStorageType.FILE,
+                claimToken = "00000000-0000-0000-0000-000000000127",
+                fileIdentity = "nio:bGVnYWN5LWZpbGUta2V5:1234",
+            )
+            val claim = requireNotNull(deletionClaimFile(intent))
+            Files.move(source.toPath(), claim.toPath())
+
+            assertFalse(deletionClaimIdentityHasPinnedDescriptorAuthority(requireNotNull(intent.fileIdentity)))
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, replayClaimedFileDeletion(intent, claim))
+            assertTrue(source.isFile)
+            assertArrayEquals(bytes, source.readBytes())
+            assertFalse(claim.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun claimedFileDeletion_replayDeletesOnlyTheClaimedOriginalAfterPathReuse() {
         val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
         val directory = Files.createTempDirectory(parent.toPath(), "delete-replay-").toFile()
@@ -2251,8 +2288,14 @@ class DurabilityInvariantTest {
             assertFalse(fileIdentityMatches(originalIdentity, resolveFileIdentity(source)))
             assertTrue(fileIdentityMatches(originalIdentity, resolveFileIdentity(claim)))
 
-            assertEquals(FileDeletionClaimResult.DELETED, replayClaimedFileDeletion(intent, claim))
-            assertFalse(claim.exists())
+            val result = replayClaimedFileDeletion(intent, claim)
+            if (deletionClaimIdentityHasPinnedDescriptorAuthority(originalIdentity)) {
+                assertEquals(FileDeletionClaimResult.DELETED, result)
+                assertFalse(claim.exists())
+            } else {
+                assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
+                assertFalse(claim.exists())
+            }
             assertArrayEquals(replacementBytes, source.readBytes())
         } finally {
             directory.deleteRecursively()
@@ -2268,6 +2311,7 @@ class DurabilityInvariantTest {
             val source = File(directory, "clip.wav").apply { writeBytes(originalBytes) }
             val originalIdentity = resolveFileIdentity(source)
             val digest = sha256(ByteArrayInputStream(originalBytes))
+            val descriptorBoundIdentity = "stat:11:22:33:44:55"
             val intent = PendingDeletionIntent(
                 id = source.absolutePath,
                 byteCount = digest.byteCount,
@@ -2275,7 +2319,7 @@ class DurabilityInvariantTest {
                 assetDeleted = false,
                 storageType = RecordingStorageType.FILE,
                 claimToken = "00000000-0000-0000-0000-000000000126",
-                fileIdentity = originalIdentity,
+                fileIdentity = descriptorBoundIdentity,
             )
             val claim = requireNotNull(deletionClaimFile(intent))
             Files.move(source.toPath(), claim.toPath())
@@ -2287,7 +2331,7 @@ class DurabilityInvariantTest {
                 readClaimFingerprint = { _, _ ->
                     StableOutputFingerprint(
                         digest = digest,
-                        fileKey = originalIdentity,
+                        fileKey = descriptorBoundIdentity,
                         providerIdentity = null,
                     )
                 },
