@@ -51,7 +51,7 @@ class MoveDeletionAuthorityJournalTest {
     @Test
     fun providerSourceMoveV4_roundTripsWithoutFileClaimAuthority() {
         val intent = PendingDeletionIntent(
-            id = "content://media/source",
+            id = "content://media/external/audio/media/17",
             byteCount = 4321L,
             sha256Hex = "cd".repeat(32),
             assetDeleted = false,
