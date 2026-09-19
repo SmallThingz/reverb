@@ -943,10 +943,9 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun failedStopRollbackPausesWhenPriorIntentCannotBeRestoredDurably() {
-        assertTrue(captureStopRollbackRequiresPause(previousEnabled = true, rollbackPersisted = false))
-        assertFalse(captureStopRollbackRequiresPause(previousEnabled = true, rollbackPersisted = true))
-        assertFalse(captureStopRollbackRequiresPause(previousEnabled = false, rollbackPersisted = false))
+    fun failedCaptureCommandRollbackFailsClosedWheneverDurabilityIsUnproven() {
+        assertTrue(captureCommandRollbackRequiresFailClosed(rollbackPersisted = false))
+        assertFalse(captureCommandRollbackRequiresFailClosed(rollbackPersisted = true))
     }
 
     @Test

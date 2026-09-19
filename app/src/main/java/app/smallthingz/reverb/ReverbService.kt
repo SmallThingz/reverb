@@ -614,6 +614,7 @@ class ReverbService : Service() {
         var previousActiveBuffer = bufferSlot
         var targetChanged = false
         var switchingWhileRecording = false
+        var rollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
             if (serviceDestroying || !recorderCommandGenerationMayApply(
                     expectedGeneration = expectedGeneration,
@@ -641,8 +642,15 @@ class ReverbService : Service() {
                     onException = { error -> Log.e(TAG, "Capture destination commit threw", error) },
                 )
             ) {
-                if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
+                val rollbackPersisted = restoreCaptureIntentPreferences(
+                    prefs,
+                    previousStoredSlot = previousStoredSlot,
+                )
+                if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed selection")
+                    rollbackFailure = IOException(
+                        "Unable to restore capture destination after failed selection",
+                    )
                 }
                 null
             } else {
@@ -665,7 +673,15 @@ class ReverbService : Service() {
             resolvedGeneration
         }
         if (generation == null) {
-            reportError(getString(R.string.recorder_state_persist_failed))
+            val failure = rollbackFailure
+            if (failure != null) {
+                pauseListeningAfterPersistenceFailure(
+                    operation = "restore capture destination after failed selection",
+                    error = failure,
+                )
+            } else {
+                reportError(getString(R.string.recorder_state_persist_failed))
+            }
             return ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
         }
         if (targetChanged) {
@@ -719,7 +735,7 @@ class ReverbService : Service() {
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
         var stopIncidentStateFailure = false
-        var stopIntentRollbackFailure: IOException? = null
+        var intentRollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
             if (serviceDestroying || !recorderCommandGenerationMayApply(
                     expectedGeneration = expectedGeneration,
@@ -761,13 +777,11 @@ class ReverbService : Service() {
                         previousEnabled = previousEnabled,
                         previousStoredSlot = previousStoredSlot,
                     )
-                    if (!rollbackPersisted) {
+                    if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                         Log.e(TAG, "Unable to durably restore recorder intent after failed command")
-                        if (captureStopRollbackRequiresPause(previousEnabled, rollbackPersisted) && !enabled) {
-                            stopIntentRollbackFailure = IOException(
-                                "Unable to restore recorder intent after failed Stop persistence",
-                            )
-                        }
+                        intentRollbackFailure = IOException(
+                            "Unable to restore recorder intent after failed command persistence",
+                        )
                     }
                     null
                 } else if (enabled) {
@@ -804,7 +818,7 @@ class ReverbService : Service() {
                         )
                         if (!rollbackPersisted) {
                             Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
-                            stopIntentRollbackFailure = IOException(
+                            intentRollbackFailure = IOException(
                                 "Unable to restore recorder intent after failed known Stop",
                             )
                         }
@@ -822,10 +836,10 @@ class ReverbService : Service() {
             }
         }
         if (generation == null) {
-            val rollbackFailure = stopIntentRollbackFailure
+            val rollbackFailure = intentRollbackFailure
             if (rollbackFailure != null) {
                 pauseListeningAfterPersistenceFailure(
-                    operation = "restore recorder intent after rejected Stop",
+                    operation = "restore recorder intent after rejected command",
                     error = rollbackFailure,
                 )
             } else {
@@ -915,6 +929,7 @@ class ReverbService : Service() {
         var switchGeneration = Long.MIN_VALUE
         var changed = false
         var persistenceError: IOException? = null
+        var rollbackFailed = false
         var failedWhileListening = false
 
         val accepted = synchronized(listeningIntentLock) {
@@ -934,7 +949,12 @@ class ReverbService : Service() {
                     onException = { error -> Log.e(TAG, "Capture handoff commit threw", error) },
                 )
             ) {
-                if (!restoreCaptureIntentPreferences(prefs, previousStoredSlot = previousStoredSlot)) {
+                val rollbackPersisted = restoreCaptureIntentPreferences(
+                    prefs,
+                    previousStoredSlot = previousStoredSlot,
+                )
+                rollbackFailed = captureCommandRollbackRequiresFailClosed(rollbackPersisted)
+                if (rollbackFailed) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed handoff")
                 }
                 persistenceError = IOException("Unable to persist capture destination handoff")
@@ -956,7 +976,7 @@ class ReverbService : Service() {
 
         if (!accepted) {
             persistenceError?.let { error ->
-                if (failedWhileListening) {
+                if (failedWhileListening || rollbackFailed) {
                     // Losing the handoff transaction is an unexpected capture interruption, not
                     // evidence that the user asked recording to stop. Preserve durable intent so
                     // a later foreground bind can retry once persistence is healthy again.
@@ -4518,10 +4538,9 @@ internal enum class ExplicitCaptureStopDisposition {
     INCIDENT_STATE_FAILURE,
 }
 
-internal fun captureStopRollbackRequiresPause(
-    previousEnabled: Boolean,
+internal fun captureCommandRollbackRequiresFailClosed(
     rollbackPersisted: Boolean,
-): Boolean = previousEnabled && !rollbackPersisted
+): Boolean = !rollbackPersisted
 
 internal fun explicitCaptureStopDisposition(
     stopIntentChanged: Boolean,
