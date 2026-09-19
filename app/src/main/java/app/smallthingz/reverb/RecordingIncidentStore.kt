@@ -609,7 +609,7 @@ internal object RecordingIncidentStore {
             val markerFile = sessionFile(context)
             val marker = readSession(markerFile)
             if (marker == null) {
-                when (atomicFileBackingState(markerFile.baseFile)) {
+                when (atomicFileRegularBackingState(markerFile.baseFile)) {
                     StoragePathState.MISSING -> {
                         // If history was already built before marker retirement failed, keep that
                         // incident. With no marker left there is no exact session identity from
@@ -664,7 +664,7 @@ internal object RecordingIncidentStore {
                 val markerFile = sessionFile(context)
                 val marker = readSession(markerFile)
                 if (marker == null) {
-                    when (atomicFileBackingState(markerFile.baseFile)) {
+                    when (atomicFileRegularBackingState(markerFile.baseFile)) {
                         StoragePathState.MISSING -> {
                             iterator.remove()
                             continue
@@ -911,7 +911,7 @@ internal object RecordingIncidentStore {
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
 
     private fun deleteAtomicDurablyIfPresent(file: AtomicFile) {
-        when (atomicFileBackingState(file.baseFile)) {
+        when (atomicFileRegularBackingState(file.baseFile)) {
             StoragePathState.MISSING -> return
             StoragePathState.UNAVAILABLE -> throw IOException(
                 "Unable to inspect durable incident state: ${file.baseFile.absolutePath}",
@@ -919,7 +919,7 @@ internal object RecordingIncidentStore {
             StoragePathState.PRESENT -> Unit
         }
         file.delete()
-        when (atomicFileBackingState(file.baseFile)) {
+        when (atomicFileRegularBackingState(file.baseFile)) {
             StoragePathState.MISSING -> Unit
             StoragePathState.PRESENT -> throw IOException(
                 "Unable to remove durable incident state: ${file.baseFile.absolutePath}",
@@ -1114,17 +1114,30 @@ internal object RecordingIncidentStore {
         label: String,
         block: (DataInputStream) -> T,
     ): T? {
+        when (val backingState = atomicFileRegularBackingState(file.baseFile)) {
+            StoragePathState.MISSING -> return null
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to read $label while AtomicFile backing state is $backingState",
+            )
+            StoragePathState.PRESENT -> Unit
+        }
         val stream = try {
             file.openRead()
         } catch (error: FileNotFoundException) {
-            val backingState = atomicFileBackingState(file.baseFile)
+            val backingState = atomicFileRegularBackingState(file.baseFile)
             if (atomicReadMissIsAuthoritativeAbsence(backingState)) return null
             throw IOException("Unable to read $label while AtomicFile backing state is $backingState", error)
         }
         return try {
-            DataInputStream(BufferedInputStream(stream)).use { input ->
+            val descriptorIdentity = bindAtomicFileReadDescriptor(file.baseFile, stream.fd)
+                ?: throw IOException("Unable to bind $label to its AtomicFile backing object")
+            val result = DataInputStream(BufferedInputStream(stream)).use { input ->
                 readIncidentPayloadExact(input, label, block)
             }
+            if (!atomicFileReadDescriptorRemainsCurrent(file.baseFile, descriptorIdentity)) {
+                throw IOException("AtomicFile backing object changed while reading $label")
+            }
+            result
         } catch (error: IOException) {
             throw IOException("Unable to read $label", error)
         } catch (error: RuntimeException) {
@@ -1144,6 +1157,9 @@ internal object RecordingIncidentStore {
     }
 
     private inline fun writeAtomic(file: AtomicFile, block: (DataOutputStream) -> Unit) {
+        if (atomicFileRegularBackingState(file.baseFile) == StoragePathState.UNAVAILABLE) {
+            throw IOException("AtomicFile backing state is unsafe for write: ${file.baseFile.absolutePath}")
+        }
         val stream = file.startWrite()
         var committed = false
         try {
@@ -1152,6 +1168,9 @@ internal object RecordingIncidentStore {
             output.flush()
             file.finishWrite(stream)
             committed = true
+            if (atomicFileRegularBackingState(file.baseFile) != StoragePathState.PRESENT) {
+                throw IOException("AtomicFile publication is not a regular backing file: ${file.baseFile.absolutePath}")
+            }
             if (!confirmFileDirectoryStateDurable(file.baseFile)) {
                 throw IOException("Unable to persist incident-state publication: ${file.baseFile.absolutePath}")
             }

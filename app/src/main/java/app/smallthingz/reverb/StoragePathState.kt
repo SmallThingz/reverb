@@ -55,3 +55,42 @@ internal fun atomicFileBackingState(
     }
     return if (unavailable) StoragePathState.UNAVAILABLE else StoragePathState.MISSING
 }
+
+internal fun atomicFileRegularBackingState(baseFile: File): StoragePathState {
+    var present = false
+    for (candidate in listOf(baseFile, File(baseFile.path + ".bak"), File(baseFile.path + ".new"))) {
+        val observation = observeStoragePath(candidate)
+        when (observation.state) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.UNAVAILABLE -> return StoragePathState.UNAVAILABLE
+            StoragePathState.PRESENT -> {
+                if (!observation.isRegularFile) return StoragePathState.UNAVAILABLE
+                present = true
+            }
+        }
+    }
+    return if (present) StoragePathState.PRESENT else StoragePathState.MISSING
+}
+
+internal fun bindAtomicFileReadDescriptor(
+    baseFile: File,
+    descriptor: java.io.FileDescriptor,
+): String? {
+    if (atomicFileRegularBackingState(baseFile) != StoragePathState.PRESENT) return null
+    val pathIdentity = resolveFileIdentity(baseFile).takeIf { it.isNotBlank() } ?: return null
+    val descriptorIdentity = resolveFileDescriptorIdentity(descriptor).takeIf { it.isNotBlank() } ?: return null
+    return descriptorIdentity.takeIf { fileDescriptorIdentityMatches(pathIdentity, descriptorIdentity) }
+}
+
+internal fun atomicFileReadDescriptorRemainsCurrent(
+    baseFile: File,
+    descriptorIdentity: String,
+): Boolean {
+    if (descriptorIdentity.isBlank() ||
+        atomicFileRegularBackingState(baseFile) != StoragePathState.PRESENT
+    ) {
+        return false
+    }
+    val pathIdentity = resolveFileIdentity(baseFile).takeIf { it.isNotBlank() } ?: return false
+    return fileDescriptorIdentityMatches(pathIdentity, descriptorIdentity)
+}

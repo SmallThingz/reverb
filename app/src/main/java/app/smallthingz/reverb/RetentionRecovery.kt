@@ -424,14 +424,29 @@ internal fun readBoundedRetentionRecoveryBytes(input: InputStream): ByteArray? {
 }
 
 internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
-    val atomicFile = AtomicFile(retentionRecoveryFile(context))
+    val baseFile = retentionRecoveryFile(context)
+    val atomicFile = AtomicFile(baseFile)
+    when (atomicFileRegularBackingState(baseFile)) {
+        StoragePathState.MISSING -> return RetentionRecoveryRead(RetentionRecoveryReadState.MISSING)
+        StoragePathState.UNAVAILABLE -> return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+        StoragePathState.PRESENT -> Unit
+    }
     val bytes = try {
-        // openRead() first so AtomicFile can recover its backup/new-file state after a crash.
-        atomicFile.openRead().use(::readBoundedRetentionRecoveryBytes)
-            ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+        // Let AtomicFile recover a regular backup/new-file state, then bind the descriptor it
+        // actually opened back to the recovered regular base before consuming durable authority.
+        atomicFile.openRead().use { input ->
+            val descriptorIdentity = bindAtomicFileReadDescriptor(baseFile, input.fd)
+                ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+            val value = readBoundedRetentionRecoveryBytes(input)
+                ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+            if (!atomicFileReadDescriptorRemainsCurrent(baseFile, descriptorIdentity)) {
+                return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
+            }
+            value
+        }
     } catch (_: FileNotFoundException) {
         return RetentionRecoveryRead(
-            if (atomicFileBackingState(retentionRecoveryFile(context)) == StoragePathState.MISSING) {
+            if (atomicFileRegularBackingState(baseFile) == StoragePathState.MISSING) {
                 RetentionRecoveryReadState.MISSING
             } else {
                 RetentionRecoveryReadState.INVALID
@@ -462,7 +477,9 @@ internal fun writeRetentionRecoveryConfiguration(
     context: Context,
     configuration: RetentionConfiguration,
 ): Boolean {
-    val atomicFile = AtomicFile(retentionRecoveryFile(context))
+    val baseFile = retentionRecoveryFile(context)
+    if (atomicFileRegularBackingState(baseFile) == StoragePathState.UNAVAILABLE) return false
+    val atomicFile = AtomicFile(baseFile)
     val bytes = runCatching { encodeRetentionRecoveryConfiguration(configuration) }.getOrNull() ?: return false
     var output: java.io.FileOutputStream? = null
     return try {
@@ -471,7 +488,8 @@ internal fun writeRetentionRecoveryConfiguration(
         output.fd.sync()
         atomicFile.finishWrite(output)
         output = null
-        syncRetentionRecoveryDirectory(context)
+        atomicFileRegularBackingState(baseFile) == StoragePathState.PRESENT &&
+            syncRetentionRecoveryDirectory(context)
     } catch (error: Exception) {
         val failedOutput = output
         atomicWriteFailureResult(error) {

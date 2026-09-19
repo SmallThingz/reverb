@@ -121,4 +121,32 @@ class StoragePathStateTest {
             root.deleteRecursively()
         }
     }
+    @Test
+    fun atomicFileRegularBackingState_rejectsSymlinkedBackingEntries() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "atomic-nofollow-").toFile()
+        try {
+            val base = File(root, "state.bin")
+            assertEquals(StoragePathState.MISSING, atomicFileRegularBackingState(base))
+
+            val backup = File(base.path + ".bak").apply { writeBytes(byteArrayOf(1)) }
+            assertEquals(StoragePathState.PRESENT, atomicFileRegularBackingState(base))
+            assertTrue(backup.delete())
+
+            base.writeBytes(byteArrayOf(2))
+            assertEquals(StoragePathState.PRESENT, atomicFileRegularBackingState(base))
+            val target = File(root, "outside.bin").apply { writeBytes(byteArrayOf(9)) }
+            val newFile = File(base.path + ".new")
+            Files.createSymbolicLink(newFile.toPath(), target.toPath().toAbsolutePath())
+            assertEquals(StoragePathState.UNAVAILABLE, atomicFileRegularBackingState(base))
+            assertTrue(newFile.delete())
+
+            assertTrue(base.delete())
+            Files.createSymbolicLink(base.toPath(), target.toPath().toAbsolutePath())
+            assertEquals(StoragePathState.UNAVAILABLE, atomicFileRegularBackingState(base))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
 }
