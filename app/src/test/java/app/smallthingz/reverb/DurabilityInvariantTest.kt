@@ -2281,7 +2281,7 @@ class DurabilityInvariantTest {
             val result = replayClaimedFileDeletion(
                 intent = intent,
                 claim = claim,
-                readClaimFingerprint = {
+                readClaimFingerprint = { _, _ ->
                     StableOutputFingerprint(
                         digest = digest,
                         fileKey = originalIdentity,

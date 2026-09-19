@@ -1394,16 +1394,35 @@ internal fun deleteClaimedFile(
     )
 }
 
+internal fun readStableDeletionClaimFingerprint(
+    file: File,
+    expectedIdentity: String,
+): StableOutputFingerprint? {
+    if (expectedIdentity.startsWith("stat:")) {
+        return readStableFileOutputFingerprint(file)
+    }
+    val before = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return null
+    val digest = runCatching { FileInputStream(file).use(::sha256) }.getOrNull() ?: return null
+    val after = resolveFileIdentity(file)
+    if (!fileIdentityMatches(before, after)) return null
+    return StableOutputFingerprint(
+        digest = digest,
+        fileKey = after,
+        providerIdentity = null,
+    )
+}
+
 internal fun replayClaimedFileDeletion(
     intent: PendingDeletionIntent,
     claim: File? = deletionClaimFile(intent),
-    readClaimFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
+    readClaimFingerprint: (File, String) -> StableOutputFingerprint? = ::readStableDeletionClaimFingerprint,
     identityBeforeDelete: (File) -> String = ::resolveFileIdentity,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
     val expectedIdentity = intent.fileIdentity ?: return FileDeletionClaimResult.RETRY
-    val verifiedClaim = readClaimFingerprint(resolvedClaim) ?: return FileDeletionClaimResult.RETRY
+    val verifiedClaim = readClaimFingerprint(resolvedClaim, expectedIdentity)
+        ?: return FileDeletionClaimResult.RETRY
     val verifiedIdentity = verifiedClaim.fileKey ?: return FileDeletionClaimResult.RETRY
     if (!sameFileObjectAcrossRename(expectedIdentity, verifiedIdentity) ||
         !pendingDeletionMatchesDigest(
