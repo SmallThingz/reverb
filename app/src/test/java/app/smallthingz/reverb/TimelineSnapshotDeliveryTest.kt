@@ -147,11 +147,20 @@ class TimelineSnapshotDeliveryTest {
                 requestedChannelCount = 1,
                 sampleFormat = PcmSampleFormat.PCM_16,
             )
+            var queuedSnapshot: ReverbService.TimelineSnapshot? = null
             failChunkDirectorySync = true
-            closeCaptureSnapshotsBestEffort(snapshot, secondCloseable)
-            failChunkDirectorySync = false
+            closeCaptureSnapshotsBestEffort(
+                snapshot,
+                secondCloseable,
+                timelineRelease = { queuedSnapshot = it },
+            )
 
             assertTrue(secondClosed)
+            assertSame(snapshot, queuedSnapshot)
+            assertEquals(null, reported)
+
+            queuedSnapshot?.releaseBestEffort()
+            failChunkDirectorySync = false
             assertTrue(
                 reported?.message?.contains("Injected capture snapshot retention sync failure") == true,
             )

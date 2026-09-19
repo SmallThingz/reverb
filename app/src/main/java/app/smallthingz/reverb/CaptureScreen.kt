@@ -117,10 +117,19 @@ internal fun recordingSavedNotificationTag(recordingId: String): String =
 internal fun recordingSavedPendingIntentAction(packageName: String, recordingId: String): String =
     packageName + RECORDING_SAVED_NOTIFICATION_ACTION_PREFIX + recordingSavedNotificationKey(recordingId)
 
-internal fun closeCaptureSnapshotsBestEffort(vararg snapshots: Closeable?) {
+private fun releaseCaptureTimelineSnapshotOffMain(snapshot: ReverbService.TimelineSnapshot) {
+    backgroundRecordingResultScope.launch {
+        snapshot.releaseBestEffort()
+    }
+}
+
+internal fun closeCaptureSnapshotsBestEffort(
+    vararg snapshots: Closeable?,
+    timelineRelease: (ReverbService.TimelineSnapshot) -> Unit = ::releaseCaptureTimelineSnapshotOffMain,
+) {
     snapshots.forEach { snapshot ->
         when (snapshot) {
-            is ReverbService.TimelineSnapshot -> snapshot.releaseBestEffort()
+            is ReverbService.TimelineSnapshot -> timelineRelease(snapshot)
             null -> Unit
             else -> runCatching { snapshot.close() }
         }
