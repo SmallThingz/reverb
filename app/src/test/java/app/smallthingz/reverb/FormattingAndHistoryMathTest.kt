@@ -949,6 +949,28 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun captureIntentStopRepair_clearsOnlyAuthorityOriginatedPersistenceBlock() {
+        assertTrue(
+            captureIntentRepairClearsPersistenceBlock(
+                authorityWasValid = false,
+                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
+            ),
+        )
+        assertFalse(
+            captureIntentRepairClearsPersistenceBlock(
+                authorityWasValid = true,
+                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
+            ),
+        )
+        assertFalse(
+            captureIntentRepairClearsPersistenceBlock(
+                authorityWasValid = false,
+                stopDisposition = ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
+            ),
+        )
+    }
+
+    @Test
     fun explicitCaptureStop_rejectsOnlyWhenPriorArmedMarkerWasRestored() {
         assertEquals(
             ExplicitCaptureStopDisposition.KNOWN_STOP,

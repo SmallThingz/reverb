@@ -830,6 +830,13 @@ class ReverbService : Service() {
                         durableCaptureIntentAuthorityValid = true
                         durableListeningIntentEnabled = false
                         durableCaptureBufferSlot = requestedSlot
+                        if (captureIntentRepairClearsPersistenceBlock(
+                                authorityWasValid = authorityWasValid,
+                                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
+                            )
+                        ) {
+                            persistenceFailureBlocked = false
+                        }
                         captureContinuityGeneration.incrementAndGet()
                         if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
                     }
@@ -4580,6 +4587,11 @@ internal enum class ExplicitCaptureStopDisposition {
 internal fun captureCommandRollbackRequiresFailClosed(
     rollbackPersisted: Boolean,
 ): Boolean = !rollbackPersisted
+
+internal fun captureIntentRepairClearsPersistenceBlock(
+    authorityWasValid: Boolean,
+    stopDisposition: ExplicitCaptureStopDisposition,
+): Boolean = !authorityWasValid && stopDisposition == ExplicitCaptureStopDisposition.KNOWN_STOP
 
 internal fun explicitCaptureStopDisposition(
     stopIntentChanged: Boolean,
