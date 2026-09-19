@@ -98,6 +98,49 @@ class ServiceForegroundLifetimeTest {
     }
 
     @Test
+    fun retentionProtectionFailureClearingOwnershipAllowsServiceStopConvergence() {
+        var active = true
+        var protectionCalls = 0
+
+        assertFalse(
+            retentionMaintenanceKeepsServiceAlive(
+                isActive = { active },
+                ensureProtectedLifetime = {
+                    protectionCalls++
+                    active = false
+                },
+            ),
+        )
+        assertEquals(1, protectionCalls)
+    }
+
+    @Test
+    fun activeRetentionKeepsServiceAliveAfterProtectionAttempt() {
+        var protectionCalls = 0
+
+        assertTrue(
+            retentionMaintenanceKeepsServiceAlive(
+                isActive = { true },
+                ensureProtectedLifetime = { protectionCalls++ },
+            ),
+        )
+        assertEquals(1, protectionCalls)
+    }
+
+    @Test
+    fun inactiveRetentionDoesNotAttemptForegroundProtection() {
+        var protectionCalls = 0
+
+        assertFalse(
+            retentionMaintenanceKeepsServiceAlive(
+                isActive = { false },
+                ensureProtectedLifetime = { protectionCalls++ },
+            ),
+        )
+        assertEquals(0, protectionCalls)
+    }
+
+    @Test
     fun foregroundTimeoutBlocksRetentionRestartUntilServiceRecovery() {
         assertTrue(
             retentionMaintenanceMayRun(

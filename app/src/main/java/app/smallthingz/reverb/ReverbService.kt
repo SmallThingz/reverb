@@ -1645,8 +1645,11 @@ class ReverbService : Service() {
             stopForegroundTracked()
             return
         }
-        if (retentionMaintenanceState.isActive()) {
-            ensureRetentionMaintenanceOnlyForegroundIfNeeded()
+        if (retentionMaintenanceKeepsServiceAlive(
+                isActive = retentionMaintenanceState::isActive,
+                ensureProtectedLifetime = { ensureRetentionMaintenanceOnlyForegroundIfNeeded() },
+            )
+        ) {
             return
         }
         stopForegroundTracked()
@@ -4426,6 +4429,15 @@ internal fun retentionMaintenanceMayRun(
     serviceDestroying: Boolean,
     foregroundServiceTimedOut: Boolean,
 ): Boolean = !serviceDestroying && !foregroundServiceTimedOut
+
+internal inline fun retentionMaintenanceKeepsServiceAlive(
+    isActive: () -> Boolean,
+    ensureProtectedLifetime: () -> Unit,
+): Boolean {
+    if (!isActive()) return false
+    ensureProtectedLifetime()
+    return isActive()
+}
 
 internal fun retentionMaintenanceHasProtectedLifetime(
     healthyListeningLifetime: Boolean,
