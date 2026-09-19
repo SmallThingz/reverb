@@ -8,6 +8,16 @@ import org.junit.Test
 
 class RecordingCatalogStorageTypeTest {
     @Test
+    fun catalogInitialCapacity_isBoundedBeforeRowValidation() {
+        assertEquals(0, recordingCatalogInitialCapacity(-1))
+        assertEquals(3, recordingCatalogInitialCapacity(3))
+        assertEquals(
+            MAX_RECORDING_CATALOG_INITIAL_CAPACITY,
+            recordingCatalogInitialCapacity(Int.MAX_VALUE),
+        )
+    }
+
+    @Test
     fun catalogStorageType_acceptsFreshAndMatchingLegacyRows() {
         assertEquals(
             RecordingStorageType.FILE,

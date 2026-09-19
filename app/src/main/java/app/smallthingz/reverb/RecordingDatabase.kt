@@ -584,6 +584,11 @@ internal fun resolveRecordingCatalogStorageType(
     }
 }
 
+internal const val MAX_RECORDING_CATALOG_INITIAL_CAPACITY = 1_024
+
+internal fun recordingCatalogInitialCapacity(rowCount: Int): Int =
+    rowCount.coerceIn(0, MAX_RECORDING_CATALOG_INITIAL_CAPACITY)
+
 internal fun recordingCatalogCoreFieldsAreValid(
     id: String?,
     displayName: String?,
@@ -638,8 +643,7 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val createdAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_CREATED_AT_MILLIS)
     val lastSeenAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS)
     val missingSinceMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS)
-    val count = cursor.count.coerceAtLeast(0)
-    val result = ArrayList<RecordingEntity>(count)
+    val result = ArrayList<RecordingEntity>(recordingCatalogInitialCapacity(cursor.count))
     while (cursor.moveToNext()) {
         val id = cursor.getString(idIndex)
         val displayName = cursor.getString(displayNameIndex)
