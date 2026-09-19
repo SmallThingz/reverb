@@ -3211,7 +3211,8 @@ internal class RecordingRenameStateUncertainException(
 internal fun providerRenameStateIsUncertain(
     mutationAccepted: Boolean,
     contentContinuityVerified: Boolean,
-): Boolean = mutationAccepted && !contentContinuityVerified
+    displayNameVerified: Boolean = true,
+): Boolean = mutationAccepted && (!contentContinuityVerified || !displayNameVerified)
 
 internal fun fileRenameMoveFailureIsUncertain(error: Throwable): Boolean =
     error is IOException && error !is FileAlreadyExistsException
@@ -3306,16 +3307,22 @@ private fun renameMediaStoreRecording(
         }
 
         val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
+        val renamedDisplayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() }
         val sameObject = sameProviderObjectAcrossMutation(recording.fileIdentity, renamedIdentity)
         val renamed = recording.copy(
-            displayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() } ?: uniqueName,
+            displayName = renamedDisplayName ?: uniqueName,
             fileIdentity = renamedIdentity,
         )
         val afterDigest = if (sameObject) sha256StableRecording(context, renamed) else null
         val continuityVerified = renameContentContinuityIsSafe(sameObject, beforeDigest, afterDigest)
-        if (providerRenameStateIsUncertain(mutationAccepted = true, continuityVerified)) {
+        if (providerRenameStateIsUncertain(
+                mutationAccepted = true,
+                contentContinuityVerified = continuityVerified,
+                displayNameVerified = renamedDisplayName == uniqueName,
+            )
+        ) {
             throw RecordingRenameStateUncertainException(
-                "MediaStore recording changed during rename: ${recording.id}",
+                "MediaStore rename postcondition is uncertain: ${recording.id}",
             )
         }
         rebindRecordingWaveformCache(recording, renamed)
@@ -3433,9 +3440,10 @@ private fun renameDocumentRecording(
             return@runCatching null
         }
         val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri)
+        val renamedDisplayName = DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
         val renamed = recording.copy(
             id = renamedUri.toString(),
-            displayName = DocumentFile.fromSingleUri(context, renamedUri)?.name ?: uniqueName,
+            displayName = renamedDisplayName ?: uniqueName,
             fileIdentity = renamedIdentity,
         )
         val sourceUriUnchanged = renamedUri == sourceUri
@@ -3453,8 +3461,13 @@ private fun renameDocumentRecording(
             beforeDigest = beforeDigest,
             afterDigest = afterDigest,
         )
-        if (providerRenameStateIsUncertain(mutationAccepted = true, continuityVerified)) {
-            if (rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
+        if (providerRenameStateIsUncertain(
+                mutationAccepted = true,
+                contentContinuityVerified = continuityVerified,
+                displayNameVerified = renamedDisplayName == uniqueName,
+            )
+        ) {
+            if (!continuityVerified && rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
                 !suppressProviderOutputWithoutDeletion(
                     context = context,
                     storageType = RecordingStorageType.DOCUMENT,

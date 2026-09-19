@@ -10,6 +10,13 @@ class RecordingRenameUncertaintyTest {
         assertFalse(providerRenameStateIsUncertain(mutationAccepted = false, contentContinuityVerified = false))
         assertFalse(providerRenameStateIsUncertain(mutationAccepted = true, contentContinuityVerified = true))
         assertTrue(providerRenameStateIsUncertain(mutationAccepted = true, contentContinuityVerified = false))
+        assertTrue(
+            providerRenameStateIsUncertain(
+                mutationAccepted = true,
+                contentContinuityVerified = true,
+                displayNameVerified = false,
+            ),
+        )
     }
 
     @Test
