@@ -35,6 +35,14 @@ class RecordingCatalogRegistrationFailureTest {
                 currentIdentityMatches = true,
             ) is RecordingCatalogIdentityChangedException,
         )
+        assertTrue(
+            catalogRegistrationFailureAfterIdentityRecheck(
+                error = databaseFailure,
+                stableIdentityAvailable = true,
+                currentIdentityMatches = true,
+                currentDisplayNameMatches = false,
+            ) is RecordingCatalogIdentityChangedException,
+        )
     }
 
     @Test

@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import java.io.File
 import java.io.FileInputStream
@@ -54,8 +55,16 @@ internal fun catalogRegistrationFailureAfterIdentityRecheck(
     error: Exception,
     stableIdentityAvailable: Boolean,
     currentIdentityMatches: Boolean,
+    currentDisplayNameMatches: Boolean = true,
 ): Exception {
-    if (recordingCatalogIdentityIsCurrent(stableIdentityAvailable, currentIdentityMatches)) return error
+    if (recordingCatalogPostconditionIsCurrent(
+            stableIdentityAvailable = stableIdentityAvailable,
+            currentIdentityMatches = currentIdentityMatches,
+            currentDisplayNameMatches = currentDisplayNameMatches,
+        )
+    ) {
+        return error
+    }
     return RecordingCatalogIdentityChangedException(
         "Recording changed while catalog registration failed",
         error,
@@ -215,12 +224,16 @@ object RecordingRepository {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
-                val currentIdentityMatches = stableIdentityAvailable && runCatching {
+                val currentDisplayNameMatches = stableIdentityAvailable && runCatching {
+                    recordingCatalogDisplayNameMatches(context, recording)
+                }.getOrDefault(false)
+                val currentIdentityMatches = stableIdentityAvailable && currentDisplayNameMatches && runCatching {
                     recordingContentIdentityMatches(context, recording)
                 }.getOrDefault(false)
-                if (!recordingCatalogIdentityIsCurrent(
+                if (!recordingCatalogPostconditionIsCurrent(
                         stableIdentityAvailable = stableIdentityAvailable,
                         currentIdentityMatches = currentIdentityMatches,
+                        currentDisplayNameMatches = currentDisplayNameMatches,
                     )
                 ) {
                     throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
@@ -238,6 +251,9 @@ object RecordingRepository {
                     throw catalogRegistrationFailureAfterIdentityRecheck(
                         error = error,
                         stableIdentityAvailable = stableIdentityAvailable,
+                        currentDisplayNameMatches = stableIdentityAvailable && runCatching {
+                            recordingCatalogDisplayNameMatches(context, recording)
+                        }.getOrDefault(false),
                         currentIdentityMatches = stableIdentityAvailable && runCatching {
                             recordingContentIdentityMatches(context, recording)
                         }.getOrDefault(false),
@@ -540,10 +556,14 @@ object RecordingRepository {
                         // outside Reverb's mutation lock. Recheck the exact renamed object at the
                         // catalog boundary before carrying metadata/cache state into SQLite.
                         val stableRenamedIdentityAvailable = renamed.fileIdentity.isNotBlank()
-                        if (!recordingCatalogIdentityIsCurrent(
+                        val currentDisplayNameMatches = stableRenamedIdentityAvailable &&
+                            recordingCatalogDisplayNameMatches(context, renamed)
+                        val currentIdentityMatches = stableRenamedIdentityAvailable &&
+                            currentDisplayNameMatches && recordingContentIdentityMatches(context, renamed)
+                        if (!recordingCatalogPostconditionIsCurrent(
                                 stableIdentityAvailable = stableRenamedIdentityAvailable,
-                                currentIdentityMatches = stableRenamedIdentityAvailable &&
-                                    recordingContentIdentityMatches(context, renamed),
+                                currentIdentityMatches = currentIdentityMatches,
+                                currentDisplayNameMatches = currentDisplayNameMatches,
                             )
                         ) {
                             throw IOException("Recording changed before rename catalog commit")
@@ -705,10 +725,13 @@ object RecordingRepository {
         // catalog commit; a replacement must never become the recoverable authority for deleting
         // the selected source.
         val stableTargetIdentityAvailable = target.fileIdentity.isNotBlank()
-        val targetIdentityCurrent = recordingCatalogIdentityIsCurrent(
+        val currentTargetDisplayNameMatches = stableTargetIdentityAvailable &&
+            recordingCatalogDisplayNameMatches(context, target)
+        val targetIdentityCurrent = recordingCatalogPostconditionIsCurrent(
             stableIdentityAvailable = stableTargetIdentityAvailable,
-            currentIdentityMatches = stableTargetIdentityAvailable &&
+            currentIdentityMatches = stableTargetIdentityAvailable && currentTargetDisplayNameMatches &&
                 recordingContentIdentityMatches(context, target),
+            currentDisplayNameMatches = currentTargetDisplayNameMatches,
         )
         if (!targetIdentityCurrent) {
             Log.w("RecordingRepository", "Verified move target changed before catalog commit: ${target.id}")
@@ -1518,6 +1541,33 @@ internal fun recordingCatalogIdentityIsCurrent(
     stableIdentityAvailable: Boolean,
     currentIdentityMatches: Boolean,
 ): Boolean = stableIdentityAvailable && currentIdentityMatches
+
+internal fun recordingCatalogPostconditionIsCurrent(
+    stableIdentityAvailable: Boolean,
+    currentIdentityMatches: Boolean,
+    currentDisplayNameMatches: Boolean,
+): Boolean = recordingCatalogIdentityIsCurrent(stableIdentityAvailable, currentIdentityMatches) &&
+    currentDisplayNameMatches
+
+internal fun recordingCatalogDisplayNameMatches(
+    context: Context,
+    recording: RecordingEntity,
+): Boolean = when (recording.storageType) {
+    RecordingStorageType.FILE -> File(recording.id).name == recording.displayName
+    RecordingStorageType.DOCUMENT,
+    RecordingStorageType.MEDIASTORE,
+    -> runCatching {
+        context.contentResolver.query(
+            Uri.parse(recording.id),
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            cursor.moveToFirst() && !cursor.isNull(0) && cursor.getString(0) == recording.displayName
+        } ?: false
+    }.getOrDefault(false)
+}
 
 internal enum class VerifiedMoveCommitResult { MOVED, SOURCE_CLEANUP_FAILED, TARGET_CHANGED }
 

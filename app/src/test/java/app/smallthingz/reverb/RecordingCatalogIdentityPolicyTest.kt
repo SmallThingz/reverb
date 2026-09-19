@@ -26,4 +26,29 @@ class RecordingCatalogIdentityPolicyTest {
             ),
         )
     }
+    @Test
+    fun catalogMutation_requiresCurrentDisplayNameAsWellAsIdentity() {
+        assertTrue(
+            recordingCatalogPostconditionIsCurrent(
+                stableIdentityAvailable = true,
+                currentIdentityMatches = true,
+                currentDisplayNameMatches = true,
+            ),
+        )
+        assertFalse(
+            recordingCatalogPostconditionIsCurrent(
+                stableIdentityAvailable = true,
+                currentIdentityMatches = true,
+                currentDisplayNameMatches = false,
+            ),
+        )
+        assertFalse(
+            recordingCatalogPostconditionIsCurrent(
+                stableIdentityAvailable = true,
+                currentIdentityMatches = false,
+                currentDisplayNameMatches = true,
+            ),
+        )
+    }
+
 }
