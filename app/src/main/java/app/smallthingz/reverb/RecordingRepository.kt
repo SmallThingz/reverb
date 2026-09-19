@@ -789,7 +789,9 @@ object RecordingRepository {
         runCatching { context.contentResolver.persistedUriPermissions }
             .getOrDefault(emptyList())
             .asSequence()
-            .filter { it.isReadPermission }
+            .filter { permission ->
+                permission.isReadPermission && documentTreeIdIsValid(permission.uri.toString())
+            }
             .forEach { permission ->
                 directoryUris.putIfAbsent(permission.uri.toString(), permission.uri)
             }

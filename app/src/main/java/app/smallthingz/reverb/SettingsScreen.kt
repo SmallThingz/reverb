@@ -719,7 +719,7 @@ fun SettingsScreen(
                     val rollbackWakeLock = isWakeLockEnabled(context)
                     val rollbackTheme = getConfiguredThemeMode(context)
                     val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
-                    val rollbackExportDirectoryUri = getConfiguredExportTreeUri(context)?.toString()
+                    val rollbackExportDirectoryUri = preferences.safeString(PrefKey.EXPORT_DIRECTORY_URI)
 
                     persistRetentionTransaction(
                         // Recovery is the write-ahead side of the transaction. If the process dies before
@@ -800,7 +800,7 @@ fun SettingsScreen(
                 source = getConfiguredAudioSourceMode(context),
                 channelMode = getConfiguredChannelMode(context),
                 sampleRate = getConfiguredSampleRate(context),
-                exportTreeUri = getConfiguredExportTreeUri(context),
+                exportTreeUri = getConfiguredExportTreeUriForSettings(context),
                 wakeLockEnabled = isWakeLockEnabled(context),
             )
         }

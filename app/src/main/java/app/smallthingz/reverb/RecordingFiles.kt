@@ -273,9 +273,31 @@ internal fun usesMediaStoreDefaultStorage(sdkInt: Int = Build.VERSION.SDK_INT): 
 internal fun requiresLegacyPublicStoragePermission(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
     sdkInt < Build.VERSION_CODES.Q
 
+internal fun configuredExportTreePreferenceIsUsable(raw: String?): Boolean =
+    raw == null || documentTreeIdIsValid(raw)
+
+private fun configuredExportTreePreferenceRaw(context: Context): String? {
+    val preferences = getRecorderPreferences(context)
+    return requireDurablePreference(
+        present = preferences.contains(PrefKey.EXPORT_DIRECTORY_URI),
+        absent = null,
+        label = PrefKey.EXPORT_DIRECTORY_URI.name,
+    ) {
+        preferences.getString(PrefKey.EXPORT_DIRECTORY_URI, null)
+    }
+}
+
 fun getConfiguredExportTreeUri(context: Context): Uri? {
+    val raw = configuredExportTreePreferenceRaw(context) ?: return null
+    if (!documentTreeIdIsValid(raw)) {
+        throw IllegalStateException("Unreadable durable export tree authority")
+    }
+    return raw.toUri()
+}
+
+internal fun getConfiguredExportTreeUriForSettings(context: Context): Uri? {
     val raw = getRecorderPreferences(context).safeString(PrefKey.EXPORT_DIRECTORY_URI) ?: return null
-    return raw.takeIf { it.isNotBlank() }?.toUri()
+    return raw.takeIf(::documentTreeIdIsValid)?.toUri()
 }
 
 internal inline fun commitConfiguredExportTreeUriChange(
@@ -291,11 +313,13 @@ fun setConfiguredExportTreeUri(
     context: Context,
     treeUri: Uri?,
 ): Boolean {
+    val updatedValue = treeUri?.toString()
+    if (updatedValue != null && !documentTreeIdIsValid(updatedValue)) return false
     val preferences = getRecorderPreferences(context)
     val previousValue = preferences.safeString(PrefKey.EXPORT_DIRECTORY_URI)
     return commitConfiguredExportTreeUriChange(
         previousValue = previousValue,
-        updatedValue = treeUri?.toString(),
+        updatedValue = updatedValue,
     ) { value ->
         val editor = preferences.edit()
         if (value != null) editor.putString(PrefKey.EXPORT_DIRECTORY_URI, value)
@@ -312,7 +336,11 @@ fun getOutputDirectoryId(
     context: Context,
     treeUri: Uri?,
 ): String {
-    if (treeUri != null) return treeUri.toString()
+    if (treeUri != null) {
+        val id = treeUri.toString()
+        require(documentTreeIdIsValid(id)) { "Output directory is not a canonical document tree" }
+        return id
+    }
     return if (usesMediaStoreDefaultStorage()) {
         MEDIA_STORE_DIRECTORY_ID
     } else {
@@ -700,6 +728,9 @@ internal fun createOutputTargetInDirectory(
     startedAtMillis: Long,
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
+    if (targetTreeUri != null && !documentTreeIdIsValid(targetTreeUri.toString())) {
+        throw IOException("Output destination is not a canonical document tree")
+    }
     return if (targetTreeUri == null) {
         if (usesMediaStoreDefaultStorage()) {
             createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
@@ -2505,6 +2536,9 @@ internal fun listOutputDirectoryRecordings(
     treeUri: Uri?,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
+    if (treeUri != null && !documentTreeIdIsValid(treeUri.toString())) {
+        throw IOException("Output destination is not a canonical document tree")
+    }
     val suppressedIds = pendingOutputCleanupIds(context)
     if (treeUri == null) {
         return if (usesMediaStoreDefaultStorage()) {

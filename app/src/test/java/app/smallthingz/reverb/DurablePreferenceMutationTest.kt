@@ -8,6 +8,17 @@ import org.junit.Test
 
 class DurablePreferenceMutationTest {
     @Test
+    fun configuredExportTreeAuthority_requiresCanonicalTreeOnly() {
+        assertTrue(configuredExportTreePreferenceIsUsable(null))
+        assertTrue(configuredExportTreePreferenceIsUsable("content://docs/tree/root"))
+        assertTrue(configuredExportTreePreferenceIsUsable("content://docs/tree/primary%3AMusic%2FReverb"))
+        assertFalse(configuredExportTreePreferenceIsUsable(""))
+        assertFalse(configuredExportTreePreferenceIsUsable("content://docs/tree/root/document/child"))
+        assertFalse(configuredExportTreePreferenceIsUsable("content://docs/tree/root?query=1"))
+        assertFalse(configuredExportTreePreferenceIsUsable("content://docs/tree/%72oot"))
+    }
+
+    @Test
     fun failedDurableCommit_restoresPriorProcessStateBeforeReturningFailure() {
         val events = mutableListOf<String>()
 
