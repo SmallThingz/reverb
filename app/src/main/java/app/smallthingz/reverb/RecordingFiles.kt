@@ -2513,7 +2513,15 @@ private data class ScannedFileRecording(
 private data class ScannedProviderRecording(
     val strictDurationMillis: Long,
     val media: RecordingMediaMetadata,
+    val afterReadIdentity: String,
 )
+
+internal fun recoveredProviderCatalogIdentity(
+    publishedIdentity: String,
+    scannedIdentity: String,
+): String? = publishedIdentity.takeIf {
+    it.isNotBlank() && providerRecordingIdentityMatches(it, scannedIdentity)
+}
 
 private fun scanProviderRecording(
     context: Context,
@@ -2557,6 +2565,7 @@ private fun scanProviderRecording(
         ScannedProviderRecording(
             strictDurationMillis = strictDuration,
             media = media,
+            afterReadIdentity = afterReadIdentity,
         )
     }
 }
@@ -2684,6 +2693,7 @@ private fun listMediaStoreRecordings(
                     var name = storedName
                     var media: RecordingMediaMetadata? = null
                     var durationMillis = 0L
+                    var recoveredPublishedIdentity: String? = null
 
                     if (pending) {
                         val metadata = parseStagingOutputMetadata(storedName)
@@ -2727,8 +2737,24 @@ private fun listMediaStoreRecordings(
                                 .getOrNull() ?: continue
                             removeVerifiedExportStaging(context, stagedTarget.storageType, stagedTarget.id, publishFingerprint)
                             name = finalized.displayName
-                            durationMillis = observation.durationMillis
-                            media = inspectRecordingMedia(context, uri, name)
+                            val publishedScan = runCatching {
+                                scanProviderRecording(
+                                    context = context,
+                                    storageType = RecordingStorageType.MEDIASTORE,
+                                    uri = uri,
+                                    displayName = name,
+                                    beforeIdentity = finalized.publishedIdentity,
+                                )
+                            }.onFailure {
+                                Log.w(TAG, "Unable to inspect published recovered recording $uri", it)
+                            }.getOrNull() ?: continue
+                            if (publishedScan.strictDurationMillis <= 0L) continue
+                            recoveredPublishedIdentity = recoveredProviderCatalogIdentity(
+                                publishedIdentity = finalized.publishedIdentity,
+                                scannedIdentity = publishedScan.afterReadIdentity,
+                            ) ?: continue
+                            durationMillis = publishedScan.strictDurationMillis
+                            media = publishedScan.media
                         } else {
                             // Older rows predate operation-kind/session staging, so they may
                             // represent either an export or a copy/move. That ambiguity is not
@@ -2741,7 +2767,7 @@ private fun listMediaStoreRecordings(
 
                     val id = uri.toString()
                     val identity = if (pending) {
-                        resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
+                        recoveredPublishedIdentity ?: continue
                     } else {
                         providerRecordingIdentity(
                             RecordingStorageType.MEDIASTORE, id, size, generation.takeIf { it > 0L } ?: modifiedMillis,

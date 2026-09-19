@@ -59,6 +59,25 @@ class RecordingScanIdentityTest {
     }
 
     @Test
+    fun recoveredProviderCatalogIdentity_keepsPublishedRevisionBoundToScan() {
+        val published = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/1",
+            100L,
+            9L,
+        )
+        val replacement = providerRecordingIdentity(
+            RecordingStorageType.MEDIASTORE,
+            "content://media/1",
+            101L,
+            10L,
+        )
+        assertTrue(recoveredProviderCatalogIdentity(published, published) == published)
+        assertTrue(recoveredProviderCatalogIdentity(published, replacement) == null)
+        assertTrue(recoveredProviderCatalogIdentity("", published) == null)
+    }
+
+    @Test
     fun scanIdentity_requiresStableKnownRevisionAcrossValidation() {
         val file = "stat:1:2:3:4:5"
         assertTrue(scannedRecordingIdentityRemainsCurrent(RecordingStorageType.FILE, file, file))
