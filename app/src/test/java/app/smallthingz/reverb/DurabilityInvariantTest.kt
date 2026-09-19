@@ -1535,6 +1535,15 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun mediaStoreRelativePath_requiresExactManagedDirectory() {
+        val managed = "Music/Reverb/"
+        assertTrue(mediaStoreRelativePathIsManaged(managed, managed))
+        assertFalse(mediaStoreRelativePathIsManaged("Music/Reverb", managed))
+        assertFalse(mediaStoreRelativePathIsManaged("Music/Other/", managed))
+        assertFalse(mediaStoreRelativePathIsManaged(null, managed))
+    }
+
+    @Test
     fun mediaStoreProviderIdentity_requiresKnownSizeAndRealRevision() {
         val id = "content://media/external/audio/media/9"
         val generationIdentity = providerRecordingIdentity(RecordingStorageType.MEDIASTORE, id, 7_000L, 42L)

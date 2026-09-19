@@ -78,6 +78,11 @@ internal data class StagingOutputMetadata(
 internal const val MEDIA_STORE_DIRECTORY_ID = "mediastore:external:Music/Reverb"
 private val MEDIA_STORE_RELATIVE_PATH = "${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}/"
 
+internal fun mediaStoreRelativePathIsManaged(
+    value: String?,
+    managedRelativePath: String = MEDIA_STORE_RELATIVE_PATH,
+): Boolean = value == managedRelativePath
+
 
 enum class RecordingStorageType(val storageCode: Byte) {
     FILE(1),
@@ -1431,16 +1436,24 @@ internal fun resolveProviderCatalogObservation(
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.DATE_MODIFIED,
                 MediaStore.MediaColumns.GENERATION_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH,
             )
         } else {
             arrayOf(
                 MediaStore.MediaColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH,
             )
         }
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst() || cursor.isNull(0)) return@use null
+            val relativePathIndex = if (useGeneration) 4 else 3
+            if (cursor.isNull(relativePathIndex) ||
+                !mediaStoreRelativePathIsManaged(cursor.getString(relativePathIndex))
+            ) {
+                return@use null
+            }
             ProviderCatalogObservation(
                 displayName = cursor.getString(0),
                 identity = mediaStoreProviderIdentityFromMetadata(
@@ -1498,12 +1511,23 @@ internal fun resolveProviderRecordingIdentity(
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.DATE_MODIFIED,
                 MediaStore.MediaColumns.GENERATION_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH,
             )
         } else {
-            arrayOf(MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED)
+            arrayOf(
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+            )
         }
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) return@use ""
+            val relativePathIndex = if (useGeneration) 3 else 2
+            if (cursor.isNull(relativePathIndex) ||
+                !mediaStoreRelativePathIsManaged(cursor.getString(relativePathIndex))
+            ) {
+                return@use ""
+            }
             mediaStoreProviderIdentityFromMetadata(
                 id = uri.toString(),
                 sizeKnown = !cursor.isNull(0),
