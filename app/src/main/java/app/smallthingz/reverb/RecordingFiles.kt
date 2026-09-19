@@ -117,6 +117,26 @@ private data class DocumentStorageScope(
     val documentId: String?,
 )
 
+private fun documentStorageSegmentIsCanonical(raw: String): Boolean {
+    if (raw.isBlank()) return false
+    var index = 0
+    while (index < raw.length) {
+        if (raw[index] != '%') {
+            index++
+            continue
+        }
+        if (index + 2 >= raw.length) return false
+        val value = raw.substring(index + 1, index + 3).toIntOrNull(16) ?: return false
+        val encodedUnreserved = value in 'A'.code..'Z'.code ||
+            value in 'a'.code..'z'.code ||
+            value in '0'.code..'9'.code ||
+            value == '-'.code || value == '.'.code || value == '_'.code || value == '~'.code
+        if (encodedUnreserved) return false
+        index += 3
+    }
+    return true
+}
+
 private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCatching {
     val uri = URI(id)
     if (!uri.scheme.equals("content", ignoreCase = true) || uri.authority.isNullOrBlank() ||
@@ -127,11 +147,11 @@ private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCa
     val segments = uri.rawPath.orEmpty().split('/')
     when {
         segments.size == 3 && segments[0].isEmpty() &&
-            segments[1] == "tree" && segments[2].isNotBlank() ->
+            segments[1] == "tree" && documentStorageSegmentIsCanonical(segments[2]) ->
             DocumentStorageScope(requireNotNull(uri.authority), segments[2], null)
         segments.size == 5 && segments[0].isEmpty() &&
-            segments[1] == "tree" && segments[2].isNotBlank() &&
-            segments[3] == "document" && segments[4].isNotBlank() ->
+            segments[1] == "tree" && documentStorageSegmentIsCanonical(segments[2]) &&
+            segments[3] == "document" && documentStorageSegmentIsCanonical(segments[4]) ->
             DocumentStorageScope(requireNotNull(uri.authority), segments[2], segments[4])
         else -> null
     }

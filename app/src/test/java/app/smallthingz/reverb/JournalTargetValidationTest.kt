@@ -48,6 +48,8 @@ class JournalTargetValidationTest {
             scopedDocument,
             decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(scopedDocument)),
         )
+        val aliasedDocument = scopedDocument.copy(id = "content://docs/tree/%72oot/document/7")
+        assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(aliasedDocument)))
 
         val staging = VerifiedExportStagingRecord(
             storageType = RecordingStorageType.MEDIASTORE,

@@ -184,12 +184,20 @@ class RecordingCatalogStorageTypeTest {
                 "content://docs/tree/root/document/1",
             ),
         )
+        assertTrue(
+            recordingStorageIdIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/tree/%E2%82%AC/document/%E2%82%AC",
+            ),
+        )
         listOf(
             "content://docs//tree/root/document/1",
             "content://docs/tree//root/document/1",
             "content://docs/tree/root//document/1",
             "content://docs/tree/root/document//1",
             "content://docs/tree/root/document/1/",
+            "content://docs/tree/%72oot/document/1",
+            "content://docs/tree/root/document/%31",
         ).forEach { id ->
             assertFalse(recordingStorageIdIsValid(RecordingStorageType.DOCUMENT, id))
         }
@@ -206,10 +214,12 @@ class RecordingCatalogStorageTypeTest {
             ),
         )
         assertTrue(documentTreeIdIsValid("content://docs/tree/root"))
+        assertTrue(documentTreeIdIsValid("content://docs/tree/%E2%82%AC"))
         listOf(
             "content://docs//tree/root",
             "content://docs/tree//root",
             "content://docs/tree/root/",
+            "content://docs/tree/%72oot",
         ).forEach { id ->
             assertFalse(documentTreeIdIsValid(id))
         }
