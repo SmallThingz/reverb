@@ -3363,10 +3363,9 @@ class ReverbService : Service() {
             pauseListeningAfterPersistenceFailure("inspect retention maintenance", error)
             return
         }
-        if (retentionMaintenanceState.claimObservedNeed(needed)) {
-            if (!ensureRetentionMaintenanceOnlyForegroundIfNeeded()) return
-            submitClaimedRetentionMaintenancePass()
-        }
+        val passId = retentionMaintenanceState.claimObservedNeed(needed) ?: return
+        if (!ensureRetentionMaintenanceOnlyForegroundIfNeeded()) return
+        submitClaimedRetentionMaintenancePass(passId)
     }
 
     private fun enqueueRetentionMaintenancePass() {
@@ -3374,14 +3373,13 @@ class ReverbService : Service() {
             retentionMaintenanceState.clear()
             return
         }
-        if (retentionMaintenanceState.claimActiveRetry()) {
-            submitClaimedRetentionMaintenancePass()
-        }
+        val passId = retentionMaintenanceState.claimActiveRetry() ?: return
+        submitClaimedRetentionMaintenancePass(passId)
     }
 
-    private fun submitClaimedRetentionMaintenancePass() {
+    private fun submitClaimedRetentionMaintenancePass(passId: Long) {
         try {
-            bufferClearExecutor.execute(::runRetentionMaintenancePass)
+            bufferClearExecutor.execute { runRetentionMaintenancePass(passId) }
         } catch (error: RejectedExecutionException) {
             retentionMaintenanceState.clear()
             if (!serviceDestroying) {
@@ -3390,7 +3388,7 @@ class ReverbService : Service() {
         }
     }
 
-    private fun runRetentionMaintenancePass() {
+    private fun runRetentionMaintenancePass(passId: Long) {
         if (!retentionMaintenanceMayRun(serviceDestroying, foregroundServiceTimedOut)) {
             retentionMaintenanceState.clear()
             return
@@ -3414,7 +3412,14 @@ class ReverbService : Service() {
             retentionMaintenanceState.clear()
             return
         }
-        retentionMaintenanceState.completePass(needsMore)
+        if (!retentionMaintenanceState.completePass(passId, needsMore)) {
+            // Terminal clear or a newer claim superseded this worker while its durability step
+            // was in flight. Never let this stale result reschedule work or revoke newer ownership.
+            mainHandler.post {
+                if (!serviceDestroying) requestServiceStopWhenExportIdle()
+            }
+            return
+        }
         if (needsMore) {
             if (blocked) {
                 mainHandler.postDelayed(

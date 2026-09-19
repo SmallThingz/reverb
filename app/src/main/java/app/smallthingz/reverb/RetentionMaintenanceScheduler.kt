@@ -3,14 +3,15 @@ package app.smallthingz.reverb
 internal class RetentionMaintenanceSchedulerState {
     private val lock = Any()
     private var active = false
-    private var passQueued = false
+    private var queuedPassId: Long? = null
+    private var nextPassId = 1L
 
     fun isActive(): Boolean = synchronized(lock) { active }
 
     fun clear() {
         synchronized(lock) {
             active = false
-            passQueued = false
+            queuedPassId = null
         }
     }
 
@@ -19,36 +20,43 @@ internal class RetentionMaintenanceSchedulerState {
      *
      * Queued/running work and a previously proven backlog both outrank a later negative
      * observation: that observation may have been sampled before the previous pass published
-     * needsMore=true. Only completePass(false) or explicit clear() may retire known backlog.
+     * needsMore=true. Only an accepted completePass(..., false) or explicit clear() may retire
+     * known backlog.
      */
-    fun claimObservedNeed(needed: Boolean): Boolean = synchronized(lock) {
-        if (passQueued) {
+    fun claimObservedNeed(needed: Boolean): Long? = synchronized(lock) {
+        if (queuedPassId != null) {
             active = true
-            return@synchronized false
+            return@synchronized null
         }
         if (active) {
-            if (!needed) return@synchronized false
-            passQueued = true
-            return@synchronized true
+            if (!needed) return@synchronized null
+            return@synchronized claimPassLocked()
         }
-        if (!needed) return@synchronized false
+        if (!needed) return@synchronized null
         active = true
-        passQueued = true
-        true
+        claimPassLocked()
     }
 
     /** Claims the next pass for an already-known backlog, such as a lease-blocked retry. */
-    fun claimActiveRetry(): Boolean = synchronized(lock) {
-        if (!active || passQueued) return@synchronized false
-        passQueued = true
+    fun claimActiveRetry(): Long? = synchronized(lock) {
+        if (!active || queuedPassId != null) return@synchronized null
+        claimPassLocked()
+    }
+
+    /**
+     * Releases exactly the pass that was claimed. A clear/new claim invalidates an older worker,
+     * so its late completion cannot resurrect backlog or revoke ownership from newer work.
+     */
+    fun completePass(passId: Long, needsMore: Boolean): Boolean = synchronized(lock) {
+        if (queuedPassId != passId) return@synchronized false
+        queuedPassId = null
+        active = needsMore
         true
     }
 
-    /** Releases the current pass while preserving whether another pass is still required. */
-    fun completePass(needsMore: Boolean) {
-        synchronized(lock) {
-            passQueued = false
-            active = needsMore
-        }
+    private fun claimPassLocked(): Long {
+        val passId = nextPassId++
+        queuedPassId = passId
+        return passId
     }
 }

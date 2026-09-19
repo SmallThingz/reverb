@@ -9,15 +9,15 @@ class RetentionMaintenanceSchedulerTest {
     fun staleNoWorkObservationCannotRevokeQueuedPass() {
         val state = RetentionMaintenanceSchedulerState()
 
-        assertTrue(state.claimObservedNeed(needed = true))
+        val passId = requireNotNull(state.claimObservedNeed(needed = true))
         assertTrue(state.isActive())
 
         // Another caller may have sampled "no work" before the claimed pass mutates storage.
         // That stale observation must not revoke the already-owned pass.
-        assertFalse(state.claimObservedNeed(needed = false))
+        assertTrue(state.claimObservedNeed(needed = false) == null)
         assertTrue(state.isActive())
 
-        state.completePass(needsMore = false)
+        assertTrue(state.completePass(passId, needsMore = false))
         assertFalse(state.isActive())
     }
 
@@ -25,17 +25,17 @@ class RetentionMaintenanceSchedulerTest {
     fun staleNoWorkObservationCannotRevokeKnownBacklogBetweenPasses() {
         val state = RetentionMaintenanceSchedulerState()
 
-        assertTrue(state.claimObservedNeed(needed = true))
-        state.completePass(needsMore = true)
+        val firstPassId = requireNotNull(state.claimObservedNeed(needed = true))
+        assertTrue(state.completePass(firstPassId, needsMore = true))
         assertTrue(state.isActive())
 
-        // This result may have been sampled before completePass(true) published known backlog.
-        assertFalse(state.claimObservedNeed(needed = false))
+        // This result may have been sampled before the prior pass published known backlog.
+        assertTrue(state.claimObservedNeed(needed = false) == null)
         assertTrue(state.isActive())
 
-        assertTrue(state.claimActiveRetry())
+        val retryPassId = requireNotNull(state.claimActiveRetry())
         assertTrue(state.isActive())
-        state.completePass(needsMore = false)
+        assertTrue(state.completePass(retryPassId, needsMore = false))
         assertFalse(state.isActive())
     }
 
@@ -43,15 +43,15 @@ class RetentionMaintenanceSchedulerTest {
     fun blockedBacklogCanBeReclaimedExactlyOnce() {
         val state = RetentionMaintenanceSchedulerState()
 
-        assertTrue(state.claimObservedNeed(needed = true))
-        state.completePass(needsMore = true)
+        val firstPassId = requireNotNull(state.claimObservedNeed(needed = true))
+        assertTrue(state.completePass(firstPassId, needsMore = true))
         assertTrue(state.isActive())
 
-        assertTrue(state.claimActiveRetry())
-        assertFalse(state.claimActiveRetry())
+        val retryPassId = requireNotNull(state.claimActiveRetry())
+        assertTrue(state.claimActiveRetry() == null)
         assertTrue(state.isActive())
 
-        state.completePass(needsMore = false)
+        assertTrue(state.completePass(retryPassId, needsMore = false))
         assertFalse(state.isActive())
     }
 
@@ -59,9 +59,28 @@ class RetentionMaintenanceSchedulerTest {
     fun clearRevokesActiveAndQueuedOwnership() {
         val state = RetentionMaintenanceSchedulerState()
 
-        assertTrue(state.claimObservedNeed(needed = true))
+        val passId = requireNotNull(state.claimObservedNeed(needed = true))
         state.clear()
+
         assertFalse(state.isActive())
-        assertFalse(state.claimActiveRetry())
+        assertTrue(state.claimActiveRetry() == null)
+        assertFalse(state.completePass(passId, needsMore = true))
+        assertFalse(state.isActive())
+    }
+
+    @Test
+    fun staleCompletionCannotMutateNewerClaim() {
+        val state = RetentionMaintenanceSchedulerState()
+
+        val stalePassId = requireNotNull(state.claimObservedNeed(needed = true))
+        state.clear()
+        val newerPassId = requireNotNull(state.claimObservedNeed(needed = true))
+
+        assertFalse(state.completePass(stalePassId, needsMore = false))
+        assertTrue(state.isActive())
+        assertTrue(state.claimActiveRetry() == null)
+
+        assertTrue(state.completePass(newerPassId, needsMore = false))
+        assertFalse(state.isActive())
     }
 }
