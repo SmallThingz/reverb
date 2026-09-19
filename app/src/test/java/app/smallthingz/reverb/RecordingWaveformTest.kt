@@ -476,7 +476,24 @@ class RecordingWaveformTest {
             sizeBytes = 4_000L,
         )
         assertEquals(request, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request)))
+        val documentRequest = request.copy(
+            storageType = RecordingStorageType.DOCUMENT,
+            sourceId = "content://docs/tree/root/document/1",
+        )
+        assertEquals(
+            documentRequest,
+            decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(documentRequest)),
+        )
         assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(request).dropLast(1)))
+        val aliasedSource = request.copy(sourceId = "content://me%64ia/external/audio/media/1")
+        assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(aliasedSource)))
+        val mismatchedStorage = request.copy(storageType = RecordingStorageType.DOCUMENT)
+        assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(mismatchedStorage)))
+        val malformedDocument = request.copy(
+            storageType = RecordingStorageType.DOCUMENT,
+            sourceId = "content://docs/tree/root/document/1?query=1",
+        )
+        assertEquals(null, decodeVerifiedProviderPathSegments(verifiedProviderPathSegments(malformedDocument)))
         assertEquals(request.mimeType, verifiedProviderMimeType(request, first))
         assertEquals(null, verifiedProviderMimeType(request, "provider:2:other:1234:9"))
         assertFalse(providerRecordingIdentityMatches("", first))

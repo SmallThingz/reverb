@@ -51,6 +51,7 @@ internal fun decodeVerifiedProviderPathSegments(segments: List<String>): Verifie
     val storageType = segments[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
         ?.takeIf { it != RecordingStorageType.FILE } ?: return null
     val sourceId = decodeVerifiedProviderField(segments[2])?.takeIf { it.isNotBlank() } ?: return null
+    if (!recordingStorageIdIsValid(storageType, sourceId)) return null
     val expectedIdentity = decodeVerifiedProviderField(segments[3])?.takeIf { it.isNotBlank() } ?: return null
     val mimeType = decodeVerifiedProviderField(segments[4])?.takeIf { it.isNotBlank() } ?: FALLBACK_MIME_TYPE_AUDIO
     val displayName = decodeVerifiedProviderField(segments[5])?.takeIf { it.isNotBlank() } ?: "recording"
@@ -62,6 +63,9 @@ internal fun buildVerifiedProviderUri(
     context: Context,
     request: VerifiedProviderRequest,
 ): Uri {
+    require(recordingStorageIdIsValid(request.storageType, request.sourceId)) {
+        "Provider recording must use a canonical storage ID"
+    }
     val source = request.sourceId.toUri()
     require(source.scheme == "content") { "Provider recording must use a content URI" }
     val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source)
