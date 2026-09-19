@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -604,6 +605,25 @@ internal fun recordingCatalogCoreFieldsAreValid(
     lastSeenAtMillis >= 0L &&
     (missingSinceMillis == null || missingSinceMillis >= 0L)
 
+internal fun recordingCatalogLocationIsValid(
+    storageType: RecordingStorageType,
+    id: String,
+    directoryId: String,
+): Boolean = when (storageType) {
+    RecordingStorageType.FILE -> {
+        val file = File(id)
+        val directory = File(directoryId)
+        file.isAbsolute && directory.isAbsolute && file.parentFile?.absolutePath == directory.absolutePath
+    }
+    RecordingStorageType.DOCUMENT -> isContentUri(id) && isContentUri(directoryId)
+    RecordingStorageType.MEDIASTORE -> isContentUri(id) && directoryId == MEDIA_STORE_DIRECTORY_ID
+}
+
+private fun isContentUri(value: String): Boolean = runCatching {
+    val uri = URI(value)
+    uri.scheme.equals("content", ignoreCase = true) && !uri.authority.isNullOrBlank()
+}.getOrDefault(false)
+
 private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val idIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_ID)
     val displayNameIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_DISPLAY_NAME)
@@ -655,6 +675,15 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
         )
         if (storage == null) {
             Log.w("RecordingDatabase", "Skipping catalog row with malformed storage type: $id")
+            continue
+        }
+        if (!recordingCatalogLocationIsValid(
+                storageType = storage,
+                id = requireNotNull(id),
+                directoryId = requireNotNull(directoryId),
+            )
+        ) {
+            Log.w("RecordingDatabase", "Skipping catalog row with malformed storage location: $id")
             continue
         }
         result.add(

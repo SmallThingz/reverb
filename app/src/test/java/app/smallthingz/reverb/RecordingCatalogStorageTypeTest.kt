@@ -77,4 +77,57 @@ class RecordingCatalogStorageTypeTest {
         assertFalse(valid(missingSinceMillis = -1L))
     }
 
+    @Test
+    fun catalogLocation_requiresStorageSpecificAuthorityShape() {
+        assertTrue(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.FILE,
+                "/recordings/a.wav",
+                "/recordings",
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.FILE,
+                "relative/a.wav",
+                "/recordings",
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.FILE,
+                "/other/a.wav",
+                "/recordings",
+            ),
+        )
+        assertTrue(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/document/1",
+                "content://docs/tree/root",
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.DOCUMENT,
+                "file:///recordings/a.wav",
+                "content://docs/tree/root",
+            ),
+        )
+        assertTrue(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external/audio/media/1",
+                MEDIA_STORE_DIRECTORY_ID,
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external/audio/media/1",
+                "content://other/tree/root",
+            ),
+        )
+    }
+
 }
