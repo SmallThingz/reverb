@@ -6,9 +6,9 @@ import android.content.SharedPreferences
 import android.util.AtomicFile
 import android.system.Os
 import android.system.OsConstants
-import java.io.DataInputStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -402,11 +402,33 @@ internal fun decodeRetentionRecoveryConfiguration(bytes: ByteArray): RetentionCo
     )
 }
 
+internal fun readBoundedRetentionRecoveryBytes(input: InputStream): ByteArray? {
+    val bytes = ByteArray(RETENTION_RECOVERY_FILE_BYTES + 1)
+    var offset = 0
+    while (offset < bytes.size) {
+        val count = input.read(bytes, offset, bytes.size - offset)
+        when {
+            count < 0 -> break
+            count > 0 -> offset += count
+            else -> {
+                // InputStream permits a zero-length progress result. Force one-byte progress so
+                // a malformed/custom stream cannot spin startup recovery forever.
+                val value = input.read()
+                if (value < 0) break
+                bytes[offset++] = value.toByte()
+            }
+        }
+    }
+    if (offset > RETENTION_RECOVERY_FILE_BYTES) return null
+    return bytes.copyOf(offset)
+}
+
 internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
     val atomicFile = AtomicFile(retentionRecoveryFile(context))
     val bytes = try {
         // openRead() first so AtomicFile can recover its backup/new-file state after a crash.
-        atomicFile.openRead().use { input -> DataInputStream(input).readBytes() }
+        atomicFile.openRead().use(::readBoundedRetentionRecoveryBytes)
+            ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
     } catch (_: FileNotFoundException) {
         return RetentionRecoveryRead(
             if (atomicFileBackingState(retentionRecoveryFile(context)) == StoragePathState.MISSING) {
