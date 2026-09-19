@@ -354,31 +354,46 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
         throw IOException("Recording is not a RIFF/WAVE file")
     }
 
+    val fileSize = channel.size()
+    val containerBytes = littleEndianUInt(riff, 4) + 8L
+    if (containerBytes < 44L || containerBytes != fileSize) {
+        throw IOException("WAV RIFF size does not match the file")
+    }
+
     var sampleRate = 0
     var channelCount = 0
     var sampleFormat: PcmSampleFormat? = null
     var blockAlign = 0
+    var byteRate = 0L
     var dataOffset = -1L
     var dataBytes = -1L
+    var sawFormat = false
+    var sawData = false
     var cursor = 12L
-    val fileSize = channel.size().coerceAtLeast(12L)
     val header = ByteArray(8)
 
-    while (cursor <= fileSize - header.size) {
+    while (cursor < containerBytes) {
+        if (containerBytes - cursor < header.size.toLong()) {
+            throw IOException("Truncated WAV chunk header")
+        }
         requireReadAt(channel, cursor, header, header.size)
         val chunkSize = littleEndianUInt(header, 4)
-        val payloadOffset = cursor + header.size
-        if (payloadOffset > fileSize || chunkSize > fileSize - payloadOffset) {
+        val paddedChunkSize = chunkSize + (chunkSize and 1L)
+        val payloadOffset = cursor + header.size.toLong()
+        if (paddedChunkSize > containerBytes - payloadOffset) {
             throw IOException("Truncated WAV chunk")
         }
         when {
             header.asciiEquals(0, "fmt ") -> {
-                if (chunkSize < 16L) throw IOException("Invalid WAV fmt chunk")
+                if (sawFormat || chunkSize < 16L) throw IOException("Invalid WAV fmt chunk")
                 val fmt = ByteArray(16)
                 requireReadAt(channel, payloadOffset, fmt, fmt.size)
                 val formatTag = littleEndianUShort(fmt, 0)
                 channelCount = littleEndianUShort(fmt, 2)
-                sampleRate = littleEndianInt(fmt, 4)
+                val sampleRateLong = littleEndianUInt(fmt, 4)
+                if (sampleRateLong !in 1L..Int.MAX_VALUE.toLong()) throw IOException("Invalid WAV sample rate")
+                sampleRate = sampleRateLong.toInt()
+                byteRate = littleEndianUInt(fmt, 8)
                 blockAlign = littleEndianUShort(fmt, 12)
                 val bitsPerSample = littleEndianUShort(fmt, 14)
                 sampleFormat = when {
@@ -387,20 +402,25 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
                     formatTag == 3 && bitsPerSample == 32 -> PcmSampleFormat.PCM_FLOAT
                     else -> throw IOException("Unsupported WAV PCM format")
                 }
+                sawFormat = true
             }
             header.asciiEquals(0, "data") -> {
+                if (sawData) throw IOException("Duplicate WAV data chunk")
                 dataOffset = payloadOffset
                 dataBytes = chunkSize
+                sawData = true
             }
         }
-        if (sampleFormat != null && dataOffset >= 0L) break
-        cursor = payloadOffset + chunkSize + (chunkSize and 1L)
+        cursor = payloadOffset + paddedChunkSize
     }
 
+    if (cursor != containerBytes) throw IOException("WAV container did not end at RIFF boundary")
     val format = sampleFormat ?: throw IOException("WAV fmt chunk missing")
-    if (sampleRate <= 0 || channelCount !in 1..2) throw IOException("Invalid WAV format")
+    if (!sawFormat || !sawData || channelCount !in 1..2) throw IOException("Invalid WAV format")
     val expectedFrameBytes = channelCount * format.bytesPerSample
+    val expectedByteRate = sampleRate.toLong() * expectedFrameBytes.toLong()
     if (blockAlign != expectedFrameBytes) throw IOException("Unsupported WAV block alignment")
+    if (byteRate != expectedByteRate) throw IOException("Unsupported WAV byte rate")
     if (dataOffset < 0L || dataBytes < expectedFrameBytes.toLong()) throw IOException("WAV data chunk missing")
     if (dataBytes % expectedFrameBytes.toLong() != 0L) {
         throw IOException("WAV data chunk is not frame aligned")

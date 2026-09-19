@@ -166,6 +166,41 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun wavLayoutAcceptsPaddedOddPcm8Container() {
+        val file = testFile("pcm8-padded-${System.nanoTime()}.wav")
+        val payload = byteArrayOf(1, 2, 3)
+        file.writeBytes(
+            buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_8, payload.size.toLong()) +
+                payload + byteArrayOf(0),
+        )
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                assertEquals(PcmSampleFormat.PCM_8, layout.sampleFormat)
+                assertEquals(3L, layout.frameCount)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun wavLayoutAcceptsFloatFactChunkContainer() {
+        val file = testFile("float-wave-${System.nanoTime()}.wav")
+        val payload = ByteArray(8)
+        file.writeBytes(buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_FLOAT, payload.size.toLong()) + payload)
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                assertEquals(PcmSampleFormat.PCM_FLOAT, layout.sampleFormat)
+                assertEquals(2L, layout.frameCount)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun wavLayoutRejectsPartialFinalPcmFrame() {
         val file = testFile("partial-frame-${System.nanoTime()}.wav")
         val payload = byteArrayOf(1, 2, 3)
@@ -182,6 +217,59 @@ class RecordingWaveformTest {
                 FileInputStream(file).channel.use(::readWavPcmLayout)
             }.exceptionOrNull()
             assertTrue(failure is IOException)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun wavLayoutRejectsBytesOutsideDeclaredRiffContainer() {
+        val file = testFile("riff-trailing-${System.nanoTime()}.wav")
+        val payload = byteArrayOf(1, 0, 2, 0)
+        file.writeBytes(
+            buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_16, payload.size.toLong()) +
+                payload + byteArrayOf(99),
+        )
+        try {
+            assertThrows(IOException::class.java) {
+                FileInputStream(file).channel.use(::readWavPcmLayout)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun wavLayoutRejectsMissingOddDataPadding() {
+        val file = testFile("riff-padding-${System.nanoTime()}.wav")
+        val payload = byteArrayOf(1, 2, 3)
+        file.writeBytes(
+            buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_8, payload.size.toLong()) + payload,
+        )
+        try {
+            assertThrows(IOException::class.java) {
+                FileInputStream(file).channel.use(::readWavPcmLayout)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun wavLayoutRejectsInconsistentDeclaredByteRate() {
+        val file = testFile("riff-byte-rate-${System.nanoTime()}.wav")
+        val payload = byteArrayOf(1, 0, 2, 0)
+        val bytes = buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_16, payload.size.toLong()) + payload
+        // PCM RIFF fmt payload begins at byte 20; byte-rate is bytes 28..31.
+        bytes[28] = 0
+        bytes[29] = 0
+        bytes[30] = 0
+        bytes[31] = 0
+        file.writeBytes(bytes)
+        try {
+            assertThrows(IOException::class.java) {
+                FileInputStream(file).channel.use(::readWavPcmLayout)
+            }
         } finally {
             file.delete()
         }
