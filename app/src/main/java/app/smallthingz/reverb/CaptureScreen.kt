@@ -119,7 +119,11 @@ internal fun recordingSavedPendingIntentAction(packageName: String, recordingId:
 
 internal fun closeCaptureSnapshotsBestEffort(vararg snapshots: Closeable?) {
     snapshots.forEach { snapshot ->
-        runCatching { snapshot?.close() }
+        when (snapshot) {
+            is ReverbService.TimelineSnapshot -> snapshot.releaseBestEffort()
+            null -> Unit
+            else -> runCatching { snapshot.close() }
+        }
     }
 }
 

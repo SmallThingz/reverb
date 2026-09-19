@@ -104,6 +104,74 @@ class TimelineSnapshotDeliveryTest {
     }
 
     @Test
+    fun captureSnapshotCleanup_reportsParentReleaseFailureAndContinuesClosing() {
+        val parent = File("build/tmp/timeline-snapshot-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "capture-parent-release-").toFile()
+        var failChunkDirectorySync = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = false,
+            directorySync = { directory ->
+                if (failChunkDirectorySync && directory.name == BUFFER_CHUNKS_FOLDER_NAME) {
+                    throw IOException("Injected capture snapshot retention sync failure")
+                }
+            },
+        )
+        try {
+            store.configure(
+                requestedRetentionMode = RetentionMode.SIZE,
+                requestedRetentionValue = 128 * 1024L,
+                requestedSampleRate = 8_000,
+                requestedChannelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+            )
+            val first = ByteArray(8_192) { index -> (index * 11).toByte() }
+            val second = ByteArray(8_192) { index -> (index * 23 + 5).toByte() }
+            assertEquals(first.size, store.append(first, 0, first.size))
+            store.sealActiveChunk()
+            assertEquals(second.size, store.append(second, 0, second.size))
+            store.sealActiveChunk()
+
+            var reported: Exception? = null
+            val snapshot = ReverbService.TimelineSnapshot(
+                lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds())),
+                onChildReleaseFailure = { reported = it },
+            )
+            var secondClosed = false
+            val secondCloseable = Closeable { secondClosed = true }
+
+            store.configure(
+                requestedRetentionMode = RetentionMode.SIZE,
+                requestedRetentionValue = 4_096L,
+                requestedSampleRate = 8_000,
+                requestedChannelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+            )
+            failChunkDirectorySync = true
+            closeCaptureSnapshotsBestEffort(snapshot, secondCloseable)
+            failChunkDirectorySync = false
+
+            assertTrue(secondClosed)
+            assertTrue(
+                reported?.message?.contains("Injected capture snapshot retention sync failure") == true,
+            )
+        } finally {
+            failChunkDirectorySync = false
+            runCatching {
+                store.configure(
+                    requestedRetentionMode = RetentionMode.SIZE,
+                    requestedRetentionValue = 4_096L,
+                    requestedSampleRate = 8_000,
+                    requestedChannelCount = 1,
+                    sampleFormat = PcmSampleFormat.PCM_16,
+                )
+            }
+            runCatching { store.close() }
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun timelineChildRelease_reportsDeferredRetentionFailureWithoutEscaping() {
         val parent = File("build/tmp/timeline-snapshot-tests").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "child-release-").toFile()

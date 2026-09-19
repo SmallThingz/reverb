@@ -1460,7 +1460,7 @@ class ReverbService : Service() {
                         TimelineSnapshot(
                             lease = lease,
                             onChildReleaseFailure = { error ->
-                                reportPersistentStoreFailure("release timeline child range", error)
+                                reportPersistentStoreFailure("release timeline range", error)
                             },
                         )
                     }
@@ -4194,6 +4194,13 @@ class ReverbService : Service() {
         internal fun releaseChildRangeBestEffort(child: PersistentAudioChunkStore.RangeLease?) {
             releaseTimelineSnapshotBestEffort(
                 release = { child?.close() },
+                onFailure = onChildReleaseFailure,
+            )
+        }
+
+        internal fun releaseBestEffort() {
+            releaseTimelineSnapshotBestEffort(
+                release = lease::close,
                 onFailure = onChildReleaseFailure,
             )
         }
