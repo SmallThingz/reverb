@@ -29,6 +29,7 @@ import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
@@ -1578,11 +1579,16 @@ internal fun providerDeletionCompleted(observedState: RecordingAssetState): Bool
 
 internal fun resolveFileIdentity(file: File): String {
     val attributes = runCatching {
-        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
-    }.getOrNull()
-    val birthNanos = attributes?.creationTime()?.let { time ->
+        Files.readAttributes(
+            file.toPath(),
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+    }.getOrNull() ?: return ""
+    if (!attributes.isRegularFile) return ""
+    val birthNanos = attributes.creationTime().let { time ->
         runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-    } ?: 0L
+    }
 
     val statIdentity = runCatching {
         val stat = Os.stat(file.absolutePath)
@@ -1593,7 +1599,7 @@ internal fun resolveFileIdentity(file: File): String {
     if (statIdentity.isNotBlank()) return statIdentity
 
     return runCatching {
-        val key = attributes?.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
+        val key = attributes.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
         val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
         "nio:$encodedKey:$birthNanos"
     }.getOrDefault("")
@@ -1696,17 +1702,14 @@ internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     return fileIdentityMatches(recording.fileIdentity, resolveFileIdentity(File(recording.id)))
 }
 
-internal fun fileRecordingAssetState(file: File): RecordingAssetState = try {
-    val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
-    if (attributes.isRegularFile) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
-} catch (_: NoSuchFileException) {
-    RecordingAssetState.MISSING
-} catch (error: IOException) {
-    Log.w(TAG, "Unable to inspect recording $file", error)
-    RecordingAssetState.UNAVAILABLE
-} catch (error: SecurityException) {
-    Log.w(TAG, "Unable to inspect recording $file", error)
-    RecordingAssetState.UNAVAILABLE
+internal fun fileRecordingAssetState(file: File): RecordingAssetState = when (val observation = observeStoragePath(file)) {
+    StoragePathObservation(StoragePathState.MISSING, false) -> RecordingAssetState.MISSING
+    StoragePathObservation(StoragePathState.UNAVAILABLE, false) -> RecordingAssetState.UNAVAILABLE
+    else -> if (observation.state == StoragePathState.PRESENT && observation.isRegularFile) {
+        RecordingAssetState.PRESENT
+    } else {
+        RecordingAssetState.MISSING
+    }
 }
 
 internal fun recordingAssetState(
@@ -2119,18 +2122,45 @@ internal fun openRecordingInputStream(context: Context, recording: RecordingEnti
 
 internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputStream? {
     if (recording.storageType != RecordingStorageType.FILE || recording.fileIdentity.isBlank()) return null
+    val file = File(recording.id)
+    val beforeObservation = observeStoragePath(file)
+    if (beforeObservation.state != StoragePathState.PRESENT || !beforeObservation.isRegularFile) return null
+    val beforeIdentity = resolveFileIdentity(file)
+    if (!fileIdentityMatches(recording.fileIdentity, beforeIdentity)) return null
     val stream = try {
-        FileInputStream(File(recording.id))
+        FileInputStream(file)
     } catch (_: Exception) {
         return null
     }
     val openedIdentity = resolveFileDescriptorIdentity(stream.fd)
-    if (!fileDescriptorIdentityMatches(recording.fileIdentity, openedIdentity)) {
+    val afterObservation = observeStoragePath(file)
+    val afterIdentity = if (afterObservation.state == StoragePathState.PRESENT && afterObservation.isRegularFile) {
+        resolveFileIdentity(file)
+    } else {
+        ""
+    }
+    if (!verifiedFileReadHandoffMatchesExpected(
+            expectedIdentity = recording.fileIdentity,
+            beforePathIdentity = beforeIdentity,
+            descriptorIdentity = openedIdentity,
+            afterPathIdentity = afterIdentity,
+        )
+    ) {
         closeRejectedOwnerOrThrow { stream.close() }
         return null
     }
     return stream
 }
+
+internal fun verifiedFileReadHandoffMatchesExpected(
+    expectedIdentity: String,
+    beforePathIdentity: String,
+    descriptorIdentity: String,
+    afterPathIdentity: String,
+): Boolean = fileIdentityMatches(expectedIdentity, beforePathIdentity) &&
+    fileDescriptorIdentityMatches(expectedIdentity, descriptorIdentity) &&
+    fileIdentityMatches(expectedIdentity, afterPathIdentity) &&
+    fileDescriptorIdentityMatches(afterPathIdentity, descriptorIdentity)
 
 internal fun sha256StableRecording(
     context: Context,
@@ -3606,7 +3636,11 @@ internal fun stagingFileDescriptorMatchesCreation(
 private fun queryCreatedFileOutput(target: RecordingOutputTarget): NewlyCreatedOutputObservation? {
     val file = target.file ?: return null
     val attributes = try {
-        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+        Files.readAttributes(
+            file.toPath(),
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
     } catch (_: Exception) {
         return null
     }

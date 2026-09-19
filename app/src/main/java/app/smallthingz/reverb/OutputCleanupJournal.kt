@@ -726,15 +726,27 @@ internal fun readStableOutputFingerprint(
 }.getOrNull()
 
 internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprint? = runCatching {
+    val beforeObservation = observeStoragePath(file)
+    if (beforeObservation.state != StoragePathState.PRESENT || !beforeObservation.isRegularFile) {
+        return@runCatching null
+    }
+    val beforeIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
     FileInputStream(file).use { input ->
         val openedIdentity = resolveFileDescriptorIdentity(input.fd)
             .takeIf { it.isNotBlank() } ?: return@runCatching null
+        if (!fileDescriptorIdentityMatches(beforeIdentity, openedIdentity)) return@runCatching null
         val digest = sha256(input)
         val closedIdentity = resolveFileDescriptorIdentity(input.fd)
         if (openedIdentity != closedIdentity) return@runCatching null
-        val pathIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
-        if (!fileDescriptorIdentityMatches(pathIdentity, closedIdentity)) return@runCatching null
-        StableOutputFingerprint(digest, fileKey = pathIdentity, providerIdentity = null)
+        val afterObservation = observeStoragePath(file)
+        if (afterObservation.state != StoragePathState.PRESENT || !afterObservation.isRegularFile) {
+            return@runCatching null
+        }
+        val afterIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
+        if (!fileIdentityMatches(beforeIdentity, afterIdentity) ||
+            !fileDescriptorIdentityMatches(afterIdentity, closedIdentity)
+        ) return@runCatching null
+        StableOutputFingerprint(digest, fileKey = beforeIdentity, providerIdentity = null)
     }
 }.getOrNull()
 
@@ -743,13 +755,14 @@ private fun outputCleanupAssetState(
     storageType: RecordingStorageType,
     id: String,
 ): OutputCleanupAssetState = when (storageType) {
-    RecordingStorageType.FILE -> try {
-        val attrs = Files.readAttributes(File(id).toPath(), BasicFileAttributes::class.java)
-        if (attrs.isRegularFile) OutputCleanupAssetState.PRESENT else OutputCleanupAssetState.MISSING
-    } catch (_: NoSuchFileException) {
-        OutputCleanupAssetState.MISSING
-    } catch (_: Exception) {
-        OutputCleanupAssetState.UNAVAILABLE
+    RecordingStorageType.FILE -> when (val observation = observeStoragePath(File(id))) {
+        StoragePathObservation(StoragePathState.MISSING, false) -> OutputCleanupAssetState.MISSING
+        StoragePathObservation(StoragePathState.UNAVAILABLE, false) -> OutputCleanupAssetState.UNAVAILABLE
+        else -> if (observation.state == StoragePathState.PRESENT && observation.isRegularFile) {
+            OutputCleanupAssetState.PRESENT
+        } else {
+            OutputCleanupAssetState.UNAVAILABLE
+        }
     }
     RecordingStorageType.DOCUMENT -> try {
         context.contentResolver.query(

@@ -30,6 +30,38 @@ class StoragePathStateTest {
     }
 
     @Test
+    fun fileIdentityAndVerifiedReads_rejectSymbolicLinksBeforeAuthority() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "identity-link-").toFile()
+        try {
+            val target = File(root, "target.wav").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val targetIdentity = resolveFileIdentity(target)
+            assertTrue(targetIdentity.isNotBlank())
+            val link = File(root, "recording.wav")
+            Files.createSymbolicLink(link.toPath(), target.toPath().toAbsolutePath())
+
+            assertEquals("", resolveFileIdentity(link))
+            assertEquals(RecordingAssetState.MISSING, fileRecordingAssetState(link))
+            assertEquals(null, readStableFileOutputFingerprint(link))
+            val recording = RecordingEntity(
+                id = link.absolutePath,
+                displayName = link.name,
+                mimeType = "audio/wav",
+                startedAtMillis = 0L,
+                durationMillis = 1L,
+                sizeBytes = target.length(),
+                codecSummary = "PCM",
+                storageType = RecordingStorageType.FILE,
+                directoryId = root.absolutePath,
+                fileIdentity = targetIdentity,
+            )
+            assertEquals(null, openVerifiedFileInputStream(recording))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun observeStoragePath_danglingSymbolicLinkRemainsPresentAndNonRegular() {
         val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "dangling-").toFile()
