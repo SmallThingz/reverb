@@ -303,14 +303,18 @@ private data class RetrievedMediaMetadata(
     val sampleRate: Int?,
 )
 
-private fun inspectRecordingMedia(file: File): RecordingMediaMetadata {
+private fun inspectRecordingMedia(
+    descriptor: FileDescriptor,
+    displayName: String,
+    fallbackDurationMillis: Long,
+): RecordingMediaMetadata {
     val retriever = MediaMetadataRetriever()
     val metadata = try {
         withOwnedResource(
             owner = retriever,
             release = { it.release() },
         ) { configured ->
-            configured.setDataSource(file.absolutePath)
+            configured.setDataSource(descriptor)
             RetrievedMediaMetadata(
                 durationMillis = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
                 bitrate = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
@@ -320,20 +324,17 @@ private fun inspectRecordingMedia(file: File): RecordingMediaMetadata {
             )
         }
     } catch (error: Exception) {
-        Log.w(TAG, "Unable to inspect recording metadata for $file", error)
+        Log.w(TAG, "Unable to inspect recording metadata for $displayName", error)
         null
     }
 
     val duration = metadata?.durationMillis?.takeIf { it > 0L }
-        ?: if (file.extension.equals(ExportFormat.WAV.extension, ignoreCase = true)) {
-            readWavDurationMillis(file)
-        } else {
-            0L
-        }
+        ?: fallbackDurationMillis.takeIf { it > 0L }
+        ?: 0L
     return RecordingMediaMetadata(
         durationMillis = duration,
         codecSummary = resolveRecordingCodecInfo(
-            extension = file.extension,
+            extension = displayName.substringAfterLast('.', ""),
             bitrate = metadata?.bitrate,
             sampleRate = metadata?.sampleRate,
         ),
@@ -1527,6 +1528,14 @@ internal fun resolveFileDescriptorIdentity(descriptor: FileDescriptor): String =
     if (stat.st_ino == 0L) "" else "statfd:${stat.st_dev}:${stat.st_ino}:${stat.st_ctim.tv_sec}:${stat.st_ctim.tv_nsec}"
 }.getOrDefault("")
 
+internal fun resolveFileDescriptorModifiedTimeMillis(descriptor: FileDescriptor): Long = runCatching {
+    val stat = Os.fstat(descriptor)
+    Math.addExact(
+        Math.multiplyExact(stat.st_mtim.tv_sec, 1_000L),
+        stat.st_mtim.tv_nsec / 1_000_000L,
+    )
+}.getOrDefault(0L)
+
 private fun buildStatFileIdentity(
     dev: Long,
     ino: Long,
@@ -1578,6 +1587,18 @@ internal fun fileDescriptorIdentityMatches(storedIdentity: String, descriptorIde
         stored[1] == descriptor[1] && stored[2] == descriptor[2] &&
         stored[3] == descriptor[3] && stored[4] == descriptor[4]
 }
+
+internal fun scannedFileRecordingIdentityRemainsCurrent(
+    beforePathIdentity: String,
+    openedDescriptorIdentity: String,
+    afterReadDescriptorIdentity: String,
+    afterPathIdentity: String,
+): Boolean = beforePathIdentity.isNotBlank() &&
+    afterPathIdentity.isNotBlank() &&
+    fileDescriptorIdentityMatches(beforePathIdentity, openedDescriptorIdentity) &&
+    openedDescriptorIdentity == afterReadDescriptorIdentity &&
+    fileIdentityMatches(beforePathIdentity, afterPathIdentity) &&
+    fileDescriptorIdentityMatches(afterPathIdentity, afterReadDescriptorIdentity)
 
 internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     if (recording.storageType != RecordingStorageType.FILE) return true
@@ -2396,44 +2417,74 @@ private fun listFileDirectoryRecordings(
                 FileDirectoryEntryScanAction.SCAN -> Unit
             }
             val id = file.absolutePath
-            val size = listedRecordingFileSize(file) ?: return@mapNotNull null
-            if (size <= 0L) return@mapNotNull null
+            val listedSize = listedRecordingFileSize(file) ?: return@mapNotNull null
             val identity = resolveFileIdentity(file)
             val existing = knownRecordings[id]
             if (
                 existing != null && existing.durationMillis > 0L &&
-                existing.displayName == file.name && existing.sizeBytes == size &&
+                existing.displayName == file.name && existing.sizeBytes == listedSize &&
                 fileIdentityMatches(existing.fileIdentity, identity)
             ) {
                 existing
             } else {
-                val strictDuration = try {
+                val scan = try {
                     FileInputStream(file).use { input ->
-                        structurallyCompleteRecordingDurationMillis(file.name, input)
+                        val openedDescriptorIdentity = resolveFileDescriptorIdentity(input.fd)
+                        if (!fileDescriptorIdentityMatches(identity, openedDescriptorIdentity)) {
+                            throw IOException("Recording path changed before descriptor scan: $file")
+                        }
+                        val descriptorSize = input.channel.size()
+                        val strictDuration = if (descriptorSize > 0L) {
+                            structurallyCompleteRecordingDurationMillis(file.name, input)
+                        } else {
+                            0L
+                        }
+                        val media = if (strictDuration > 0L) {
+                            inspectRecordingMedia(
+                                descriptor = input.fd,
+                                displayName = file.name,
+                                fallbackDurationMillis = strictDuration,
+                            )
+                        } else {
+                            RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
+                        }
+                        val startedAtMillis = resolveRecordingStartTimeMillis(
+                            displayName = file.name,
+                            fallbackMillis = resolveFileDescriptorModifiedTimeMillis(input.fd),
+                        )
+                        val afterReadDescriptorIdentity = resolveFileDescriptorIdentity(input.fd)
+                        ScannedFileRecording(
+                            strictDurationMillis = strictDuration,
+                            sizeBytes = descriptorSize,
+                            codecSummary = media.codecSummary,
+                            startedAtMillis = startedAtMillis,
+                            openedDescriptorIdentity = openedDescriptorIdentity,
+                            afterReadDescriptorIdentity = afterReadDescriptorIdentity,
+                        )
                     }
                 } catch (_: NoSuchFileException) {
                     return@mapNotNull null
                 } catch (error: Exception) {
                     throw IOException("Unable to validate discovered recording $file", error)
                 }
-                if (strictDuration <= 0L) return@mapNotNull null
-                val media = inspectRecordingMedia(file)
-                if (!scannedRecordingIdentityRemainsCurrent(
-                        storageType = RecordingStorageType.FILE,
-                        beforeValidation = identity,
-                        afterValidation = resolveFileIdentity(file),
+                if (!scannedFileRecordingIdentityRemainsCurrent(
+                        beforePathIdentity = identity,
+                        openedDescriptorIdentity = scan.openedDescriptorIdentity,
+                        afterReadDescriptorIdentity = scan.afterReadDescriptorIdentity,
+                        afterPathIdentity = resolveFileIdentity(file),
                     )
                 ) {
                     throw IOException("Recording changed while scanning $file")
                 }
+                if (scan.strictDurationMillis <= 0L || scan.sizeBytes <= 0L) return@mapNotNull null
                 RecordingEntity(
                     id = id,
                     displayName = file.name,
                     mimeType = guessMimeType(file.name),
-                    startedAtMillis = resolveRecordingStartTimeMillis(file),
-                    durationMillis = strictDuration,
-                    sizeBytes = size,
-                    codecSummary = media.codecSummary,
+                    startedAtMillis = scan.startedAtMillis,
+                    durationMillis = scan.strictDurationMillis,
+                    sizeBytes = scan.sizeBytes,
+                    codecSummary = scan.codecSummary,
                     storageType = RecordingStorageType.FILE,
                     directoryId = directory.absolutePath,
                     fileIdentity = identity,
@@ -2442,6 +2493,15 @@ private fun listFileDirectoryRecordings(
         }
         .toList()
 }
+
+private data class ScannedFileRecording(
+    val strictDurationMillis: Long,
+    val sizeBytes: Long,
+    val codecSummary: String,
+    val startedAtMillis: Long,
+    val openedDescriptorIdentity: String,
+    val afterReadDescriptorIdentity: String,
+)
 
 private fun listDocumentTreeRecordings(
     context: Context,

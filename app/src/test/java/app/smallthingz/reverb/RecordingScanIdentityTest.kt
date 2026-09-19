@@ -6,6 +6,39 @@ import org.junit.Test
 
 class RecordingScanIdentityTest {
     @Test
+    fun fileScanIdentity_requiresPinnedDescriptorAndCurrentPath() {
+        val path = "stat:1:2:3:4:5"
+        val descriptor = "statfd:1:2:3:4"
+        assertTrue(scannedFileRecordingIdentityRemainsCurrent(path, descriptor, descriptor, path))
+
+        assertFalse(
+            scannedFileRecordingIdentityRemainsCurrent(
+                path,
+                "statfd:1:9:3:4",
+                "statfd:1:9:3:4",
+                path,
+            ),
+        )
+        assertFalse(
+            scannedFileRecordingIdentityRemainsCurrent(
+                path,
+                descriptor,
+                "statfd:1:2:8:9",
+                path,
+            ),
+        )
+        assertFalse(
+            scannedFileRecordingIdentityRemainsCurrent(
+                path,
+                descriptor,
+                descriptor,
+                "stat:1:9:3:4:5",
+            ),
+        )
+        assertFalse(scannedFileRecordingIdentityRemainsCurrent("", descriptor, descriptor, ""))
+    }
+
+    @Test
     fun scanIdentity_requiresStableKnownRevisionAcrossValidation() {
         val file = "stat:1:2:3:4:5"
         assertTrue(scannedRecordingIdentityRemainsCurrent(RecordingStorageType.FILE, file, file))
