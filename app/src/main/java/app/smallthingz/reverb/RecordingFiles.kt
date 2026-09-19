@@ -305,18 +305,24 @@ private data class RetrievedMediaMetadata(
 
 private fun inspectRecordingMedia(file: File): RecordingMediaMetadata {
     val retriever = MediaMetadataRetriever()
-    val metadata = runCatching {
-        retriever.setDataSource(file.absolutePath)
-        RetrievedMediaMetadata(
-            durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
-            bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
-            sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
-            } else null,
-        )
-    }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $file", it) }
-        .getOrNull()
-    runCatching { retriever.release() }
+    val metadata = try {
+        withOwnedResource(
+            owner = retriever,
+            release = { it.release() },
+        ) { configured ->
+            configured.setDataSource(file.absolutePath)
+            RetrievedMediaMetadata(
+                durationMillis = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
+                bitrate = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
+                sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                } else null,
+            )
+        }
+    } catch (error: Exception) {
+        Log.w(TAG, "Unable to inspect recording metadata for $file", error)
+        null
+    }
 
     val duration = metadata?.durationMillis?.takeIf { it > 0L }
         ?: if (file.extension.equals(ExportFormat.WAV.extension, ignoreCase = true)) {
@@ -340,18 +346,24 @@ private fun inspectRecordingMedia(
     displayName: String,
 ): RecordingMediaMetadata {
     val retriever = MediaMetadataRetriever()
-    val metadata = runCatching {
-        retriever.setDataSource(context, uri)
-        RetrievedMediaMetadata(
-            durationMillis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
-            bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
-            sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
-            } else null,
-        )
-    }.onFailure { Log.w(TAG, "Unable to inspect recording metadata for $uri", it) }
-        .getOrNull()
-    runCatching { retriever.release() }
+    val metadata = try {
+        withOwnedResource(
+            owner = retriever,
+            release = { it.release() },
+        ) { configured ->
+            configured.setDataSource(context, uri)
+            RetrievedMediaMetadata(
+                durationMillis = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull(),
+                bitrate = configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
+                sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    configured.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                } else null,
+            )
+        }
+    } catch (error: Exception) {
+        Log.w(TAG, "Unable to inspect recording metadata for $uri", error)
+        null
+    }
 
     val duration = metadata?.durationMillis?.takeIf { it > 0L }
         ?: if (displayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) {
