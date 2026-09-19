@@ -71,6 +71,10 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
     DATABASE_VERSION,
     PreservingRecordingDatabaseErrorHandler(context.applicationContext, DATABASE_NAME),
 ) {
+    private val managedFileDirectoryIds = setOf(
+        getSavedRecordingsDirectory(context.applicationContext).absolutePath,
+        getSharedMusicRecordingsDirectory().absolutePath,
+    )
     private val dao = DaoImpl()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -114,7 +118,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 null,
                 null,
                 "$COLUMN_STARTED_AT_MILLIS DESC, $COLUMN_CREATED_AT_MILLIS DESC",
-            ).use(::readRecordings)
+            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
         }
 
         override suspend fun findById(id: String): RecordingEntity? {
@@ -127,7 +131,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 null,
                 null,
                 "1",
-            ).use(::readRecordings).firstOrNull()
+            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }.firstOrNull()
         }
 
         override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> {
@@ -139,7 +143,7 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 null,
                 null,
                 "$COLUMN_STARTED_AT_MILLIS DESC, $COLUMN_CREATED_AT_MILLIS DESC",
-            ).use(::readRecordings)
+            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
         }
 
         override suspend fun upsert(recording: RecordingEntity) {
@@ -613,11 +617,14 @@ internal fun recordingCatalogLocationIsValid(
     storageType: RecordingStorageType,
     id: String,
     directoryId: String,
+    managedFileDirectoryIds: Set<String> = emptySet(),
 ): Boolean = when (storageType) {
     RecordingStorageType.FILE -> {
         val file = File(id)
         val directory = File(directoryId)
-        recordingStorageIdIsValid(storageType, id) && directory.isAbsolute &&
+        recordingStorageIdIsValid(storageType, id) &&
+            directory.isAbsolute &&
+            directory.absolutePath in managedFileDirectoryIds &&
             file.parentFile?.absolutePath == directory.absolutePath
     }
     RecordingStorageType.DOCUMENT -> recordingStorageIdIsValid(storageType, id) &&
@@ -626,7 +633,10 @@ internal fun recordingCatalogLocationIsValid(
         directoryId == MEDIA_STORE_DIRECTORY_ID
 }
 
-private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
+private fun readRecordings(
+    cursor: Cursor,
+    managedFileDirectoryIds: Set<String>,
+): List<RecordingEntity> {
     val idIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_ID)
     val displayNameIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_DISPLAY_NAME)
     val mimeTypeIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_MIME_TYPE)
@@ -682,6 +692,7 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
                 storageType = storage,
                 id = requireNotNull(id),
                 directoryId = requireNotNull(directoryId),
+                managedFileDirectoryIds = managedFileDirectoryIds,
             )
         ) {
             Log.w("RecordingDatabase", "Skipping catalog row with malformed storage location: $id")

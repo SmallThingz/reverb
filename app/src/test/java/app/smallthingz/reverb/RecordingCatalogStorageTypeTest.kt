@@ -89,11 +89,13 @@ class RecordingCatalogStorageTypeTest {
 
     @Test
     fun catalogLocation_requiresStorageSpecificAuthorityShape() {
+        val managedFileDirectories = setOf("/recordings", "/legacy-recordings")
         assertTrue(
             recordingCatalogLocationIsValid(
                 RecordingStorageType.FILE,
                 "/recordings/a.wav",
                 "/recordings",
+                managedFileDirectories,
             ),
         )
         assertFalse(
@@ -101,6 +103,7 @@ class RecordingCatalogStorageTypeTest {
                 RecordingStorageType.FILE,
                 "relative/a.wav",
                 "/recordings",
+                managedFileDirectories,
             ),
         )
         assertFalse(
@@ -108,6 +111,23 @@ class RecordingCatalogStorageTypeTest {
                 RecordingStorageType.FILE,
                 "/other/a.wav",
                 "/recordings",
+                managedFileDirectories,
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.FILE,
+                "/outside/a.wav",
+                "/outside",
+                managedFileDirectories,
+            ),
+        )
+        assertTrue(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.FILE,
+                "/legacy-recordings/a.wav",
+                "/legacy-recordings",
+                managedFileDirectories,
             ),
         )
         assertTrue(
