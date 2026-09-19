@@ -1322,16 +1322,21 @@ class ReverbService : Service() {
                 )
                 .setBufferSizeInBytes(maxOf(minBuffer * 2, MIN_AUDIO_RECORD_BUFFER_SIZE))
                 .build()
-            if (inputRouteMode == InputRouteMode.BUILTIN_MIC) {
-                val builtInMic = findBuiltInMicrophone(this)
-                val routeAccepted = builtInMic != null &&
-                    runCatching { record.setPreferredDevice(builtInMic) }.getOrDefault(false)
-                if (!routeAccepted) {
-                    runCatching { record.release() }
-                    return null
+            configureOwnedResourceOrRelease(
+                owner = record,
+                release = { it.release() },
+            ) { configured ->
+                check(configured.state == AudioRecord.STATE_INITIALIZED) {
+                    "AudioRecord failed to initialize"
+                }
+                if (inputRouteMode == InputRouteMode.BUILTIN_MIC) {
+                    val builtInMic = findBuiltInMicrophone(this)
+                        ?: error("Built-in microphone unavailable")
+                    check(configured.setPreferredDevice(builtInMic)) {
+                        "Unable to select built-in microphone"
+                    }
                 }
             }
-            record
         } catch (error: Exception) {
             Log.e(TAG, "Unable to create AudioRecord", error)
             null
