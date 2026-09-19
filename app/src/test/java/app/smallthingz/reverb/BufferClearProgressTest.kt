@@ -125,6 +125,22 @@ class BufferClearProgressTest {
                 failureAlreadyRequested = true,
             ),
         )
+        assertEquals(
+            BufferClearPhase.FAILED,
+            bufferClearCancellationTerminal(
+                reportFailure = false,
+                cancelRequested = false,
+                serviceDestroying = true,
+            ),
+        )
+        assertEquals(
+            BufferClearPhase.CANCELLED,
+            bufferClearCancellationTerminal(
+                reportFailure = false,
+                cancelRequested = true,
+                serviceDestroying = true,
+            ),
+        )
     }
 
     @Test

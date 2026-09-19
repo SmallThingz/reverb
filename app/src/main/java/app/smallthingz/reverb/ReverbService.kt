@@ -3240,8 +3240,18 @@ class ReverbService : Service() {
         reportFailure
     }
 
-    private fun bufferClearCancellationPhase(operation: BufferClearOperation): BufferClearPhase =
-        bufferClearCancellationTerminal(operation.cancellationReportsFailure.get())
+    private fun bufferClearCancellationPhase(operation: BufferClearOperation): BufferClearPhase {
+        // onDestroy publishes serviceDestroying before it can acquire bufferClearLock to mark
+        // this operation as a failed cancellation. Read the user-cancel bit first: observing
+        // teardown in that gap must still fail, while an already-requested user Cancel stays neutral.
+        val cancelRequested = operation.cancelRequested.get()
+        val reportFailure = operation.cancellationReportsFailure.get()
+        return bufferClearCancellationTerminal(
+            reportFailure = reportFailure,
+            cancelRequested = cancelRequested,
+            serviceDestroying = serviceDestroying,
+        )
+    }
 
     private fun runBufferClear(operation: BufferClearOperation) {
         val store = chunkStore(operation.bufferSlot)
