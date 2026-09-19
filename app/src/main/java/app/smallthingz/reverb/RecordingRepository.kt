@@ -1305,12 +1305,26 @@ private fun pendingDeletionOwnsClaimPath(rawEntries: Set<String>, claimPath: Str
         decodePendingDeletionIntent(raw)?.let(::deletionClaimFile)?.absolutePath == claimPath
     }
 
+internal fun tornPendingDeletionSourceHasManagedFileAuthority(
+    sourceId: String,
+    managedDirectoryIds: Set<String>,
+): Boolean = recordingFileStorageIdIsManaged(sourceId, managedDirectoryIds)
+
 private fun preserveTornPendingDeletionClaims(
     context: Context,
     raw: String,
     pendingDeletionSnapshot: Set<String>,
 ): Boolean {
     val sourceId = tornPendingDeletionFileSourceId(raw) ?: return true
+    if (!tornPendingDeletionSourceHasManagedFileAuthority(
+            sourceId,
+            managedRecordingFileDirectoryIds(context),
+        )
+    ) {
+        // Keep the torn record as suppression-only evidence, but never inspect or rename claim
+        // files beneath an arbitrary absolute directory recovered from malformed metadata.
+        return false
+    }
     return preserveOrphanedDeletionClaims(sourceId) { claim ->
         pendingDeletionOwnsClaimPath(pendingDeletionSnapshot, claim.absolutePath) ||
             pendingOutputCleanupOwnsClaimPath(context, claim.absolutePath)

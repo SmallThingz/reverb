@@ -23,6 +23,20 @@ class TornDeletionClaimRecoveryTest {
 
         assertNull(decodePendingDeletionIntent(malformed))
         assertEquals(id, tornPendingDeletionFileSourceId(malformed))
+        val managed = setOf("/storage/emulated/0/Music/Reverb")
+        assertTrue(tornPendingDeletionSourceHasManagedFileAuthority(id, managed))
+        assertFalse(
+            tornPendingDeletionSourceHasManagedFileAuthority(
+                "/storage/emulated/0/Download/clip.wav",
+                managed,
+            ),
+        )
+        assertFalse(
+            tornPendingDeletionSourceHasManagedFileAuthority(
+                "/storage/emulated/0/Music/Reverb/nested/clip.wav",
+                managed,
+            ),
+        )
 
         val providerCode = RecordingStorageType.MEDIASTORE.storageCode.toInt()
         val providerMalformed = "v3|$encodedId|4|$sha|0|$providerCode|not-a-uuid|broken"
