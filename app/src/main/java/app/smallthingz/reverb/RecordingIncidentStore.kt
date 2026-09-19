@@ -68,6 +68,15 @@ internal fun toggleRecordingIncidentAcknowledgement(
     acknowledgedAtMillis = if (incident.acknowledged) 0L else acknowledgedAtMillis.coerceAtLeast(1L),
 )
 
+internal inline fun throwIncidentAtomicWriteFailure(
+    primaryFailure: Throwable,
+    committed: Boolean,
+    rollback: () -> Unit,
+): Nothing {
+    if (!committed) throwAfterClosePreservingPrimary(primaryFailure, rollback)
+    throw primaryFailure
+}
+
 internal inline fun runIncidentHistoryMutation(
     mutation: () -> Unit,
     onFailure: (Exception) -> Unit,
@@ -1135,8 +1144,11 @@ internal object RecordingIncidentStore {
                 throw IOException("Unable to persist incident-state publication: ${file.baseFile.absolutePath}")
             }
         } catch (error: Throwable) {
-            if (!committed) file.failWrite(stream)
-            throw error
+            throwIncidentAtomicWriteFailure(
+                primaryFailure = error,
+                committed = committed,
+                rollback = { file.failWrite(stream) },
+            )
         }
     }
 }

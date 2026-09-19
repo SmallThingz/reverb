@@ -10,6 +10,46 @@ import org.junit.Test
 
 class RecordingIncidentStoreTest {
     @Test
+    fun incidentAtomicRollbackFailure_keepsWriteFailurePrimary() {
+        val primary = IOException("incident write failed")
+        val rollback = IllegalStateException("incident rollback failed")
+        var observed: Throwable? = null
+
+        try {
+            throwIncidentAtomicWriteFailure(
+                primaryFailure = primary,
+                committed = false,
+                rollback = { throw rollback },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertTrue(primary.suppressed.contains(rollback))
+    }
+
+    @Test
+    fun incidentAtomicPostCommitFailure_neverRollsBackPublishedState() {
+        val primary = IOException("incident directory sync failed")
+        var rollbackCalled = false
+        var observed: Throwable? = null
+
+        try {
+            throwIncidentAtomicWriteFailure(
+                primaryFailure = primary,
+                committed = true,
+                rollback = { rollbackCalled = true },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertFalse(rollbackCalled)
+    }
+
+    @Test
     fun everyObservedProcessExitInterruptsAnArmedCapture() {
         listOf(
             ApplicationExitInfo.REASON_UNKNOWN,
