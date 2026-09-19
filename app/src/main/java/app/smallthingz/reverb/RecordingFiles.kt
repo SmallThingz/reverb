@@ -1593,12 +1593,13 @@ internal fun scannedFileRecordingIdentityRemainsCurrent(
     openedDescriptorIdentity: String,
     afterReadDescriptorIdentity: String,
     afterPathIdentity: String,
-): Boolean = beforePathIdentity.isNotBlank() &&
+): Boolean = beforePathIdentity.isBlank() || (
     afterPathIdentity.isNotBlank() &&
-    fileDescriptorIdentityMatches(beforePathIdentity, openedDescriptorIdentity) &&
-    openedDescriptorIdentity == afterReadDescriptorIdentity &&
-    fileIdentityMatches(beforePathIdentity, afterPathIdentity) &&
-    fileDescriptorIdentityMatches(afterPathIdentity, afterReadDescriptorIdentity)
+        fileDescriptorIdentityMatches(beforePathIdentity, openedDescriptorIdentity) &&
+        openedDescriptorIdentity == afterReadDescriptorIdentity &&
+        fileIdentityMatches(beforePathIdentity, afterPathIdentity) &&
+        fileDescriptorIdentityMatches(afterPathIdentity, afterReadDescriptorIdentity)
+    )
 
 internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     if (recording.storageType != RecordingStorageType.FILE) return true
@@ -2437,7 +2438,10 @@ private fun listFileDirectoryRecordings(
                 val scan = try {
                     FileInputStream(file).use { input ->
                         val openedDescriptorIdentity = resolveFileDescriptorIdentity(input.fd)
-                        if (!fileDescriptorIdentityMatches(identity, openedDescriptorIdentity)) {
+                        if (
+                            identity.isNotBlank() &&
+                            !fileDescriptorIdentityMatches(identity, openedDescriptorIdentity)
+                        ) {
                             throw IOException("Recording path changed before descriptor scan: $file")
                         }
                         val descriptorSize = input.channel.size()

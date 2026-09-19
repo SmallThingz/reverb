@@ -35,7 +35,15 @@ class RecordingScanIdentityTest {
                 "stat:1:9:3:4:5",
             ),
         )
-        assertFalse(scannedFileRecordingIdentityRemainsCurrent("", descriptor, descriptor, ""))
+        assertTrue(scannedFileRecordingIdentityRemainsCurrent("", descriptor, descriptor, ""))
+        assertTrue(
+            scannedFileRecordingIdentityRemainsCurrent(
+                "",
+                descriptor,
+                "statfd:9:9:9:9",
+                "stat:9:9:9:9:9",
+            ),
+        )
     }
 
     @Test
