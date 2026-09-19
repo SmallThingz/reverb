@@ -14,6 +14,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.system.Os
+import android.system.OsConstants
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
@@ -1602,30 +1603,51 @@ internal fun providerDeletionCompleted(observedState: RecordingAssetState): Bool
     observedState == RecordingAssetState.MISSING
 
 internal fun resolveFileIdentity(file: File): String {
-    val attributes = runCatching {
+    fun readRegularAttributes(): BasicFileAttributes? = runCatching {
         Files.readAttributes(
             file.toPath(),
             BasicFileAttributes::class.java,
             LinkOption.NOFOLLOW_LINKS,
         )
-    }.getOrNull() ?: return ""
-    if (!attributes.isRegularFile) return ""
+    }.getOrNull()?.takeIf(BasicFileAttributes::isRegularFile)
+
+    val attributes = readRegularAttributes() ?: return ""
     val birthNanos = attributes.creationTime().let { time ->
         runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
     }
 
     val statIdentity = runCatching {
-        val stat = Os.stat(file.absolutePath)
-        if (stat.st_ino == 0L) "" else buildStatFileIdentity(
-            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, birthNanos,
+        val stat = Os.lstat(file.absolutePath)
+        if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_ino == 0L) return@runCatching ""
+        val confirmed = readRegularAttributes() ?: return@runCatching ""
+        val initialKey = attributes.fileKey()?.toString().orEmpty()
+        val confirmedKey = confirmed.fileKey()?.toString().orEmpty()
+        if (initialKey.isNotBlank() && confirmedKey.isNotBlank() && initialKey != confirmedKey) {
+            return@runCatching ""
+        }
+        val confirmedBirthNanos = confirmed.creationTime().let { time ->
+            runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+        }
+        if (birthNanos != 0L && confirmedBirthNanos != 0L && birthNanos != confirmedBirthNanos) {
+            return@runCatching ""
+        }
+        buildStatFileIdentity(
+            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, confirmedBirthNanos,
         )
     }.getOrDefault("")
     if (statIdentity.isNotBlank()) return statIdentity
 
+    // Android/JVM environments without a usable lstat inode fall back to NIO. Re-sample the
+    // path entry immediately before deriving that identity so a symlink swap after the first
+    // observation cannot inherit the previous regular file's key.
+    val fallbackAttributes = readRegularAttributes() ?: return ""
+    val fallbackBirthNanos = fallbackAttributes.creationTime().let { time ->
+        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+    }
     return runCatching {
-        val key = attributes.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
+        val key = fallbackAttributes.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
         val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
-        "nio:$encodedKey:$birthNanos"
+        "nio:$encodedKey:$fallbackBirthNanos"
     }.getOrDefault("")
 }
 
@@ -2374,6 +2396,28 @@ internal fun listLegacyAppStorageRecordings(
     )
 }
 
+internal fun readRecoverableStagingFile(file: File): RecoverableStagingWav? {
+    val beforeObservation = observeStoragePath(file)
+    if (beforeObservation.state != StoragePathState.PRESENT || !beforeObservation.isRegularFile) return null
+    val beforeIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return null
+    return FileInputStream(file).use { input ->
+        val openedIdentity = resolveFileDescriptorIdentity(input.fd).takeIf { it.isNotBlank() } ?: return@use null
+        if (!fileDescriptorIdentityMatches(beforeIdentity, openedIdentity)) return@use null
+        val observation = readRecoverableStagingWav(input) ?: return@use null
+        val afterReadIdentity = resolveFileDescriptorIdentity(input.fd)
+        if (openedIdentity != afterReadIdentity) return@use null
+        val afterObservation = observeStoragePath(file)
+        if (afterObservation.state != StoragePathState.PRESENT || !afterObservation.isRegularFile) return@use null
+        val afterIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@use null
+        if (!fileIdentityMatches(beforeIdentity, afterIdentity) ||
+            !fileDescriptorIdentityMatches(afterIdentity, afterReadIdentity)
+        ) {
+            return@use null
+        }
+        observation
+    }
+}
+
 private fun recoverStagedFileOutputs(
     context: Context,
     directory: File,
@@ -2384,7 +2428,10 @@ private fun recoverStagedFileOutputs(
     files.forEach { file ->
         if (file.absolutePath in suppressedIds) return@forEach
         val name = file.name
-        if (!file.isFile || !isStagingOutputName(name)) return@forEach
+        val pathObservation = observeStoragePath(file)
+        if (pathObservation.state != StoragePathState.PRESENT || !pathObservation.isRegularFile ||
+            !isStagingOutputName(name)
+        ) return@forEach
         val metadata = parseStagingOutputMetadata(name) ?: return@forEach
         val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
             verifiedExportStagingFingerprint(context, RecordingStorageType.FILE, file.absolutePath)
@@ -2392,8 +2439,8 @@ private fun recoverStagedFileOutputs(
             null
         }
         if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
-        if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true) || file.length() <= 0L) return@forEach
-        val observation = runCatching { FileInputStream(file).use(::readRecoverableStagingWav) }
+        if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
+        val observation = runCatching { readRecoverableStagingFile(file) }
             .onFailure { Log.w(TAG, "Unable to inspect staging recording $file", it) }
             .getOrNull() ?: return@forEach
         val target = RecordingOutputTarget(

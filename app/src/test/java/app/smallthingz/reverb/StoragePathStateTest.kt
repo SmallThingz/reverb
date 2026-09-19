@@ -62,6 +62,41 @@ class StoragePathStateTest {
     }
 
     @Test
+    fun recoverableStagingRead_rejectsSymbolicLinkBeforeReadingTarget() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "staging-link-").toFile()
+        try {
+            val payload = ByteArray(160)
+            val target = File(root, "target.wav").apply {
+                writeBytes(buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_16, payload.size.toLong()) + payload)
+            }
+            val link = File(root, ".reverb-export-test.pending")
+            Files.createSymbolicLink(link.toPath(), target.toPath().toAbsolutePath())
+
+            assertEquals(null, readRecoverableStagingFile(link))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recoverableStagingRead_acceptsStableRegularFile() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "staging-regular-").toFile()
+        try {
+            val payload = ByteArray(160)
+            val file = File(root, ".reverb-export-test.pending").apply {
+                writeBytes(buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_16, payload.size.toLong()) + payload)
+            }
+            val observation = requireNotNull(readRecoverableStagingFile(file))
+            assertEquals(10L, observation.durationMillis)
+            assertEquals(file.length(), observation.digest.byteCount)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun observeStoragePath_danglingSymbolicLinkRemainsPresentAndNonRegular() {
         val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "dangling-").toFile()
