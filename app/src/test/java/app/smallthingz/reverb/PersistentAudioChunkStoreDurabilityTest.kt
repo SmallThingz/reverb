@@ -1135,6 +1135,34 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun oversizedRetirementMarker_failsClosedWithoutReadingWholeFile() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        PersistentAudioChunkStore(root).use { store ->
+            configure(store, 128 * 1024L)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            store.sealActiveChunk()
+        }
+
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val chunkBefore = chunk.readBytes()
+        val marker = File(root, "retired/0").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(1_024) { 'x'.code.toByte() })
+        }
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            val error = assertThrows(IOException::class.java) {
+                configure(reopened, 128 * 1024L)
+            }
+            assertTrue(error.cause?.message?.contains("exceeds 256 bytes") == true)
+        }
+
+        assertEquals(1_024L, marker.length())
+        assertTrue(chunk.isFile)
+        assertArrayEquals(chunkBefore, chunk.readBytes())
+    }
+
+    @Test
     fun malformedRetirementMarker_neverResurrectsChunkAfterIndexLoss() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         PersistentAudioChunkStore(root).use { store ->

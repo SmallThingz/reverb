@@ -1278,7 +1278,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             val filenameId = file.name.toUIntOrNull() ?: continue
             val raw = try {
-                file.readText(Charsets.UTF_8)
+                readRetirementTombstoneText(file)
             } catch (error: IOException) {
                 throw IOException("Unable to read retirement marker: ${file.absolutePath}", error)
             } catch (error: SecurityException) {
@@ -1288,6 +1288,28 @@ internal class PersistentAudioChunkStore internal constructor(
             result[filenameId] = identity?.takeIf { it.id == filenameId }
         }
         return result
+    }
+
+    private fun readRetirementTombstoneText(file: File): String {
+        val bytes = ByteArray(MAX_RETIREMENT_TOMBSTONE_BYTES + 1)
+        var offset = 0
+        FileInputStream(file).use { input ->
+            while (offset < bytes.size) {
+                val count = input.read(bytes, offset, bytes.size - offset)
+                if (count < 0) break
+                if (count == 0) {
+                    val byte = input.read()
+                    if (byte < 0) break
+                    bytes[offset++] = byte.toByte()
+                } else {
+                    offset += count
+                }
+            }
+        }
+        if (offset > MAX_RETIREMENT_TOMBSTONE_BYTES) {
+            throw IOException("Retirement marker exceeds $MAX_RETIREMENT_TOMBSTONE_BYTES bytes")
+        }
+        return String(bytes, 0, offset, Charsets.UTF_8)
     }
 
     private fun parseRetirementTombstone(raw: String): RetiredChunkIdentity? {
@@ -2737,6 +2759,7 @@ internal class PersistentAudioChunkStore internal constructor(
         const val MIN_CHUNKS_PER_RETENTION = 16L
         const val MAX_CHANNEL_COUNT = 2
         const val UINT32_HALF_RANGE = 0x8000_0000L
+        const val MAX_RETIREMENT_TOMBSTONE_BYTES = 256
 
         const val INDEX_MAGIC = 0x52564958 // RVIX
         const val INDEX_VERSION = 2
