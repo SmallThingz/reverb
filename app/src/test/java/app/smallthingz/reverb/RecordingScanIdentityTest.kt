@@ -49,7 +49,7 @@ class RecordingScanIdentityTest {
                 "",
                 descriptor,
                 descriptor,
-                "stat:1:9:3:4:5",
+                "stat:1:2:3:4:5",
             ),
         )
         assertFalse(scannedFileRecordingIdentityRemainsCurrent("", descriptor, "", ""))
