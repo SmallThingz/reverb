@@ -1341,6 +1341,80 @@ internal fun mediaStoreProviderIdentityFromMetadata(
     )
 }
 
+internal data class ProviderCatalogObservation(
+    val displayName: String,
+    val identity: String,
+)
+
+internal fun resolveProviderCatalogObservation(
+    context: Context,
+    storageType: RecordingStorageType,
+    uri: Uri,
+): ProviderCatalogObservation? = when (storageType) {
+    RecordingStorageType.FILE -> null
+    RecordingStorageType.DOCUMENT -> runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return@use null
+            ProviderCatalogObservation(
+                displayName = cursor.getString(0),
+                identity = documentProviderIdentityFromMetadata(
+                    id = uri.toString(),
+                    sizeKnown = !cursor.isNull(1),
+                    sizeBytes = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
+                    modifiedKnown = !cursor.isNull(2),
+                    modifiedMillis = if (cursor.isNull(2)) 0L else cursor.getLong(2).coerceAtLeast(0L),
+                ),
+            )
+        }
+    }.getOrNull()
+    RecordingStorageType.MEDIASTORE -> runCatching {
+        val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        val projection = if (useGeneration) {
+            arrayOf(
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.GENERATION_MODIFIED,
+            )
+        } else {
+            arrayOf(
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+            )
+        }
+        context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return@use null
+            ProviderCatalogObservation(
+                displayName = cursor.getString(0),
+                identity = mediaStoreProviderIdentityFromMetadata(
+                    id = uri.toString(),
+                    sizeKnown = !cursor.isNull(1),
+                    sizeBytes = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
+                    modifiedKnown = !cursor.isNull(2),
+                    modifiedSeconds = if (cursor.isNull(2)) 0L else cursor.getLong(2).coerceAtLeast(0L),
+                    generationKnown = useGeneration && !cursor.isNull(3),
+                    generationModified = if (useGeneration && !cursor.isNull(3)) {
+                        cursor.getLong(3).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    },
+                ),
+            )
+        }
+    }.getOrNull()
+}
+
 internal fun resolveProviderRecordingIdentity(
     context: Context,
     storageType: RecordingStorageType,
