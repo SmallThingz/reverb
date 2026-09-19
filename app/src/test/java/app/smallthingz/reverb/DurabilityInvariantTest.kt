@@ -1759,7 +1759,7 @@ class DurabilityInvariantTest {
         val hash = "ab".repeat(32)
         val record = PendingOutputCleanupRecord(
             storageType = RecordingStorageType.FILE,
-            id = "recordings/path-with-delimiters.wav",
+            id = "/recordings/path-with-delimiters.wav",
             byteCount = 1234L,
             sha256Hex = hash,
             fileKey = "stat:1:2:100:5:77",
@@ -1858,7 +1858,7 @@ class DurabilityInvariantTest {
         val digest = CopyDigest(4L, ByteArray(32) { 0x01 })
         val fileRecord = VerifiedExportStagingRecord(
             storageType = RecordingStorageType.FILE,
-            id = "recordings/staged.wav",
+            id = "/recordings/staged.wav",
             byteCount = digest.byteCount,
             sha256Hex = digest.sha256.toHexString(),
             fileKey = "stat:1:2:100:5:77",
