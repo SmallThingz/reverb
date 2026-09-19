@@ -236,6 +236,7 @@ class RecordingCatalogStorageTypeTest {
             "content://media/external/audio/media/%31",
             "content://media/external/audio/media/0001",
             "content://media/external/audio/media/9223372036854775808",
+            "content://media/external%5Fprimary/audio/media/1",
         ).forEach { id ->
             assertFalse(recordingStorageIdIsValid(RecordingStorageType.MEDIASTORE, id))
         }

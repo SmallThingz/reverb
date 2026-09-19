@@ -164,6 +164,7 @@ internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {
         uri.authority == MediaStore.AUTHORITY &&
         uri.rawQuery == null &&
         uri.rawFragment == null &&
+        uri.rawPath == uri.path &&
         segments.size == 5 &&
         segments[0].isEmpty() &&
         segments[1].isNotBlank() &&
