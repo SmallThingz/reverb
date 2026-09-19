@@ -114,8 +114,20 @@ internal fun recordingSavedNotificationKey(recordingId: String): String =
 internal fun recordingSavedNotificationTag(recordingId: String): String =
     RECORDING_SAVED_NOTIFICATION_TAG_PREFIX + recordingSavedNotificationKey(recordingId)
 
-internal fun recordingSavedPendingIntentAction(packageName: String, recordingId: String): String =
-    packageName + RECORDING_SAVED_NOTIFICATION_ACTION_PREFIX + recordingSavedNotificationKey(recordingId)
+internal fun recordingSavedPendingIntentKey(recordingId: String, fileIdentity: String): String {
+    require(recordingId.isNotBlank()) { "Recording ID is required" }
+    require(fileIdentity.isNotBlank()) { "Recording identity is required" }
+    return UUID.nameUUIDFromBytes(
+        (recordingId + "\u0000" + fileIdentity).toByteArray(Charsets.UTF_8),
+    ).toString()
+}
+
+internal fun recordingSavedPendingIntentAction(
+    packageName: String,
+    recordingId: String,
+    fileIdentity: String,
+): String = packageName + RECORDING_SAVED_NOTIFICATION_ACTION_PREFIX +
+    recordingSavedPendingIntentKey(recordingId, fileIdentity)
 
 private fun releaseCaptureTimelineSnapshotOffMain(snapshot: ReverbService.TimelineSnapshot) {
     backgroundRecordingResultScope.launch {
@@ -241,7 +253,11 @@ internal fun normalizedCaptureSaveFailureMessage(message: String, fallback: Stri
 fun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {
     ensureCaptureResultNotificationChannel(context)
     val intent = RecordingOpenActivity.intentFor(context, recording).apply {
-        action = recordingSavedPendingIntentAction(context.packageName, recording.id)
+        action = recordingSavedPendingIntentAction(
+            context.packageName,
+            recording.id,
+            recording.fileIdentity,
+        )
     }
     val pendingIntent = PendingIntent.getActivity(
         context,

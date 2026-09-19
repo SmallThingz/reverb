@@ -176,8 +176,19 @@ class SaveTerminalDeliveryTest {
         assertTrue(firstKey != secondKey)
         assertTrue(recordingSavedNotificationTag("FB") != recordingSavedNotificationTag("Ea"))
         assertTrue(
-            recordingSavedPendingIntentAction("app.smallthingz.reverb", "FB") !=
-                recordingSavedPendingIntentAction("app.smallthingz.reverb", "Ea"),
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "FB", "identity-a") !=
+                recordingSavedPendingIntentAction("app.smallthingz.reverb", "Ea", "identity-a"),
         )
+        assertEquals(
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "same", "identity-a"),
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "same", "identity-a"),
+        )
+        assertTrue(
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "same", "identity-a") !=
+                recordingSavedPendingIntentAction("app.smallthingz.reverb", "same", "identity-b"),
+        )
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            recordingSavedPendingIntentAction("app.smallthingz.reverb", "same", "")
+        }
     }
 }
