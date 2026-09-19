@@ -106,6 +106,22 @@ internal inline fun commitRecorderPreferenceMutation(
     false
 }
 
+internal fun quickTileStartedLifetimeMayStop(
+    serviceDestroying: Boolean,
+    listeningIntentEnabled: Boolean,
+    recorderState: Int,
+    exportActive: Boolean,
+    bufferClearActive: Boolean,
+    settingsRuntimeActive: Boolean,
+    retentionActive: Boolean,
+): Boolean = !serviceDestroying &&
+    !listeningIntentEnabled &&
+    recorderState != ReverbService.STATE_LISTENING &&
+    !exportActive &&
+    !bufferClearActive &&
+    !settingsRuntimeActive &&
+    !retentionActive
+
 internal fun quickTileRejectedCommandRequiresResample(
     sampledGeneration: Long,
     result: ReverbService.ListeningCommandResult?,
@@ -2849,13 +2865,15 @@ class ReverbService : Service() {
     }
 
     private fun releaseQuickTileStartedLifetimeIfIdle(startId: Int) {
-        if (
-            serviceDestroying ||
-            isListeningEnabled() ||
-            state == STATE_LISTENING ||
-            hasActiveExport() ||
-            hasActiveBufferClear() ||
-            retentionMaintenanceState.isActive()
+        if (!quickTileStartedLifetimeMayStop(
+                serviceDestroying = serviceDestroying,
+                listeningIntentEnabled = isListeningEnabled(),
+                recorderState = state,
+                exportActive = hasActiveExport(),
+                bufferClearActive = hasActiveBufferClear(),
+                settingsRuntimeActive = settingsRuntimeLifetime.isActive(),
+                retentionActive = retentionMaintenanceState.isActive(),
+            )
         ) {
             return
         }

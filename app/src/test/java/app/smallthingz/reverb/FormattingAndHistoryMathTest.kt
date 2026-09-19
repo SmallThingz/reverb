@@ -1863,6 +1863,36 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun quickTileStartedLifetimeStopsOnlyWhenNoServiceOwnerRemains() {
+        fun mayStop(
+            serviceDestroying: Boolean = false,
+            listeningIntentEnabled: Boolean = false,
+            recorderState: Int = ReverbService.STATE_READY,
+            exportActive: Boolean = false,
+            bufferClearActive: Boolean = false,
+            settingsRuntimeActive: Boolean = false,
+            retentionActive: Boolean = false,
+        ): Boolean = quickTileStartedLifetimeMayStop(
+            serviceDestroying = serviceDestroying,
+            listeningIntentEnabled = listeningIntentEnabled,
+            recorderState = recorderState,
+            exportActive = exportActive,
+            bufferClearActive = bufferClearActive,
+            settingsRuntimeActive = settingsRuntimeActive,
+            retentionActive = retentionActive,
+        )
+
+        assertTrue(mayStop())
+        assertFalse(mayStop(serviceDestroying = true))
+        assertFalse(mayStop(listeningIntentEnabled = true))
+        assertFalse(mayStop(recorderState = ReverbService.STATE_LISTENING))
+        assertFalse(mayStop(exportActive = true))
+        assertFalse(mayStop(bufferClearActive = true))
+        assertFalse(mayStop(settingsRuntimeActive = true))
+        assertFalse(mayStop(retentionActive = true))
+    }
+
+    @Test
     fun successfulClearUpdatesStoppedTileFallbackWithoutInventingOtherChanges() {
         val previous = RecordingTileSnapshot(
             listening = true,
