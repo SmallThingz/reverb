@@ -156,7 +156,7 @@ private fun androidUriEncodeComponent(value: String): String = buildString {
 private fun documentStorageSegmentIsCanonical(raw: String): Boolean {
     if (raw.isBlank()) return false
     return runCatching {
-        val decoded = URLDecoder.decode(raw.replace("+", "%2B"), StandardCharsets.UTF_8)
+        val decoded = URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8")
         raw == androidUriEncodeComponent(decoded)
     }.getOrDefault(false)
 }
