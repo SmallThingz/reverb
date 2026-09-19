@@ -184,6 +184,15 @@ class RecordingCatalogStorageTypeTest {
                 "content://docs/tree/root/document/1",
             ),
         )
+        listOf(
+            "content://docs//tree/root/document/1",
+            "content://docs/tree//root/document/1",
+            "content://docs/tree/root//document/1",
+            "content://docs/tree/root/document//1",
+            "content://docs/tree/root/document/1/",
+        ).forEach { id ->
+            assertFalse(recordingStorageIdIsValid(RecordingStorageType.DOCUMENT, id))
+        }
         assertFalse(
             recordingStorageIdIsValid(
                 RecordingStorageType.DOCUMENT,
@@ -197,6 +206,13 @@ class RecordingCatalogStorageTypeTest {
             ),
         )
         assertTrue(documentTreeIdIsValid("content://docs/tree/root"))
+        listOf(
+            "content://docs//tree/root",
+            "content://docs/tree//root",
+            "content://docs/tree/root/",
+        ).forEach { id ->
+            assertFalse(documentTreeIdIsValid(id))
+        }
         assertFalse(documentTreeIdIsValid("content://docs/tree/root/document/1"))
         assertFalse(documentTreeIdIsValid("content://docs/document/1"))
         assertFalse(documentTreeIdIsValid("not a uri"))

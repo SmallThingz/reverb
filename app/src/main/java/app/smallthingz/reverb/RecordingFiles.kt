@@ -124,13 +124,15 @@ private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCa
     ) {
         return@runCatching null
     }
-    val segments = uri.rawPath.orEmpty().split('/').filter(String::isNotEmpty)
+    val segments = uri.rawPath.orEmpty().split('/')
     when {
-        segments.size == 2 && segments[0] == "tree" && segments[1].isNotBlank() ->
-            DocumentStorageScope(requireNotNull(uri.authority), segments[1], null)
-        segments.size == 4 && segments[0] == "tree" && segments[1].isNotBlank() &&
-            segments[2] == "document" && segments[3].isNotBlank() ->
-            DocumentStorageScope(requireNotNull(uri.authority), segments[1], segments[3])
+        segments.size == 3 && segments[0].isEmpty() &&
+            segments[1] == "tree" && segments[2].isNotBlank() ->
+            DocumentStorageScope(requireNotNull(uri.authority), segments[2], null)
+        segments.size == 5 && segments[0].isEmpty() &&
+            segments[1] == "tree" && segments[2].isNotBlank() &&
+            segments[3] == "document" && segments[4].isNotBlank() ->
+            DocumentStorageScope(requireNotNull(uri.authority), segments[2], segments[4])
         else -> null
     }
 }.getOrNull()
