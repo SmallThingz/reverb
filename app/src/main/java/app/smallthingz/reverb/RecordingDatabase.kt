@@ -259,8 +259,24 @@ private class PreservingRecordingDatabaseErrorHandler(
         if (!closed) {
             throw SQLiteException("Recording database is corrupt and could not be frozen for preservation")
         }
+        val preservedSourceIdentities = recordingDatabaseSourceIdentitySnapshot(databaseFile)
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw SQLiteException("Recording database is corrupt and its backing identity is unavailable")
         val preserved = preserveCorruptRecordingDatabase(databaseFile, recoveryRoot)
             ?: throw SQLiteException("Recording database is corrupt and could not be preserved")
+
+        // Preservation proves the bytes are durable, but reset is still destructive. Another
+        // thread must not be able to replace/recreate the database or one of its sidecars after
+        // the snapshot and have that newer object deleted as if it were the frozen corrupt one.
+        if (!recordingDatabaseSourceIdentitySnapshotStillCurrent(
+                databaseFile,
+                preservedSourceIdentities,
+            )
+        ) {
+            throw SQLiteException(
+                "Recording database changed after preservation at ${preserved.name}; refusing destructive reset",
+            )
+        }
 
         SQLiteDatabase.deleteDatabase(databaseFile)
         if (!recordingDatabaseSidecarsConfirmedMissing(databaseFile)) {
@@ -296,6 +312,32 @@ internal fun recordingDatabaseFilesForPreservation(
         }
     }
     return present
+}
+
+internal fun recordingDatabaseSourceIdentitySnapshot(
+    databaseFile: File,
+    resolveIdentity: (File) -> String = ::resolveFileIdentity,
+): Map<String, String>? {
+    val sources = recordingDatabaseFilesForPreservation(databaseFile) ?: return null
+    val snapshot = LinkedHashMap<String, String>(sources.size)
+    for (source in sources) {
+        val identity = resolveIdentity(source).takeIf { it.isNotBlank() } ?: return null
+        if (snapshot.put(source.name, identity) != null) return null
+    }
+    return snapshot
+}
+
+internal fun recordingDatabaseSourceIdentitySnapshotStillCurrent(
+    databaseFile: File,
+    expected: Map<String, String>,
+    snapshot: (File) -> Map<String, String>? = { file -> recordingDatabaseSourceIdentitySnapshot(file) },
+): Boolean {
+    if (expected.isEmpty()) return false
+    val current = snapshot(databaseFile) ?: return false
+    if (current.keys != expected.keys) return false
+    return expected.all { (name, identity) ->
+        fileIdentityMatches(identity, current[name].orEmpty())
+    }
 }
 
 internal fun recordingDatabaseSidecarsConfirmedMissing(

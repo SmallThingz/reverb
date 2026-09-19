@@ -212,6 +212,56 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun corruptDatabaseRecovery_identitySnapshotRejectsSameByteReplacement() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "identity-replacement-").toFile()
+        try {
+            val bytes = byteArrayOf(1, 2, 3, 4)
+            val database = File(root, "recordings.db").apply { writeBytes(bytes) }
+            val expected = requireNotNull(recordingDatabaseSourceIdentitySnapshot(database))
+
+            assertTrue(database.delete())
+            database.writeBytes(bytes)
+
+            assertFalse(recordingDatabaseSourceIdentitySnapshotStillCurrent(database, expected))
+            assertArrayEquals(bytes, database.readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_identitySnapshotRejectsNewSidecar() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "identity-sidecar-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val expected = requireNotNull(recordingDatabaseSourceIdentitySnapshot(database))
+            val wal = File(database.path + "-wal").apply { writeBytes(byteArrayOf(5, 6, 7)) }
+
+            assertFalse(recordingDatabaseSourceIdentitySnapshotStillCurrent(database, expected))
+            assertTrue(wal.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun corruptDatabaseRecovery_identitySnapshotAcceptsUnchangedBackingSet() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "identity-stable-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            File(database.path + "-wal").writeBytes(byteArrayOf(5, 6, 7))
+            val expected = requireNotNull(recordingDatabaseSourceIdentitySnapshot(database))
+
+            assertTrue(recordingDatabaseSourceIdentitySnapshotStillCurrent(database, expected))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptDatabaseRecovery_atomicPublishFailureNeverCreatesFinalSnapshot() {
         val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "publish-failure-").toFile()
