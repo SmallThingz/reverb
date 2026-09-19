@@ -175,7 +175,9 @@ internal class RecordingPcm16MonoReader internal constructor(
                 RecordingStorageType.DOCUMENT,
                 RecordingStorageType.MEDIASTORE,
                 -> {
-                    if (!recordingContentIdentityMatches(context, recording)) {
+                    if (!recordingReadIdentityIsStable(recording) ||
+                        !recordingContentIdentityMatches(context, recording)
+                    ) {
                         throw IOException("Recording changed in provider")
                     }
                     val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
@@ -314,7 +316,9 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
     RecordingStorageType.DOCUMENT,
     RecordingStorageType.MEDIASTORE,
     -> {
-        if (!recordingContentIdentityMatches(context, recording)) {
+        if (!recordingReadIdentityIsStable(recording) ||
+            !recordingContentIdentityMatches(context, recording)
+        ) {
             throw IOException("Recording changed in provider")
         }
         val uri = recording.id.toUri()
