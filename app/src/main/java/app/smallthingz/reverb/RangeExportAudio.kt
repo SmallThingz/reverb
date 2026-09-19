@@ -393,7 +393,20 @@ internal fun ReverbService.TimelineSnapshot.readWaveformEnvelopeProgressive(
     return shaped
 }
 
-internal class TimelineAudioPreviewController : Closeable {
+internal inline fun releasePreviewTrackReportingFailure(
+    release: () -> Unit,
+    onFailure: (Throwable) -> Unit,
+) {
+    try {
+        release()
+    } catch (error: Throwable) {
+        runCatching { onFailure(error) }
+    }
+}
+
+internal class TimelineAudioPreviewController(
+    private val onTrackReleaseFailure: (Throwable) -> Unit = {},
+) : Closeable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0L)
     private val executor = ThreadPoolExecutor(
@@ -1035,7 +1048,13 @@ internal class TimelineAudioPreviewController : Closeable {
         runCatching { track.pause() }
         runCatching { track.flush() }
         runCatching { track.stop() }
-        runCatching { track.release() }
+        releasePreviewTrackReportingFailure(
+            release = { track.release() },
+            onFailure = { error ->
+                Log.e("ReverbRangeAudio", "AudioTrack.release failed", error)
+                onTrackReleaseFailure(error)
+            },
+        )
     }
 
     private fun checkCurrent(token: Long) {

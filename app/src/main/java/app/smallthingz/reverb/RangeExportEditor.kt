@@ -573,8 +573,11 @@ internal fun rangeTimelineDurationSeconds(value: Float): Float =
 internal class RangeExportEditorState(
     initialDurationSeconds: Float,
     private val rememberedRangeExport: RememberedRangeExport? = null,
+    onPreviewReleaseFailure: (Throwable) -> Unit = {},
 ) {
-    private val previewController = TimelineAudioPreviewController()
+    private val previewController = TimelineAudioPreviewController(
+        onTrackReleaseFailure = onPreviewReleaseFailure,
+    )
 
     var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
         private set
@@ -973,11 +976,21 @@ internal fun RangeExportHomeContent(
     onExport: (startSeconds: Float, endSeconds: Float) -> Unit,
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val rememberedRangeExport = remember(selectedBuffer) {
         getRememberedRangeExport(context, selectedBuffer)
     }
-    val state = remember(selectedBuffer, rememberedRangeExport) {
-        RangeExportEditorState(initialDurationSeconds, rememberedRangeExport)
+    val state = remember(selectedBuffer, rememberedRangeExport, appContext) {
+        RangeExportEditorState(
+            initialDurationSeconds = initialDurationSeconds,
+            rememberedRangeExport = rememberedRangeExport,
+            onPreviewReleaseFailure = {
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.audio_preview_release_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+        )
     }
     val colors = MaterialTheme.colorScheme
     var transitionStarted by remember(selectedBuffer) { mutableStateOf(false) }

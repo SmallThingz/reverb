@@ -366,7 +366,17 @@ internal fun RecordingInlinePlayer(
     ) {
         "${recording.id}|${recording.fileIdentity}|${recording.sizeBytes}|${recording.durationMillis}|${recording.lastSeenAtMillis}"
     }
-    val fineSeekPreviewController = remember(recordingRevisionKey) { TimelineAudioPreviewController() }
+    val fineSeekPreviewController = remember(recordingRevisionKey, appContext) {
+        TimelineAudioPreviewController(
+            onTrackReleaseFailure = { error ->
+                Log.e(INLINE_PLAYER_TAG, "Saved recording preview AudioTrack.release failed", error)
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.audio_preview_release_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+        )
+    }
     val playbackBookkeeping = remember(recordingRevisionKey) { InlinePlayerBookkeeping() }
 
     var mediaPlayer by remember(recordingRevisionKey) { mutableStateOf<MediaPlayer?>(null) }
