@@ -1353,7 +1353,13 @@ class ReverbService : Service() {
         audioRecordGeneration = Long.MIN_VALUE
         runCatching { record.stop() }
         runCatching { record.release() }
-            .onFailure { Log.w(TAG, "AudioRecord.release failed", it) }
+            .onFailure { error ->
+                Log.e(TAG, "AudioRecord.release failed", error)
+                AppFeedbackCenter.post(
+                    getString(R.string.audio_input_release_failed),
+                    FeedbackTone.ERROR,
+                )
+            }
     }
 
     fun dumpRecording(

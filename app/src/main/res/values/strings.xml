@@ -127,6 +127,7 @@
     <string name="recorder_state_persist_failed">Couldn\'t persist recorder state.</string>
     <string name="settings_apply_failed">Saved, but recorder couldn\'t reload settings.</string>
     <string name="audio_input_init_failed">Couldn\'t start microphone.</string>
+    <string name="audio_input_release_failed">Couldn\'t release microphone.</string>
     <string name="custom_memory_size_invalid">Enter a valid number.</string>
     <string name="permission_required">Permission required</string>
     <string name="permission_required_message">Microphone access required.</string>
