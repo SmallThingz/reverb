@@ -193,7 +193,7 @@ class ServiceForegroundLifetimeTest {
             onFailure = { observed = it },
         )
 
-        assertEquals(null, acquired)
+        assertTrue(acquired == null)
         assertEquals(expected, observed)
         assertEquals(0, configureCalls)
         assertEquals(0, releaseCalls)
@@ -216,7 +216,7 @@ class ServiceForegroundLifetimeTest {
             onFailure = { observed = it },
         )
 
-        assertEquals(null, acquired)
+        assertTrue(acquired == null)
         assertEquals(expected, observed)
         assertEquals(1, owner.releaseCalls)
     }
@@ -239,7 +239,7 @@ class ServiceForegroundLifetimeTest {
             onFailure = { observed = it },
         )
 
-        assertEquals(null, acquired)
+        assertTrue(acquired == null)
         assertEquals(expected, observed)
         assertEquals(listOf(cleanupFailure), expected.suppressed.toList())
         assertEquals(1, owner.releaseCalls)
@@ -257,7 +257,7 @@ class ServiceForegroundLifetimeTest {
             onFailure = { throw IllegalStateException("report failed") },
         )
 
-        assertEquals(null, acquired)
+        assertTrue(acquired == null)
         assertEquals(0, owner.releaseCalls)
     }
 
@@ -274,7 +274,7 @@ class ServiceForegroundLifetimeTest {
             onFailure = { observed = it },
         )
 
-        assertEquals(null, acquired)
+        assertTrue(acquired == null)
         assertTrue(observed is IllegalStateException)
         assertEquals(0, owner.releaseCalls)
     }
