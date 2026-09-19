@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteException
 import android.database.Cursor
 import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.Log
 import androidx.core.database.sqlite.transaction
 import java.io.File
 import java.io.FileInputStream
@@ -567,6 +568,22 @@ private fun RecordingEntity.toContentValues(): ContentValues {
     }
 }
 
+internal fun resolveRecordingCatalogStorageType(
+    storageCode: Int,
+    legacyValue: String?,
+): RecordingStorageType? {
+    val encoded = RecordingStorageType.fromStorageCode(storageCode)
+    val legacyText = legacyValue?.takeIf { it.isNotBlank() } ?: return encoded
+    val legacy = RecordingStorageType.fromLegacyName(legacyText)
+        ?: legacyText.toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        ?: return null
+    return when {
+        encoded == null -> legacy
+        encoded == legacy -> encoded
+        else -> null
+    }
+}
+
 private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val idIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_ID)
     val displayNameIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_DISPLAY_NAME)
@@ -587,9 +604,17 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val count = cursor.count.coerceAtLeast(0)
     val result = ArrayList<RecordingEntity>(count)
     while (cursor.moveToNext()) {
-        val storage = RecordingStorageType.fromStorageCode(cursor.getInt(storageTypeCodeIndex))
-            ?: RecordingStorageType.fromLegacyName(cursor.getString(storageTypeIndex))
-            ?: throw SQLiteException("Unknown recording storage type in catalog")
+        val storage = resolveRecordingCatalogStorageType(
+            storageCode = cursor.getInt(storageTypeCodeIndex),
+            legacyValue = cursor.getString(storageTypeIndex),
+        )
+        if (storage == null) {
+            Log.w(
+                "RecordingDatabase",
+                "Skipping catalog row with malformed storage type: ${cursor.getString(idIndex)}",
+            )
+            continue
+        }
         result.add(
             RecordingEntity(
                 id = cursor.getString(idIndex),
