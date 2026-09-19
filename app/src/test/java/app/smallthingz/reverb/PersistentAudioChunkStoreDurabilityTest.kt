@@ -1239,6 +1239,91 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun staleRetirementMarkerRemovalSyncFailure_blocksIdReuseUntilRetryBarrier() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        var retiredSyncs = 0
+        var failRetiredSync = true
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            directorySync = { directory ->
+                if (directory.name == "retired") {
+                    retiredSyncs++
+                    if (failRetiredSync && retiredSyncs == 1) {
+                        throw IOException("Injected stale-marker removal sync failure")
+                    }
+                }
+            },
+        )
+        configure(store, 128 * 1024L)
+        val nextId = PersistentAudioChunkStore::class.java.getDeclaredField("nextChunkId")
+        nextId.isAccessible = true
+        nextId.setInt(store, 7)
+        val retired = File(root, "retired").apply { mkdirs() }
+        val stale = File(retired, "7").apply { writeText("v1|7|1|8000|1|PCM_16") }
+
+        val failure = assertThrows(IOException::class.java) {
+            store.append(expected, 0, expected.size)
+        }
+        assertTrue(failure.message?.contains("durably clear stale retirement marker") == true)
+        assertFalse(stale.exists())
+        assertFalse(File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "7").exists())
+        assertEquals(1, retiredSyncs)
+
+        failRetiredSync = false
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        assertEquals(2, retiredSyncs)
+        store.sealActiveChunk()
+        assertArrayEquals(expected, readAll(store))
+        store.close()
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
+    fun closeFlushesStaleRetirementMarkerRemovalBarrierBeforeIdOwnerDisappears() = withStoreRoot { root ->
+        val expected = pcmBytes(4_096)
+        var retiredSyncs = 0
+        var failRetiredSync = true
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            directorySync = { directory ->
+                if (directory.name == "retired") {
+                    retiredSyncs++
+                    if (failRetiredSync && retiredSyncs == 1) {
+                        throw IOException("Injected stale-marker removal sync failure")
+                    }
+                }
+            },
+        )
+        configure(store, 128 * 1024L)
+        val nextId = PersistentAudioChunkStore::class.java.getDeclaredField("nextChunkId")
+        nextId.isAccessible = true
+        nextId.setInt(store, 7)
+        File(root, "retired").apply { mkdirs() }
+            .resolve("7")
+            .writeText("v1|7|1|8000|1|PCM_16")
+
+        assertThrows(IOException::class.java) {
+            store.append(expected, 0, expected.size)
+        }
+        assertEquals(1, retiredSyncs)
+
+        failRetiredSync = false
+        store.close()
+        assertEquals(2, retiredSyncs)
+
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 128 * 1024L)
+            assertEquals(expected.size, reopened.append(expected, 0, expected.size))
+            reopened.sealActiveChunk()
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun retiredChunk_waitsForEveryConcurrentReadLeaseBeforeDeletion() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val store = PersistentAudioChunkStore(root)

@@ -197,6 +197,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val liveChunkIds = HashSet<UInt>()
     private val retiredById = HashMap<UInt, ChunkRecord>()
     private val retirementTombstoneDurabilityPending = HashSet<UInt>()
+    private val retirementTombstoneRemovalDurabilityPending = HashSet<UInt>()
 
     private var loaded = false
     private var closed = false
@@ -686,6 +687,7 @@ internal class PersistentAudioChunkStore internal constructor(
         ensureLoadedLocked()
         writeActiveHeaderLocked()
         retryRetiredDeletesLocked()
+        retryRetirementTombstoneRemovalDurabilityLocked()
         writeIndexLocked()
     }
 
@@ -696,10 +698,14 @@ internal class PersistentAudioChunkStore internal constructor(
     @Synchronized
     fun sealActiveChunk() {
         ensureLoadedLocked()
-        if (activeRecord == null) return
+        if (activeRecord == null) {
+            retryRetirementTombstoneRemovalDurabilityLocked()
+            return
+        }
         finalizeActiveLocked()
         cleanupRetentionAfterCaptureLocked()
         retryRetiredDeletesLocked()
+        retryRetirementTombstoneRemovalDurabilityLocked()
         writeIndexLocked()
     }
 
@@ -799,6 +805,11 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             try {
                 retryRetiredDeletesLocked()
+            } catch (error: Exception) {
+                recordFailure(error)
+            }
+            try {
+                retryRetirementTombstoneRemovalDurabilityLocked()
             } catch (error: Exception) {
                 recordFailure(error)
             }
@@ -1314,11 +1325,13 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun deleteRetirementTombstoneLocked(id: UInt): Boolean = runCatching {
         val marker = retirementTombstoneFile(id)
-        Files.deleteIfExists(marker.toPath())
-        // Always cross the directory barrier, even when the marker is already visibly absent.
-        // A previous attempt may have deleted it before its directory fsync failed; skipping the
-        // retry barrier would let same-process ID reuse rely on an undurable absence.
+        if (Files.deleteIfExists(marker.toPath())) {
+            // The namespace mutation is visible before its parent directory is durable. Keep an
+            // explicit owner so a retry can still fsync after the marker has become visibly absent.
+            retirementTombstoneRemovalDurabilityPending += id
+        }
         forceDirectoryDurable(retiredDirectory)
+        retirementTombstoneRemovalDurabilityPending.remove(id)
         retirementTombstoneDurabilityPending.remove(id)
         true
     }.getOrDefault(false)
@@ -1645,16 +1658,22 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         val staleRetirement = retirementTombstoneFile(id)
         when (storagePathState(staleRetirement)) {
-            StoragePathState.MISSING -> Unit
+            StoragePathState.MISSING -> {
+                if (id in retirementTombstoneRemovalDurabilityPending &&
+                    !deleteRetirementTombstoneLocked(id)
+                ) {
+                    throw IOException("Unable to durably clear stale retirement marker for chunk id $id")
+                }
+            }
             StoragePathState.UNAVAILABLE -> throw IOException(
                 "Unable to inspect retirement marker for chunk id $id",
             )
             StoragePathState.PRESENT -> {
                 // A prior delete may have removed the chunk in memory but not reached stable
-                // storage. Force the positively observed absence before removing its tombstone.
+                // storage. Force the positively observed chunk absence before removing its tombstone.
                 forceDirectoryDurable(chunksDirectory)
                 if (!deleteRetirementTombstoneLocked(id)) {
-                    throw IOException("Unable to clear stale retirement marker for chunk id $id")
+                    throw IOException("Unable to durably clear stale retirement marker for chunk id $id")
                 }
             }
         }
@@ -2278,6 +2297,15 @@ internal class PersistentAudioChunkStore internal constructor(
         val retry = retiredById.values.filter { it.refCount == 0 }
         for (record in retry) {
             tryDeleteRetiredRecordLocked(record)
+        }
+    }
+
+    private fun retryRetirementTombstoneRemovalDurabilityLocked() {
+        val pending = retirementTombstoneRemovalDurabilityPending.toList()
+        for (id in pending) {
+            if (!deleteRetirementTombstoneLocked(id)) {
+                throw IOException("Unable to persist retirement marker removal for chunk id $id")
+            }
         }
     }
 
