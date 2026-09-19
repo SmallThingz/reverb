@@ -696,6 +696,9 @@ class DurabilityInvariantTest {
         assertEquals(2L, loopingDropChunkBytesForSize(1L, 100L, 2))
         assertEquals(4L, loopingDropChunkBytesForSize(3L, 100L, 2))
         assertEquals(100L, loopingDropChunkBytesForSize(500L, 100L, 2))
+        assertEquals(100L, loopingDropChunkBytesForSize(Long.MAX_VALUE, 100L, 2))
+        assertEquals(Long.MAX_VALUE - 1L, loopingDropChunkBytesForSize(Long.MAX_VALUE, Long.MAX_VALUE, 2))
+        assertEquals(100L, loopingDropChunkBytesForSize(Long.MAX_VALUE, 101L, 2))
 
         val rate = 48_000
         assertEquals(2L, loopingDropChunkBytesForTime(1.0 / rate, 100L, rate, 2))

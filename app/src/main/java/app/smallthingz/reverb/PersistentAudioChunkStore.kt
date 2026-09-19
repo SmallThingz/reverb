@@ -77,8 +77,13 @@ internal fun loopingDropChunkBytesForSize(
 ): Long {
     if (excessBytes <= 0L || chunkPayloadBytes <= 0L || frameBytes <= 0) return 0L
     val frame = frameBytes.toLong()
-    val dropFrames = ((excessBytes - 1L) / frame + 1L).coerceAtLeast(1L)
-    return minOf(chunkPayloadBytes, dropFrames * frame)
+    // Bound before rounding up. Rounding an unbounded Long.MAX_VALUE excess to a whole frame
+    // can overflow the multiplication and turn a positive trim into a negative byte count.
+    val wholeChunkBytes = chunkPayloadBytes - chunkPayloadBytes % frame
+    if (wholeChunkBytes <= 0L) return 0L
+    val boundedExcess = minOf(excessBytes, wholeChunkBytes)
+    val dropFrames = (boundedExcess - 1L) / frame + 1L
+    return dropFrames * frame
 }
 
 internal fun loopingDropChunkBytesForTime(
