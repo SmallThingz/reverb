@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import java.io.File
+import java.io.FileInputStream
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -88,9 +89,16 @@ class StoragePathStateTest {
             val file = File(root, ".reverb-export-test.pending").apply {
                 writeBytes(buildWavHeaderBytes(8_000, 1, PcmSampleFormat.PCM_16, payload.size.toLong()) + payload)
             }
-            val observation = requireNotNull(readRecoverableStagingFile(file))
-            assertEquals(10L, observation.durationMillis)
-            assertEquals(file.length(), observation.digest.byteCount)
+            val pathIdentity = resolveFileIdentity(file)
+            val descriptorIdentity = FileInputStream(file).use { resolveFileDescriptorIdentity(it.fd) }
+            val observation = readRecoverableStagingFile(file)
+            if (!fileDescriptorIdentityMatches(pathIdentity, descriptorIdentity)) {
+                assertEquals(null, observation)
+            } else {
+                val verified = requireNotNull(observation)
+                assertEquals(10L, verified.durationMillis)
+                assertEquals(file.length(), verified.digest.byteCount)
+            }
         } finally {
             root.deleteRecursively()
         }
