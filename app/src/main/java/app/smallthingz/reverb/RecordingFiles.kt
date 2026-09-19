@@ -99,14 +99,25 @@ internal fun recordingStorageIdIsValid(
     if (id.isBlank()) return false
     return when (storageType) {
         RecordingStorageType.FILE -> File(id).let { file -> file.isAbsolute && file.parentFile != null }
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> runCatching {
+        RecordingStorageType.DOCUMENT -> runCatching {
             val uri = URI(id)
             uri.scheme.equals("content", ignoreCase = true) && !uri.authority.isNullOrBlank()
         }.getOrDefault(false)
+        RecordingStorageType.MEDIASTORE -> mediaStoreRecordingIdIsValid(id)
     }
 }
+
+internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {
+    val uri = URI(id)
+    val segments = uri.path.orEmpty().split('/').filter(String::isNotEmpty)
+    uri.scheme.equals("content", ignoreCase = true) &&
+        uri.authority == MediaStore.AUTHORITY &&
+        segments.size == 4 &&
+        segments[1] == "audio" &&
+        segments[2] == "media" &&
+        segments[3].isNotEmpty() &&
+        segments[3].all(Char::isDigit)
+}.getOrDefault(false)
 
 internal fun managedRecordingFileDirectoryIds(context: Context): Set<String> = setOf(
     getSavedRecordingsDirectory(context.applicationContext).absolutePath,

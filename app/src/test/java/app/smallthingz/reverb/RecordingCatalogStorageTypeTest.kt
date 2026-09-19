@@ -183,6 +183,30 @@ class RecordingCatalogStorageTypeTest {
             ),
         )
         assertFalse(recordingStorageIdIsValid(RecordingStorageType.MEDIASTORE, "relative"))
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://other.provider/external/audio/media/1",
+            ),
+        )
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external/images/media/1",
+            ),
+        )
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external/audio/media/not-a-row",
+            ),
+        )
+        assertTrue(
+            recordingStorageIdIsValid(
+                RecordingStorageType.MEDIASTORE,
+                "content://media/external_primary/audio/media/42",
+            ),
+        )
     }
 
 }

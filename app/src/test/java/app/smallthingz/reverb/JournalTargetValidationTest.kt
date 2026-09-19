@@ -45,6 +45,11 @@ class JournalTargetValidationTest {
             providerIdentity = "provider:3:bad:4:1",
         )
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(staging)))
+
+        val wrongMediaAuthority = staging.copy(id = "content://other.provider/external/audio/media/7")
+        assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(wrongMediaAuthority)))
+        val wrongMediaCollection = staging.copy(id = "content://media/external/images/media/7")
+        assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(wrongMediaCollection)))
     }
 
     @Test
