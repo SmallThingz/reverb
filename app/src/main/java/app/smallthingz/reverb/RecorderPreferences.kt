@@ -802,9 +802,8 @@ fun isInputConfigSupported(
             return@run false
         }
 
-        var record: AudioRecord? = null
         try {
-            record = AudioRecord.Builder()
+            val record = AudioRecord.Builder()
                 .setAudioSource(sourceMode.sourceValue)
                 .setAudioFormat(
                     AudioFormat.Builder()
@@ -815,12 +814,15 @@ fun isInputConfigSupported(
                 )
                 .setBufferSizeInBytes(max(minBuffer * 2, 16 * 1024))
                 .build()
-            val routeAccepted = preferredDevice == null || record.setPreferredDevice(preferredDevice)
-            routeAccepted && record.state == AudioRecord.STATE_INITIALIZED
+            withOwnedResource(
+                owner = record,
+                release = { it.release() },
+            ) { configured ->
+                val routeAccepted = preferredDevice == null || configured.setPreferredDevice(preferredDevice)
+                routeAccepted && configured.state == AudioRecord.STATE_INITIALIZED
+            }
         } catch (_: Exception) {
             false
-        } finally {
-            runCatching { record?.release() }
         }
     }
     if (supported) inputConfigCache.putIfAbsent(key, true)

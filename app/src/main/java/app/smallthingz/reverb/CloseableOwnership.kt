@@ -29,6 +29,23 @@ internal inline fun <Owner> configureOwnedResourceOrRelease(
     )
 }
 
+internal inline fun <Owner, Result> withOwnedResource(
+    owner: Owner,
+    release: (Owner) -> Unit,
+    block: (Owner) -> Result,
+): Result {
+    var primaryFailure: Throwable? = null
+    try {
+        return block(owner)
+    } catch (error: Throwable) {
+        primaryFailure = error
+        throw error
+    } finally {
+        val terminalFailure = closePreservingPrimaryFailure(primaryFailure) { release(owner) }
+        if (primaryFailure == null && terminalFailure != null) throw terminalFailure
+    }
+}
+
 internal inline fun closePreservingPrimaryFailure(
     primaryFailure: Throwable?,
     close: () -> Unit,

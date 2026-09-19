@@ -97,6 +97,69 @@ class CloseableOwnershipTest {
         assertFalse(owner.released)
     }
 
+    @Test
+    fun ownedUse_successReleasesOwnerAndReturnsResult() {
+        val owner = TestOwnedResource()
+
+        val result = withOwnedResource(
+            owner = owner,
+            release = { it.release() },
+        ) { "result" }
+
+        assertEquals("result", result)
+        assertTrue(owner.released)
+    }
+
+    @Test
+    fun ownedUse_failureReleasesOwnerAndPreservesPrimary() {
+        val owner = TestOwnedResource()
+        val primary = IOException("probe failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            withOwnedResource(
+                owner = owner,
+                release = { it.release() },
+            ) { throw primary }
+        }
+
+        assertSame(primary, thrown)
+        assertTrue(owner.released)
+    }
+
+    @Test
+    fun ownedUse_releaseFailureIsSuppressedOnPrimary() {
+        val releaseFailure = IOException("release failed")
+        val owner = TestOwnedResource(releaseFailure)
+        val primary = IOException("probe failed")
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            withOwnedResource(
+                owner = owner,
+                release = { it.release() },
+            ) { throw primary }
+        }
+
+        assertSame(primary, thrown)
+        assertEquals(listOf(releaseFailure), thrown.suppressed.toList())
+        assertTrue(owner.released)
+    }
+
+    @Test
+    fun ownedUse_releaseFailureAfterSuccessBecomesTerminalFailure() {
+        val releaseFailure = IOException("release failed")
+        val owner = TestOwnedResource(releaseFailure)
+
+        val thrown = org.junit.Assert.assertThrows(IOException::class.java) {
+            withOwnedResource(
+                owner = owner,
+                release = { it.release() },
+            ) { "result" }
+        }
+
+        assertSame(releaseFailure, thrown)
+        assertTrue(owner.released)
+    }
+
     private class TestOwnedResource(
         private val releaseFailure: IOException? = null,
     ) {
