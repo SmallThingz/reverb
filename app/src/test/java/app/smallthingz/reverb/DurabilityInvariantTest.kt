@@ -2427,6 +2427,13 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun claimedFileReplay_retiresCatalogOnlyAfterPhysicalDeletion() {
+        assertTrue(claimedFileReplayRetiresCatalog(FileDeletionClaimResult.DELETED))
+        assertFalse(claimedFileReplayRetiresCatalog(FileDeletionClaimResult.MISMATCH_PRESERVED))
+        assertFalse(claimedFileReplayRetiresCatalog(FileDeletionClaimResult.RETRY))
+    }
+
+    @Test
     fun claimedFileReplay_waitsUnlessClaimPresenceIsProven() {
         assertEquals(
             ClaimedFileReplayAction.NO_CLAIM,

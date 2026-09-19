@@ -361,18 +361,25 @@ object RecordingRepository {
                     ClaimedFileReplayAction.WAIT -> continue
                     ClaimedFileReplayAction.NO_CLAIM -> Unit
                     ClaimedFileReplayAction.REPLAY -> when (
-                        replayClaimedFileDeletion(intent, claim) {
+                        val replayResult = replayClaimedFileDeletion(intent, claim) {
                             pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
                         }
                     ) {
                         FileDeletionClaimResult.RETRY -> continue
-                        FileDeletionClaimResult.MISMATCH_PRESERVED,
-                        FileDeletionClaimResult.DELETED,
-                        -> {
-                            // Rename/delete/recovery changes must be durable before the journal
-                            // that explains them can disappear. A current source-path occupant,
-                            // if any, is a different object and reconciliation will import it.
+                        FileDeletionClaimResult.MISMATCH_PRESERVED -> {
+                            // The claim was restored/preserved rather than physically deleted.
+                            // Retire only the intent; keep catalog metadata until authoritative
+                            // reconciliation observes the restored/replacement bytes.
                             if (!confirmFileDirectoryStateDurable(File(intent.id))) continue
+                            removePendingDeletionLocked(context, intent.id)
+                            continue
+                        }
+                        FileDeletionClaimResult.DELETED -> {
+                            if (!claimedFileReplayRetiresCatalog(replayResult) ||
+                                !confirmFileDirectoryStateDurable(File(intent.id))
+                            ) {
+                                continue
+                            }
                             if (recording != null) dao.deleteById(intent.id)
                             removePendingDeletionLocked(context, intent.id)
                             continue
@@ -1352,6 +1359,9 @@ internal fun pendingDeletionMatchesDigest(
 ): Boolean = intent.byteCount == byteCount && intent.sha256Hex.equals(sha256Hex, ignoreCase = true)
 
 internal enum class FileDeletionClaimResult { DELETED, MISMATCH_PRESERVED, RETRY }
+
+internal fun claimedFileReplayRetiresCatalog(result: FileDeletionClaimResult): Boolean =
+    result == FileDeletionClaimResult.DELETED
 
 internal enum class ClaimedFileReplayAction { REPLAY, NO_CLAIM, WAIT }
 
