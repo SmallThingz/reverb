@@ -216,12 +216,12 @@ internal fun inlineShuttleFailureShouldResume(
     lifecycleResumed: Boolean,
 ): Boolean = shuttleActive && resumeAfterScrub && lifecycleResumed
 
-internal inline fun closeInlinePlaybackSourceReportingFailure(
-    close: () -> Unit,
+internal inline fun runInlinePlaybackCleanupReportingFailure(
+    cleanup: () -> Unit,
     onFailure: (Exception) -> Unit,
 ) {
     try {
-        close()
+        cleanup()
     } catch (error: Exception) {
         runCatching { onFailure(error) }
     }
@@ -435,8 +435,8 @@ internal fun RecordingInlinePlayer(
     val trimBackProgress = if (trimMode) backProgress else 0f
     val collapseBackProgress = if (!trimMode) backProgress else 0f
 
-    fun reportPlaybackSourceCloseFailure(error: Exception) {
-        Log.e(INLINE_PLAYER_TAG, "Saved recording playback source close failed", error)
+    fun reportPlaybackCleanupFailure(error: Exception) {
+        Log.e(INLINE_PLAYER_TAG, "Saved recording playback cleanup failed", error)
         AppFeedbackCenter.post(
             appContext.getString(R.string.recording_read_cleanup_failed),
             FeedbackTone.ERROR,
@@ -449,10 +449,15 @@ internal fun RecordingInlinePlayer(
         val player = mediaPlayer
         mediaPlayer = null
         player?.runCatching { stop() }
-        player?.runCatching { release() }
-        closeInlinePlaybackSourceReportingFailure(
-            close = { pinnedMediaSource.getAndSet(null)?.close() },
-            onFailure = ::reportPlaybackSourceCloseFailure,
+        if (player != null) {
+            runInlinePlaybackCleanupReportingFailure(
+                cleanup = { player.release() },
+                onFailure = ::reportPlaybackCleanupFailure,
+            )
+        }
+        runInlinePlaybackCleanupReportingFailure(
+            cleanup = { pinnedMediaSource.getAndSet(null)?.close() },
+            onFailure = ::reportPlaybackCleanupFailure,
         )
         prepared = false
         isPlaying = false
@@ -736,9 +741,9 @@ internal fun RecordingInlinePlayer(
             }
             if (playbackBookkeeping.released || mediaPlayer !== player) return@LaunchedEffect
             openedRef.compareAndSet(opened, null)
-            closeInlinePlaybackSourceReportingFailure(
-                close = { pinnedMediaSource.getAndSet(opened)?.close() },
-                onFailure = ::reportPlaybackSourceCloseFailure,
+            runInlinePlaybackCleanupReportingFailure(
+                cleanup = { pinnedMediaSource.getAndSet(opened)?.close() },
+                onFailure = ::reportPlaybackCleanupFailure,
             )
             player.setDataSource(opened.descriptor)
             player.prepareAsync()
@@ -750,9 +755,9 @@ internal fun RecordingInlinePlayer(
                 onPlaybackFailed()
             }
         } finally {
-            closeInlinePlaybackSourceReportingFailure(
-                close = { openedRef.getAndSet(null)?.close() },
-                onFailure = ::reportPlaybackSourceCloseFailure,
+            runInlinePlaybackCleanupReportingFailure(
+                cleanup = { openedRef.getAndSet(null)?.close() },
+                onFailure = ::reportPlaybackCleanupFailure,
             )
         }
     }

@@ -8,12 +8,12 @@ import org.junit.Test
 
 class RecordingInlinePlayerLogicTest {
     @Test
-    fun playbackSourceCloseFailure_isReportedWithoutEscapingCleanup() {
+    fun playbackCleanupFailure_isReportedWithoutEscapingCleanup() {
         val expected = IOException("close failed")
         var observed: Exception? = null
 
-        closeInlinePlaybackSourceReportingFailure(
-            close = { throw expected },
+        runInlinePlaybackCleanupReportingFailure(
+            cleanup = { throw expected },
             onFailure = { observed = it },
         )
 
@@ -21,9 +21,9 @@ class RecordingInlinePlayerLogicTest {
     }
 
     @Test
-    fun playbackSourceCloseReporterFailure_cannotEscapeCleanup() {
-        closeInlinePlaybackSourceReportingFailure(
-            close = { throw IOException("close failed") },
+    fun playbackCleanupReporterFailure_cannotEscapeCleanup() {
+        runInlinePlaybackCleanupReportingFailure(
+            cleanup = { throw IOException("close failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )
     }
