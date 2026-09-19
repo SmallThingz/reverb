@@ -202,6 +202,8 @@ class RecordingCatalogStorageTypeTest {
             "content://docs/tree/root//document/1",
             "content://docs/tree/root/document//1",
             "content://docs/tree/root/document/1/",
+            "content://do%63s/tree/root/document/1",
+            "CONTENT://docs/tree/root/document/1",
             "content://docs/tree/%72oot/document/1",
             "content://docs/tree/root/document/%31",
             "content://docs/tree/root:alias/document/1",
@@ -229,6 +231,8 @@ class RecordingCatalogStorageTypeTest {
             "content://docs//tree/root",
             "content://docs/tree//root",
             "content://docs/tree/root/",
+            "content://do%63s/tree/root",
+            "CONTENT://docs/tree/root",
             "content://docs/tree/%72oot",
             "content://docs/tree/root:alias",
             "content://docs/tree/root%3aalias",
@@ -261,6 +265,8 @@ class RecordingCatalogStorageTypeTest {
             "content://media/external/audio/media/0001",
             "content://media/external/audio/media/9223372036854775808",
             "content://media/external%5Fprimary/audio/media/1",
+            "content://me%64ia/external/audio/media/1",
+            "CONTENT://media/external/audio/media/1",
         ).forEach { id ->
             assertFalse(recordingStorageIdIsValid(RecordingStorageType.MEDIASTORE, id))
         }

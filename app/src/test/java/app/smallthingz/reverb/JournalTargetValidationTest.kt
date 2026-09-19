@@ -50,6 +50,8 @@ class JournalTargetValidationTest {
         )
         val aliasedDocument = scopedDocument.copy(id = "content://docs/tree/%72oot/document/7")
         assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(aliasedDocument)))
+        val encodedDocumentAuthority = scopedDocument.copy(id = "content://do%63s/tree/root/document/7")
+        assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(encodedDocumentAuthority)))
         val rawReservedDocument = scopedDocument.copy(id = "content://docs/tree/root:alias/document/7")
         assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(rawReservedDocument)))
         val lowerEscapeDocument = scopedDocument.copy(id = "content://docs/tree/root%3aalias/document/7")
@@ -80,6 +82,8 @@ class JournalTargetValidationTest {
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(aliasedMediaRow)))
         val encodedVolumeRow = staging.copy(id = "content://media/external%5Fprimary/audio/media/7")
         assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(encodedVolumeRow)))
+        val encodedAuthorityRow = staging.copy(id = "content://me%64ia/external/audio/media/7")
+        assertNull(decodeVerifiedExportStagingRecord(encodeVerifiedExportStagingRecord(encodedAuthorityRow)))
     }
 
     @Test

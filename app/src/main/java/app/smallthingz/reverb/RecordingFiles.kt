@@ -163,8 +163,8 @@ private fun documentStorageSegmentIsCanonical(raw: String): Boolean {
 
 private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCatching {
     val uri = URI(id)
-    if (!uri.scheme.equals("content", ignoreCase = true) || uri.authority.isNullOrBlank() ||
-        uri.rawQuery != null || uri.rawFragment != null
+    if (uri.scheme != "content" || uri.authority.isNullOrBlank() ||
+        uri.rawAuthority != uri.authority || uri.rawQuery != null || uri.rawFragment != null
     ) {
         return@runCatching null
     }
@@ -204,8 +204,9 @@ internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {
     val segments = uri.rawPath.orEmpty().split('/')
     val rowIdText = segments.getOrNull(4).orEmpty()
     val rowId = rowIdText.toLongOrNull()
-    uri.scheme.equals("content", ignoreCase = true) &&
+    uri.scheme == "content" &&
         uri.authority == MediaStore.AUTHORITY &&
+        uri.rawAuthority == uri.authority &&
         uri.rawQuery == null &&
         uri.rawFragment == null &&
         uri.rawPath == uri.path &&
