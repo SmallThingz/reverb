@@ -131,6 +131,7 @@ class StoragePathStateTest {
             val link = File(root, "recordings")
             Files.createSymbolicLink(link.toPath(), target.toPath().toAbsolutePath())
             assertEquals(StoragePathState.UNAVAILABLE, storageDirectoryState(link))
+            assertEquals("", resolveDirectoryIdentity(link))
             org.junit.Assert.assertThrows(IOException::class.java) {
                 ensureDirectoryEntryNoFollow(link)
             }
@@ -138,6 +139,7 @@ class StoragePathStateTest {
 
             assertTrue(ensureDirectoryEntryNoFollow(link))
             assertEquals(StoragePathState.PRESENT, storageDirectoryState(link))
+            assertTrue(resolveDirectoryIdentity(link).isNotBlank())
             assertTrue(link.isDirectory)
             assertFalse(ensureDirectoryEntryNoFollow(link))
         } finally {

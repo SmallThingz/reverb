@@ -1690,6 +1690,51 @@ internal fun resolveFileIdentity(file: File): String {
     }.getOrDefault("")
 }
 
+internal fun resolveDirectoryIdentity(directory: File): String {
+    fun readDirectoryAttributes(): BasicFileAttributes? = runCatching {
+        Files.readAttributes(
+            directory.toPath(),
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+    }.getOrNull()?.takeIf(BasicFileAttributes::isDirectory)
+
+    val attributes = readDirectoryAttributes() ?: return ""
+    val birthNanos = attributes.creationTime().let { time ->
+        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+    }
+    val statIdentity = runCatching {
+        val stat = Os.lstat(directory.absolutePath)
+        if (!OsConstants.S_ISDIR(stat.st_mode) || stat.st_ino == 0L) return@runCatching ""
+        val confirmed = readDirectoryAttributes() ?: return@runCatching ""
+        val initialKey = attributes.fileKey()?.toString().orEmpty()
+        val confirmedKey = confirmed.fileKey()?.toString().orEmpty()
+        if (initialKey.isNotBlank() && confirmedKey.isNotBlank() && initialKey != confirmedKey) {
+            return@runCatching ""
+        }
+        val confirmedBirthNanos = confirmed.creationTime().let { time ->
+            runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+        }
+        if (birthNanos != 0L && confirmedBirthNanos != 0L && birthNanos != confirmedBirthNanos) {
+            return@runCatching ""
+        }
+        buildStatFileIdentity(
+            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, confirmedBirthNanos,
+        )
+    }.getOrDefault("")
+    if (statIdentity.isNotBlank()) return statIdentity
+
+    val fallback = readDirectoryAttributes() ?: return ""
+    val fallbackBirthNanos = fallback.creationTime().let { time ->
+        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
+    }
+    return runCatching {
+        val key = fallback.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
+        val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
+        "nio:$encodedKey:$fallbackBirthNanos"
+    }.getOrDefault("")
+}
+
 internal fun resolveFileDescriptorIdentity(descriptor: FileDescriptor): String = runCatching {
     val stat = Os.fstat(descriptor)
     if (stat.st_ino == 0L) "" else "statfd:${stat.st_dev}:${stat.st_ino}:${stat.st_ctim.tv_sec}:${stat.st_ctim.tv_nsec}"
@@ -3191,8 +3236,14 @@ internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Bool
     sizeBytes > 0L && durationMillis > 0L
 
 private fun forceRecordingDirectoryDurable(directory: File) {
+    val beforeIdentity = resolveDirectoryIdentity(directory).takeIf { it.isNotBlank() }
+        ?: throw IOException("Recording directory is not a trustworthy directory: ${directory.absolutePath}")
     FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
         channel.force(true)
+    }
+    val afterIdentity = resolveDirectoryIdentity(directory)
+    if (!fileIdentityMatches(beforeIdentity, afterIdentity)) {
+        throw IOException("Recording directory changed across durability barrier: ${directory.absolutePath}")
     }
 }
 
