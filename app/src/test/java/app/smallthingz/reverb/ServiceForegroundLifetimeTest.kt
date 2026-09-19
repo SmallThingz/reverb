@@ -163,6 +163,123 @@ class ServiceForegroundLifetimeTest {
     }
 
     @Test
+    fun wakeLockAcquireSuccessTransfersOwnerWithoutRelease() {
+        val owner = TestWakeLockOwner()
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { owner },
+            configure = { it.held = true },
+            isHeld = { it.held },
+            release = { it.release() },
+            onFailure = { throw AssertionError("unexpected failure", it) },
+        )
+
+        assertEquals(owner, acquired)
+        assertEquals(0, owner.releaseCalls)
+    }
+
+    @Test
+    fun wakeLockCreateFailureReportsWithoutConfigurationOrRelease() {
+        val expected = IllegalStateException("create failed")
+        var configureCalls = 0
+        var releaseCalls = 0
+        var observed: Exception? = null
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { throw expected },
+            configure = { configureCalls++ },
+            isHeld = { false },
+            release = { releaseCalls++ },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(null, acquired)
+        assertEquals(expected, observed)
+        assertEquals(0, configureCalls)
+        assertEquals(0, releaseCalls)
+    }
+
+    @Test
+    fun wakeLockAcquireFailureReleasesPartialOwnerAndReportsPrimary() {
+        val owner = TestWakeLockOwner()
+        val expected = IllegalStateException("acquire failed")
+        var observed: Exception? = null
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { owner },
+            configure = {
+                it.held = true
+                throw expected
+            },
+            isHeld = { it.held },
+            release = { it.release() },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(null, acquired)
+        assertEquals(expected, observed)
+        assertEquals(1, owner.releaseCalls)
+    }
+
+    @Test
+    fun wakeLockAcquireCleanupFailureIsSuppressedOnPrimary() {
+        val cleanupFailure = IllegalStateException("release failed")
+        val owner = TestWakeLockOwner(releaseFailure = cleanupFailure)
+        val expected = IllegalStateException("acquire failed")
+        var observed: Exception? = null
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { owner },
+            configure = {
+                it.held = true
+                throw expected
+            },
+            isHeld = { it.held },
+            release = { it.release() },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(null, acquired)
+        assertEquals(expected, observed)
+        assertEquals(listOf(cleanupFailure), expected.suppressed.toList())
+        assertEquals(1, owner.releaseCalls)
+    }
+
+    @Test
+    fun wakeLockAcquireReporterFailureCannotEscapeOptionalRuntimePath() {
+        val owner = TestWakeLockOwner()
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { owner },
+            configure = { throw IllegalStateException("configure failed") },
+            isHeld = { it.held },
+            release = { it.release() },
+            onFailure = { throw IllegalStateException("report failed") },
+        )
+
+        assertEquals(null, acquired)
+        assertEquals(0, owner.releaseCalls)
+    }
+
+    @Test
+    fun wakeLockAcquireFailureBeforeHoldSkipsRelease() {
+        val owner = TestWakeLockOwner()
+        var observed: Exception? = null
+
+        val acquired = acquireWakeLockReportingFailure(
+            create = { owner },
+            configure = { throw IllegalStateException("configure failed") },
+            isHeld = { it.held },
+            release = { it.release() },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(null, acquired)
+        assertTrue(observed is IllegalStateException)
+        assertEquals(0, owner.releaseCalls)
+    }
+
+    @Test
     fun wakeLockReleaseFailure_isReportedWithoutEscapingTeardown() {
         val expected = IllegalStateException("release failed")
         var observed: Exception? = null
@@ -246,4 +363,17 @@ class ServiceForegroundLifetimeTest {
             ),
         )
     }
+    private class TestWakeLockOwner(
+        private val releaseFailure: Exception? = null,
+    ) {
+        var held = false
+        var releaseCalls = 0
+
+        fun release() {
+            releaseCalls++
+            held = false
+            releaseFailure?.let { throw it }
+        }
+    }
+
 }

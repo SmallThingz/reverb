@@ -4182,10 +4182,22 @@ class ReverbService : Service() {
         }
 
         val manager = powerManager ?: getSystemService(PowerManager::class.java)?.also { powerManager = it } ?: return
-        wakeLock = manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, packageName + WAKE_LOCK_TAG_SUFFIX).apply {
-            setReferenceCounted(false)
-            acquire()
-        }
+        wakeLock = acquireWakeLockReportingFailure(
+            create = { manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, packageName + WAKE_LOCK_TAG_SUFFIX) },
+            configure = { lock ->
+                lock.setReferenceCounted(false)
+                lock.acquire()
+            },
+            isHeld = { it.isHeld },
+            release = { it.release() },
+            onFailure = { error ->
+                Log.e(TAG, "WakeLock acquisition failed", error)
+                AppFeedbackCenter.post(
+                    getString(R.string.wake_lock_acquire_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+        )
     }
 
     @Synchronized
@@ -4594,6 +4606,23 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceCommandMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal inline fun <Owner> acquireWakeLockReportingFailure(
+    create: () -> Owner,
+    configure: (Owner) -> Unit,
+    isHeld: (Owner) -> Boolean,
+    release: (Owner) -> Unit,
+    onFailure: (Exception) -> Unit,
+): Owner? = try {
+    configureOwnedResourceOrRelease(
+        owner = create(),
+        release = { owner -> if (isHeld(owner)) release(owner) },
+        configure = configure,
+    )
+} catch (error: Exception) {
+    runCatching { onFailure(error) }
+    null
+}
 
 internal inline fun releaseWakeLockReportingFailure(
     isHeld: () -> Boolean,
