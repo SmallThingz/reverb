@@ -3605,11 +3605,19 @@ private fun renameDocumentRecording(
         // represent the same recording rather than an unrelated equal-looking document.
         val beforeDigest = sha256StableRecording(context, recording) ?: return@runCatching null
         var renameFailure: Throwable? = null
-        val directRenamedUri = try {
+        val returnedRenamedUri = try {
             DocumentsContract.renameDocument(context.contentResolver, sourceUri, uniqueName)
         } catch (error: Exception) {
             renameFailure = error
             null
+        }
+        val directRenamedUri = returnedRenamedUri?.takeIf { returned ->
+            documentRecordingBelongsToTree(returned.toString(), recording.directoryId)
+        }
+        if (returnedRenamedUri != null && directRenamedUri == null) {
+            renameFailure = IOException(
+                "Document rename returned URI outside configured tree: $returnedRenamedUri",
+            )
         }
         val renamedUri = directRenamedUri ?: run {
             val expectedFingerprint = StableOutputFingerprint(
