@@ -532,6 +532,12 @@ internal fun pendingOutputCleanupRecordMatchesFingerprint(
     providerIdentity = fingerprint.providerIdentity,
 )
 
+internal fun pendingOutputCleanupTargetHasManagedFileAuthority(
+    record: PendingOutputCleanupRecord,
+    managedDirectoryIds: Set<String>,
+): Boolean = record.storageType != RecordingStorageType.FILE ||
+    recordingFileStorageIdIsManaged(record.id, managedDirectoryIds)
+
 internal fun retryPendingOutputCleanup(context: Context) {
     val rawEntries = synchronized(outputCleanupJournalLock) { pendingOutputCleanupEntriesLocked(context) }
     for (raw in rawEntries) {
@@ -539,6 +545,15 @@ internal fun retryPendingOutputCleanup(context: Context) {
         if (record == null) {
             // Malformed cleanup metadata has no destructive authority, but discarding it can
             // expose a cancelled/failed final-name output. Keep it suppression-only.
+            continue
+        }
+        if (!pendingOutputCleanupTargetHasManagedFileAuthority(
+                record,
+                managedRecordingFileDirectoryIds(context),
+            )
+        ) {
+            // A structurally valid absolute path is still not deletion authority. Corrupt or
+            // legacy journal data outside Reverb's managed roots remains suppression-only.
             continue
         }
         if (pendingFileOutputCleanupRequiresClaimReplay(record)) {

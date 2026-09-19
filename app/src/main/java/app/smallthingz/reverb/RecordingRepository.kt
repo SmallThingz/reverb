@@ -353,6 +353,15 @@ object RecordingRepository {
                 removePendingDeletionRawLocked(context, raw)
                 continue
             }
+            if (!pendingDeletionTargetsHaveManagedFileAuthority(
+                    intent,
+                    managedRecordingFileDirectoryIds(context),
+                )
+            ) {
+                // Keep the raw intent as suppression evidence, but never claim/read/delete an
+                // arbitrary absolute path recovered from corrupt or legacy durable metadata.
+                continue
+            }
             val recording = byId[intent.id]
             val claim = deletionClaimFile(intent)
             if (claim != null) {
@@ -1114,6 +1123,22 @@ private fun encodePendingDeletionField(value: String): String =
 private fun decodePendingDeletionField(value: String): String? =
     runCatching { String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8) }
         .getOrNull()?.takeIf { it.isNotBlank() }
+
+internal fun pendingDeletionTargetsHaveManagedFileAuthority(
+    intent: PendingDeletionIntent,
+    managedDirectoryIds: Set<String>,
+): Boolean {
+    if (intent.storageType == RecordingStorageType.FILE &&
+        !recordingFileStorageIdIsManaged(intent.id, managedDirectoryIds)
+    ) {
+        return false
+    }
+    if (intent.moveTargetStorageType == RecordingStorageType.FILE) {
+        val targetId = intent.moveTargetId ?: return false
+        if (!recordingFileStorageIdIsManaged(targetId, managedDirectoryIds)) return false
+    }
+    return true
+}
 
 internal fun pendingDeletionHasAnyMoveTargetField(intent: PendingDeletionIntent): Boolean =
     intent.moveTargetStorageType != null || intent.moveTargetId != null || intent.moveTargetIdentity != null

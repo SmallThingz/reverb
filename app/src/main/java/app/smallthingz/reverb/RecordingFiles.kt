@@ -108,6 +108,23 @@ internal fun recordingStorageIdIsValid(
     }
 }
 
+internal fun managedRecordingFileDirectoryIds(context: Context): Set<String> = setOf(
+    getSavedRecordingsDirectory(context.applicationContext).absolutePath,
+    getSharedMusicRecordingsDirectory().absolutePath,
+)
+
+internal fun recordingFileStorageIdIsManaged(
+    id: String,
+    managedDirectoryIds: Set<String>,
+): Boolean {
+    if (!recordingStorageIdIsValid(RecordingStorageType.FILE, id)) return false
+    val parent = File(id).parentFile?.absolutePath ?: return false
+    return parent in managedDirectoryIds
+}
+
+internal fun recordingFileStorageIdIsManaged(context: Context, id: String): Boolean =
+    recordingFileStorageIdIsManaged(id, managedRecordingFileDirectoryIds(context))
+
 internal enum class RecordingAssetState {
     PRESENT,
     MISSING,

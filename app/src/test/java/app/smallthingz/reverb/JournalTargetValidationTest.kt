@@ -1,7 +1,9 @@
 package app.smallthingz.reverb
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JournalTargetValidationTest {
@@ -59,6 +61,59 @@ class JournalTargetValidationTest {
         val raw = encodePendingDeletionIntent(intent)
         assertNull(decodePendingDeletionIntent(raw))
         assertEquals(intent.id, pendingDeletionSuppressedId(raw))
+    }
+
+    @Test
+    fun absoluteFileJournalTargetsOutsideManagedRootsRemainSuppressionOnly() {
+        val managed = setOf("/recordings")
+        val cleanup = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "/other/unsafe.wav",
+            byteCount = 4L,
+            sha256Hex = digestHex,
+            fileKey = statIdentity,
+        )
+        assertFalse(pendingOutputCleanupTargetHasManagedFileAuthority(cleanup, managed))
+        assertTrue(
+            pendingOutputCleanupTargetHasManagedFileAuthority(
+                cleanup.copy(id = "/recordings/safe.wav"),
+                managed,
+            ),
+        )
+        assertFalse(
+            pendingOutputCleanupTargetHasManagedFileAuthority(
+                cleanup.copy(id = "/recordings/nested/not-direct.wav"),
+                managed,
+            ),
+        )
+
+        val deletion = PendingDeletionIntent(
+            id = "/other/unsafe.wav",
+            byteCount = 4L,
+            sha256Hex = digestHex,
+            assetDeleted = false,
+            storageType = RecordingStorageType.FILE,
+            claimToken = "00000000-0000-0000-0000-000000000903",
+            fileIdentity = statIdentity,
+        )
+        assertFalse(pendingDeletionTargetsHaveManagedFileAuthority(deletion, managed))
+        assertTrue(
+            pendingDeletionTargetsHaveManagedFileAuthority(
+                deletion.copy(id = "/recordings/safe.wav"),
+                managed,
+            ),
+        )
+        assertFalse(
+            pendingDeletionTargetsHaveManagedFileAuthority(
+                deletion.copy(
+                    id = "/recordings/source.wav",
+                    moveTargetStorageType = RecordingStorageType.FILE,
+                    moveTargetId = "/other/target.wav",
+                    moveTargetIdentity = statIdentity,
+                ),
+                managed,
+            ),
+        )
     }
 
     @Test
