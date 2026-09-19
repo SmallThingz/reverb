@@ -184,6 +184,10 @@ internal fun pendingOutputCleanupMatches(
 internal fun pendingFileOutputCleanupRequiresClaimReplay(record: PendingOutputCleanupRecord): Boolean =
     record.storageType == RecordingStorageType.FILE && !record.fileKey.isNullOrBlank()
 
+internal fun pendingFileOutputCleanupHasDeleteAuthority(record: PendingOutputCleanupRecord): Boolean =
+    record.storageType == RecordingStorageType.FILE &&
+        record.fileKey?.let(::deletionClaimIdentityHasPinnedDescriptorAuthority) == true
+
 internal fun pendingOutputCleanupSuppressedId(raw: String): String? {
     decodePendingOutputCleanupRecord(raw)?.let { return it.id }
     val parts = raw.split('|')
@@ -805,6 +809,15 @@ private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean
     val intent = pendingOutputCleanupFileIntent(record) ?: return false
     val identity = requireNotNull(intent.fileIdentity)
     val claimState = outputCleanupClaimState(record)
+    if (!pendingFileOutputCleanupHasDeleteAuthority(record)) {
+        // Legacy/NIO FILE identities can still own an older hidden claim, so recover that claim
+        // back to visible/preserved bytes. They may not create a new claim or physically delete:
+        // equal bytes plus a path-scoped legacy identity are suppression evidence only.
+        if (claimState is OutputCleanupClaimState.REPLAY) {
+            replayClaimedFileDeletion(claimState.intent, claimState.file)
+        }
+        return false
+    }
     val result = when (claimState) {
         OutputCleanupClaimState.WAIT -> return false
         OutputCleanupClaimState.NONE -> deleteClaimedFile(intent)

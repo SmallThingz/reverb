@@ -2092,6 +2092,23 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun pendingFileOutputCleanup_legacyIdentityRemainsSuppressionOnly() {
+        val legacy = PendingOutputCleanupRecord(
+            storageType = RecordingStorageType.FILE,
+            id = "/recordings/legacy-nio.wav",
+            byteCount = 10L,
+            sha256Hex = "ab".repeat(32),
+            fileKey = "nio:bGVnYWN5LWZpbGUta2V5:1234",
+        )
+        val descriptorBound = legacy.copy(fileKey = "stat:1:2:3:4:5")
+
+        assertTrue(pendingFileOutputCleanupRequiresClaimReplay(legacy))
+        assertFalse(pendingFileOutputCleanupHasDeleteAuthority(legacy))
+        assertTrue(pendingFileOutputCleanupRequiresClaimReplay(descriptorBound))
+        assertTrue(pendingFileOutputCleanupHasDeleteAuthority(descriptorBound))
+    }
+
+    @Test
     fun pendingFileOutputCleanup_withoutObjectIdentityFailsClosed() {
         val record = PendingOutputCleanupRecord(
             storageType = RecordingStorageType.FILE,
