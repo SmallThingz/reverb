@@ -3415,7 +3415,16 @@ class ReverbService : Service() {
             return
         }
         val passId = retentionMaintenanceState.claimObservedNeed(needed) ?: return
-        if (!ensureRetentionMaintenanceOnlyForegroundIfNeeded()) return
+        if (!retentionMaintenanceKeepsServiceAlive(
+                isActive = retentionMaintenanceState::isActive,
+                ensureProtectedLifetime = { ensureRetentionMaintenanceOnlyForegroundIfNeeded() },
+            )
+        ) {
+            mainHandler.post {
+                if (!serviceDestroying) requestServiceStopWhenExportIdle()
+            }
+            return
+        }
         submitClaimedRetentionMaintenancePass(passId)
     }
 
