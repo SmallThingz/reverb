@@ -75,13 +75,42 @@ internal fun SharedPreferences.safeLong(key: PrefKey, default: Long): Long =
 internal fun SharedPreferences.safeBoolean(key: PrefKey, default: Boolean): Boolean =
     safePreferenceRead(default) { getBoolean(key, default) }
 
+internal const val MAX_DURABLE_JOURNAL_ENTRIES = 2_048
+internal const val MAX_DURABLE_JOURNAL_ENTRY_CHARS = 16 * 1_024
+internal const val MAX_DURABLE_JOURNAL_TOTAL_CHARS = 2 * 1_024 * 1_024
+
+internal fun boundedDurableStringSet(entries: Set<String>, label: String): Set<String> {
+    if (entries.size > MAX_DURABLE_JOURNAL_ENTRIES) {
+        throw IllegalStateException(
+            "Durable preference $label has ${entries.size} entries; max is $MAX_DURABLE_JOURNAL_ENTRIES",
+        )
+    }
+    var totalChars = 0L
+    val copy = LinkedHashSet<String>(entries.size)
+    for (entry in entries) {
+        if (entry.length > MAX_DURABLE_JOURNAL_ENTRY_CHARS) {
+            throw IllegalStateException(
+                "Durable preference $label has an oversized entry (${entry.length} chars)",
+            )
+        }
+        totalChars += entry.length.toLong()
+        if (totalChars > MAX_DURABLE_JOURNAL_TOTAL_CHARS.toLong()) {
+            throw IllegalStateException(
+                "Durable preference $label exceeds $MAX_DURABLE_JOURNAL_TOTAL_CHARS total chars",
+            )
+        }
+        copy += entry
+    }
+    return copy
+}
+
 internal fun SharedPreferences.requireDurableStringSet(key: PrefKey): Set<String> =
     requireDurablePreference(
         present = contains(key),
         absent = emptySet(),
         label = key.name,
     ) {
-        getStringSet(key, emptySet())?.toSet() ?: emptySet()
+        boundedDurableStringSet(getStringSet(key, emptySet()) ?: emptySet(), key.name)
     }
 
 internal inline fun commitDurablePreferenceOrRestoreInMemory(
@@ -109,6 +138,8 @@ internal fun SharedPreferences.commitDurableStringSetReplacement(
     previousEntries: Set<String>,
     updatedEntries: Set<String>,
 ): Boolean {
+    val boundedPrevious = boundedDurableStringSet(previousEntries, key.name)
+    val boundedUpdated = boundedDurableStringSet(updatedEntries, key.name)
     val previousPresent = contains(key)
     fun write(entries: Set<String>, present: Boolean): Boolean {
         val editor = edit()
@@ -116,13 +147,13 @@ internal fun SharedPreferences.commitDurableStringSetReplacement(
         return editor.commit()
     }
     return commitDurablePreferenceOrRestoreInMemory(
-        commit = { write(updatedEntries, updatedEntries.isNotEmpty()) },
+        commit = { write(boundedUpdated, boundedUpdated.isNotEmpty()) },
         // SharedPreferences commits update the process-local map before disk I/O. A failed
         // durability boundary must therefore restore the prior map synchronously so later
         // same-process replay cannot consume authority that was never durably published, or
         // forget authority whose removal never became durable. The rollback commit's Boolean
         // is intentionally not promoted to success; the original mutation still failed.
-        restoreInMemory = { write(previousEntries, previousPresent) },
+        restoreInMemory = { write(boundedPrevious, previousPresent) },
     )
 }
 fun SharedPreferences.Editor.putString(key: PrefKey, value: String): SharedPreferences.Editor =
