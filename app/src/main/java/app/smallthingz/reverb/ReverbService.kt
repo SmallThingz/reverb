@@ -96,6 +96,9 @@ internal fun recorderCommandGenerationMayApply(
     currentGeneration: Long,
 ): Boolean = expectedGeneration == null || expectedGeneration == currentGeneration
 
+internal inline fun <T : Any> requireServiceStarted(start: () -> T?): T =
+    start() ?: throw IllegalStateException("Service start returned no component")
+
 internal inline fun commitRecorderPreferenceMutation(
     commit: () -> Boolean,
     onException: (Throwable) -> Unit = {},
@@ -1239,7 +1242,9 @@ class ReverbService : Service() {
         state = STATE_LISTENING
         updateWakeLockState()
         try {
-            ContextCompat.startForegroundService(this, Intent(this, javaClass))
+            requireServiceStarted {
+                ContextCompat.startForegroundService(this, Intent(this, javaClass))
+            }
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to start recorder foreground service", error)
             pauseListeningAfterForegroundStartFailure(generation, error)
@@ -1692,10 +1697,12 @@ class ReverbService : Service() {
         foregroundServiceTimedOut = false
         return try {
             if (foregroundServiceTypes == 0) {
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE),
-                )
+                requireServiceStarted {
+                    ContextCompat.startForegroundService(
+                        this,
+                        Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE),
+                    )
+                }
             }
             if (exportShouldRefreshDataSyncNotification(foregroundServiceTypes)) {
                 promoteForeground(
@@ -1827,10 +1834,12 @@ class ReverbService : Service() {
 
         return try {
             if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) == 0) {
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, javaClass).setAction(ACTION_RETENTION_MAINTENANCE_KEEPALIVE),
-                )
+                requireServiceStarted {
+                    ContextCompat.startForegroundService(
+                        this,
+                        Intent(this, javaClass).setAction(ACTION_RETENTION_MAINTENANCE_KEEPALIVE),
+                    )
+                }
             }
             // Even when another data-sync notification just ended, explicitly refresh the
             // content so stale "Saving…" / "Clearing…" text cannot outlive its owner.
@@ -3226,10 +3235,12 @@ class ReverbService : Service() {
         foregroundServiceTimedOut = false
         return try {
             if (foregroundServiceTypes == 0) {
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, javaClass).setAction(ACTION_BUFFER_CLEAR_KEEPALIVE),
-                )
+                requireServiceStarted {
+                    ContextCompat.startForegroundService(
+                        this,
+                        Intent(this, javaClass).setAction(ACTION_BUFFER_CLEAR_KEEPALIVE),
+                    )
+                }
             }
             if (clearShouldRefreshDataSyncNotification(
                     foregroundServiceTypes = foregroundServiceTypes,

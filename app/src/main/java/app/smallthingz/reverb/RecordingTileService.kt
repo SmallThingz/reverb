@@ -608,7 +608,7 @@ abstract class RecordingTileService : TileService() {
             .setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
             .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, bufferSlot.storageCode.toInt())
         val started = runCatching {
-            ContextCompat.startForegroundService(this, intent)
+            requireServiceStarted { ContextCompat.startForegroundService(this, intent) }
         }.isSuccess
         if (!started) {
             val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(this)

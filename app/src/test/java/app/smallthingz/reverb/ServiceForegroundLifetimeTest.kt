@@ -3,10 +3,34 @@ package app.smallthingz.reverb
 import android.content.pm.ServiceInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServiceForegroundLifetimeTest {
+    @Test
+    fun serviceStartRequiresReturnedComponent() {
+        assertEquals("component", requireServiceStarted { "component" })
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            requireServiceStarted<String> { null }
+        }
+
+        assertTrue(error.message.orEmpty().contains("no component"))
+    }
+
+    @Test
+    fun serviceStartPreservesThrownFailure() {
+        val expected = SecurityException("denied")
+
+        val actual = assertThrows(SecurityException::class.java) {
+            requireServiceStarted<String> { throw expected }
+        }
+
+        assertSame(expected, actual)
+    }
+
     @Test
     fun retentionUsesDataSyncWhenMicrophoneDoesNotOwnLifetime() {
         assertEquals(

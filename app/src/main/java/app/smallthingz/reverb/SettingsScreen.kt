@@ -527,9 +527,11 @@ fun SettingsScreen(
         val appContext = context.applicationContext
         if (getRecorderPreferences(appContext).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
             runCatching {
-                appContext.startService(
-                    Intent(appContext, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
-                )
+                requireServiceStarted {
+                    appContext.startService(
+                        Intent(appContext, ReverbService::class.java).setAction(ReverbService.ACTION_APPLY_SETTINGS),
+                    )
+                }
             }.onFailure {
                 // Durable settings changed but no recorder accepted the reload. Replace stale
                 // runtime tile state immediately with a fail-closed snapshot, then hydrate the
