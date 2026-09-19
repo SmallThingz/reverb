@@ -166,6 +166,28 @@ class RecordingWaveformTest {
     }
 
     @Test
+    fun wavLayoutRejectsPartialFinalPcmFrame() {
+        val file = testFile("partial-frame-${System.nanoTime()}.wav")
+        val payload = byteArrayOf(1, 2, 3)
+        file.writeBytes(
+            buildWavHeaderBytes(
+                sampleRate = 8_000,
+                channelCount = 1,
+                sampleFormat = PcmSampleFormat.PCM_16,
+                dataSize = payload.size.toLong(),
+            ) + payload + byteArrayOf(0),
+        )
+        try {
+            val failure = runCatching {
+                FileInputStream(file).channel.use(::readWavPcmLayout)
+            }.exceptionOrNull()
+            assertTrue(failure is IOException)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun wavLayoutRejectsNonWaveInput() {
         val file = testFile("not-wave.bin")
         file.writeBytes(ByteArray(64) { it.toByte() })

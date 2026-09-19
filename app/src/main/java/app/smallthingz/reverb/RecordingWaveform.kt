@@ -402,11 +402,10 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
     val expectedFrameBytes = channelCount * format.bytesPerSample
     if (blockAlign != expectedFrameBytes) throw IOException("Unsupported WAV block alignment")
     if (dataOffset < 0L || dataBytes < expectedFrameBytes.toLong()) throw IOException("WAV data chunk missing")
-    val available = (fileSize - dataOffset).coerceAtLeast(0L)
-    val boundedBytes = minOf(dataBytes, available)
-    val alignedBytes = boundedBytes - boundedBytes % expectedFrameBytes.toLong()
-    if (alignedBytes <= 0L) throw IOException("WAV contains no complete audio frames")
-    return WavPcmLayout(sampleRate, channelCount, format, dataOffset, alignedBytes)
+    if (dataBytes % expectedFrameBytes.toLong() != 0L) {
+        throw IOException("WAV data chunk is not frame aligned")
+    }
+    return WavPcmLayout(sampleRate, channelCount, format, dataOffset, dataBytes)
 }
 
 internal fun readRecordingWaveformEnvelopeProgressive(
