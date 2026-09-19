@@ -4027,53 +4027,6 @@ private fun parseRecordingStartTimeMillis(value: String): Long? {
     return normalized.toLongOrNull()
 }
 
-private fun readWavDurationMillis(file: File): Long {
-    return runCatching {
-        FileInputStream(file).use(::readWavDurationMillis)
-    }.onFailure { Log.w(TAG, "readWavDurationMillis(file=$file) failed", it) }.getOrDefault(0L)
-}
-
-private fun readWavDurationMillis(input: InputStream): Long {
-    return runCatching {
-        val riffHeader = ByteArray(12)
-        if (!input.readFully(riffHeader)) return@runCatching 0L
-        if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
-            return@runCatching 0L
-        }
-
-        var byteRate = 0L
-        var dataSize = -1L
-        val chunkHeader = ByteArray(8)
-        while (input.readFully(chunkHeader)) {
-            val chunkSize = littleEndianUnsignedInt(chunkHeader, 4)
-            when {
-                chunkHeader.regionMatchesAscii(0, "fmt ") -> {
-                    if (chunkSize < 16L) return@runCatching 0L
-                    val format = ByteArray(16)
-                    if (!input.readFully(format)) return@runCatching 0L
-                    byteRate = littleEndianUnsignedInt(format, 8)
-                    if (!input.skipFully(chunkSize - format.size.toLong())) return@runCatching 0L
-                }
-
-                chunkHeader.regionMatchesAscii(0, "data") -> {
-                    dataSize = chunkSize
-                    if (byteRate > 0L) {
-                        return@runCatching dataSize * 1000L / byteRate
-                    }
-                    if (!input.skipFully(chunkSize)) return@runCatching 0L
-                }
-
-                else -> if (!input.skipFully(chunkSize)) return@runCatching 0L
-            }
-            if ((chunkSize and 1L) != 0L && !input.skipFully(1L)) return@runCatching 0L
-            if (byteRate > 0L && dataSize >= 0L) {
-                return@runCatching dataSize * 1000L / byteRate
-            }
-        }
-        0L
-    }.onFailure { Log.w(TAG, "readWavDurationMillis(input) failed", it) }.getOrDefault(0L)
-}
-
 internal fun structurallyCompleteRecordingDurationMillis(
     displayName: String,
     input: InputStream,
@@ -4254,20 +4207,6 @@ private fun InputStream.readFully(buffer: ByteArray): Boolean {
             offset++
         } else {
             offset += read
-        }
-    }
-    return true
-}
-
-private fun InputStream.skipFully(byteCount: Long): Boolean {
-    var remaining = byteCount
-    while (remaining > 0L) {
-        val skipped = skip(remaining)
-        if (skipped > 0L) {
-            remaining -= skipped
-        } else {
-            if (read() < 0) return false
-            remaining--
         }
     }
     return true
