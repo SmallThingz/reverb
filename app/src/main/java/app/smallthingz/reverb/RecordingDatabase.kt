@@ -388,32 +388,55 @@ internal fun preserveCorruptRecordingDatabase(
     if (sources.isEmpty()) return null
     return runCatching {
         val recoveryRootCreated = ensureDirectoryEntryNoFollow(recoveryRoot)
+        val recoveryRootIdentity = resolveDirectoryIdentity(recoveryRoot).takeIf { it.isNotBlank() }
+            ?: throw IOException("Recording database recovery root identity is unavailable")
+        fun requireRecoveryRootCurrent() {
+            val currentIdentity = resolveDirectoryIdentity(recoveryRoot)
+            if (!fileIdentityMatches(recoveryRootIdentity, currentIdentity)) {
+                throw IOException("Recording database recovery root changed during preservation")
+            }
+        }
         if (recoveryRootCreated) {
             val recoveryParent = recoveryRoot.parentFile
                 ?: throw IOException("Recording database recovery root has no parent")
             io.forceDirectory(recoveryParent)
-            if (storageDirectoryState(recoveryRoot) != StoragePathState.PRESENT) {
-                throw IOException("Recording database recovery root changed during creation")
-            }
+            requireRecoveryRootCurrent()
         }
 
+        requireRecoveryRootCurrent()
         var suffix = 0
         var destination: File
         do {
             destination = File(recoveryRoot, if (suffix == 0) recoveryId else "$recoveryId-$suffix")
             suffix++
         } while (destination.exists() || File(recoveryRoot, destination.name + ".partial").exists())
+        requireRecoveryRootCurrent()
         val staging = File(recoveryRoot, destination.name + ".partial")
         if (!staging.mkdir()) throw IOException("Unable to create recording database recovery snapshot")
+        requireRecoveryRootCurrent()
+        val stagingIdentity = resolveDirectoryIdentity(staging).takeIf { it.isNotBlank() }
+            ?: throw IOException("Recording database recovery staging identity is unavailable")
+        fun requireStagingCurrent() {
+            val currentIdentity = resolveDirectoryIdentity(staging)
+            if (!fileIdentityMatches(stagingIdentity, currentIdentity)) {
+                throw IOException("Recording database recovery staging directory changed")
+            }
+        }
         io.forceDirectory(recoveryRoot)
+        requireRecoveryRootCurrent()
+        requireStagingCurrent()
 
         val sourceDigests = LinkedHashMap<String, ByteArray>(sources.size)
         sources.forEach { source ->
             sourceDigests[source.name] = io.sha256(source)
         }
         sources.forEach { source ->
+            requireRecoveryRootCurrent()
+            requireStagingCurrent()
             val target = File(staging, source.name)
             io.copyAndSync(source, target)
+            requireRecoveryRootCurrent()
+            requireStagingCurrent()
             val expectedDigest = sourceDigests.getValue(source.name)
             if (!expectedDigest.contentEquals(io.sha256(target))) {
                 throw IOException("Recording database recovery copy mismatch: ${source.name}")
@@ -432,13 +455,26 @@ internal fun preserveCorruptRecordingDatabase(
             }
         }
 
+        requireRecoveryRootCurrent()
+        requireStagingCurrent()
         io.forceDirectory(staging)
+        requireRecoveryRootCurrent()
+        requireStagingCurrent()
         try {
             io.atomicMove(staging, destination)
         } catch (error: AtomicMoveNotSupportedException) {
             throw IOException("Atomic recording database recovery publication is unavailable", error)
         }
+        requireRecoveryRootCurrent()
+        val destinationIdentity = resolveDirectoryIdentity(destination)
+        if (!fileIdentityMatches(stagingIdentity, destinationIdentity)) {
+            throw IOException("Recording database recovery publication changed identity")
+        }
         io.forceDirectory(recoveryRoot)
+        requireRecoveryRootCurrent()
+        if (!fileIdentityMatches(stagingIdentity, resolveDirectoryIdentity(destination))) {
+            throw IOException("Recording database recovery publication changed after durability barrier")
+        }
         destination
     }.getOrNull()
 }

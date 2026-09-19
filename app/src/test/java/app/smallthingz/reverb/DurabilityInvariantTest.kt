@@ -101,6 +101,39 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun corruptDatabaseRecovery_rejectsRecoveryRootReplacementDuringCopy() {
+        val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "recovery-root-race-").toFile()
+        try {
+            val database = File(root, "recordings.db").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val recoveryRoot = File(root, "recovery")
+            val redirected = File(root, "redirected")
+            var replaced = false
+            val preserved = preserveCorruptRecordingDatabase(
+                database,
+                recoveryRoot,
+                "snapshot",
+                InjectedRecordingDatabaseRecoveryIo(
+                    afterCopy = { _, _ ->
+                        if (!replaced) {
+                            Files.move(recoveryRoot.toPath(), redirected.toPath())
+                            Files.createSymbolicLink(recoveryRoot.toPath(), redirected.toPath().toAbsolutePath())
+                            replaced = true
+                        }
+                    },
+                ),
+            )
+
+            assertTrue(replaced)
+            assertEquals(null, preserved)
+            assertTrue(Files.isSymbolicLink(recoveryRoot.toPath()))
+            assertArrayEquals(byteArrayOf(1, 2, 3, 4), database.readBytes())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun corruptDatabaseRecovery_rejectsSourceMutationDuringCopy() {
         val parent = File("build/tmp/database-recovery-tests").apply { mkdirs() }
         val root = Files.createTempDirectory(parent.toPath(), "source-mutation-").toFile()
