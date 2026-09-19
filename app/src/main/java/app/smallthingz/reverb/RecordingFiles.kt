@@ -1593,13 +1593,27 @@ internal fun scannedFileRecordingIdentityRemainsCurrent(
     openedDescriptorIdentity: String,
     afterReadDescriptorIdentity: String,
     afterPathIdentity: String,
-): Boolean = beforePathIdentity.isBlank() || (
-    afterPathIdentity.isNotBlank() &&
+): Boolean {
+    if (beforePathIdentity.isBlank()) {
+        // Identity-less rows remain non-authoritative, but the bytes/metadata sampled from the
+        // pinned descriptor still have to belong to one stable descriptor revision. If path
+        // identity becomes available by the end of the scan, bind that path to the same revision.
+        if (openedDescriptorIdentity.isBlank() != afterReadDescriptorIdentity.isBlank()) return false
+        if (openedDescriptorIdentity.isNotBlank() && openedDescriptorIdentity != afterReadDescriptorIdentity) {
+            return false
+        }
+        if (afterPathIdentity.isNotBlank()) {
+            return afterReadDescriptorIdentity.isNotBlank() &&
+                fileDescriptorIdentityMatches(afterPathIdentity, afterReadDescriptorIdentity)
+        }
+        return true
+    }
+    return afterPathIdentity.isNotBlank() &&
         fileDescriptorIdentityMatches(beforePathIdentity, openedDescriptorIdentity) &&
         openedDescriptorIdentity == afterReadDescriptorIdentity &&
         fileIdentityMatches(beforePathIdentity, afterPathIdentity) &&
         fileDescriptorIdentityMatches(afterPathIdentity, afterReadDescriptorIdentity)
-    )
+}
 
 internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     if (recording.storageType != RecordingStorageType.FILE) return true
