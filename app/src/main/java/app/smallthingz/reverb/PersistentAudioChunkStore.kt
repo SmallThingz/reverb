@@ -1314,8 +1314,11 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun deleteRetirementTombstoneLocked(id: UInt): Boolean = runCatching {
         val marker = retirementTombstoneFile(id)
-        val existed = Files.deleteIfExists(marker.toPath())
-        if (existed) forceDirectoryDurable(retiredDirectory)
+        Files.deleteIfExists(marker.toPath())
+        // Always cross the directory barrier, even when the marker is already visibly absent.
+        // A previous attempt may have deleted it before its directory fsync failed; skipping the
+        // retry barrier would let same-process ID reuse rely on an undurable absence.
+        forceDirectoryDurable(retiredDirectory)
         retirementTombstoneDurabilityPending.remove(id)
         true
     }.getOrDefault(false)
@@ -2253,16 +2256,22 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             retirementTombstoneDurabilityPending.remove(record.id)
         }
-        val deleted = deleteChunkFileDurablyLocked(record.file)
-        if (deleted) {
+        val chunkDeleted = deleteChunkFileDurablyLocked(record.file)
+        if (!chunkDeleted) {
+            retiredById[record.id] = record
+            return false
+        }
+
+        val markerDeletedDurably = deleteRetirementTombstoneLocked(record.id)
+        if (markerDeletedDurably) {
             retiredById.remove(record.id)
-            // If marker cleanup fails, keep the stale marker on disk. Reuse refuses to
-            // claim this numeric id until that marker can itself be removed durably.
-            deleteRetirementTombstoneLocked(record.id)
         } else {
+            // The PCM is already durably absent, but the marker-removal barrier is not. Keep
+            // owning this retired id so checkpoint/close retries the marker cleanup and chunk-id
+            // reuse cannot race an old tombstone that may reappear after a crash.
             retiredById[record.id] = record
         }
-        return deleted
+        return markerDeletedDurably
     }
 
     private fun retryRetiredDeletesLocked() {

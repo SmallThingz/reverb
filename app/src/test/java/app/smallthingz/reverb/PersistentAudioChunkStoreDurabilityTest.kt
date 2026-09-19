@@ -713,6 +713,55 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retirementMarkerRemovalSyncFailure_blocksIdReuseUntilRetryIsDurable() = withStoreRoot { root ->
+        val expected = pcmBytes(1_024)
+        var retiredSyncCount = 0
+        var failMarkerRemovalSync = true
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            overwriteOldest = true,
+            directorySync = { directory ->
+                if (directory.name == "retired") {
+                    retiredSyncCount++
+                    if (failMarkerRemovalSync && retiredSyncCount == 2) {
+                        throw IOException("Injected retirement-marker removal sync failure")
+                    }
+                }
+            },
+        )
+        configure(store, 64 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+
+        val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val marker = File(File(root, "retired"), "0")
+        store.clear()
+
+        assertFalse(store.hasData())
+        assertFalse(chunk.exists())
+        assertFalse(marker.exists())
+        assertEquals(2, retiredSyncCount)
+
+        val nextId = PersistentAudioChunkStore::class.java.getDeclaredField("nextChunkId")
+        nextId.isAccessible = true
+        nextId.setInt(store, 0)
+        val collision = assertThrows(IOException::class.java) {
+            store.append(expected, 0, expected.size)
+        }
+        assertTrue(collision.message?.contains("collision with live data") == true)
+
+        failMarkerRemovalSync = false
+        store.checkpoint()
+        assertEquals(3, retiredSyncCount)
+
+        nextId.setInt(store, 0)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+        assertArrayEquals(expected, readAll(store))
+        store.close()
+    }
+
+    @Test
     fun clear_surfacesActiveAccessCloseFailureAfterRetiringAudio() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         val store = PersistentAudioChunkStore(root)
