@@ -3205,11 +3205,15 @@ class ReverbService : Service() {
     fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
         startClearBuffer(bufferSlot) != null
 
-    fun cancelBufferClear(operationId: Long): Boolean =
+    fun cancelBufferClear(operationId: Long): Boolean = synchronized(listeningIntentLock) {
+        // Serialize user cancellation with onDestroy so a stale binder cannot convert teardown
+        // into a neutral Cancel after the Service terminal boundary already won.
+        if (!serviceCommandMayQueue(serviceDestroying)) return@synchronized false
         requestBufferClearCancellation(
             operationId = operationId,
             reportFailure = false,
         )
+    }
 
     private fun requestBufferClearCancellation(
         operationId: Long? = null,
