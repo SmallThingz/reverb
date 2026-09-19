@@ -1405,6 +1405,56 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun preservation_neverDeletesSourceReplacedAfterVerifiedCopy() = withStoreRoot { root ->
+        val expected = pcmBytes(32_000)
+        val firstReplacement = ByteArray(257) { index -> ((index * 31 + 5) and 0xff).toByte() }
+        val lateReplacement = ByteArray(263) { index -> ((index * 37 + 9) and 0xff).toByte() }
+        var chunk: File? = null
+        var replaceAfterPreservedSync = false
+        var replacementInjected = false
+        val store = PersistentAudioChunkStore(
+            rootDirectory = root,
+            directorySync = { directory ->
+                if (
+                    replaceAfterPreservedSync && !replacementInjected &&
+                    directory.name == "preserved"
+                ) {
+                    requireNotNull(chunk).writeBytes(lateReplacement)
+                    replacementInjected = true
+                }
+            },
+        )
+        configure(store, 128 * 1024L)
+        assertEquals(expected.size, store.append(expected, 0, expected.size))
+        store.sealActiveChunk()
+        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+
+        store.clear()
+        assertArrayEquals(expected, readLease(lease))
+        chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+        val marker = File(root, "retired/0")
+        requireNotNull(chunk).writeBytes(firstReplacement)
+        replaceAfterPreservedSync = true
+
+        lease.close()
+
+        assertTrue(replacementInjected)
+        assertFalse(requireNotNull(chunk).exists())
+        assertFalse(marker.exists())
+        val preserved = File(root, "preserved").listFiles().orEmpty()
+        val firstPreserved = preserved.single { ".retired-changed" in it.name }
+        assertArrayEquals(firstReplacement, firstPreserved.readBytes())
+        assertTrue(
+            preserved.any { file ->
+                ".preserve-race-" in file.name && file.readBytes().contentEquals(lateReplacement)
+            },
+        )
+
+        replaceAfterPreservedSync = false
+        store.close()
+    }
+
+    @Test
     fun loopingExplicitShrink_retainsExactNewestBytesAfterBoundaryLeaseReleases() = withStoreRoot { root ->
         val expected = pcmBytes(30_000)
         val store = PersistentAudioChunkStore(root, overwriteOldest = true)

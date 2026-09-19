@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.ArrayDeque
+import java.util.UUID
 import java.util.zip.CRC32
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -1369,6 +1370,62 @@ internal class PersistentAudioChunkStore internal constructor(
         true
     }.getOrDefault(false)
 
+    private fun claimChunkPathForDeletionLocked(file: File, reason: String): File? {
+        val claim = File(chunksDirectory, ".reverb-$reason-${UUID.randomUUID()}.pending")
+        var moved = false
+        try {
+            Files.move(file.toPath(), claim.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            moved = true
+            forceDirectoryDurable(chunksDirectory)
+            return claim
+        } catch (_: AtomicMoveNotSupportedException) {
+            return null
+        } catch (error: Exception) {
+            if (moved) {
+                val uncertain = IOException(
+                    "Chunk deletion claim is visible but not durably synced: ${claim.absolutePath}",
+                    error,
+                )
+                terminalStorageFailure = uncertain
+                throw uncertain
+            }
+            return null
+        }
+    }
+
+    private fun deleteClaimedChunkDurablyLocked(claim: File): Boolean = runCatching {
+        Files.deleteIfExists(claim.toPath())
+        forceDirectoryDurable(chunksDirectory)
+        true
+    }.getOrDefault(false)
+
+    private fun moveClaimedChunkToPreservedLocked(
+        claim: File,
+        originalName: String,
+        reason: String,
+    ): Boolean {
+        ensureQuarantineDirectoryDurableLocked()
+        val target = File(
+            quarantineDirectory,
+            "$originalName.$reason-${UUID.randomUUID()}",
+        )
+        try {
+            Files.move(claim.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            forceDirectoryDurable(chunksDirectory)
+            forceDirectoryDurable(quarantineDirectory)
+            return true
+        } catch (_: AtomicMoveNotSupportedException) {
+            return false
+        } catch (error: Exception) {
+            val uncertain = IOException(
+                "Unable to durably preserve claimed chunk: ${claim.absolutePath}",
+                error,
+            )
+            terminalStorageFailure = uncertain
+            throw uncertain
+        }
+    }
+
     private fun scanChunkFilesLocked(
         retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
     ): MutableMap<UInt, ChunkRecord> {
@@ -1439,13 +1496,13 @@ internal class PersistentAudioChunkStore internal constructor(
                 suffix++
                 continue
             }
-            try {
+            val sourceAuthority = try {
                 copyPreservedChunkAndVerifyLocked(file, target)
             } catch (error: Exception) {
                 runCatching { Files.deleteIfExists(target.toPath()) }
                 throw error
             }
-            if (!deleteChunkFileDurablyLocked(file)) {
+            if (!removePreservedSourceLocked(file, sourceAuthority)) {
                 // Both copies are intentionally retained if source removal cannot be made
                 // durable; abort recovery rather than pretending quarantine was exclusive.
                 throw IOException("Unable to durably remove preserved chunk source: ${file.absolutePath}")
@@ -1479,7 +1536,19 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
-    private fun copyPreservedChunkAndVerifyLocked(source: File, target: File) {
+    private data class PreservedSourceAuthority(
+        val identity: String,
+        val digest: CopyDigest,
+    )
+
+    private fun copyPreservedChunkAndVerifyLocked(
+        source: File,
+        target: File,
+    ): PreservedSourceAuthority {
+        val sourceIdentityBefore = resolveFileIdentity(source)
+        if (sourceIdentityBefore.isBlank()) {
+            throw IOException("Unable to identify chunk before preservation: ${source.absolutePath}")
+        }
         val copiedDigest = FileInputStream(source).use { input ->
             FileOutputStream(target, false).use { output ->
                 val digest = copyWithSha256(input, output)
@@ -1495,7 +1564,35 @@ internal class PersistentAudioChunkStore internal constructor(
         if (!copyDigestMatches(copiedDigest, sourceAfterCopy)) {
             throw IOException("Chunk changed while being preserved: ${source.absolutePath}")
         }
+        val sourceIdentityAfter = resolveFileIdentity(source)
+        if (!fileIdentityMatches(sourceIdentityBefore, sourceIdentityAfter)) {
+            throw IOException("Chunk identity changed while being preserved: ${source.absolutePath}")
+        }
         forceDirectoryDurable(quarantineDirectory)
+        return PreservedSourceAuthority(sourceIdentityAfter, copiedDigest)
+    }
+
+    private fun removePreservedSourceLocked(
+        source: File,
+        authority: PreservedSourceAuthority,
+    ): Boolean {
+        val claim = claimChunkPathForDeletionLocked(source, "preserve-delete") ?: return false
+        val beforeIdentity = resolveFileIdentity(claim)
+        val currentDigest = runCatching { FileInputStream(claim).use(::sha256) }.getOrNull()
+        val afterIdentity = resolveFileIdentity(claim)
+        val stillOwned = currentDigest != null &&
+            sameFileObjectAcrossRename(authority.identity, beforeIdentity) &&
+            fileIdentityMatches(beforeIdentity, afterIdentity) &&
+            sameFileObjectAcrossRename(authority.identity, afterIdentity) &&
+            copyDigestMatches(authority.digest, currentDigest)
+        if (!stillOwned) {
+            return moveClaimedChunkToPreservedLocked(
+                claim = claim,
+                originalName = source.name,
+                reason = "preserve-race",
+            )
+        }
+        return deleteClaimedChunkDurablyLocked(claim)
     }
 
     private fun restoreFromIndexLocked(
@@ -2338,24 +2435,51 @@ internal class PersistentAudioChunkStore internal constructor(
         if (verifiedIdentity == null) {
             return preserveChangedRetiredChunkLocked(record)
         }
-        val identityAtDelete = resolveFileIdentity(record.file)
-        if (!fileIdentityMatches(verifiedIdentity, identityAtDelete)) {
-            return preserveChangedRetiredChunkLocked(record)
+        val claim = try {
+            claimChunkPathForDeletionLocked(record.file, "retired-delete")
+        } catch (_: IOException) {
+            retiredById[record.id] = record
+            return false
+        } ?: run {
+            retiredById[record.id] = record
+            return false
         }
-        if (!deleteChunkFileDurablyLocked(record.file)) {
+        val claimedIdentity = try {
+            verifiedRetiredChunkIdentityLocked(record, claim)
+        } catch (_: IOException) {
+            null
+        } catch (_: SecurityException) {
+            null
+        }
+        val removedSafely = if (
+            claimedIdentity != null &&
+            sameFileObjectAcrossRename(verifiedIdentity, claimedIdentity)
+        ) {
+            deleteClaimedChunkDurablyLocked(claim)
+        } else {
+            moveClaimedChunkToPreservedLocked(
+                claim = claim,
+                originalName = record.file.name,
+                reason = "retired-delete-race",
+            )
+        }
+        if (!removedSafely) {
             retiredById[record.id] = record
             return false
         }
         return finishRetiredRecordMarkerLocked(record)
     }
 
-    private fun verifiedRetiredChunkIdentityLocked(record: ChunkRecord): String? {
+    private fun verifiedRetiredChunkIdentityLocked(
+        record: ChunkRecord,
+        file: File = record.file,
+    ): String? {
         if (record.state != ChunkState.FINALIZED) return null
-        val beforeIdentity = resolveFileIdentity(record.file)
+        val beforeIdentity = resolveFileIdentity(file)
         if (beforeIdentity.isBlank()) {
             throw IOException("Unable to identify retired chunk ${record.id}")
         }
-        val header = readChunkHeader(record.file) ?: return null
+        val header = readChunkHeader(file) ?: return null
         if (
             header.id != record.id ||
             header.state != ChunkState.FINALIZED ||
@@ -2372,11 +2496,11 @@ internal class PersistentAudioChunkStore internal constructor(
             return null
         }
         val expectedLength = Math.addExact(record.payloadOffsetBytes, record.payloadBytes)
-        if (Files.size(record.file.toPath()) != expectedLength) return null
-        if (crc32FilePayload(record.file, record.payloadOffsetBytes, record.payloadBytes) != record.payloadChecksum) {
+        if (Files.size(file.toPath()) != expectedLength) return null
+        if (crc32FilePayload(file, record.payloadOffsetBytes, record.payloadBytes) != record.payloadChecksum) {
             return null
         }
-        val afterIdentity = resolveFileIdentity(record.file)
+        val afterIdentity = resolveFileIdentity(file)
         if (afterIdentity.isBlank() || !fileIdentityMatches(beforeIdentity, afterIdentity)) return null
         return afterIdentity
     }
