@@ -387,14 +387,14 @@ internal fun preserveCorruptRecordingDatabase(
     val sources = recordingDatabaseFilesForPreservation(databaseFile) ?: return null
     if (sources.isEmpty()) return null
     return runCatching {
-        val rootExisted = recoveryRoot.exists()
-        if (!rootExisted && !recoveryRoot.mkdirs() && !recoveryRoot.isDirectory) {
-            throw IOException("Unable to create recording database recovery directory")
-        }
-        if (!rootExisted) {
+        val recoveryRootCreated = ensureDirectoryEntryNoFollow(recoveryRoot)
+        if (recoveryRootCreated) {
             val recoveryParent = recoveryRoot.parentFile
                 ?: throw IOException("Recording database recovery root has no parent")
             io.forceDirectory(recoveryParent)
+            if (storageDirectoryState(recoveryRoot) != StoragePathState.PRESENT) {
+                throw IOException("Recording database recovery root changed during creation")
+            }
         }
 
         var suffix = 0
