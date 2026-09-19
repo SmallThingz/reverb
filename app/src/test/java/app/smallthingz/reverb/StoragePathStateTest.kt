@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -121,6 +122,46 @@ class StoragePathStateTest {
             root.deleteRecursively()
         }
     }
+    @Test
+    fun managedDirectoryCreation_rejectsSymlinkedRootAndCreatesDirectDirectory() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "managed-dir-").toFile()
+        try {
+            val target = File(root, "target").apply { mkdir() }
+            val link = File(root, "recordings")
+            Files.createSymbolicLink(link.toPath(), target.toPath().toAbsolutePath())
+            assertEquals(StoragePathState.UNAVAILABLE, storageDirectoryState(link))
+            org.junit.Assert.assertThrows(IOException::class.java) {
+                ensureDirectoryEntryNoFollow(link)
+            }
+            assertTrue(link.delete())
+
+            assertTrue(ensureDirectoryEntryNoFollow(link))
+            assertEquals(StoragePathState.PRESENT, storageDirectoryState(link))
+            assertTrue(link.isDirectory)
+            assertFalse(ensureDirectoryEntryNoFollow(link))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun managedDirectoryCreation_rejectsSymlinkedParent() {
+        val parent = File("build/tmp/storage-path-state").apply { mkdirs() }
+        val root = Files.createTempDirectory(parent.toPath(), "managed-parent-").toFile()
+        try {
+            val targetParent = File(root, "target-parent").apply { mkdir() }
+            val linkedParent = File(root, "linked-parent")
+            Files.createSymbolicLink(linkedParent.toPath(), targetParent.toPath().toAbsolutePath())
+            assertEquals(StoragePathState.UNAVAILABLE, storageDirectoryState(linkedParent))
+            org.junit.Assert.assertThrows(IOException::class.java) {
+                ensureDirectoryEntryNoFollow(File(linkedParent, "recordings"))
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun atomicFileRegularBackingState_rejectsSymlinkedBackingEntries() {
         val parent = File("build/tmp/storage-path-state").apply { mkdirs() }

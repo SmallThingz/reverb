@@ -4248,9 +4248,7 @@ class ReverbService : Service() {
 
     private fun resolveDebugReportFile(): File {
         val directory = getSavedRecordingsDirectory(this)
-        if (!directory.exists() && !directory.mkdirs() && !directory.exists()) {
-            throw IOException("Unable to create recordings directory: ${directory.absolutePath}")
-        }
+        ensureDirectoryEntryNoFollow(directory)
         return File(directory, DEBUG_REPORT_FILE_NAME)
     }
 

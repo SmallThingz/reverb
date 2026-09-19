@@ -2638,6 +2638,13 @@ private fun listFileDirectoryRecordings(
     knownRecordings: Map<String, RecordingEntity>,
     suppressedIds: Set<String>,
 ): List<RecordingEntity> {
+    when (storageDirectoryState(directory)) {
+        StoragePathState.MISSING -> return emptyList()
+        StoragePathState.UNAVAILABLE -> throw IOException(
+            "Recording directory is not a trustworthy directory entry: ${directory.absolutePath}",
+        )
+        StoragePathState.PRESENT -> Unit
+    }
     var files = directory.listFiles() ?: if (
         fileDirectoryListingFailureIsAuthoritativeEmpty(storagePathState(directory))
     ) {
@@ -3207,11 +3214,8 @@ private fun createLocalOutputTarget(
     storageDir: File = getSavedRecordingsDirectory(context),
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
-    val storageDirectoryExisted = storageDir.exists()
-    if (!storageDirectoryExisted && !storageDir.mkdirs() && !storageDir.exists()) {
-        throw IOException("Unable to create recordings directory: ${storageDir.absolutePath}")
-    }
-    if (!storageDirectoryExisted) {
+    val storageDirectoryCreated = ensureDirectoryEntryNoFollow(storageDir)
+    if (storageDirectoryCreated) {
         val parent = storageDir.parentFile
             ?: throw IOException("Recordings directory has no parent: ${storageDir.absolutePath}")
         forceRecordingDirectoryDurable(parent)
