@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import android.app.ApplicationExitInfo
+import java.io.ByteArrayInputStream
+import java.io.DataInputStream
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +11,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingIncidentStoreTest {
+    @Test
+    fun incidentPayloadExactRead_acceptsExactEof() {
+        val input = DataInputStream(ByteArrayInputStream(byteArrayOf(7)))
+
+        val value = readIncidentPayloadExact(input, "incident test") { it.readUnsignedByte() }
+
+        assertEquals(7, value)
+    }
+
+    @Test
+    fun incidentPayloadExactRead_rejectsTrailingBytes() {
+        val input = DataInputStream(ByteArrayInputStream(byteArrayOf(7, 9)))
+
+        val error = org.junit.Assert.assertThrows(IOException::class.java) {
+            readIncidentPayloadExact(input, "incident test") { it.readUnsignedByte() }
+        }
+
+        assertTrue(error.message.orEmpty().contains("Trailing bytes"))
+    }
+
     @Test
     fun incidentAtomicRollbackFailure_keepsWriteFailurePrimary() {
         val primary = IOException("incident write failed")

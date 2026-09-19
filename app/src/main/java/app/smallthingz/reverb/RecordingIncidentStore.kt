@@ -33,6 +33,16 @@ internal fun pendingIncidentQueueCanAppend(existingCount: Int): Boolean =
 internal fun atomicReadMissIsAuthoritativeAbsence(backingState: StoragePathState): Boolean =
     backingState == StoragePathState.MISSING
 
+internal inline fun <T> readIncidentPayloadExact(
+    input: DataInputStream,
+    label: String,
+    decode: (DataInputStream) -> T,
+): T {
+    val decoded = decode(input)
+    if (input.read() >= 0) throw IOException("Trailing bytes in $label")
+    return decoded
+}
+
 internal enum class RecordingIncidentKind(val storageCode: Byte) {
     UNEXPECTED_SHUTDOWN(1),
     ;
@@ -1112,7 +1122,9 @@ internal object RecordingIncidentStore {
             throw IOException("Unable to read $label while AtomicFile backing state is $backingState", error)
         }
         return try {
-            DataInputStream(BufferedInputStream(stream)).use(block)
+            DataInputStream(BufferedInputStream(stream)).use { input ->
+                readIncidentPayloadExact(input, label, block)
+            }
         } catch (error: IOException) {
             throw IOException("Unable to read $label", error)
         } catch (error: RuntimeException) {
