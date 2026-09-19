@@ -35,6 +35,19 @@ class JournalTargetValidationTest {
             providerIdentity = "provider:2:bad:4:1",
         )
         assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(cleanup)))
+        val canonicalDocument = cleanup.copy(
+            id = "content://docs/document/7",
+            providerIdentity = "provider:2:canonical:4:1",
+        )
+        assertNull(decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(canonicalDocument)))
+        val scopedDocument = cleanup.copy(
+            id = "content://docs/tree/root/document/7",
+            providerIdentity = "provider:2:scoped:4:1",
+        )
+        assertEquals(
+            scopedDocument,
+            decodePendingOutputCleanupRecord(encodePendingOutputCleanupRecord(scopedDocument)),
+        )
 
         val staging = VerifiedExportStagingRecord(
             storageType = RecordingStorageType.MEDIASTORE,

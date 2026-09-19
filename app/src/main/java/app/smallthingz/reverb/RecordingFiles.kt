@@ -106,12 +106,51 @@ internal fun recordingStorageIdIsValid(
     if (id.isBlank()) return false
     return when (storageType) {
         RecordingStorageType.FILE -> File(id).let { file -> file.isAbsolute && file.parentFile != null }
-        RecordingStorageType.DOCUMENT -> runCatching {
-            val uri = URI(id)
-            uri.scheme.equals("content", ignoreCase = true) && !uri.authority.isNullOrBlank()
-        }.getOrDefault(false)
+        RecordingStorageType.DOCUMENT -> documentRecordingIdIsValid(id)
         RecordingStorageType.MEDIASTORE -> mediaStoreRecordingIdIsValid(id)
     }
+}
+
+private data class DocumentStorageScope(
+    val authority: String,
+    val treeId: String,
+    val documentId: String?,
+)
+
+private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCatching {
+    val uri = URI(id)
+    if (!uri.scheme.equals("content", ignoreCase = true) || uri.authority.isNullOrBlank() ||
+        uri.rawQuery != null || uri.rawFragment != null
+    ) {
+        return@runCatching null
+    }
+    val segments = uri.rawPath.orEmpty().split('/').filter(String::isNotEmpty)
+    when {
+        segments.size == 2 && segments[0] == "tree" && segments[1].isNotBlank() ->
+            DocumentStorageScope(requireNotNull(uri.authority), segments[1], null)
+        segments.size == 4 && segments[0] == "tree" && segments[1].isNotBlank() &&
+            segments[2] == "document" && segments[3].isNotBlank() ->
+            DocumentStorageScope(requireNotNull(uri.authority), segments[1], segments[3])
+        else -> null
+    }
+}.getOrNull()
+
+internal fun documentTreeIdIsValid(id: String): Boolean {
+    val tree = parseDocumentStorageScope(id) ?: return false
+    return tree.documentId == null
+}
+
+internal fun documentRecordingIdIsValid(id: String): Boolean =
+    parseDocumentStorageScope(id)?.documentId != null
+
+internal fun documentRecordingBelongsToTree(
+    recordingId: String,
+    treeId: String,
+): Boolean {
+    val recording = parseDocumentStorageScope(recordingId) ?: return false
+    val tree = parseDocumentStorageScope(treeId) ?: return false
+    return recording.documentId != null && tree.documentId == null &&
+        recording.authority == tree.authority && recording.treeId == tree.treeId
 }
 
 internal fun mediaStoreRecordingIdIsValid(id: String): Boolean = runCatching {

@@ -39,7 +39,7 @@ class MoveDeletionAuthorityJournalTest {
             claimToken = "00000000-0000-0000-0000-000000000201",
             fileIdentity = "stat:source:identity",
             moveTargetStorageType = RecordingStorageType.DOCUMENT,
-            moveTargetId = "content://docs/moved",
+            moveTargetId = "content://docs/tree/root/document/moved",
             moveTargetIdentity = "provider:2:target:1234:9",
         )
         val encoded = encodePendingDeletionIntent(intent)

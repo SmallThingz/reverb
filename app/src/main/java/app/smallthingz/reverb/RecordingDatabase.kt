@@ -627,8 +627,7 @@ internal fun recordingCatalogLocationIsValid(
             directory.absolutePath in managedFileDirectoryIds &&
             file.parentFile?.absolutePath == directory.absolutePath
     }
-    RecordingStorageType.DOCUMENT -> recordingStorageIdIsValid(storageType, id) &&
-        recordingStorageIdIsValid(RecordingStorageType.DOCUMENT, directoryId)
+    RecordingStorageType.DOCUMENT -> documentRecordingBelongsToTree(id, directoryId)
     RecordingStorageType.MEDIASTORE -> recordingStorageIdIsValid(storageType, id) &&
         directoryId == MEDIA_STORE_DIRECTORY_ID
 }

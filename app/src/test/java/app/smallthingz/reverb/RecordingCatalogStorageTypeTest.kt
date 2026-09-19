@@ -133,7 +133,7 @@ class RecordingCatalogStorageTypeTest {
         assertTrue(
             recordingCatalogLocationIsValid(
                 RecordingStorageType.DOCUMENT,
-                "content://docs/document/1",
+                "content://docs/tree/root/document/1",
                 "content://docs/tree/root",
             ),
         )
@@ -141,6 +141,20 @@ class RecordingCatalogStorageTypeTest {
             recordingCatalogLocationIsValid(
                 RecordingStorageType.DOCUMENT,
                 "file:///recordings/a.wav",
+                "content://docs/tree/root",
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/tree/other/document/1",
+                "content://docs/tree/root",
+            ),
+        )
+        assertFalse(
+            recordingCatalogLocationIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://other/tree/root/document/1",
                 "content://docs/tree/root",
             ),
         )
@@ -167,7 +181,29 @@ class RecordingCatalogStorageTypeTest {
         assertTrue(
             recordingStorageIdIsValid(
                 RecordingStorageType.DOCUMENT,
+                "content://docs/tree/root/document/1",
+            ),
+        )
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.DOCUMENT,
                 "content://docs/document/1",
+            ),
+        )
+        assertFalse(
+            recordingStorageIdIsValid(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/tree/root",
+            ),
+        )
+        assertTrue(documentTreeIdIsValid("content://docs/tree/root"))
+        assertFalse(documentTreeIdIsValid("content://docs/tree/root/document/1"))
+        assertFalse(documentTreeIdIsValid("content://docs/document/1"))
+        assertFalse(documentTreeIdIsValid("not a uri"))
+        assertTrue(
+            documentRecordingBelongsToTree(
+                "content://docs/tree/primary%3AMusic%2FReverb/document/primary%3AMusic%2FReverb%2Fclip.wav",
+                "content://docs/tree/primary%3AMusic%2FReverb",
             ),
         )
         assertTrue(
