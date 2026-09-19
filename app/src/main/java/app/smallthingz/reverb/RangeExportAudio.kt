@@ -416,6 +416,17 @@ internal inline fun releasePreviewTrackReportingFailure(
     }
 }
 
+internal inline fun startPreviewReleaseFallbackReportingFailure(
+    start: () -> Unit,
+    onFailure: (Throwable) -> Unit,
+) {
+    try {
+        start()
+    } catch (error: Throwable) {
+        runCatching { onFailure(error) }
+    }
+}
+
 internal class TimelineAudioPreviewController(
     private val onTrackReleaseFailure: (Throwable) -> Unit = {},
 ) : Closeable {
@@ -694,12 +705,18 @@ internal class TimelineAudioPreviewController(
                 // shutdown can race the isShutdown observation. Never fall back to releasing
                 // AudioTrack on the UI caller: AudioFlinger teardown can block. A one-shot
                 // daemon keeps this rare shutdown race off-thread; duplicate release is guarded.
-                runCatching {
-                    Thread(
-                        { releaseTrackOnce(track) },
-                        "Reverb-range-preview-release-fallback",
-                    ).apply { isDaemon = true }.start()
-                }
+                startPreviewReleaseFallbackReportingFailure(
+                    start = {
+                        Thread(
+                            { releaseTrackOnce(track) },
+                            "Reverb-range-preview-release-fallback",
+                        ).apply { isDaemon = true }.start()
+                    },
+                    onFailure = { error ->
+                        Log.e("ReverbRangeAudio", "Unable to start AudioTrack release fallback", error)
+                        onTrackReleaseFailure(error)
+                    },
+                )
             }
         }
     }
