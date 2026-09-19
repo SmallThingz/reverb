@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 
@@ -18,7 +19,11 @@ internal data class StoragePathObservation(
 )
 
 internal fun observeStoragePath(file: File): StoragePathObservation = try {
-    val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+    val attributes = Files.readAttributes(
+        file.toPath(),
+        BasicFileAttributes::class.java,
+        LinkOption.NOFOLLOW_LINKS,
+    )
     StoragePathObservation(
         state = StoragePathState.PRESENT,
         isRegularFile = attributes.isRegularFile,
