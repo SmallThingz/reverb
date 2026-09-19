@@ -120,6 +120,60 @@ class ServiceForegroundLifetimeTest {
     }
 
     @Test
+    fun wakeLockReleaseFailure_isReportedWithoutEscapingTeardown() {
+        val expected = IllegalStateException("release failed")
+        var observed: Exception? = null
+
+        releaseWakeLockReportingFailure(
+            isHeld = { true },
+            release = { throw expected },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(expected, observed)
+    }
+
+    @Test
+    fun wakeLockStateProbeFailure_isReportedWithoutReleaseRetry() {
+        val expected = IllegalStateException("state failed")
+        var releaseCalls = 0
+        var observed: Exception? = null
+
+        releaseWakeLockReportingFailure(
+            isHeld = { throw expected },
+            release = { releaseCalls++ },
+            onFailure = { observed = it },
+        )
+
+        assertEquals(expected, observed)
+        assertEquals(0, releaseCalls)
+    }
+
+    @Test
+    fun wakeLockReleaseReporterFailure_cannotAbortTeardown() {
+        releaseWakeLockReportingFailure(
+            isHeld = { true },
+            release = { throw IllegalStateException("release failed") },
+            onFailure = { throw IllegalStateException("report failed") },
+        )
+    }
+
+    @Test
+    fun unheldWakeLock_skipsRelease() {
+        var released = false
+        var reported = false
+
+        releaseWakeLockReportingFailure(
+            isHeld = { false },
+            release = { released = true },
+            onFailure = { reported = true },
+        )
+
+        assertFalse(released)
+        assertFalse(reported)
+    }
+
+    @Test
     fun staleKeepaliveCannotStopHealthyListeningLifetime() {
         assertTrue(
             serviceHasHealthyListeningLifetime(

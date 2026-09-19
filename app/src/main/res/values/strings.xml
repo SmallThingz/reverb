@@ -124,6 +124,7 @@
     <string name="cant_access_folder">Couldn\'t access that folder.</string>
     <string name="wake_lock_label">Keep CPU awake</string>
     <string name="wake_lock_summary">Generally not recommended. Keeps the CPU awake while live buffering, improving survival at a higher battery cost.</string>
+    <string name="wake_lock_release_failed">Couldn\'t release CPU wake lock.</string>
     <string name="recorder_state_persist_failed">Couldn\'t persist recorder state.</string>
     <string name="settings_apply_failed">Saved, but recorder couldn\'t reload settings.</string>
     <string name="audio_input_init_failed">Couldn\'t start microphone.</string>

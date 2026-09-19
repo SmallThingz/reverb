@@ -4179,10 +4179,20 @@ class ReverbService : Service() {
     @Synchronized
     private fun releaseWakeLock() {
         val lock = wakeLock ?: return
-        if (lock.isHeld) {
-            lock.release()
-        }
+        // Ownership is terminal before touching the platform object. A failed release is
+        // uncertain and must never be retried by a later lifecycle transition.
         wakeLock = null
+        releaseWakeLockReportingFailure(
+            isHeld = { lock.isHeld },
+            release = { lock.release() },
+            onFailure = { error ->
+                Log.e(TAG, "WakeLock.release failed", error)
+                AppFeedbackCenter.post(
+                    getString(R.string.wake_lock_release_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+        )
     }
 
     interface AudioFileReceiver {
@@ -4563,6 +4573,18 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceCommandMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
+
+internal inline fun releaseWakeLockReportingFailure(
+    isHeld: () -> Boolean,
+    release: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        if (isHeld()) release()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
 
 internal fun clearBufferCommandMayExecute(
     requestedBuffer: ReverbService.BufferSlot,
