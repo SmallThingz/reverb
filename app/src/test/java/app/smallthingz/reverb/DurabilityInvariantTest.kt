@@ -2257,6 +2257,50 @@ class DurabilityInvariantTest {
     }
 
     @Test
+    fun claimedFileDeletion_rechecksVerifiedClaimIdentityAtDeleteBoundary() {
+        val parent = File("build/tmp/durability-invariants").apply { mkdirs() }
+        val directory = Files.createTempDirectory(parent.toPath(), "delete-preboundary-").toFile()
+        try {
+            val originalBytes = ByteArray(4_096) { index -> ((index * 17 + 11) and 0xff).toByte() }
+            val source = File(directory, "clip.wav").apply { writeBytes(originalBytes) }
+            val originalIdentity = resolveFileIdentity(source)
+            val digest = sha256(ByteArrayInputStream(originalBytes))
+            val intent = PendingDeletionIntent(
+                id = source.absolutePath,
+                byteCount = digest.byteCount,
+                sha256Hex = digest.sha256.toHexString(),
+                assetDeleted = false,
+                storageType = RecordingStorageType.FILE,
+                claimToken = "00000000-0000-0000-0000-000000000126",
+                fileIdentity = originalIdentity,
+            )
+            val claim = requireNotNull(deletionClaimFile(intent))
+            Files.move(source.toPath(), claim.toPath())
+            val replacementIdentity = "stat:99:98:97:96:95"
+
+            val result = replayClaimedFileDeletion(
+                intent = intent,
+                claim = claim,
+                readClaimFingerprint = {
+                    StableOutputFingerprint(
+                        digest = digest,
+                        fileKey = originalIdentity,
+                        providerIdentity = null,
+                    )
+                },
+                identityBeforeDelete = { replacementIdentity },
+            )
+
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)
+            assertTrue(source.isFile)
+            assertArrayEquals(originalBytes, source.readBytes())
+            assertFalse(claim.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun pendingDeletionIntent_rejectsLegacyMalformedAndMismatchedContent() {
         assertEquals(null, decodePendingDeletionIntent("content://legacy/id-only"))
         assertEquals(null, decodePendingDeletionIntent("v1|broken|12|abcd|0"))

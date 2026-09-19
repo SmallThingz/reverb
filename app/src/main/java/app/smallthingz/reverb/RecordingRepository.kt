@@ -1360,14 +1360,22 @@ internal fun deleteClaimedFile(
         if (!confirmFileDirectoryStateDurable(source)) return FileDeletionClaimResult.RETRY
     } catch (_: NoSuchFileException) {
         return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
+                intent = intent,
+                claim = claim,
+                moveTargetStillCurrent = moveTargetStillCurrent,
+            )
             ClaimedFileReplayAction.NO_CLAIM,
             ClaimedFileReplayAction.WAIT,
             -> FileDeletionClaimResult.RETRY
         }
     } catch (_: FileAlreadyExistsException) {
         return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
+            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
+                intent = intent,
+                claim = claim,
+                moveTargetStillCurrent = moveTargetStillCurrent,
+            )
             ClaimedFileReplayAction.NO_CLAIM,
             ClaimedFileReplayAction.WAIT,
             -> FileDeletionClaimResult.RETRY
@@ -1379,25 +1387,31 @@ internal fun deleteClaimedFile(
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY
     }
-    return replayClaimedFileDeletion(intent, claim, moveTargetStillCurrent)
+    return replayClaimedFileDeletion(
+        intent = intent,
+        claim = claim,
+        moveTargetStillCurrent = moveTargetStillCurrent,
+    )
 }
 
 internal fun replayClaimedFileDeletion(
     intent: PendingDeletionIntent,
     claim: File? = deletionClaimFile(intent),
+    readClaimFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
+    identityBeforeDelete: (File) -> String = ::resolveFileIdentity,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
     val expectedIdentity = intent.fileIdentity ?: return FileDeletionClaimResult.RETRY
-    if (!sameFileObjectAcrossRename(expectedIdentity, resolveFileIdentity(resolvedClaim))) {
-        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
-        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
-    }
-    val digest = runCatching { FileInputStream(resolvedClaim).use(::sha256) }.getOrElse { error ->
-        Log.w("RecordingRepository", "Unable to verify claimed deletion file: ${resolvedClaim.absolutePath}", error)
-        return FileDeletionClaimResult.RETRY
-    }
-    if (!pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())) {
+    val verifiedClaim = readClaimFingerprint(resolvedClaim) ?: return FileDeletionClaimResult.RETRY
+    val verifiedIdentity = verifiedClaim.fileKey ?: return FileDeletionClaimResult.RETRY
+    if (!sameFileObjectAcrossRename(expectedIdentity, verifiedIdentity) ||
+        !pendingDeletionMatchesDigest(
+            intent,
+            verifiedClaim.digest.byteCount,
+            verifiedClaim.digest.sha256.toHexString(),
+        )
+    ) {
         val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
         return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
     }
@@ -1407,6 +1421,11 @@ internal fun replayClaimedFileDeletion(
             val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
             return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
         }
+    }
+    val currentIdentity = runCatching { identityBeforeDelete(resolvedClaim) }.getOrDefault("")
+    if (!fileIdentityMatches(verifiedIdentity, currentIdentity)) {
+        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
+        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
     }
     return try {
         if (!Files.deleteIfExists(resolvedClaim.toPath())) return FileDeletionClaimResult.RETRY
