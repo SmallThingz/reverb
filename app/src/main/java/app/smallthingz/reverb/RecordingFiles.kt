@@ -27,7 +27,9 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.URI
+import java.net.URLDecoder
 import java.nio.channels.FileChannel
+import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -117,24 +119,46 @@ private data class DocumentStorageScope(
     val documentId: String?,
 )
 
+private const val ANDROID_URI_UNRESERVED = "_-!.~'()*"
+private val HEX_DIGITS = "0123456789ABCDEF"
+
+private fun androidUriEncodeComponent(value: String): String = buildString {
+    var current = 0
+    while (current < value.length) {
+        val allowedStart = current
+        while (current < value.length) {
+            val char = value[current]
+            val allowed = char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' ||
+                char in ANDROID_URI_UNRESERVED
+            if (!allowed) break
+            current++
+        }
+        if (current > allowedStart) append(value, allowedStart, current)
+        if (current == value.length) break
+
+        val encodedStart = current
+        while (current < value.length) {
+            val char = value[current]
+            val allowed = char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' ||
+                char in ANDROID_URI_UNRESERVED
+            if (allowed) break
+            current++
+        }
+        value.substring(encodedStart, current).toByteArray(StandardCharsets.UTF_8).forEach { byte ->
+            val unsigned = byte.toInt() and 0xff
+            append('%')
+            append(HEX_DIGITS[unsigned ushr 4])
+            append(HEX_DIGITS[unsigned and 0x0f])
+        }
+    }
+}
+
 private fun documentStorageSegmentIsCanonical(raw: String): Boolean {
     if (raw.isBlank()) return false
-    var index = 0
-    while (index < raw.length) {
-        if (raw[index] != '%') {
-            index++
-            continue
-        }
-        if (index + 2 >= raw.length) return false
-        val value = raw.substring(index + 1, index + 3).toIntOrNull(16) ?: return false
-        val encodedUnreserved = value in 'A'.code..'Z'.code ||
-            value in 'a'.code..'z'.code ||
-            value in '0'.code..'9'.code ||
-            value == '-'.code || value == '.'.code || value == '_'.code || value == '~'.code
-        if (encodedUnreserved) return false
-        index += 3
-    }
-    return true
+    return runCatching {
+        val decoded = URLDecoder.decode(raw.replace("+", "%2B"), StandardCharsets.UTF_8)
+        raw == androidUriEncodeComponent(decoded)
+    }.getOrDefault(false)
 }
 
 private fun parseDocumentStorageScope(id: String): DocumentStorageScope? = runCatching {
