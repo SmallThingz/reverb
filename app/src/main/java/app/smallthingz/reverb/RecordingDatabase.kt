@@ -584,6 +584,26 @@ internal fun resolveRecordingCatalogStorageType(
     }
 }
 
+internal fun recordingCatalogCoreFieldsAreValid(
+    id: String?,
+    displayName: String?,
+    directoryId: String?,
+    startedAtMillis: Long,
+    durationMillis: Long,
+    sizeBytes: Long,
+    createdAtMillis: Long,
+    lastSeenAtMillis: Long,
+    missingSinceMillis: Long?,
+): Boolean = !id.isNullOrBlank() &&
+    !displayName.isNullOrBlank() &&
+    !directoryId.isNullOrBlank() &&
+    startedAtMillis >= 0L &&
+    durationMillis >= 0L &&
+    sizeBytes >= 0L &&
+    createdAtMillis >= 0L &&
+    lastSeenAtMillis >= 0L &&
+    (missingSinceMillis == null || missingSinceMillis >= 0L)
+
 private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val idIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_ID)
     val displayNameIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_DISPLAY_NAME)
@@ -604,35 +624,56 @@ private fun readRecordings(cursor: Cursor): List<RecordingEntity> {
     val count = cursor.count.coerceAtLeast(0)
     val result = ArrayList<RecordingEntity>(count)
     while (cursor.moveToNext()) {
+        val id = cursor.getString(idIndex)
+        val displayName = cursor.getString(displayNameIndex)
+        val directoryId = cursor.getString(directoryIdIndex)
+        val startedAtMillis = cursor.getLong(startedAtMillisIndex)
+        val durationMillis = cursor.getLong(durationMillisIndex)
+        val sizeBytes = cursor.getLong(sizeBytesIndex)
+        val createdAtMillis = cursor.getLong(createdAtMillisIndex)
+        val lastSeenAtMillis = cursor.getLong(lastSeenAtMillisIndex)
+        val missingSinceMillis =
+            if (cursor.isNull(missingSinceMillisIndex)) null else cursor.getLong(missingSinceMillisIndex)
+        if (!recordingCatalogCoreFieldsAreValid(
+                id = id,
+                displayName = displayName,
+                directoryId = directoryId,
+                startedAtMillis = startedAtMillis,
+                durationMillis = durationMillis,
+                sizeBytes = sizeBytes,
+                createdAtMillis = createdAtMillis,
+                lastSeenAtMillis = lastSeenAtMillis,
+                missingSinceMillis = missingSinceMillis,
+            )
+        ) {
+            Log.w("RecordingDatabase", "Skipping catalog row with malformed core fields")
+            continue
+        }
         val storage = resolveRecordingCatalogStorageType(
             storageCode = cursor.getInt(storageTypeCodeIndex),
             legacyValue = cursor.getString(storageTypeIndex),
         )
         if (storage == null) {
-            Log.w(
-                "RecordingDatabase",
-                "Skipping catalog row with malformed storage type: ${cursor.getString(idIndex)}",
-            )
+            Log.w("RecordingDatabase", "Skipping catalog row with malformed storage type: $id")
             continue
         }
         result.add(
             RecordingEntity(
-                id = cursor.getString(idIndex),
-                displayName = cursor.getString(displayNameIndex),
-                mimeType = cursor.getString(mimeTypeIndex),
-                startedAtMillis = cursor.getLong(startedAtMillisIndex),
-                durationMillis = cursor.getLong(durationMillisIndex),
-                sizeBytes = cursor.getLong(sizeBytesIndex),
-                codecSummary = cursor.getString(codecSummaryIndex),
+                id = requireNotNull(id),
+                displayName = requireNotNull(displayName),
+                mimeType = cursor.getString(mimeTypeIndex)?.takeIf { it.isNotBlank() } ?: FALLBACK_MIME_TYPE_AUDIO,
+                startedAtMillis = startedAtMillis,
+                durationMillis = durationMillis,
+                sizeBytes = sizeBytes,
+                codecSummary = cursor.getString(codecSummaryIndex).orEmpty(),
                 storageType = storage,
-                directoryId = cursor.getString(directoryIdIndex),
-                fileIdentity = cursor.getString(fileIdentityIndex),
-                waveformData = cursor.getString(waveformDataIndex),
-                waveformRevision = cursor.getString(waveformRevisionIndex),
-                createdAtMillis = cursor.getLong(createdAtMillisIndex),
-                lastSeenAtMillis = cursor.getLong(lastSeenAtMillisIndex),
-                missingSinceMillis =
-                    if (cursor.isNull(missingSinceMillisIndex)) null else cursor.getLong(missingSinceMillisIndex),
+                directoryId = requireNotNull(directoryId),
+                fileIdentity = cursor.getString(fileIdentityIndex).orEmpty(),
+                waveformData = cursor.getString(waveformDataIndex).orEmpty(),
+                waveformRevision = cursor.getString(waveformRevisionIndex).orEmpty(),
+                createdAtMillis = createdAtMillis,
+                lastSeenAtMillis = lastSeenAtMillis,
+                missingSinceMillis = missingSinceMillis,
             ),
         )
     }
