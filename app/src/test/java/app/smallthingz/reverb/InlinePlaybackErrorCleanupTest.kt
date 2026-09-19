@@ -13,6 +13,7 @@ class InlinePlaybackErrorCleanupTest {
 
         val thrown = assertThrows(IllegalStateException::class.java) {
             handleInlinePlaybackError(
+                ownsPlaybackResources = true,
                 shouldReportFailure = true,
                 releaseResources = { events += "release" },
                 reportFailure = {
@@ -27,13 +28,26 @@ class InlinePlaybackErrorCleanupTest {
     }
 
     @Test
-    fun playbackError_releaseStillRunsWhenFailureUiIsAlreadyDisposed() {
+    fun playbackError_releasesOwnedResourcesWhenFailureUiIsUnavailable() {
         val events = mutableListOf<String>()
         handleInlinePlaybackError(
+            ownsPlaybackResources = true,
             shouldReportFailure = false,
             releaseResources = { events += "release" },
             reportFailure = { events += "callback" },
         )
         assertEquals(listOf("release"), events)
+    }
+
+    @Test
+    fun stalePlaybackError_doesNotReleaseReplacementResources() {
+        val events = mutableListOf<String>()
+        handleInlinePlaybackError(
+            ownsPlaybackResources = false,
+            shouldReportFailure = false,
+            releaseResources = { events += "release" },
+            reportFailure = { events += "callback" },
+        )
+        assertEquals(emptyList<String>(), events)
     }
 }

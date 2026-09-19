@@ -228,10 +228,12 @@ internal inline fun closeInlinePlaybackSourceReportingFailure(
 }
 
 internal inline fun handleInlinePlaybackError(
+    ownsPlaybackResources: Boolean,
     shouldReportFailure: Boolean,
     releaseResources: () -> Unit,
     reportFailure: () -> Unit,
 ) {
+    if (!ownsPlaybackResources) return
     releaseResources()
     if (shouldReportFailure) reportFailure()
 }
@@ -697,12 +699,15 @@ internal fun RecordingInlinePlayer(
                 }
             }
             configuredPlayer.setOnErrorListener { errorPlayer, _, _ ->
+                val samePlayer = mediaPlayer === errorPlayer
+                val ownsPlaybackResources = !playbackBookkeeping.released && samePlayer
                 val shouldReportFailure = inlinePlaybackCallbackIsCurrent(
                     released = playbackBookkeeping.released,
                     disposed = disposed,
-                    samePlayer = mediaPlayer === errorPlayer,
+                    samePlayer = samePlayer,
                 )
                 handleInlinePlaybackError(
+                    ownsPlaybackResources = ownsPlaybackResources,
                     shouldReportFailure = shouldReportFailure,
                     releaseResources = ::releasePlayer,
                     reportFailure = onPlaybackFailed,
