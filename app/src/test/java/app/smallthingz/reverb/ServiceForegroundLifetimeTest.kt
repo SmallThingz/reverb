@@ -184,9 +184,10 @@ class ServiceForegroundLifetimeTest {
         var configureCalls = 0
         var releaseCalls = 0
         var observed: Exception? = null
+        val createOwner: () -> TestWakeLockOwner = { throw expected }
 
         val acquired = acquireWakeLockReportingFailure(
-            create = { throw expected },
+            create = createOwner,
             configure = { configureCalls++ },
             isHeld = { false },
             release = { releaseCalls++ },
