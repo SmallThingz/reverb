@@ -113,9 +113,11 @@ private fun restoreRetentionTransactionAfterFailure(
 ): Throwable? {
     var failure: Throwable? = null
 
-    fun attempt(restore: () -> Boolean) {
+    fun attempt(label: String, restore: () -> Boolean) {
         try {
-            restore()
+            if (!restore()) {
+                throw IllegalStateException("$label rollback returned false")
+            }
         } catch (restoreError: Throwable) {
             val primary = failure
             if (primary == null) {
@@ -126,8 +128,8 @@ private fun restoreRetentionTransactionAfterFailure(
         }
     }
 
-    attempt(restoreRecovery)
-    restorePreferences?.let(::attempt)
+    attempt("Retention recovery", restoreRecovery)
+    restorePreferences?.let { restore -> attempt("Retention preferences", restore) }
     return failure
 }
 

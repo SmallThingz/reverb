@@ -162,6 +162,80 @@ class RetentionTransactionFailureTest {
     }
 
     @Test
+    fun falseRecoveryRollbackIsFailureRatherThanSuccessfulRollback() {
+        var observed: Throwable? = null
+
+        try {
+            persistRetentionTransaction(
+                writeNewRecovery = { false },
+                commitNewPreferences = { true },
+                restoreRecovery = { false },
+                restorePreferences = { true },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertEquals("Retention recovery rollback returned false", observed?.message)
+    }
+
+    @Test
+    fun falsePreferenceCommitAttemptsBothFalseRollbacksAndPreservesBothFailures() {
+        var observed: Throwable? = null
+        val events = mutableListOf<String>()
+
+        try {
+            persistRetentionTransaction(
+                writeNewRecovery = { true },
+                commitNewPreferences = { false },
+                restoreRecovery = {
+                    events += "recovery"
+                    false
+                },
+                restorePreferences = {
+                    events += "preferences"
+                    false
+                },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertEquals(listOf("recovery", "preferences"), events)
+        assertEquals("Retention recovery rollback returned false", observed?.message)
+        assertEquals(
+            listOf("Retention preferences rollback returned false"),
+            observed?.suppressed?.map { it.message },
+        )
+    }
+
+    @Test
+    fun primaryCommitExceptionKeepsFalseRollbackFailuresSuppressed() {
+        val primary = IllegalStateException("primary")
+        var observed: Throwable? = null
+
+        try {
+            persistRetentionTransaction(
+                writeNewRecovery = { true },
+                commitNewPreferences = { throw primary },
+                restoreRecovery = { false },
+                restorePreferences = { false },
+            )
+        } catch (error: Throwable) {
+            observed = error
+        }
+
+        assertSame(primary, observed)
+        assertEquals(
+            listOf(
+                "Retention recovery rollback returned false",
+                "Retention preferences rollback returned false",
+            ),
+            primary.suppressed.map { it.message },
+        )
+    }
+
+    @Test
     fun durabilityBarrier_requiresBothFsyncAndDescriptorClose() {
         val events = mutableListOf<String>()
         assertEquals(
