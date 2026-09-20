@@ -19,6 +19,80 @@ import org.junit.Test
 
 class DurabilityInvariantTest {
     @Test
+    fun failedLocalStagingDirectoryBarrier_preservesReplacementAtCreatedPath() {
+        var created = false
+        var replacementPresent = false
+        var handleClosed = false
+        var forceCalls = 0
+        val originalPathIdentity = "stat:1:2:3:4:0"
+        val descriptorIdentity = "statfd:1:2:3:4"
+        val replacementPathIdentity = "stat:1:9:3:4:0"
+        val io = object : LocalStagingCreationIo {
+            override fun openExclusive(file: File): LocalStagingCreationHandle {
+                created = true
+                return object : LocalStagingCreationHandle {
+                    override fun descriptorIdentity(): String = descriptorIdentity
+                    override fun close() { handleClosed = true }
+                }
+            }
+
+            override fun forceDirectory(directory: File) {
+                forceCalls++
+                if (forceCalls == 1) {
+                    replacementPresent = true
+                    throw IOException("directory sync failed after path replacement")
+                }
+            }
+
+            override fun resolveIdentity(file: File): String =
+                if (replacementPresent) replacementPathIdentity else originalPathIdentity
+        }
+
+        assertThrows(IOException::class.java) {
+            createLocalStagingFile(
+                storageDir = File("recordings"),
+                finalDisplayName = "clip.wav",
+                stagingKind = StagingOutputKind.COPY,
+                token = { "token" },
+                io = io,
+            )
+        }
+
+        assertTrue(created)
+        assertTrue(handleClosed)
+        assertTrue("A barrier failure must never delete a replacement object", replacementPresent)
+    }
+
+    @Test
+    fun localStagingCreation_rejectsReplacementBeforeDurabilityBarrier() {
+        var forceCalled = false
+        var handleClosed = false
+        val io = object : LocalStagingCreationIo {
+            override fun openExclusive(file: File): LocalStagingCreationHandle =
+                object : LocalStagingCreationHandle {
+                    override fun descriptorIdentity(): String = "statfd:1:2:3:4"
+                    override fun close() { handleClosed = true }
+                }
+
+            override fun forceDirectory(directory: File) { forceCalled = true }
+            override fun resolveIdentity(file: File): String = "stat:1:9:3:4:0"
+        }
+
+        assertThrows(IOException::class.java) {
+            createLocalStagingFile(
+                storageDir = File("recordings"),
+                finalDisplayName = "clip.wav",
+                stagingKind = StagingOutputKind.COPY,
+                token = { "token" },
+                io = io,
+            )
+        }
+
+        assertFalse(forceCalled)
+        assertTrue(handleClosed)
+    }
+
+    @Test
     fun databaseVersionOneMigration_preservesRowsWithAdditiveOnlySql() {
         val steps = recordingDatabaseMigrationSteps(1, RecordingDatabase.DATABASE_VERSION)
 

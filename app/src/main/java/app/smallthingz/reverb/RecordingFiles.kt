@@ -13,6 +13,7 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -3392,23 +3393,13 @@ private fun createLocalOutputTarget(
     // recordings are moved from SAF back into the app directory.
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
     val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate -> File(storageDir, candidate).exists() }
-    var file: File
-    while (true) {
-        file = File(storageDir, stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind))
-        if (!file.createNewFile()) continue
-        try {
-            forceRecordingDirectoryDurable(storageDir)
-        } catch (error: Exception) {
-            runCatching {
-                Files.deleteIfExists(file.toPath())
-                forceRecordingDirectoryDurable(storageDir)
-            }
-            throw if (error is IOException) error else IOException("Unable to persist output staging entry", error)
-        }
-        break
-    }
-    val stagingIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() }
-        ?: throw IOException("Unable to bind new output staging file to a stable identity")
+    val created = createLocalStagingFile(
+        storageDir = storageDir,
+        finalDisplayName = uniqueName,
+        stagingKind = stagingKind,
+    )
+    val file = created.file
+    val stagingIdentity = created.identity
     return RecordingOutputTarget(
         id = file.absolutePath,
         displayName = uniqueName,
@@ -3421,6 +3412,89 @@ private fun createLocalOutputTarget(
         stagingDisplayName = file.name,
         stagingIdentity = stagingIdentity,
     )
+}
+
+internal data class CreatedLocalStagingFile(
+    val file: File,
+    val identity: String,
+)
+
+internal interface LocalStagingCreationHandle {
+    fun descriptorIdentity(): String
+    fun close()
+}
+
+internal interface LocalStagingCreationIo {
+    fun openExclusive(file: File): LocalStagingCreationHandle?
+    fun forceDirectory(directory: File)
+    fun resolveIdentity(file: File): String
+}
+
+private object DefaultLocalStagingCreationIo : LocalStagingCreationIo {
+    override fun openExclusive(file: File): LocalStagingCreationHandle? {
+        val descriptor = try {
+            Os.open(
+                file.absolutePath,
+                OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_RDWR or OsConstants.O_NOFOLLOW,
+                0x1B6,
+            )
+        } catch (error: ErrnoException) {
+            if (error.errno == OsConstants.EEXIST) return null
+            throw IOException("Unable to create output staging entry", error)
+        }
+        return object : LocalStagingCreationHandle {
+            override fun descriptorIdentity(): String = resolveFileDescriptorIdentity(descriptor)
+            override fun close() {
+                try {
+                    Os.close(descriptor)
+                } catch (error: ErrnoException) {
+                    throw IOException("Unable to close output staging creation descriptor", error)
+                }
+            }
+        }
+    }
+
+    override fun forceDirectory(directory: File) = forceRecordingDirectoryDurable(directory)
+    override fun resolveIdentity(file: File): String = resolveFileIdentity(file)
+}
+
+internal fun createLocalStagingFile(
+    storageDir: File,
+    finalDisplayName: String,
+    stagingKind: StagingOutputKind,
+    token: () -> String = { UUID.randomUUID().toString() },
+    io: LocalStagingCreationIo = DefaultLocalStagingCreationIo,
+): CreatedLocalStagingFile {
+    while (true) {
+        val file = File(storageDir, stagingOutputName(finalDisplayName, token(), kind = stagingKind))
+        val handle = io.openExclusive(file) ?: continue
+        var failure: Throwable? = null
+        var created: CreatedLocalStagingFile? = null
+        try {
+            val descriptorIdentity = handle.descriptorIdentity().takeIf { it.isNotBlank() }
+                ?: throw IOException("Unable to bind new output staging descriptor to a stable identity")
+            val beforeIdentity = io.resolveIdentity(file).takeIf { it.isNotBlank() }
+                ?: throw IOException("Unable to bind new output staging path to a stable identity")
+            if (!fileDescriptorIdentityMatches(beforeIdentity, descriptorIdentity)) {
+                throw IOException("Output staging path changed during creation")
+            }
+            io.forceDirectory(storageDir)
+            val afterIdentity = io.resolveIdentity(file).takeIf { it.isNotBlank() }
+                ?: throw IOException("Output staging path became unavailable during creation")
+            if (!fileDescriptorIdentityMatches(afterIdentity, descriptorIdentity)) {
+                throw IOException("Output staging path changed across creation durability barrier")
+            }
+            created = CreatedLocalStagingFile(file, afterIdentity)
+        } catch (error: Throwable) {
+            failure = if (error is IOException) error
+            else IOException("Unable to persist output staging entry", error)
+        }
+        failure = closePreservingPrimaryFailure(failure) { handle.close() }
+        failure?.let { error ->
+            throw if (error is IOException) error else IOException("Unable to close output staging creation", error)
+        }
+        return requireNotNull(created)
+    }
 }
 
 private fun renameFileRecording(
