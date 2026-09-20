@@ -336,7 +336,13 @@ class PersistentAudioChunkStoreDurabilityTest {
         // the already-closed lease. Otherwise the retired second chunk survives until restart.
         configure(store, 4_096L)
         store.close()
-        assertFalse(File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "1").exists())
+        val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME)
+        assertFalse(File(chunks, "1").exists())
+        assertTrue(
+            chunks.listFiles().orEmpty().none { file ->
+                file.name.startsWith(".reverb-retired-delete-") && file.name.endsWith(".pending")
+            },
+        )
     }
 
     @Test

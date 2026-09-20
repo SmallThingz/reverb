@@ -202,6 +202,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val chunks = ArrayDeque<ChunkRecord>()
     private val liveChunkIds = HashSet<UInt>()
     private val retiredById = HashMap<UInt, ChunkRecord>()
+    private val retiredDeletionClaims = HashMap<UInt, PendingRetiredDeletionClaim>()
     private val retirementTombstoneDurabilityPending = HashSet<UInt>()
     private val retirementTombstoneRemovalDurabilityPending = HashSet<UInt>()
 
@@ -1370,25 +1371,36 @@ internal class PersistentAudioChunkStore internal constructor(
         true
     }.getOrDefault(false)
 
-    private fun claimChunkPathForDeletionLocked(file: File, reason: String): File? {
+    private data class ClaimedChunkPath(
+        val file: File,
+        val durabilityFailure: IOException? = null,
+    )
+
+    private data class PendingRetiredDeletionClaim(
+        val file: File,
+        val expectedIdentity: String,
+    )
+
+    private fun claimChunkPathForDeletionLocked(file: File, reason: String): ClaimedChunkPath? {
         val claim = File(chunksDirectory, ".reverb-$reason-${UUID.randomUUID()}.pending")
         var moved = false
         try {
             Files.move(file.toPath(), claim.toPath(), StandardCopyOption.ATOMIC_MOVE)
             moved = true
-            forceDirectoryDurable(chunksDirectory)
-            return claim
-        } catch (_: AtomicMoveNotSupportedException) {
-            return null
-        } catch (error: Exception) {
-            if (moved) {
-                val uncertain = IOException(
+            val durabilityFailure = try {
+                forceDirectoryDurable(chunksDirectory)
+                null
+            } catch (error: Exception) {
+                IOException(
                     "Chunk deletion claim is visible but not durably synced: ${claim.absolutePath}",
                     error,
                 )
-                terminalStorageFailure = uncertain
-                throw uncertain
             }
+            return ClaimedChunkPath(claim, durabilityFailure)
+        } catch (_: AtomicMoveNotSupportedException) {
+            return null
+        } catch (error: Exception) {
+            if (moved) throw error
             return null
         }
     }
@@ -1576,7 +1588,9 @@ internal class PersistentAudioChunkStore internal constructor(
         source: File,
         authority: PreservedSourceAuthority,
     ): Boolean {
-        val claim = claimChunkPathForDeletionLocked(source, "preserve-delete") ?: return false
+        val claimed = claimChunkPathForDeletionLocked(source, "preserve-delete") ?: return false
+        claimed.durabilityFailure?.let { throw it }
+        val claim = claimed.file
         val beforeIdentity = resolveFileIdentity(claim)
         val currentDigest = runCatching { FileInputStream(claim).use(::sha256) }.getOrNull()
         val afterIdentity = resolveFileIdentity(claim)
@@ -2400,6 +2414,18 @@ internal class PersistentAudioChunkStore internal constructor(
             retirementTombstoneDurabilityPending.remove(record.id)
         }
 
+        retiredDeletionClaims[record.id]?.let { pendingClaim ->
+            val claimDurable = runCatching {
+                forceDirectoryDurable(chunksDirectory)
+                true
+            }.getOrDefault(false)
+            if (!claimDurable) {
+                retiredById[record.id] = record
+                return false
+            }
+            return finishRetiredDeletionClaimLocked(record, pendingClaim)
+        }
+
         when (storagePathState(record.file)) {
             StoragePathState.MISSING -> {
                 val absenceDurable = runCatching {
@@ -2435,15 +2461,47 @@ internal class PersistentAudioChunkStore internal constructor(
         if (verifiedIdentity == null) {
             return preserveChangedRetiredChunkLocked(record)
         }
-        val claim = try {
-            claimChunkPathForDeletionLocked(record.file, "retired-delete")
-        } catch (_: IOException) {
-            retiredById[record.id] = record
-            return false
-        } ?: run {
+        val claimed = claimChunkPathForDeletionLocked(record.file, "retired-delete") ?: run {
             retiredById[record.id] = record
             return false
         }
+        val pendingClaim = PendingRetiredDeletionClaim(
+            file = claimed.file,
+            expectedIdentity = verifiedIdentity,
+        )
+        if (claimed.durabilityFailure != null) {
+            retiredDeletionClaims[record.id] = pendingClaim
+            retiredById[record.id] = record
+            throw claimed.durabilityFailure
+        }
+        return finishRetiredDeletionClaimLocked(record, pendingClaim)
+    }
+
+    private fun finishRetiredDeletionClaimLocked(
+        record: ChunkRecord,
+        pendingClaim: PendingRetiredDeletionClaim,
+    ): Boolean {
+        val claim = pendingClaim.file
+        when (storagePathState(claim)) {
+            StoragePathState.MISSING -> {
+                val absenceDurable = runCatching {
+                    forceDirectoryDurable(chunksDirectory)
+                    true
+                }.getOrDefault(false)
+                if (!absenceDurable) {
+                    retiredById[record.id] = record
+                    return false
+                }
+                retiredDeletionClaims.remove(record.id)
+                return finishRetiredRecordMarkerLocked(record)
+            }
+            StoragePathState.UNAVAILABLE -> {
+                retiredById[record.id] = record
+                return false
+            }
+            StoragePathState.PRESENT -> Unit
+        }
+
         val claimedIdentity = try {
             verifiedRetiredChunkIdentityLocked(record, claim)
         } catch (_: IOException) {
@@ -2453,7 +2511,7 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         val removedSafely = if (
             claimedIdentity != null &&
-            sameFileObjectAcrossRename(verifiedIdentity, claimedIdentity)
+            sameFileObjectAcrossRename(pendingClaim.expectedIdentity, claimedIdentity)
         ) {
             deleteClaimedChunkDurablyLocked(claim)
         } else {
@@ -2467,6 +2525,7 @@ internal class PersistentAudioChunkStore internal constructor(
             retiredById[record.id] = record
             return false
         }
+        retiredDeletionClaims.remove(record.id)
         return finishRetiredRecordMarkerLocked(record)
     }
 
