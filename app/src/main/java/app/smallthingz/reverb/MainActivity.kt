@@ -1259,6 +1259,7 @@ private fun MainScreen(
                     .zIndex(4f),
             ) {
                 AppTopBar(
+                    onBackClick = ::closeLibrary,
                     onBrandClick = { showAboutDialog = true },
                     onIncidentsClick = {
                         closeLibrary()

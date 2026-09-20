@@ -221,23 +221,20 @@ enum class AppThemeMode(
     }
 }
 
-private inline fun <T> readByteBackedPreference(
+internal inline fun <T> readByteBackedPreference(
     prefs: SharedPreferences,
     key: PrefKey,
     default: T,
     crossinline fromStorageCode: (Int) -> T?,
     crossinline fromLegacyPrefValue: (String?) -> T,
-    crossinline storageCode: (T) -> Byte,
 ): T {
     val encoded = prefs.safeInt(key, Int.MIN_VALUE)
     if (encoded != Int.MIN_VALUE) return fromStorageCode(encoded) ?: default
 
     val legacy = prefs.safeString(key) ?: return default
-    val decoded = fromLegacyPrefValue(legacy)
-    // SharedPreferences stores integral values as Ints. Keep enum payloads byte-sized and
-    // migrate legacy strings in memory immediately; apply() persists the same semantics async.
-    prefs.edit { putInt(key, storageCode(decoded).toInt()) }
-    return decoded
+    // A read may race a durable Settings save. Never write a sampled legacy value back:
+    // it could overwrite the newer commit. Explicit saves persist canonical byte codes.
+    return fromLegacyPrefValue(legacy)
 }
 
 fun getRecorderPreferences(context: Context): SharedPreferences {
@@ -297,14 +294,24 @@ internal fun decodeDurableCaptureIntentPreferences(
     rawPreferences: Map<String, *>,
 ): DurableCaptureIntentPreferences {
     val enabled = when (val raw = rawPreferences[PrefKey.AUDIO_MEMORY_ENABLED.name]) {
-        null -> false
+        null -> {
+            check(!rawPreferences.containsKey(PrefKey.AUDIO_MEMORY_ENABLED.name)) {
+                "Null durable capture intent"
+            }
+            false
+        }
         is Boolean -> raw
         else -> throw IllegalStateException(
             "Unreadable durable preference ${PrefKey.AUDIO_MEMORY_ENABLED.name}: ${raw::class.java.simpleName}",
         )
     }
     val bufferSlot = when (val raw = rawPreferences[PrefKey.CAPTURE_BUFFER_SLOT.name]) {
-        null -> null
+        null -> {
+            check(!rawPreferences.containsKey(PrefKey.CAPTURE_BUFFER_SLOT.name)) {
+                "Null durable capture buffer slot"
+            }
+            null
+        }
         is Int -> ReverbService.BufferSlot.fromStorageCode(raw)
             ?: throw IllegalStateException("Unknown durable capture buffer slot code: $raw")
         is String -> ReverbService.BufferSlot.fromLegacyName(raw)
@@ -326,9 +333,7 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
         return ReverbService.BufferSlot.fromStorageCode(encoded)
     }
     val legacy = prefs.safeString(PrefKey.CAPTURE_BUFFER_SLOT) ?: return null
-    val slot = ReverbService.BufferSlot.fromLegacyName(legacy) ?: return null
-    prefs.edit { putInt(PrefKey.CAPTURE_BUFFER_SLOT, slot.storageCode.toInt()) }
-    return slot
+    return ReverbService.BufferSlot.fromLegacyName(legacy)
 }
 
 fun isWakeLockEnabled(context: Context): Boolean {
@@ -350,7 +355,6 @@ fun getConfiguredThemeMode(context: Context): AppThemeMode = readByteBackedPrefe
     default = AppThemeMode.SYSTEM,
     fromStorageCode = AppThemeMode::fromStorageCode,
     fromLegacyPrefValue = AppThemeMode::fromLegacyPrefValue,
-    storageCode = AppThemeMode::storageCode,
 )
 
 internal data class ConfiguredBufferAvailability(
@@ -489,7 +493,6 @@ fun getConfiguredOutputFormat(context: Context): ExportFormat = readByteBackedPr
     default = ExportFormat.WAV,
     fromStorageCode = ExportFormat::fromStorageCode,
     fromLegacyPrefValue = ExportFormat::fromLegacyPrefValue,
-    storageCode = ExportFormat::storageCode,
 )
 
 fun getConfiguredOutputCodec(context: Context): ExportCodec = readByteBackedPreference(
@@ -498,7 +501,6 @@ fun getConfiguredOutputCodec(context: Context): ExportCodec = readByteBackedPref
     default = ExportCodec.PCM_16,
     fromStorageCode = ExportCodec::fromStorageCode,
     fromLegacyPrefValue = ExportCodec::fromLegacyPrefValue,
-    storageCode = ExportCodec::storageCode,
 )
 
 fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat = readByteBackedPreference(
@@ -507,7 +509,6 @@ fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat = readByteBa
     default = PcmSampleFormat.PCM_16,
     fromStorageCode = PcmSampleFormat::fromStorageCode,
     fromLegacyPrefValue = PcmSampleFormat::fromLegacyPrefValue,
-    storageCode = PcmSampleFormat::storageCode,
 )
 
 fun isCodecCompatibleWithFormat(
@@ -530,7 +531,6 @@ fun getConfiguredInputRouteMode(context: Context): InputRouteMode = readByteBack
     default = InputRouteMode.AUTO,
     fromStorageCode = InputRouteMode::fromStorageCode,
     fromLegacyPrefValue = InputRouteMode::fromLegacyPrefValue,
-    storageCode = InputRouteMode::storageCode,
 )
 
 fun getConfiguredChannelMode(context: Context): ChannelMode = readByteBackedPreference(
@@ -539,7 +539,6 @@ fun getConfiguredChannelMode(context: Context): ChannelMode = readByteBackedPref
     default = DEFAULT_CHANNEL_MODE,
     fromStorageCode = ChannelMode::fromStorageCode,
     fromLegacyPrefValue = ChannelMode::fromLegacyPrefValue,
-    storageCode = ChannelMode::storageCode,
 )
 
 fun getConfiguredSampleRate(context: Context): Int {

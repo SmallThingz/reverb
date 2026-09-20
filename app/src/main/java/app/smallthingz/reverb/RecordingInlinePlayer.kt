@@ -738,8 +738,12 @@ internal fun RecordingInlinePlayer(
         }
     }
 
-    LaunchedEffect(recordingRevisionKey, mediaPlayer) {
-        val player = mediaPlayer ?: return@LaunchedEffect
+    // Capture the effect key during composition. DisposableEffect can install the player
+    // before a null-keyed coroutine starts; reading live state there prepares that same
+    // player twice when recomposition subsequently launches the player-keyed effect.
+    val playerToPrepare = mediaPlayer
+    LaunchedEffect(recordingRevisionKey, playerToPrepare) {
+        val player = playerToPrepare ?: return@LaunchedEffect
         if (playbackBookkeeping.released) return@LaunchedEffect
         // withContext has prompt cancellation when returning to Main. Keep ownership in an
         // atomic slot before the IO block returns so a collapse at that exact boundary cannot

@@ -16,6 +16,13 @@ class DebugCommandReceiver : BroadcastReceiver() {
                 intent.extras?.let { putExtras(it) }
                 setPackage(context.packageName)
             }
-        ContextCompat.startForegroundService(context, forwardedIntent)
+        // Stopped diagnostic commands do not enter foreground mode. Requesting an FGS
+        // for them leaves Android's promotion deadline armed while the UI remains bound.
+        val started = if (debugCommandRunsWithoutListening(intent.action, debuggable = true)) {
+            context.startService(forwardedIntent)
+        } else {
+            ContextCompat.startForegroundService(context, forwardedIntent)
+        }
+        checkNotNull(started) { "Unable to start Reverb debug command" }
     }
 }

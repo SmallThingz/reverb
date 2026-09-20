@@ -4144,6 +4144,10 @@ private fun createMediaStoreOutputTarget(
         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
         put(MediaStore.MediaColumns.RELATIVE_PATH, MEDIA_STORE_RELATIVE_PATH)
         put(MediaStore.MediaColumns.IS_PENDING, 1)
+        // MediaStore may not create the backing file until the first descriptor open,
+        // leaving SIZE null on insert. Seed our empty pending row explicitly; admission
+        // still re-queries it and verifies the actual descriptor is empty before writing.
+        put(MediaStore.MediaColumns.SIZE, 0L)
     }
     val uri = context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
         ?: throw IOException("Unable to create MediaStore recording")

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import androidx.compose.animation.animateColorAsState
+
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -1924,21 +1926,27 @@ private fun BufferSegment(
 ) {
     val colors = MaterialTheme.colorScheme
     val chrome = appChrome()
-    val containerColor = when {
-        selected && recording -> colors.primary
-        filled && selected -> colors.tertiary
-        filled -> colors.tertiaryContainer.copy(alpha = 0.58f)
-        selected -> colors.primaryContainer.copy(alpha = 0.74f)
-        else -> Color.Transparent
-    }
-    val contentColor = when {
-        selected && recording -> colors.onPrimary
-        filled && selected -> colors.onTertiary
-        filled -> colors.onTertiaryContainer
-        selected && !enabled -> colors.onPrimaryContainer.copy(alpha = 0.62f)
-        selected -> colors.onPrimaryContainer
-        else -> chrome.muted.copy(alpha = if (enabled) 0.52f else 0.30f)
-    }
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            selected && recording -> colors.primary
+            filled && selected -> colors.tertiary
+            selected -> colors.primaryContainer.copy(alpha = 0.74f)
+            else -> Color.Transparent
+        },
+        animationSpec = tween(160),
+        label = "bufferContainer",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            selected && recording -> colors.onPrimary
+            filled && selected -> colors.onTertiary
+            selected && !enabled -> colors.onPrimaryContainer.copy(alpha = 0.62f)
+            selected -> colors.onPrimaryContainer
+            else -> chrome.muted.copy(alpha = if (enabled) 0.52f else 0.30f)
+        },
+        animationSpec = tween(160),
+        label = "bufferContent",
+    )
 
     Surface(
         modifier = Modifier.selectable(
