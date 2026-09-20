@@ -49,14 +49,19 @@ class DurablePreferenceMutationTest {
         var processValue: String? = "content://old"
         val writes = mutableListOf<String?>()
 
+        val previousValue = processValue
         val committed = commitConfiguredExportTreeUriChange(
-            previousValue = processValue,
             updatedValue = "content://new",
-        ) { value ->
-            processValue = value
-            writes += value
-            value != "content://new"
-        }
+            write = { value ->
+                processValue = value
+                writes += value
+                value != "content://new"
+            },
+            restoreInMemory = {
+                processValue = previousValue
+                writes += previousValue
+            },
+        )
 
         assertFalse(committed)
         assertEquals("content://old", processValue)
@@ -64,18 +69,45 @@ class DurablePreferenceMutationTest {
     }
 
     @Test
+    fun failedExportDirectoryCommit_preservesMalformedPriorProcessValue() {
+        var processValue: Any? = 17
+        val previous = durablePreferenceValueSnapshot(
+            mapOf(PrefKey.EXPORT_DIRECTORY_URI.name to processValue),
+            PrefKey.EXPORT_DIRECTORY_URI,
+        )
+
+        val committed = commitConfiguredExportTreeUriChange(
+            updatedValue = "content://docs/tree/new",
+            write = { value ->
+                processValue = value
+                value != "content://docs/tree/new"
+            },
+            restoreInMemory = { processValue = previous.value },
+        )
+
+        assertFalse(committed)
+        assertTrue(previous.present)
+        assertEquals(17, processValue)
+    }
+
+    @Test
     fun failedExportDirectoryRemoval_restoresPreviousProcessValue() {
         var processValue: String? = "content://old"
         val writes = mutableListOf<String?>()
 
+        val previousValue = processValue
         val committed = commitConfiguredExportTreeUriChange(
-            previousValue = processValue,
             updatedValue = null,
-        ) { value ->
-            processValue = value
-            writes += value
-            value != null
-        }
+            write = { value ->
+                processValue = value
+                writes += value
+                value != null
+            },
+            restoreInMemory = {
+                processValue = previousValue
+                writes += previousValue
+            },
+        )
 
         assertFalse(committed)
         assertEquals("content://old", processValue)

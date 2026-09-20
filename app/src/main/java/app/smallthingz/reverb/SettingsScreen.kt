@@ -719,7 +719,8 @@ fun SettingsScreen(
                     val rollbackWakeLock = isWakeLockEnabled(context)
                     val rollbackTheme = getConfiguredThemeMode(context)
                     val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
-                    val rollbackExportDirectoryUri = preferences.safeString(PrefKey.EXPORT_DIRECTORY_URI)
+                    val rollbackExportDirectory =
+                        preferences.snapshotDurablePreferenceValue(PrefKey.EXPORT_DIRECTORY_URI)
 
                     persistRetentionTransaction(
                         // Recovery is the write-ahead side of the transaction. If the process dies before
@@ -745,10 +746,10 @@ fun SettingsScreen(
                                 .putBoolean(PrefKey.WAKE_LOCK_ENABLED, rollbackWakeLock)
                                 .putInt(PrefKey.THEME_MODE, rollbackTheme.storageCode.toInt())
                                 .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, rollbackOneShotFull)
-                                .apply {
-                                    if (rollbackExportDirectoryUri == null) remove(PrefKey.EXPORT_DIRECTORY_URI)
-                                    else putString(PrefKey.EXPORT_DIRECTORY_URI, rollbackExportDirectoryUri)
-                                }
+                                .restoreDurablePreferenceValue(
+                                    PrefKey.EXPORT_DIRECTORY_URI,
+                                    rollbackExportDirectory,
+                                )
                                 .commit()
                         },
                     )

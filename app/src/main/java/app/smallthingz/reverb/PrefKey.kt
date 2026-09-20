@@ -75,6 +75,49 @@ internal fun SharedPreferences.safeLong(key: PrefKey, default: Long): Long =
 internal fun SharedPreferences.safeBoolean(key: PrefKey, default: Boolean): Boolean =
     safePreferenceRead(default) { getBoolean(key, default) }
 
+internal data class DurablePreferenceValueSnapshot(
+    val present: Boolean,
+    val value: Any?,
+)
+
+internal fun durablePreferenceValueSnapshot(
+    values: Map<String, *>,
+    key: PrefKey,
+): DurablePreferenceValueSnapshot {
+    if (!values.containsKey(key.name)) return DurablePreferenceValueSnapshot(false, null)
+    val value = values[key.name]
+    val copied = if (value is Set<*>) value.toSet() else value
+    return DurablePreferenceValueSnapshot(true, copied)
+}
+
+internal fun SharedPreferences.snapshotDurablePreferenceValue(key: PrefKey): DurablePreferenceValueSnapshot =
+    durablePreferenceValueSnapshot(all, key)
+
+@Suppress("UNCHECKED_CAST")
+internal fun SharedPreferences.Editor.restoreDurablePreferenceValue(
+    key: PrefKey,
+    snapshot: DurablePreferenceValueSnapshot,
+): SharedPreferences.Editor {
+    if (!snapshot.present) return remove(key)
+    return when (val value = snapshot.value) {
+        is String -> putString(key, value)
+        is Int -> putInt(key, value)
+        is Long -> putLong(key, value)
+        is Float -> putFloat(key.name, value)
+        is Boolean -> putBoolean(key, value)
+        is Set<*> -> {
+            if (value.any { it !is String }) {
+                throw IllegalStateException("Unsupported durable preference set for ${key.name}")
+            }
+            putStringSet(key, (value as Set<String>).toSet())
+        }
+        null -> putString(key.name, null)
+        else -> throw IllegalStateException(
+            "Unsupported durable preference value ${value::class.java.name} for ${key.name}",
+        )
+    }
+}
+
 internal const val MAX_DURABLE_JOURNAL_ENTRIES = 2_048
 internal const val MAX_DURABLE_JOURNAL_ENTRY_CHARS = 16 * 1_024
 internal const val MAX_DURABLE_JOURNAL_TOTAL_CHARS = 2 * 1_024 * 1_024
