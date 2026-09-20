@@ -234,6 +234,15 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun serviceStopRetry_deduplicatesSameProcessSession() {
+        val session = IncidentRetrySessionKey(pid = 42, processStartElapsedRealtimeMillis = 9_000L)
+        val other = IncidentRetrySessionKey(pid = 43, processStartElapsedRealtimeMillis = 9_001L)
+
+        assertFalse(serviceStopRetryShouldAppend(listOf(session), session))
+        assertTrue(serviceStopRetryShouldAppend(listOf(session), other))
+    }
+
+    @Test
     fun provisionalServiceStopMergesLaterExitEvidenceWithoutDuplicatingSession() {
         val provisional = RecordingIncident(
             occurredAtMillis = 10_000L,

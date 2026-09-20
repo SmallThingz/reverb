@@ -159,6 +159,19 @@ private data class PendingServiceStopIncidentRetry(
     val incident: RecordingIncident? = null,
 )
 
+internal data class IncidentRetrySessionKey(
+    val pid: Int,
+    val processStartElapsedRealtimeMillis: Long,
+)
+
+internal fun serviceStopRetryShouldAppend(
+    existing: List<IncidentRetrySessionKey>,
+    incoming: IncidentRetrySessionKey,
+): Boolean = incoming !in existing
+
+private fun PendingServiceStopIncidentRetry.sessionKey(): IncidentRetrySessionKey =
+    IncidentRetrySessionKey(expectedPid, expectedProcessStartElapsedRealtimeMillis)
+
 private data class PendingCaptureInterruptionRetry(
     val occurredAtMillis: Long,
     val description: String,
@@ -569,7 +582,13 @@ internal object RecordingIncidentStore {
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
 
     private fun enqueueServiceStopIncidentRetry(retry: PendingServiceStopIncidentRetry) {
-        pendingServiceStopIncidentRetries += retry
+        if (serviceStopRetryShouldAppend(
+                existing = pendingServiceStopIncidentRetries.map(PendingServiceStopIncidentRetry::sessionKey),
+                incoming = retry.sessionKey(),
+            )
+        ) {
+            pendingServiceStopIncidentRetries += retry
+        }
         // StateFlow retains the latest revision even with no active UI. A live UI immediately
         // enters its existing read/backoff loop; a later UI load also sees the incremented value.
         signalHistoryChanged()
