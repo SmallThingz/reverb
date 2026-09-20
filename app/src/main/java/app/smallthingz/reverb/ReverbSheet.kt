@@ -35,6 +35,9 @@ internal fun ReverbActionSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val noiseBrush = rememberAppNoiseBrush()
+    // Material3 1.4 owns predictive Back for ModalBottomSheet through its dialog wrapper. Keep
+    // sheets on that single handler; adding Reverb's screen-level handler here would double-consume
+    // one system gesture and break the sheet's native predictive transform.
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = modifier,

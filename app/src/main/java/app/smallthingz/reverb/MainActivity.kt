@@ -916,26 +916,40 @@ private fun MainScreen(
             !libraryExpandedRecordingActive && !showAboutDialog,
         onBack = { showLibrary = false },
     )
+    val settingsPredictiveDismissCommitted = settingsBackMotion.commitCompleted && !showSettings
+    val libraryPredictiveDismissCommitted = libraryBackMotion.commitCompleted && !showLibrary
     val settingsSettledProgress by animateFloatAsState(
         targetValue = if (settingsDragging) settingsDragProgress else if (showSettings) 1f else 0f,
-        animationSpec = if (settingsDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
+        animationSpec = if (settingsDragging || settingsPredictiveDismissCommitted) {
+            snap()
+        } else {
+            tween(PANEL_SETTLE_DURATION_MS)
+        },
         label = "settings-panel-progress",
     )
     val librarySettledProgress by animateFloatAsState(
         targetValue = if (libraryDragging) libraryDragProgress else if (showLibrary) 1f else 0f,
-        animationSpec = if (libraryDragging) snap() else tween(PANEL_SETTLE_DURATION_MS),
+        animationSpec = if (libraryDragging || libraryPredictiveDismissCommitted) {
+            snap()
+        } else {
+            tween(PANEL_SETTLE_DURATION_MS)
+        },
         label = "library-panel-progress",
     )
-    val settingsPanelProgress = if (settingsBackMotion.gestureActive) {
-        predictiveBackOpenProgress(settingsBackMotion.progress.value)
-    } else {
-        settingsSettledProgress
-    }
-    val libraryPanelProgress = if (libraryBackMotion.gestureActive) {
-        predictiveBackOpenProgress(libraryBackMotion.progress.value)
-    } else {
-        librarySettledProgress
-    }
+    val settingsPanelProgress = predictiveBackPanelOpenProgress(
+        settledProgress = settingsSettledProgress,
+        gestureActive = settingsBackMotion.gestureActive,
+        gestureProgress = settingsBackMotion.progress.value,
+        commitCompleted = settingsBackMotion.commitCompleted,
+        surfaceVisible = showSettings,
+    )
+    val libraryPanelProgress = predictiveBackPanelOpenProgress(
+        settledProgress = librarySettledProgress,
+        gestureActive = libraryBackMotion.gestureActive,
+        gestureProgress = libraryBackMotion.progress.value,
+        commitCompleted = libraryBackMotion.commitCompleted,
+        surfaceVisible = showLibrary,
+    )
     var librarySnapshot by remember { mutableStateOf<List<RecordingEntity>>(emptyList()) }
     val libraryRefreshGeneration = remember { intArrayOf(0) }
     val settingsCompositionRetained = remember { booleanArrayOf(false) }
