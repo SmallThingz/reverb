@@ -112,12 +112,27 @@ internal fun recordingIncidentsShareCaptureSession(
     return true
 }
 
+internal fun recordingIncidentHasSessionIdentity(
+    incident: RecordingIncident,
+): Boolean = incident.pid > 0 && incident.captureArmedAtMillis > 0L
+
 internal fun recordingIncidentReferenceMatches(
     candidate: RecordingIncident,
     reference: RecordingIncident,
-): Boolean = candidate.kind == reference.kind &&
-    (candidate.occurredAtMillis == reference.occurredAtMillis ||
-        recordingIncidentsShareCaptureSession(candidate, reference))
+): Boolean {
+    if (candidate.kind != reference.kind) return false
+    if (recordingIncidentsShareCaptureSession(candidate, reference)) return true
+
+    // Exact interruption timestamp is retained only as a legacy identity fallback. Once both
+    // records carry capture-session identity, a session mismatch is authoritative even when two
+    // independent incidents happen to land on the same wall-clock millisecond.
+    if (recordingIncidentHasSessionIdentity(candidate) &&
+        recordingIncidentHasSessionIdentity(reference)
+    ) {
+        return false
+    }
+    return candidate.occurredAtMillis == reference.occurredAtMillis
+}
 
 internal fun exitTimestampBelongsToPriorProcess(
     exitTimestampMillis: Long,
@@ -909,7 +924,7 @@ internal object RecordingIncidentStore {
                 recordingIncidentsShareCaptureSession(candidate, incident)
         }
         val exactIndex = existing.indexOfFirst { candidate ->
-            candidate.kind == incident.kind && candidate.occurredAtMillis == incident.occurredAtMillis
+            recordingIncidentReferenceMatches(candidate, incident)
         }
         val index = sessionIndex.takeIf { it >= 0 } ?: exactIndex
         val updated = if (index >= 0) {

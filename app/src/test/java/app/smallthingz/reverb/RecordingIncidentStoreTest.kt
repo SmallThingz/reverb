@@ -226,6 +226,53 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun incidentReference_sameTimestampCannotOverrideConflictingKnownSessionIdentity() {
+        val first = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            pid = 42,
+            processStartedAtMillis = 5_000L,
+            captureArmedAtMillis = 9_000L,
+        )
+
+        assertFalse(
+            recordingIncidentReferenceMatches(
+                first.copy(pid = 43),
+                first,
+            ),
+        )
+        assertFalse(
+            recordingIncidentReferenceMatches(
+                first.copy(captureArmedAtMillis = 8_000L),
+                first,
+            ),
+        )
+        assertFalse(
+            recordingIncidentReferenceMatches(
+                first.copy(processStartedAtMillis = 6_000L),
+                first,
+            ),
+        )
+    }
+
+    @Test
+    fun incidentReference_sameTimestampRemainsLegacyFallbackWhenSessionIdentityMissing() {
+        val current = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            pid = 42,
+            processStartedAtMillis = 5_000L,
+            captureArmedAtMillis = 9_000L,
+        )
+        val legacy = current.copy(
+            pid = 0,
+            processStartedAtMillis = -1L,
+            captureArmedAtMillis = -1L,
+        )
+
+        assertTrue(recordingIncidentReferenceMatches(legacy, current))
+        assertTrue(recordingIncidentReferenceMatches(current, legacy))
+    }
+
+    @Test
     fun priorProcessExitEvidenceIsBoundedBeforeCurrentProcessStart() {
         assertTrue(exitTimestampBelongsToPriorProcess(10_500L, 10_000L, 11_000L))
         assertTrue(exitTimestampBelongsToPriorProcess(11_000L, 10_000L, 11_000L))
