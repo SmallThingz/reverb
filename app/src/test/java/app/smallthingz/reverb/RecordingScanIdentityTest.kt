@@ -57,6 +57,33 @@ class RecordingScanIdentityTest {
     }
 
     @Test
+    fun listedProviderIdentity_requiresKnownSizeBeforeGrantingAuthority() {
+        val documentId = "content://docs/tree/root/document/clip"
+        val mediaId = "content://media/external_primary/audio/media/7"
+
+        assertTrue(
+            listedProviderRecordingIdentity(
+                RecordingStorageType.DOCUMENT, documentId, false, 0L, 9L,
+            ).isBlank(),
+        )
+        assertTrue(
+            listedProviderRecordingIdentity(
+                RecordingStorageType.MEDIASTORE, mediaId, false, 0L, 11L,
+            ).isBlank(),
+        )
+        assertTrue(
+            listedProviderRecordingIdentity(
+                RecordingStorageType.DOCUMENT, documentId, true, 0L, 9L,
+            ).isNotBlank(),
+        )
+        assertTrue(
+            listedProviderRecordingIdentity(
+                RecordingStorageType.MEDIASTORE, mediaId, true, 0L, 11L,
+            ).isNotBlank(),
+        )
+    }
+
+    @Test
     fun providerScanIdentity_requiresStableDescriptorHandoffForKnownRevision() {
         val before = providerRecordingIdentity(
             RecordingStorageType.MEDIASTORE,

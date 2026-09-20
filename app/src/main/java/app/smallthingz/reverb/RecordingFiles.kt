@@ -1490,6 +1490,18 @@ internal fun providerRecordingIdentity(
     return "provider:${storageType.storageCode.toInt()}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
 }
 
+internal fun listedProviderRecordingIdentity(
+    storageType: RecordingStorageType,
+    id: String,
+    sizeKnown: Boolean,
+    sizeBytes: Long,
+    revisionToken: Long,
+): String = if (sizeKnown) {
+    providerRecordingIdentity(storageType, id, sizeBytes, revisionToken)
+} else {
+    ""
+}
+
 internal fun documentProviderIdentityFromMetadata(
     id: String,
     sizeKnown: Boolean,
@@ -3004,8 +3016,12 @@ private fun listDocumentTreeRecordings(
             val name = file.name ?: return@mapNotNull null
             val size = file.sizeBytes
             val modifiedMillis = file.modifiedMillis
-            val identity = providerRecordingIdentity(
-                RecordingStorageType.DOCUMENT, uri.toString(), size, modifiedMillis,
+            val identity = listedProviderRecordingIdentity(
+                storageType = RecordingStorageType.DOCUMENT,
+                id = uri.toString(),
+                sizeKnown = file.sizeKnown,
+                sizeBytes = size,
+                revisionToken = modifiedMillis,
             )
             val existing = knownRecordings[uri.toString()]
             if (
@@ -3184,8 +3200,12 @@ private fun listMediaStoreRecordings(
                     val identity = if (pending) {
                         recoveredPublishedIdentity ?: continue
                     } else {
-                        providerRecordingIdentity(
-                            RecordingStorageType.MEDIASTORE, id, size, generation.takeIf { it > 0L } ?: modifiedMillis,
+                        listedProviderRecordingIdentity(
+                            storageType = RecordingStorageType.MEDIASTORE,
+                            id = id,
+                            sizeKnown = !cursor.isNull(sizeIndex),
+                            sizeBytes = size,
+                            revisionToken = generation.takeIf { it > 0L } ?: modifiedMillis,
                         )
                     }
                     val existing = knownRecordings[id]
