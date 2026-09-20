@@ -1321,7 +1321,13 @@ private fun finalizeDocumentOutputTarget(
         null
     }
     var recoveredPublication: ObservedDocumentPublication? = null
-    val renamedUri = directRenamedUri ?: run {
+    val treeScopedDirectRenamedUri = directRenamedUri?.takeIf { returned ->
+        documentRecordingBelongsToTree(returned.toString(), target.directoryId)
+    }
+    if (directRenamedUri != null && treeScopedDirectRenamedUri == null) {
+        renameFailure = IOException("Document publication returned URI outside configured tree: $directRenamedUri")
+    }
+    val renamedUri = treeScopedDirectRenamedUri ?: run {
         val failure = requireNotNull(renameFailure)
         val observed = runCatching {
             readStableDocumentPublicationObservation(context, treeUri, sourceUri, finalName)
@@ -1700,6 +1706,27 @@ internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): 
     val afterIdentity = after?.let(::parseProviderRecordingIdentity) ?: return false
     return beforeIdentity.storageType == afterIdentity.storageType &&
         beforeIdentity.encodedId == afterIdentity.encodedId
+}
+
+private fun providerRecordingIdentityStorageId(identity: ProviderRecordingIdentity): String? =
+    runCatching {
+        String(Base64.getUrlDecoder().decode(identity.encodedId), Charsets.UTF_8)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+internal fun documentProviderIdentitiesShareTree(before: String, after: String): Boolean {
+    val beforeIdentity = parseProviderRecordingIdentity(before) ?: return false
+    val afterIdentity = parseProviderRecordingIdentity(after) ?: return false
+    if (beforeIdentity.storageType != RecordingStorageType.DOCUMENT ||
+        afterIdentity.storageType != RecordingStorageType.DOCUMENT
+    ) {
+        return false
+    }
+    val beforeId = providerRecordingIdentityStorageId(beforeIdentity) ?: return false
+    val afterId = providerRecordingIdentityStorageId(afterIdentity) ?: return false
+    val beforeScope = parseDocumentStorageScope(beforeId) ?: return false
+    val afterScope = parseDocumentStorageScope(afterId) ?: return false
+    return beforeScope.documentId != null && afterScope.documentId != null &&
+        beforeScope.authority == afterScope.authority && beforeScope.treeId == afterScope.treeId
 }
 
 internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
@@ -3720,7 +3747,8 @@ internal fun documentRenameTransitionIsSafe(
     if (sourceUriUnchanged) {
         return sameProviderObjectAcrossMutation(beforeIdentity, afterIdentity)
     }
-    return oldUriStateAfterRename == RecordingAssetState.MISSING
+    return oldUriStateAfterRename == RecordingAssetState.MISSING &&
+        documentProviderIdentitiesShareTree(beforeIdentity, afterIdentity)
 }
 
 internal fun rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged: Boolean): Boolean =

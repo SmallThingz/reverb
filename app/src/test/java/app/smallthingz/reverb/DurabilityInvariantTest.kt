@@ -1187,13 +1187,24 @@ class DurabilityInvariantTest {
     @Test
     fun ambiguousDocumentPublish_requiresExactNameContentAndRenameContinuity() {
         val digest = CopyDigest(5L, ByteArray(32) { 0x41 })
+        val sourceIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT,
+            "content://docs/tree/root/document/source",
+            5L,
+            7L,
+        )
         val expected = StableOutputFingerprint(
             digest = digest,
             fileKey = null,
-            providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:source:5:7",
+            providerIdentity = sourceIdentity,
         )
         val sameUriPublished = expected.copy(
-            providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:source:5:8",
+            providerIdentity = providerRecordingIdentity(
+                RecordingStorageType.DOCUMENT,
+                "content://docs/tree/root/document/source",
+                5L,
+                8L,
+            ),
         )
         val sameUri = DocumentPublicationObservation(
             displayName = "clip.wav",
@@ -1209,7 +1220,12 @@ class DurabilityInvariantTest {
                 expected,
                 sameUri.copy(
                     fingerprint = sameUriPublished.copy(
-                        providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:other:5:8",
+                        providerIdentity = providerRecordingIdentity(
+                            RecordingStorageType.DOCUMENT,
+                            "content://docs/tree/root/document/other",
+                            5L,
+                            8L,
+                        ),
                     ),
                 ),
             ),
@@ -1219,7 +1235,12 @@ class DurabilityInvariantTest {
             sourceUriUnchanged = false,
             oldSourceState = RecordingAssetState.MISSING,
             fingerprint = sameUriPublished.copy(
-                providerIdentity = "provider:${RecordingStorageType.DOCUMENT.storageCode.toInt()}:renamed:5:8",
+                providerIdentity = providerRecordingIdentity(
+                    RecordingStorageType.DOCUMENT,
+                    "content://docs/tree/root/document/renamed",
+                    5L,
+                    8L,
+                ),
             ),
         )
         assertTrue(documentPublicationMatchesExpected("clip.wav", expected, changedUri))
@@ -1741,6 +1762,16 @@ class DurabilityInvariantTest {
             RecordingStorageType.DOCUMENT, "content://docs/new", 4L, 12L,
         )
 
+        val sameTreeOldIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/tree/root/document/old", 4L, 20L,
+        )
+        val sameTreeNewIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/tree/root/document/new", 4L, 21L,
+        )
+        val otherTreeIdentity = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT, "content://docs/tree/other/document/new", 4L, 21L,
+        )
+
         assertTrue(
             documentRenameTransitionIsSafe(
                 true, RecordingAssetState.PRESENT, oldIdentity, sameUriIdentity, before, same,
@@ -1761,9 +1792,19 @@ class DurabilityInvariantTest {
                 true, RecordingAssetState.PRESENT, oldIdentity, newUriIdentity, before, same,
             ),
         )
-        assertTrue(
+        assertFalse(
             documentRenameTransitionIsSafe(
                 false, RecordingAssetState.MISSING, oldIdentity, newUriIdentity, before, same,
+            ),
+        )
+        assertTrue(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.MISSING, sameTreeOldIdentity, sameTreeNewIdentity, before, same,
+            ),
+        )
+        assertFalse(
+            documentRenameTransitionIsSafe(
+                false, RecordingAssetState.MISSING, sameTreeOldIdentity, otherTreeIdentity, before, same,
             ),
         )
         assertFalse(
