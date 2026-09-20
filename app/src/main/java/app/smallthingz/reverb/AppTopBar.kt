@@ -27,6 +27,7 @@ internal fun AppTopBar(
     onIncidentsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     hasIncidents: Boolean,
+    onBackClick: (() -> Unit)? = null,
     applyStatusBarPadding: Boolean = true,
     barHeight: Dp = AppTopBarContentHeight,
 ) {
@@ -40,6 +41,27 @@ internal fun AppTopBar(
     Box(
         modifier = topBarModifier,
     ) {
+        if (onBackClick != null) {
+            Surface(
+                onClick = onBackClick,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(46.dp),
+                shape = buttonShape,
+                color = chrome.field,
+                border = BorderStroke(1.dp, chrome.border),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = AppIcons.back,
+                        contentDescription = stringResource(R.string.back),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(23.dp),
+                    )
+                }
+            }
+        }
+
         Surface(
             onClick = onBrandClick,
             modifier = Modifier

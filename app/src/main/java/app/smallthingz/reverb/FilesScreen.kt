@@ -725,6 +725,7 @@ fun FilesScreen(
                             onIncidentsClick = onIncidentsClick,
                             onSettingsClick = onSettingsClick,
                             hasIncidents = hasIncidents,
+                            onBackClick = onDismissLibrary,
                             applyStatusBarPadding = false,
                         )
                     }
@@ -792,6 +793,7 @@ fun FilesScreen(
                     onIncidentsClick = onIncidentsClick,
                     onSettingsClick = onSettingsClick,
                     hasIncidents = hasIncidents,
+                    onBackClick = onDismissLibrary,
                     applyStatusBarPadding = false,
                 )
             } else {
