@@ -250,8 +250,29 @@ internal fun sanitizedShuttleSourceRate(sourceRate: Float): Float =
         ?.coerceIn(-SHUTTLE_MAX_SOURCE_RATE, SHUTTLE_MAX_SOURCE_RATE)
         ?: 0f
 
-internal fun resolveShuttleSampleRate(preferredMinBufferBytes: Int): Int =
-    if (preferredMinBufferBytes > 0) SHUTTLE_PREFERRED_SAMPLE_RATE else SHUTTLE_FALLBACK_SAMPLE_RATE
+internal fun shuttleSampleRateCandidates(preferredMinBufferBytes: Int): List<Int> =
+    if (preferredMinBufferBytes > 0) {
+        listOf(SHUTTLE_PREFERRED_SAMPLE_RATE, SHUTTLE_FALLBACK_SAMPLE_RATE)
+    } else {
+        listOf(SHUTTLE_FALLBACK_SAMPLE_RATE)
+    }
+
+internal inline fun <T> createShuttleWithSampleRateFallback(
+    preferredMinBufferBytes: Int,
+    create: (Int) -> T,
+): Pair<T, Int> {
+    var earlierFailure: Exception? = null
+    for (sampleRate in shuttleSampleRateCandidates(preferredMinBufferBytes)) {
+        try {
+            return create(sampleRate) to sampleRate
+        } catch (error: Exception) {
+            val previous = earlierFailure
+            if (previous != null) error.addSuppressed(previous)
+            earlierFailure = error
+        }
+    }
+    throw earlierFailure ?: IOException("No shuttle sample rate is available")
+}
 
 internal fun shuttleSourceGrainSeconds(signedRate: Float): Double =
     SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleAudibleSpeed(signedRate).toDouble()
@@ -765,21 +786,26 @@ internal class TimelineAudioPreviewController(
         var startedCallbackSent = false
         try {
             checkCurrent(token)
-            val preferredMinBufferBytes = AudioTrack.getMinBufferSize(
-                SHUTTLE_PREFERRED_SAMPLE_RATE,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-            )
-            val shuttleSampleRate = resolveShuttleSampleRate(preferredMinBufferBytes)
-            val grainBufferBytes = (
-                SHUTTLE_GRAIN_OUTPUT_SECONDS * shuttleSampleRate.toDouble() * 2.0
-            ).roundToInt()
-            val shuttleTrack = createTrack(
-                volume = 0.82f,
-                minimumBufferBytes = grainBufferBytes,
-                lowLatency = true,
-                sampleRate = shuttleSampleRate,
-            )
+            val preferredMinBufferBytes = runCatching {
+                AudioTrack.getMinBufferSize(
+                    SHUTTLE_PREFERRED_SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                )
+            }.getOrDefault(0)
+            val (shuttleTrack, shuttleSampleRate) = createShuttleWithSampleRateFallback(
+                preferredMinBufferBytes = preferredMinBufferBytes,
+            ) { sampleRate ->
+                val grainBufferBytes = (
+                    SHUTTLE_GRAIN_OUTPUT_SECONDS * sampleRate.toDouble() * 2.0
+                ).roundToInt()
+                createTrack(
+                    volume = 0.82f,
+                    minimumBufferBytes = grainBufferBytes,
+                    lowLatency = true,
+                    sampleRate = sampleRate,
+                )
+            }
             track = shuttleTrack
             synchronized(trackLock) {
                 checkCurrent(token)
