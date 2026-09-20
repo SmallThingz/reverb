@@ -83,7 +83,8 @@ internal fun formatIncidentStopSummary(incident: RecordingIncident): String {
         Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault()),
     )
     val duration = recordingIncidentDowntimeMillis(incident)?.let { millis ->
-        val seconds = ((millis + 999L) / 1000L).coerceAtLeast(1L)
+        val seconds = (millis / 1_000L + if (millis % 1_000L == 0L) 0L else 1L)
+            .coerceAtLeast(1L)
         formatDurationInput(seconds)
     } ?: if (incident.recoveryPending) {
         "…"

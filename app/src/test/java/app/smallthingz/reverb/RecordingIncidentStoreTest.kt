@@ -332,6 +332,19 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun incidentStopSummary_roundsLargePersistedDowntimeWithoutOverflow() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 1L,
+            resumedAtMillis = Long.MAX_VALUE,
+        )
+        val expectedSeconds = (Long.MAX_VALUE - 1L) / 1_000L + 1L
+
+        val summary = formatIncidentStopSummary(incident)
+
+        assertTrue(summary.contains(" for ${formatDurationInput(expectedSeconds)}"))
+    }
+
+    @Test
     fun downtimeAndAcknowledgementStayIndependentFromHistoryRetention() {
         val incident = RecordingIncident(
             occurredAtMillis = 1_000L,
