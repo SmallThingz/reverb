@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -54,6 +55,14 @@ class RecordingScanIdentityTest {
         )
         assertFalse(scannedFileRecordingIdentityRemainsCurrent("", descriptor, "", ""))
         assertTrue(scannedFileRecordingIdentityRemainsCurrent("", "", "", ""))
+    }
+
+    @Test
+    fun mediaStoreListing_requiresKnownPendingState() {
+        assertEquals(false, mediaStoreListedPendingState(pendingKnown = true, pending = false))
+        assertEquals(true, mediaStoreListedPendingState(pendingKnown = true, pending = true))
+        assertEquals(null, mediaStoreListedPendingState(pendingKnown = false, pending = false))
+        assertEquals(null, mediaStoreListedPendingState(pendingKnown = false, pending = true))
     }
 
     @Test

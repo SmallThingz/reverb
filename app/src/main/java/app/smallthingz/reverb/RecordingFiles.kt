@@ -3062,6 +3062,11 @@ private fun listDocumentTreeRecordings(
         .toList()
 }
 
+internal fun mediaStoreListedPendingState(
+    pendingKnown: Boolean,
+    pending: Boolean,
+): Boolean? = pending.takeIf { pendingKnown }
+
 internal fun canReuseKnownMediaStoreRecording(
     existing: RecordingEntity?,
     displayName: String,
@@ -3115,7 +3120,10 @@ private fun listMediaStoreRecordings(
                     val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
                     if (uri.toString() in suppressedIds) continue
                     val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
-                    val pending = cursor.getInt(pendingIndex) != 0
+                    val pending = mediaStoreListedPendingState(
+                        pendingKnown = !cursor.isNull(pendingIndex),
+                        pending = if (cursor.isNull(pendingIndex)) false else cursor.getInt(pendingIndex) != 0,
+                    ) ?: continue
                     val modifiedSeconds = cursor.getLong(modifiedIndex).coerceAtLeast(0L)
                     val modifiedMillis = if (modifiedSeconds > Long.MAX_VALUE / 1000L) Long.MAX_VALUE
                     else modifiedSeconds * 1000L
