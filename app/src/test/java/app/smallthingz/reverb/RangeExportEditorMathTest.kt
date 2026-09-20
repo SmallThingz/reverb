@@ -10,6 +10,43 @@ import org.junit.Test
 
 class RangeExportEditorMathTest {
     @Test
+    fun committedExportTransfersSynchronouslyAndIgnoresFocusCleanupFailure() {
+        val events = mutableListOf<String>()
+
+        val accepted = dispatchCommittedRangeExport(
+            commitDraft = {
+                events += "commit"
+                true
+            },
+            clearFocus = {
+                events += "focus"
+                throw IllegalStateException("focus owner already detached")
+            },
+            export = { events += "export" },
+        )
+
+        assertTrue(accepted)
+        assertEquals(listOf("commit", "focus", "export"), events)
+    }
+
+    @Test
+    fun invalidExportDraftRetainsOwnershipWithoutDispatching() {
+        val events = mutableListOf<String>()
+
+        val accepted = dispatchCommittedRangeExport(
+            commitDraft = {
+                events += "commit"
+                false
+            },
+            clearFocus = { events += "focus" },
+            export = { events += "export" },
+        )
+
+        assertFalse(accepted)
+        assertEquals(listOf("commit"), events)
+    }
+
+    @Test
     fun textEditDraftOwnership_blocksCrossFieldOverwriteUntilPreviousEditFinishes() {
         val start = requireNotNull(
             beginRangeTextEditDraft(

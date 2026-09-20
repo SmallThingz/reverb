@@ -116,6 +116,20 @@ internal fun rangeTextEditNeedsCommitBeforeFocusHandoff(
     target: RangeEditTarget,
 ): Boolean = active != null && active.target != target
 
+internal inline fun dispatchCommittedRangeExport(
+    commitDraft: () -> Boolean,
+    clearFocus: () -> Unit,
+    export: () -> Unit,
+): Boolean {
+    if (!commitDraft()) return false
+    // Focus cleanup is presentation-only. Once the click has committed a valid draft, transfer
+    // export ownership synchronously before this callback can return; View.post() can be rejected
+    // during teardown and can also defer work past the lifetime that owns the pinned snapshot.
+    runCatching(clearFocus)
+    export()
+    return true
+}
+
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
     val commitAllowed: Boolean = false,
@@ -2053,7 +2067,6 @@ private fun RangeExportControls(
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     val focusManager = LocalFocusManager.current
-    val view = LocalView.current
     val discardDraftOnPointerDown = Modifier.pointerInput(state) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -2134,10 +2147,11 @@ private fun RangeExportControls(
                 onClick = {
                     // Export is a commit boundary. A valid draft becomes the range; an invalid
                     // draft blocks export rather than leaking a stale value into the request.
-                    if (state.commitActiveTextEditing()) {
-                        focusManager.clearFocus(force = true)
-                        view.post(onExport)
-                    }
+                    dispatchCommittedRangeExport(
+                        commitDraft = state::commitActiveTextEditing,
+                        clearFocus = { focusManager.clearFocus(force = true) },
+                        export = onExport,
+                    )
                 },
                 enabled = exportEnabled,
                 shape = RoundedCornerShape(20.dp),
