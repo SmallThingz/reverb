@@ -95,6 +95,19 @@ internal fun fileReadIdentityRemainsCurrent(
     fileDescriptorIdentityMatches(expectedIdentity, descriptorIdentity) &&
         fileIdentityMatches(expectedIdentity, pathIdentity)
 
+internal inline fun <T> consumeProviderReadAfterVerifiedHandoff(
+    expectedIdentity: String,
+    beforeOpenIdentity: String,
+    afterOpenIdentity: () -> String,
+    consume: () -> T,
+): T {
+    val after = afterOpenIdentity()
+    if (!providerReadHandoffMatchesExpected(expectedIdentity, beforeOpenIdentity, after)) {
+        throw IOException("Recording changed while opening provider read")
+    }
+    return consume()
+}
+
 internal data class WavPcmLayout(
     val sampleRate: Int,
     val channelCount: Int,
@@ -175,18 +188,28 @@ internal class RecordingPcm16MonoReader internal constructor(
                 RecordingStorageType.DOCUMENT,
                 RecordingStorageType.MEDIASTORE,
                 -> {
-                    if (!recordingReadIdentityIsStable(recording) ||
-                        !recordingContentIdentityMatches(context, recording)
-                    ) {
+                    if (!recordingReadIdentityIsStable(recording)) {
+                        throw IOException("Recording identity is unavailable in provider")
+                    }
+                    val uri = recording.id.toUri()
+                    val beforeOpenIdentity = resolveProviderRecordingIdentity(context, recording.storageType, uri)
+                    if (!providerRecordingIdentityMatches(recording.fileIdentity, beforeOpenIdentity)) {
                         throw IOException("Recording changed in provider")
                     }
-                    val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
+                    val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
                         ?: throw IOException("Unable to open recording for reading")
                     val input = openChildOrCloseOwner(descriptor) { opened ->
                         ParcelFileDescriptor.AutoCloseInputStream(opened)
                     }
                     try {
-                        val layout = readWavPcmLayout(input.channel)
+                        val layout = consumeProviderReadAfterVerifiedHandoff(
+                            expectedIdentity = recording.fileIdentity,
+                            beforeOpenIdentity = beforeOpenIdentity,
+                            afterOpenIdentity = {
+                                resolveProviderRecordingIdentity(context, recording.storageType, uri)
+                            },
+                            consume = { readWavPcmLayout(input.channel) },
+                        )
                         if (!recordingContentIdentityMatches(context, recording)) {
                             throw IOException("Recording changed in provider while opening")
                         }

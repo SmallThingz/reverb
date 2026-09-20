@@ -14,6 +14,34 @@ import org.junit.Test
 
 class RecordingWaveformTest {
     @Test
+    fun providerPcmRead_verifiesDescriptorHandoffBeforeConsumingBytes() {
+        val expected = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT,
+            "content://docs/tree/root/document/clip",
+            4L,
+            7L,
+        )
+        val replacement = providerRecordingIdentity(
+            RecordingStorageType.DOCUMENT,
+            "content://docs/tree/root/document/other",
+            4L,
+            8L,
+        )
+        val events = mutableListOf<String>()
+
+        assertThrows(IOException::class.java) {
+            consumeProviderReadAfterVerifiedHandoff(
+                expectedIdentity = expected,
+                beforeOpenIdentity = expected,
+                afterOpenIdentity = { events += "identity"; replacement },
+                consume = { events += "consume"; Unit },
+            )
+        }
+
+        assertEquals(listOf("identity"), events)
+    }
+
+    @Test
     fun wavLayoutParsesPcm16Frames() {
         val file = writePcm16Wav(
             sampleRate = 8_000,
