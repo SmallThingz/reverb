@@ -547,17 +547,15 @@ internal fun rangeFineTuneDeltaSeconds(
 internal fun rangeFineTuneShuttleRate(
     horizontalPull: Float,
     verticalPull: Float,
+    durationSeconds: Float,
 ): Float {
-    val pull = rangeFineTuneSeekPull(horizontalPull)
-    val magnitude = abs(pull)
-    if (magnitude <= 0.002f) return 0f
-    val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    // This is scrub aggressiveness, not an AudioTrack playback-rate multiplier.
-    // A value from 1x..8x controls both source-head catch-up and how much source audio
-    // each fixed-duration output grain time-compresses.
-    val baseSpeed = 1f + 7f * normalized.pow(2f)
-    val verticalScale = rangeFineTuneSpeedScale(verticalPull).pow(0.32f)
-    return sign(pull) * (baseSpeed * verticalScale).coerceIn(1f, 8f)
+    val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+    if (duration <= 0f) return 0f
+    // Pitch follows actual source seconds traversed per real second, not control percentage.
+    return rangeFineTuneTimelineRate(
+        horizontalPull = rangeFineTuneSeekPull(horizontalPull),
+        verticalPull = verticalPull,
+    ) * duration
 }
 
 internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
@@ -1774,7 +1772,11 @@ internal fun SpringFineSeekControl(
                 val dtSeconds = elapsedNanos / 1_000_000_000f
                 val liveHorizontalPull = horizontalPull
                 val liveY = rangeFineTuneConstrainedY(rawVerticalPull, liveHorizontalPull)
-                val shuttleRate = rangeFineTuneShuttleRate(liveHorizontalPull, liveY)
+                val shuttleRate = rangeFineTuneShuttleRate(
+                    liveHorizontalPull,
+                    liveY,
+                    durationSeconds,
+                )
                 commitAccumulator.add(
                     deltaSeconds = rangeFineTuneDeltaSeconds(
                         horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
@@ -1840,6 +1842,7 @@ internal fun SpringFineSeekControl(
                         rangeFineTuneShuttleRate(
                             horizontalPull = horizontalPull,
                             verticalPull = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull),
+                            durationSeconds = durationSeconds,
                         ),
                     )
                 }

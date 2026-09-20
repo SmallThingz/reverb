@@ -73,6 +73,22 @@ class RangeExportAudioOwnershipTest {
     }
 
     @Test
+    fun shuttlePrefers96kAndFallsBackWhenUnsupported() {
+        assertEquals(96_000, resolveShuttleSampleRate(4_096))
+        assertEquals(48_000, resolveShuttleSampleRate(0))
+        assertEquals(48_000, resolveShuttleSampleRate(-2))
+    }
+
+    @Test
+    fun shuttleSourceRateSanitizesInvalidAndExtremeInput() {
+        assertEquals(0f, sanitizedShuttleSourceRate(Float.NaN), 0f)
+        assertEquals(0f, sanitizedShuttleSourceRate(Float.POSITIVE_INFINITY), 0f)
+        assertEquals(4_096f, sanitizedShuttleSourceRate(10_000f), 0f)
+        assertEquals(-4_096f, sanitizedShuttleSourceRate(-10_000f), 0f)
+        assertEquals(1.25f, sanitizedShuttleSourceRate(1.25f), 0f)
+    }
+
+    @Test
     fun successfulPreviewTrackRelease_doesNotReportFailure() {
         var released = false
         var reported = false

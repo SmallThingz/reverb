@@ -552,18 +552,21 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun fineTuneShuttleRateTracksDirectionAndAggression() {
-        val near = rangeFineTuneShuttleRate(0.08f, 0f)
-        val middle = rangeFineTuneShuttleRate(0.50f, 0f)
-        val edge = rangeFineTuneShuttleRate(1f, 0f)
-        assertTrue(near >= 1f)
-        assertTrue(middle > near)
-        assertTrue(edge > middle)
-        assertTrue(edge <= 8f)
-        assertEquals(-middle, rangeFineTuneShuttleRate(-0.50f, 0f), 0.0001f)
-        assertTrue(rangeFineTuneShuttleRate(0.50f, -0.65f) > middle)
-        assertTrue(rangeFineTuneShuttleRate(0.50f, 0.65f) <= middle)
-        assertTrue(rangeFineTuneShuttleRate(0.08f, 0.90f) >= 1f)
+    fun fineTuneShuttleRateUsesActualSourceTimeVelocity() {
+        val short = rangeFineTuneShuttleRate(0.50f, 0f, 20f)
+        val long = rangeFineTuneShuttleRate(0.50f, 0f, 200f)
+        assertTrue(short > 0f)
+        assertEquals(short * 10f, long, 0.0001f)
+        assertEquals(-short, rangeFineTuneShuttleRate(-0.50f, 0f, 20f), 0.0001f)
+        assertTrue(rangeFineTuneShuttleRate(0.50f, -0.65f, 20f) > short)
+        assertTrue(rangeFineTuneShuttleRate(0.50f, 0.65f, 20f) < short)
+
+        val shortClipEdge = rangeFineTuneShuttleRate(1f, 0f, 20f)
+        val longClipEdge = rangeFineTuneShuttleRate(1f, 0f, 200f)
+        assertTrue(shortClipEdge in 1f..1.3f)
+        assertEquals(shortClipEdge, shuttleAudibleSpeed(shortClipEdge), 0.0001f)
+        assertTrue(longClipEdge > 3f)
+        assertEquals(3f, shuttleAudibleSpeed(longClipEdge), 0f)
     }
 
     @Test
@@ -571,15 +574,16 @@ class RangeExportEditorMathTest {
         val first = nextShuttleSourceAnchorSeconds(null, 10.0, 1f)
         assertEquals(10.0, first!!, 0.000001)
 
-        // A 20 ms target move is below the 32 ms output hop, so replaying would mostly
+        // A 10 ms target move is below the 16 ms output hop, so replaying would mostly
         // duplicate the previous grain. The audio thread waits instead.
-        assertEquals(null, nextShuttleSourceAnchorSeconds(first, 10.020, 1f))
-        assertEquals(10.032, nextShuttleSourceAnchorSeconds(first, 10.032, 1f)!!, 0.000001)
+        assertEquals(null, nextShuttleSourceAnchorSeconds(first, 10.010, 1f))
+        assertEquals(10.016, nextShuttleSourceAnchorSeconds(first, 10.016, 1f)!!, 0.000001)
+        assertEquals(10.016, nextShuttleSourceAnchorSeconds(first, 10.016, 0.5f)!!, 0.000001)
 
         // Small catch-up errors use bounded hops, but large errors re-anchor instead of
         // allowing audible position to trail a fast long-timeline gesture indefinitely.
-        assertEquals(10.064, nextShuttleSourceAnchorSeconds(first, 10.10, 2f)!!, 0.000001)
-        assertFalse(shuttleSourceRequiresReanchor(first, 10.10, 2f))
+        assertEquals(10.032, nextShuttleSourceAnchorSeconds(first, 10.05, 2f)!!, 0.000001)
+        assertFalse(shuttleSourceRequiresReanchor(first, 10.05, 2f))
         assertTrue(shuttleSourceRequiresReanchor(first, 11.0, 8f))
         assertTrue(shuttleSourceRequiresReanchor(first, 9.0, -1f))
         assertEquals(11.0, nextShuttleSourceAnchorSeconds(first, 11.0, 8f)!!, 0.000001)
@@ -705,12 +709,12 @@ class RangeExportEditorMathTest {
         assertEquals(800, decode(reverseTwice).first())
         assertEquals(100, decode(reverseTwice).last())
         val eightTimes = transformShuttlePcm16Mono(source, 8f)
-        assertEquals(1, eightTimes.size / 2)
-        assertEquals(8f, shuttleAudibleSpeed(8f), 0f)
-        assertEquals(8f, shuttleAudibleSpeed(-8f), 0f)
+        assertEquals(3, eightTimes.size / 2)
+        assertEquals(3f, shuttleAudibleSpeed(8f), 0f)
+        assertEquals(3f, shuttleAudibleSpeed(-8f), 0f)
         assertEquals(1f, shuttleAudibleSpeed(0.2f), 0f)
-        assertEquals(0.04, shuttleSourceGrainSeconds(1f), 0.000001)
-        assertEquals(0.32, shuttleSourceGrainSeconds(8f), 0.000001)
+        assertEquals(0.024, shuttleSourceGrainSeconds(1f), 0.000001)
+        assertEquals(0.072, shuttleSourceGrainSeconds(8f), 0.000001)
     }
 
     @Test
