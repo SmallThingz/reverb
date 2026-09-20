@@ -8,6 +8,46 @@ import org.junit.Test
 
 class DurablePreferenceMutationTest {
     @Test
+    fun settingsRollbackSnapshot_preservesRawValuesAndOnlySubmittedKeys() {
+        val raw = mapOf<String, Any?>(
+            PrefKey.OUTPUT_FORMAT.name to "malformed-format",
+            PrefKey.SAMPLE_RATE.name to 48_000L,
+            PrefKey.EXPORT_DIRECTORY_URI.name to 17,
+            PrefKey.QUICK_TILE_ONE_SHOT_FULL.name to true,
+        )
+
+        val ordinary = settingsPreferenceRollbackSnapshot(
+            rawPreferences = raw,
+            invalidateCachedOneShotFull = false,
+        )
+
+        assertEquals("malformed-format", ordinary.getValue(PrefKey.OUTPUT_FORMAT).value)
+        assertEquals(48_000L, ordinary.getValue(PrefKey.SAMPLE_RATE).value)
+        assertEquals(17, ordinary.getValue(PrefKey.EXPORT_DIRECTORY_URI).value)
+        assertFalse(PrefKey.QUICK_TILE_ONE_SHOT_FULL in ordinary)
+
+        val invalidating = settingsPreferenceRollbackSnapshot(
+            rawPreferences = raw,
+            invalidateCachedOneShotFull = true,
+        )
+        assertEquals(true, invalidating.getValue(PrefKey.QUICK_TILE_ONE_SHOT_FULL).value)
+    }
+
+    @Test
+    fun settingsRollbackSnapshot_tracksMissingKeysWithoutInventingDefaults() {
+        val snapshot = settingsPreferenceRollbackSnapshot(
+            rawPreferences = emptyMap<String, Any?>(),
+            invalidateCachedOneShotFull = false,
+        )
+
+        settingsPreferenceRollbackKeys(invalidateCachedOneShotFull = false).forEach { key ->
+            val value = snapshot.getValue(key)
+            assertFalse(value.present)
+            assertEquals(null, value.value)
+        }
+    }
+
+    @Test
     fun configuredExportTreeAuthority_requiresCanonicalTreeOnly() {
         assertTrue(configuredExportTreePreferenceIsUsable(null))
         assertTrue(configuredExportTreePreferenceIsUsable("content://docs/tree/root"))

@@ -132,6 +132,41 @@ private data class SettingsInitialConfiguration(
     val wakeLockEnabled: Boolean,
 )
 
+private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
+    PrefKey.RETENTION_MODE,
+    PrefKey.ONE_SHOT_RETENTION_SECONDS,
+    PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
+    PrefKey.RETENTION_SECONDS,
+    PrefKey.AUDIO_MEMORY_SIZE,
+    PrefKey.RETENTION_CONFIG_DIGEST,
+    PrefKey.OUTPUT_FORMAT,
+    PrefKey.OUTPUT_CODEC,
+    PrefKey.PCM_SAMPLE_FORMAT,
+    PrefKey.AUDIO_SOURCE,
+    PrefKey.CHANNEL_MODE,
+    PrefKey.INPUT_ROUTE,
+    PrefKey.SAMPLE_RATE,
+    PrefKey.WAKE_LOCK_ENABLED,
+    PrefKey.THEME_MODE,
+    PrefKey.EXPORT_DIRECTORY_URI,
+)
+
+internal fun settingsPreferenceRollbackKeys(
+    invalidateCachedOneShotFull: Boolean,
+): List<PrefKey> = if (invalidateCachedOneShotFull) {
+    SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS + PrefKey.QUICK_TILE_ONE_SHOT_FULL
+} else {
+    SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS
+}
+
+internal fun settingsPreferenceRollbackSnapshot(
+    rawPreferences: Map<String, *>,
+    invalidateCachedOneShotFull: Boolean,
+): Map<PrefKey, DurablePreferenceValueSnapshot> =
+    settingsPreferenceRollbackKeys(invalidateCachedOneShotFull).associateWith { key ->
+        durablePreferenceValueSnapshot(rawPreferences, key)
+    }
+
 internal fun shouldInvalidateCachedOneShotFull(
     previousMode: RetentionMode,
     newMode: RetentionMode,
@@ -709,18 +744,10 @@ fun SettingsScreen(
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
                     val rollbackRetention = retentionConfigurationForRead(context)
-                    val rollbackFormat = getConfiguredOutputFormat(context)
-                    val rollbackCodec = getConfiguredOutputCodec(context)
-                    val rollbackSampleFormat = getConfiguredPcmSampleFormat(context)
-                    val rollbackSource = getConfiguredAudioSourceMode(context)
-                    val rollbackChannelMode = getConfiguredChannelMode(context)
-                    val rollbackRoute = getConfiguredInputRouteMode(context)
-                    val rollbackSampleRate = getConfiguredSampleRate(context)
-                    val rollbackWakeLock = isWakeLockEnabled(context)
-                    val rollbackTheme = getConfiguredThemeMode(context)
-                    val rollbackOneShotFull = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
-                    val rollbackExportDirectory =
-                        preferences.snapshotDurablePreferenceValue(PrefKey.EXPORT_DIRECTORY_URI)
+                    val rollbackPreferences = settingsPreferenceRollbackSnapshot(
+                        rawPreferences = preferences.all,
+                        invalidateCachedOneShotFull = invalidateCachedOneShotFull,
+                    )
 
                     persistRetentionTransaction(
                         // Recovery is the write-ahead side of the transaction. If the process dies before
@@ -729,28 +756,11 @@ fun SettingsScreen(
                         commitNewPreferences = { settingsEditor.commit() },
                         restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
                         restorePreferences = {
-                            preferences.edit()
-                                .putInt(PrefKey.RETENTION_MODE, rollbackRetention.mode.storageCode.toInt())
-                                .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, rollbackRetention.oneShotSeconds)
-                                .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, rollbackRetention.oneShotSizeBytes)
-                                .putLong(PrefKey.RETENTION_SECONDS, rollbackRetention.loopingSeconds)
-                                .putLong(PrefKey.AUDIO_MEMORY_SIZE, rollbackRetention.loopingSizeBytes)
-                                .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(rollbackRetention))
-                                .putInt(PrefKey.OUTPUT_FORMAT, rollbackFormat.storageCode.toInt())
-                                .putInt(PrefKey.OUTPUT_CODEC, rollbackCodec.storageCode.toInt())
-                                .putInt(PrefKey.PCM_SAMPLE_FORMAT, rollbackSampleFormat.storageCode.toInt())
-                                .putInt(PrefKey.AUDIO_SOURCE, rollbackSource.storageCode.toInt())
-                                .putInt(PrefKey.CHANNEL_MODE, rollbackChannelMode.storageCode.toInt())
-                                .putInt(PrefKey.INPUT_ROUTE, rollbackRoute.storageCode.toInt())
-                                .putInt(PrefKey.SAMPLE_RATE, rollbackSampleRate)
-                                .putBoolean(PrefKey.WAKE_LOCK_ENABLED, rollbackWakeLock)
-                                .putInt(PrefKey.THEME_MODE, rollbackTheme.storageCode.toInt())
-                                .putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, rollbackOneShotFull)
-                                .restoreDurablePreferenceValue(
-                                    PrefKey.EXPORT_DIRECTORY_URI,
-                                    rollbackExportDirectory,
-                                )
-                                .commit()
+                            val editor = preferences.edit()
+                            rollbackPreferences.forEach { (key, snapshot) ->
+                                editor.restoreDurablePreferenceValue(key, snapshot)
+                            }
+                            editor.commit()
                         },
                     )
                 }
