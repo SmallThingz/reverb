@@ -1065,12 +1065,11 @@ class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying) return
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
-        val prefs = getRecorderPreferences(this)
-        if (prefs.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) != full) {
-            // apply() updates this process immediately; disk persistence can lag because the
-            // authoritative value is recomputed from the chunk store whenever the service lives.
-            prefs.edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full) }
-        }
+        // Record every authoritative store observation, not only preference transitions.
+        // Settings may temporarily make the process-local preference equal to this value before
+        // a failed commit; the runtime generation must still advance so rollback cannot restore
+        // stale Full state over the live store observation.
+        RecordingQuickTileStateCache.observeRuntimeOneShotFull(this, full)
         publishQuickTileSnapshotOnAudioThread(refreshTiles = refreshTiles)
     }
 

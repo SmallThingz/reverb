@@ -165,8 +165,39 @@ internal fun tileHydrationCanApply(
     currentSnapshot: RecordingTileSnapshot?,
 ): Boolean = expectedGeneration == currentGeneration && currentSnapshot === expectedSnapshot
 
+internal data class OneShotFullPreferenceRollbackToken(
+    val runtimeGeneration: Long,
+    val rawValue: DurablePreferenceValueSnapshot,
+)
+
+internal data class OneShotFullRuntimeObservationDecision(
+    val runtimeGeneration: Long,
+    val latestRuntimeValue: Boolean,
+    val preferenceWriteRequired: Boolean,
+)
+
+internal fun oneShotFullRuntimeObservationDecision(
+    currentRuntimeGeneration: Long,
+    currentPreferenceValue: Boolean,
+    observedFull: Boolean,
+): OneShotFullRuntimeObservationDecision = OneShotFullRuntimeObservationDecision(
+    runtimeGeneration = currentRuntimeGeneration + 1L,
+    latestRuntimeValue = observedFull,
+    preferenceWriteRequired = currentPreferenceValue != observedFull,
+)
+
+internal fun oneShotFullPreferenceRollbackCorrection(
+    rollbackGeneration: Long,
+    currentRuntimeGeneration: Long,
+    latestRuntimeValue: Boolean?,
+): Boolean? =
+    latestRuntimeValue?.takeIf { currentRuntimeGeneration != rollbackGeneration }
+
 internal object RecordingQuickTileStateCache {
     private val stateLock = Any()
+    private val oneShotFullPreferenceLock = Any()
+    private var oneShotFullRuntimeGeneration = 0L
+    private var latestRuntimeOneShotFull: Boolean? = null
     private val persistedReadExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "reverb-tile-persisted-state").apply { isDaemon = true }
     }
@@ -190,6 +221,55 @@ internal object RecordingQuickTileStateCache {
         cachedSnapshot ?: failClosedRecordingTileSnapshot()
 
     fun readCachedOrNull(): RecordingTileSnapshot? = cachedSnapshot
+
+    fun snapshotOneShotFullPreferenceRollback(
+        preferences: android.content.SharedPreferences,
+    ): OneShotFullPreferenceRollbackToken = synchronized(oneShotFullPreferenceLock) {
+        OneShotFullPreferenceRollbackToken(
+            runtimeGeneration = oneShotFullRuntimeGeneration,
+            rawValue = preferences.snapshotDurablePreferenceValue(PrefKey.QUICK_TILE_ONE_SHOT_FULL),
+        )
+    }
+
+    fun observeRuntimeOneShotFull(context: Context, full: Boolean) {
+        val appContext = context.applicationContext
+        synchronized(oneShotFullPreferenceLock) {
+            val preferences = getRecorderPreferences(appContext)
+            val decision = oneShotFullRuntimeObservationDecision(
+                currentRuntimeGeneration = oneShotFullRuntimeGeneration,
+                currentPreferenceValue = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
+                observedFull = full,
+            )
+            if (decision.preferenceWriteRequired) {
+                preferences.edit {
+                    putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full)
+                }
+            }
+            // Advance on every authoritative store observation, even when Settings has already
+            // made the process-local preference equal to this value. Otherwise a failed Settings
+            // rollback could restore stale raw state without noticing the live store observation.
+            latestRuntimeOneShotFull = decision.latestRuntimeValue
+            oneShotFullRuntimeGeneration = decision.runtimeGeneration
+        }
+    }
+
+    fun reconcileOneShotFullAfterFailedSettings(
+        preferences: android.content.SharedPreferences,
+        token: OneShotFullPreferenceRollbackToken,
+    ) {
+        synchronized(oneShotFullPreferenceLock) {
+            val correction = oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = token.runtimeGeneration,
+                currentRuntimeGeneration = oneShotFullRuntimeGeneration,
+                latestRuntimeValue = latestRuntimeOneShotFull,
+            ) ?: return
+            runCatching {
+                preferences.edit {
+                    putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, correction)
+                }
+            }
+        }
+    }
 
     fun markServiceStopped(context: Context): RecordingTileSnapshot =
         markRuntimeUnavailable(context, persistLatestDurations = true)
@@ -329,7 +409,7 @@ internal object RecordingQuickTileStateCache {
         if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) {
             // apply() changes this process immediately, so markServiceStopped() cannot hydrate a
             // stale Full bit while its disk write completes asynchronously.
-            getRecorderPreferences(appContext).edit { putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false) }
+            observeRuntimeOneShotFull(appContext, false)
         }
         persistedReadExecutor.execute { persistDurations(appContext, cleared) }
     }

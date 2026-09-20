@@ -8,6 +8,102 @@ import org.junit.Test
 
 class DurablePreferenceMutationTest {
     @Test
+    fun runtimeFullObservationAlwaysAdvancesGenerationEvenWhenPreferenceAlreadyMatches() {
+        val decision = oneShotFullRuntimeObservationDecision(
+            currentRuntimeGeneration = 41L,
+            currentPreferenceValue = false,
+            observedFull = false,
+        )
+
+        assertEquals(42L, decision.runtimeGeneration)
+        assertEquals(false, decision.latestRuntimeValue)
+        assertFalse(decision.preferenceWriteRequired)
+    }
+
+    @Test
+    fun runtimeFullObservationRequestsWriteOnlyForActualPreferenceTransition() {
+        val decision = oneShotFullRuntimeObservationDecision(
+            currentRuntimeGeneration = 9L,
+            currentPreferenceValue = false,
+            observedFull = true,
+        )
+
+        assertEquals(10L, decision.runtimeGeneration)
+        assertEquals(true, decision.latestRuntimeValue)
+        assertTrue(decision.preferenceWriteRequired)
+    }
+
+    @Test
+    fun oneShotFullRollbackCorrectionTreatsSameValueRuntimeObservationAsNewAuthority() {
+        // Settings may have already changed the process-local preference to false. A later
+        // authoritative store observation of false still has to advance runtime generation, so
+        // failed rollback cannot restore an older true value merely because no write was needed.
+        assertEquals(
+            false,
+            oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = 11L,
+                currentRuntimeGeneration = 12L,
+                latestRuntimeValue = false,
+            ),
+        )
+    }
+
+    @Test
+    fun oneShotFullRollbackCorrectionOnlyUsesRuntimeUpdatesAfterSnapshot() {
+        assertEquals(
+            null,
+            oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = 7L,
+                currentRuntimeGeneration = 7L,
+                latestRuntimeValue = true,
+            ),
+        )
+        assertEquals(
+            true,
+            oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = 7L,
+                currentRuntimeGeneration = 8L,
+                latestRuntimeValue = true,
+            ),
+        )
+        assertEquals(
+            false,
+            oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = 7L,
+                currentRuntimeGeneration = 9L,
+                latestRuntimeValue = false,
+            ),
+        )
+        assertEquals(
+            null,
+            oneShotFullPreferenceRollbackCorrection(
+                rollbackGeneration = 7L,
+                currentRuntimeGeneration = 8L,
+                latestRuntimeValue = null,
+            ),
+        )
+    }
+
+    @Test
+    fun settingsRollbackSnapshot_usesCoordinatedOneShotFullRawValue() {
+        val raw = mapOf<String, Any?>(
+            PrefKey.QUICK_TILE_ONE_SHOT_FULL.name to false,
+        )
+        val coordinated = DurablePreferenceValueSnapshot(
+            present = true,
+            value = true,
+        )
+
+        val snapshot = settingsPreferenceRollbackSnapshot(
+            rawPreferences = raw,
+            invalidateCachedOneShotFull = true,
+            coordinatedOneShotFullSnapshot = coordinated,
+        )
+
+        assertEquals(coordinated, snapshot.getValue(PrefKey.QUICK_TILE_ONE_SHOT_FULL))
+    }
+
+    @Test
     fun settingsRollbackSnapshot_preservesRawValuesAndOnlySubmittedKeys() {
         val raw = mapOf<String, Any?>(
             PrefKey.OUTPUT_FORMAT.name to "malformed-format",

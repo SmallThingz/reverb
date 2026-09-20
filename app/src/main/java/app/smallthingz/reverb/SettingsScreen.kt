@@ -162,9 +162,14 @@ internal fun settingsPreferenceRollbackKeys(
 internal fun settingsPreferenceRollbackSnapshot(
     rawPreferences: Map<String, *>,
     invalidateCachedOneShotFull: Boolean,
+    coordinatedOneShotFullSnapshot: DurablePreferenceValueSnapshot? = null,
 ): Map<PrefKey, DurablePreferenceValueSnapshot> =
     settingsPreferenceRollbackKeys(invalidateCachedOneShotFull).associateWith { key ->
-        durablePreferenceValueSnapshot(rawPreferences, key)
+        if (key == PrefKey.QUICK_TILE_ONE_SHOT_FULL && coordinatedOneShotFullSnapshot != null) {
+            coordinatedOneShotFullSnapshot
+        } else {
+            durablePreferenceValueSnapshot(rawPreferences, key)
+        }
     }
 
 internal fun shouldInvalidateCachedOneShotFull(
@@ -744,25 +749,42 @@ fun SettingsScreen(
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
                     val rollbackRetention = retentionConfigurationForRead(context)
+                    val oneShotFullRollback = if (invalidateCachedOneShotFull) {
+                        RecordingQuickTileStateCache.snapshotOneShotFullPreferenceRollback(preferences)
+                    } else {
+                        null
+                    }
                     val rollbackPreferences = settingsPreferenceRollbackSnapshot(
                         rawPreferences = preferences.all,
                         invalidateCachedOneShotFull = invalidateCachedOneShotFull,
+                        coordinatedOneShotFullSnapshot = oneShotFullRollback?.rawValue,
                     )
 
-                    persistRetentionTransaction(
-                        // Recovery is the write-ahead side of the transaction. If the process dies before
-                        // preferences commit, restart sees a mismatch and existing history fails closed.
-                        writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
-                        commitNewPreferences = { settingsEditor.commit() },
-                        restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
-                        restorePreferences = {
-                            val editor = preferences.edit()
-                            rollbackPreferences.forEach { (key, snapshot) ->
-                                editor.restoreDurablePreferenceValue(key, snapshot)
-                            }
-                            editor.commit()
-                        },
-                    )
+                    var transactionCommitted = false
+                    try {
+                        transactionCommitted = persistRetentionTransaction(
+                            // Recovery is the write-ahead side of the transaction. If the process dies before
+                            // preferences commit, restart sees a mismatch and existing history fails closed.
+                            writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
+                            commitNewPreferences = { settingsEditor.commit() },
+                            restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
+                            restorePreferences = {
+                                val editor = preferences.edit()
+                                rollbackPreferences.forEach { (key, snapshot) ->
+                                    editor.restoreDurablePreferenceValue(key, snapshot)
+                                }
+                                editor.commit()
+                            },
+                        )
+                        transactionCommitted
+                    } finally {
+                        if (!transactionCommitted && oneShotFullRollback != null) {
+                            RecordingQuickTileStateCache.reconcileOneShotFullAfterFailedSettings(
+                                preferences = preferences,
+                                token = oneShotFullRollback,
+                            )
+                        }
+                    }
                 }
                 }
                 if (committed) applyCommittedSettingsToRuntime(transactionService)
