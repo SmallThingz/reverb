@@ -309,21 +309,23 @@ internal fun retentionMutationIsSafe(context: Context): Boolean =
         primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
     }
 
+internal fun persistedBufferHistoryRootMayContainData(root: File): Boolean {
+    val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME)
+    return when (storageDirectoryState(chunks)) {
+        StoragePathState.MISSING -> false
+        StoragePathState.UNAVAILABLE -> true
+        StoragePathState.PRESENT -> chunks.listFiles()
+            ?.any { child -> storagePathMayContainData(storagePathState(child)) }
+            ?: true
+    }
+}
+
 internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
     val roots = listOf(
         File(context.noBackupFilesDir, BUFFER_CACHE_FOLDER_NAME),
         File(context.noBackupFilesDir, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME),
     )
-    return roots.any { root ->
-        val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME)
-        when (val state = storagePathState(chunks)) {
-            StoragePathState.MISSING -> false
-            StoragePathState.UNAVAILABLE -> storagePathMayContainData(state)
-            StoragePathState.PRESENT -> chunks.listFiles()
-                ?.any { child -> storagePathMayContainData(storagePathState(child)) }
-                ?: true
-        }
-    }
+    return roots.any(::persistedBufferHistoryRootMayContainData)
 }
 
 internal fun resolveRetentionConfiguration(

@@ -3,9 +3,27 @@ package app.smallthingz.reverb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 class RetentionTransactionFailureTest {
+    @Test
+    fun persistedHistoryProbe_treatsSymlinkedChunkDirectoryAsPossibleHistory() {
+        val root = Files.createTempDirectory("reverb-retention-history-root").toFile()
+        val target = Files.createTempDirectory("reverb-retention-history-target")
+        val chunks = root.toPath().resolve(BUFFER_CHUNKS_FOLDER_NAME)
+        try {
+            Files.createSymbolicLink(chunks, target)
+
+            assertTrue(persistedBufferHistoryRootMayContainData(root))
+        } finally {
+            Files.deleteIfExists(chunks)
+            Files.deleteIfExists(target)
+            Files.deleteIfExists(root.toPath())
+        }
+    }
+
     @Test
     fun atomicWriteFailure_successfulRollbackKeepsBooleanFailureContract() {
         val events = mutableListOf<String>()
