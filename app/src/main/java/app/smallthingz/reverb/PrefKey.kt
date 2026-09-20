@@ -129,25 +129,19 @@ internal fun SharedPreferences.Editor.restoreDurablePreferenceValue(
     snapshot: DurablePreferenceValueSnapshot,
 ): SharedPreferences.Editor {
     if (!snapshot.present) return remove(key)
+    if (!durablePreferenceSnapshotIsExactlyRestorable(snapshot)) {
+        // SharedPreferences XML can contain named null/unsupported values that Editor cannot
+        // reproduce. Never silently remove them: absence can enable defaults/legacy bootstrap.
+        return putFailClosedDurablePreferenceSurrogate(key)
+    }
     return when (val value = snapshot.value) {
         is String -> putString(key, value)
         is Int -> putInt(key, value)
         is Long -> putLong(key, value)
         is Float -> putFloat(key.name, value)
         is Boolean -> putBoolean(key, value)
-        is Set<*> -> {
-            if (value.all { it is String }) {
-                putStringSet(key, (value as Set<String>).toSet())
-            } else {
-                putFailClosedDurablePreferenceSurrogate(key)
-            }
-        }
-        // SharedPreferences XML can contain named null/unsupported values that Editor cannot
-        // reproduce. Never silently remove them: absence can enable defaults/legacy bootstrap.
-        // Replace the failed transaction rollback with a deliberately wrong-type durable value
-        // so authority-bearing typed readers remain fail-closed.
-        null -> putFailClosedDurablePreferenceSurrogate(key)
-        else -> putFailClosedDurablePreferenceSurrogate(key)
+        is Set<*> -> putStringSet(key, (value as Set<String>).toSet())
+        else -> error("Restorable durable preference has unsupported value")
     }
 }
 

@@ -501,14 +501,18 @@ fun SettingsScreen(
         }
     }
 
+    fun finishSettingsEdit(preserveActiveInputs: Boolean = true) {
+        refreshRetentionFields(preserveActiveInputs = preserveActiveInputs)
+        currentSnapshot = currentSettingsSnapshot()
+        pushUndoState()
+    }
+
     fun activateRetentionMode(mode: RetentionMode) {
         val change = settingsRetentionModeChange(activeRetentionMode, mode) ?: return
         // onValueChange keeps the active backing value current. Switching modes only
         // changes presentation; it must never reparse the rounded display string or erase drafts.
         activeRetentionMode = change.mode
-        refreshRetentionFields(preserveActiveInputs = change.preserveInputDrafts)
-        currentSnapshot = currentSettingsSnapshot()
-        pushUndoState()
+        finishSettingsEdit(preserveActiveInputs = change.preserveInputDrafts)
     }
 
     fun restorePreviousSettings() {
@@ -1269,35 +1273,27 @@ fun SettingsScreen(
                         oneShotRetentionTimeText = value
                         oneShotRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { oneShotRetentionTimeSecondsValue = it }
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        currentSnapshot = currentSettingsSnapshot()
-                        pushUndoState()
+                        finishSettingsEdit()
                     },
                     onOneShotSizeChange = { value ->
                         oneShotRetentionSizeText = value
                         oneShotRetentionSizeError = null
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
                             ?.let { oneShotRetentionSizeBytesValue = rawMegabytesToBytes(it) }
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        currentSnapshot = currentSettingsSnapshot()
-                        pushUndoState()
+                        finishSettingsEdit()
                     },
                     onLoopingTimeChange = { value ->
                         loopingRetentionTimeText = value
                         loopingRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { loopingRetentionTimeSecondsValue = it }
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        currentSnapshot = currentSettingsSnapshot()
-                        pushUndoState()
+                        finishSettingsEdit()
                     },
                     onLoopingSizeChange = { value ->
                         loopingRetentionSizeText = value
                         loopingRetentionSizeError = null
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
                             ?.let { loopingRetentionSizeBytesValue = rawMegabytesToBytes(it) }
-                        refreshRetentionFields(preserveActiveInputs = true)
-                        currentSnapshot = currentSettingsSnapshot()
-                        pushUndoState()
+                        finishSettingsEdit()
                     },
                 )
                 Spacer(Modifier.height(12.dp))
@@ -1325,9 +1321,7 @@ fun SettingsScreen(
                                 preferredChannelMode = selectedChannelMode,
                                 preferredRate = selectedSampleRate,
                             )
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1342,9 +1336,7 @@ fun SettingsScreen(
                         onOptionSelected = { channelMode ->
                             selectedChannelMode = channelMode
                             refreshSampleRates(selectedSampleRate)
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1368,9 +1360,7 @@ fun SettingsScreen(
                                 preferredChannelMode = selectedChannelMode,
                                 preferredRate = selectedSampleRate,
                             )
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1384,9 +1374,7 @@ fun SettingsScreen(
                         optionLabel = ::sampleRateLabel,
                         onOptionSelected = { sampleRate ->
                             selectedSampleRate = sampleRate
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1406,9 +1394,7 @@ fun SettingsScreen(
                         onOptionSelected = { source ->
                             selectedSource = source
                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -1427,9 +1413,7 @@ fun SettingsScreen(
                                 preferredChannelMode = selectedChannelMode,
                                 preferredRate = selectedSampleRate,
                             )
-                            refreshRetentionFields(preserveActiveInputs = true)
-                            currentSnapshot = currentSettingsSnapshot()
-                            pushUndoState()
+                            finishSettingsEdit()
                         },
                         modifier = Modifier.weight(1f),
                     )

@@ -72,9 +72,6 @@ class RecordingOpenActivity : ComponentActivity() {
     }
 }
 
-internal fun verifiedOpenProviderIdentityMatches(expected: String, current: String): Boolean =
-    expected.isNotBlank() && providerRecordingIdentityMatches(expected, current)
-
 internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? {
     val id = source.getStringExtra("recording_id")?.takeIf { it.isNotBlank() } ?: return null
     val encodedStorage = runCatching {

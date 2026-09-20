@@ -490,10 +490,6 @@ class RecordingWaveformTest {
         assertTrue(providerRecordingIdentityMatches(first, first))
         assertTrue(providerRecordingIdentityMatches(legacy, first))
         assertTrue(providerRecordingIdentityMatches(first, legacy))
-        assertTrue(verifiedOpenProviderIdentityMatches(first, legacy))
-        assertTrue(verifiedOpenProviderIdentityMatches(legacy, first))
-        assertFalse(verifiedOpenProviderIdentityMatches("", first))
-        assertFalse(verifiedOpenProviderIdentityMatches(first, "provider:MEDIASTORE:other"))
 
         val request = VerifiedProviderRequest(
             storageType = RecordingStorageType.MEDIASTORE,

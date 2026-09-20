@@ -665,11 +665,6 @@ internal fun pendingOutputCleanupEntriesAfterExactRemovals(
     expectedRaws: Set<String>,
 ): Set<String> = if (expectedRaws.none { it in entries }) entries else entries - expectedRaws
 
-internal fun pendingOutputCleanupEntriesAfterExactRemoval(
-    entries: Set<String>,
-    expectedRaw: String,
-): Set<String> = pendingOutputCleanupEntriesAfterExactRemovals(entries, setOf(expectedRaw))
-
 private fun removePendingOutputCleanupEntries(
     context: Context,
     expectedRaws: Set<String>,
@@ -764,32 +759,34 @@ private fun outputCleanupAssetState(
             OutputCleanupAssetState.UNAVAILABLE
         }
     }
-    RecordingStorageType.DOCUMENT -> try {
-        context.contentResolver.query(
-            id.toUri(),
-            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) OutputCleanupAssetState.PRESENT else OutputCleanupAssetState.MISSING
-        } ?: OutputCleanupAssetState.UNAVAILABLE
-    } catch (_: Exception) {
-        OutputCleanupAssetState.UNAVAILABLE
-    }
-    RecordingStorageType.MEDIASTORE -> try {
-        context.contentResolver.query(
-            id.toUri(),
-            arrayOf(MediaStore.MediaColumns._ID),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) OutputCleanupAssetState.PRESENT else OutputCleanupAssetState.MISSING
-        } ?: OutputCleanupAssetState.UNAVAILABLE
-    } catch (_: Exception) {
-        OutputCleanupAssetState.UNAVAILABLE
-    }
+    RecordingStorageType.DOCUMENT -> queryOutputCleanupAssetState(
+        context = context,
+        id = id,
+        projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+    )
+    RecordingStorageType.MEDIASTORE -> queryOutputCleanupAssetState(
+        context = context,
+        id = id,
+        projection = arrayOf(MediaStore.MediaColumns._ID),
+    )
+}
+
+private fun queryOutputCleanupAssetState(
+    context: Context,
+    id: String,
+    projection: Array<String>,
+): OutputCleanupAssetState = try {
+    context.contentResolver.query(
+        id.toUri(),
+        projection,
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        if (cursor.moveToFirst()) OutputCleanupAssetState.PRESENT else OutputCleanupAssetState.MISSING
+    } ?: OutputCleanupAssetState.UNAVAILABLE
+} catch (_: Exception) {
+    OutputCleanupAssetState.UNAVAILABLE
 }
 
 private fun deletePendingOutputAsset(

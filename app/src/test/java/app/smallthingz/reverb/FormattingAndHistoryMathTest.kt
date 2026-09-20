@@ -1182,27 +1182,9 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun queuedRuntimeReadFailsClosedOnceServiceTeardownOwnsLifetime() {
+    fun serviceRuntimeReadRejectsTeardown() {
         assertTrue(serviceRuntimeReadMayExecute(serviceDestroying = false))
         assertFalse(serviceRuntimeReadMayExecute(serviceDestroying = true))
-
-        val live = RecordingTileSnapshot(
-            listening = true,
-            activeBuffer = ReverbService.BufferSlot.LOOPING,
-            oneShotEnabled = true,
-            oneShotFull = false,
-            loopingEnabled = true,
-            oneShotSeconds = 3f,
-            loopingSeconds = 7f,
-        )
-        assertEquals(
-            live,
-            runtimeRecordingTileSnapshotForDelivery(false, live, live),
-        )
-        assertEquals(
-            failClosedRecordingTileSnapshot(live),
-            runtimeRecordingTileSnapshotForDelivery(true, live, live),
-        )
     }
 
     @Test
@@ -2311,37 +2293,6 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun estimateExportDurationPcm_scalesWithSizeAndFormat() {
-        val smaller = estimateExportDurationSeconds(
-            format = ExportFormat.WAV,
-            codec = ExportCodec.PCM_16,
-            sampleRate = 44_100,
-            channelCount = 1,
-            sizeBytes = 1_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        val larger = estimateExportDurationSeconds(
-            format = ExportFormat.WAV,
-            codec = ExportCodec.PCM_16,
-            sampleRate = 44_100,
-            channelCount = 1,
-            sizeBytes = 10_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        assertTrue(larger > smaller)
-
-        val pcm8 = estimateExportDurationSeconds(
-            format = ExportFormat.WAV,
-            codec = ExportCodec.PCM_16,
-            sampleRate = 44_100,
-            channelCount = 1,
-            sizeBytes = 1_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_8,
-        )
-        assertTrue(pcm8 > smaller)
-    }
-
-    @Test
     fun bytesForRetentionSeconds_handlesLongDurationsWithoutHeapClamp() {
         val fortyEightHours = 48L * 60L * 60L
         val bytes = bytesForRetentionSeconds(fortyEightHours, 48_000, 1)
@@ -2432,58 +2383,6 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun pcm8WavExportSize_accountsForOddDataPadding() {
-        assertEquals(
-            44L + 11_025L + 1L,
-            estimateExportSizeBytes(
-                format = ExportFormat.WAV,
-                codec = ExportCodec.PCM_16,
-                sampleRate = 11_025,
-                channelCount = 1,
-                durationSeconds = 1,
-                sampleFormat = PcmSampleFormat.PCM_8,
-            ),
-        )
-        assertEquals(
-            1L,
-            estimateExportDurationSeconds(
-                format = ExportFormat.WAV,
-                codec = ExportCodec.PCM_16,
-                sampleRate = 11_025,
-                channelCount = 1,
-                sizeBytes = 44L + 11_025L + 1L,
-                sampleFormat = PcmSampleFormat.PCM_8,
-            ),
-        )
-        assertEquals(
-            0L,
-            estimateExportDurationSeconds(
-                format = ExportFormat.WAV,
-                codec = ExportCodec.PCM_16,
-                sampleRate = 11_025,
-                channelCount = 1,
-                sizeBytes = 44L + 11_025L,
-                sampleFormat = PcmSampleFormat.PCM_8,
-            ),
-        )
-    }
-
-    @Test
-    fun floatWavExportSize_accountsForExtendedFmtChunk() {
-        assertEquals(
-            58L + 44_100L * PcmSampleFormat.PCM_FLOAT.bytesPerSample,
-            estimateExportSizeBytes(
-                format = ExportFormat.WAV,
-                codec = ExportCodec.PCM_16,
-                sampleRate = 44_100,
-                channelCount = 1,
-                durationSeconds = 1,
-                sampleFormat = PcmSampleFormat.PCM_FLOAT,
-            ),
-        )
-    }
-
-    @Test
     fun pcmByteRate_proportionalToSampleFormat() {
         val mono48k_16bit = bytesForRetentionSeconds(1, 48_000, 1, PcmSampleFormat.PCM_16)
         val mono48k_8bit = bytesForRetentionSeconds(1, 48_000, 1, PcmSampleFormat.PCM_8)
@@ -2520,7 +2419,7 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun exactWavExportDurationLimit_matchesFrameAlignedBudgetAndFlooredWholeSeconds() {
+    fun exactWavExportDurationLimit_matchesFrameAlignedBudget() {
         val exact = exportDurationLimitExactSeconds(
             format = ExportFormat.WAV,
             codec = ExportCodec.PCM_16,
@@ -2532,25 +2431,6 @@ class FormattingAndHistoryMathTest {
         val frameBytes = 2L * PcmSampleFormat.PCM_16.bytesPerSample.toLong()
         val alignedPayload = payload - payload % frameBytes
         assertEquals(alignedPayload.toDouble() / (48_000.0 * frameBytes.toDouble()), exact, 0.0)
-        assertEquals(
-            exportDurationLimitSeconds(
-                ExportFormat.WAV, ExportCodec.PCM_16, 48_000, 2, PcmSampleFormat.PCM_16,
-            ),
-            kotlin.math.floor(exact).toLong(),
-        )
-    }
-
-    @Test
-    fun wavExportDurationLimit_doesNotOverflow() {
-        val limit = exportDurationLimitSeconds(
-            format = ExportFormat.WAV,
-            codec = ExportCodec.PCM_16,
-            sampleRate = 48_000,
-            channelCount = 2,
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        assertTrue(limit > 0L)
-        assertTrue(limit < Long.MAX_VALUE / 2)
     }
 
     @Test
@@ -2601,48 +2481,6 @@ class FormattingAndHistoryMathTest {
         assertEquals(0L, retentionSecondsForBytes(100, 44_100, 0))
         val mono48k16bit = bytesForRetentionSeconds(1, 48_000, 1, PcmSampleFormat.PCM_16)
         assertEquals(10L, retentionSecondsForBytes(mono48k16bit * 10, 48_000, 1))
-    }
-
-    @Test
-    fun estimateExportSizeRoundTrip_matchesConfiguredSize() {
-        val configuredBytes = 100_000_000L
-        val seconds = estimateExportDurationSeconds(
-            format = ExportFormat.WAV, codec = ExportCodec.PCM_16,
-            sampleRate = 44_100, channelCount = 1,
-            sizeBytes = configuredBytes,
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        assertTrue(seconds > 0L)
-        val backToBytes = bytesForRetentionSeconds(seconds, 44_100, 1, PcmSampleFormat.PCM_16)
-        // Round-trip should be within one seconds-worth of bytes of configured
-        val bps = 44_100L * 1L * PcmSampleFormat.PCM_16.bytesPerSample
-        assertTrue(backToBytes <= configuredBytes)
-        assertTrue(backToBytes + bps >= configuredBytes)
-    }
-
-    @Test
-    fun estimateExportDuration_respectsSampleFormat() {
-        val pcm8 = estimateExportDurationSeconds(
-            format = ExportFormat.WAV, codec = ExportCodec.PCM_16,
-            sampleRate = 44_100, channelCount = 1,
-            sizeBytes = 1_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_8,
-        )
-        val pcm16 = estimateExportDurationSeconds(
-            format = ExportFormat.WAV, codec = ExportCodec.PCM_16,
-            sampleRate = 44_100, channelCount = 1,
-            sizeBytes = 1_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        val pcmFloat = estimateExportDurationSeconds(
-            format = ExportFormat.WAV, codec = ExportCodec.PCM_16,
-            sampleRate = 44_100, channelCount = 1,
-            sizeBytes = 1_000_000L,
-            sampleFormat = PcmSampleFormat.PCM_FLOAT,
-        )
-        // PCM_8 fits 4x more duration than PCM_FLOAT in same byte budget
-        assertTrue(pcm8 in (pcm16 * 2 - 1)..(pcm16 * 2 + 1))
-        assertTrue(pcmFloat in (pcm16 / 2 - 1)..(pcm16 / 2 + 1))
     }
 
     @Test

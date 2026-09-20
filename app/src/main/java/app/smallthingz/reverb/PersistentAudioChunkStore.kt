@@ -1494,36 +1494,31 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun preserveUnrecognizedChunkLocked(file: File, reason: String) {
-        ensureQuarantineDirectoryDurableLocked()
-        var suffix = 0
-        while (true) {
-            val suffixText = if (suffix == 0) "" else ".$suffix"
-            val target = File(quarantineDirectory, "${file.name}.$reason$suffixText")
-            val reserved = try {
-                target.createNewFile()
-            } catch (error: Exception) {
-                throw IOException("Unable to reserve preserved chunk path: ${target.absolutePath}", error)
-            }
-            if (!reserved) {
-                suffix++
-                continue
-            }
-            val sourceAuthority = try {
-                copyPreservedChunkAndVerifyLocked(file, target)
-            } catch (error: Exception) {
-                runCatching { Files.deleteIfExists(target.toPath()) }
-                throw error
-            }
-            if (!removePreservedSourceLocked(file, sourceAuthority)) {
-                // Both copies are intentionally retained if source removal cannot be made
-                // durable; abort recovery rather than pretending quarantine was exclusive.
-                throw IOException("Unable to durably remove preserved chunk source: ${file.absolutePath}")
-            }
-            return
+        val target = reserveQuarantinePathLocked(file, reason)
+        val sourceAuthority = try {
+            copyPreservedChunkAndVerifyLocked(file, target)
+        } catch (error: Exception) {
+            runCatching { Files.deleteIfExists(target.toPath()) }
+            throw error
+        }
+        if (!removePreservedSourceLocked(file, sourceAuthority)) {
+            // Both copies are intentionally retained if source removal cannot be made
+            // durable; abort recovery rather than pretending quarantine was exclusive.
+            throw IOException("Unable to durably remove preserved chunk source: ${file.absolutePath}")
         }
     }
 
     private fun preserveFileCopyLocked(file: File, reason: String) {
+        val target = reserveQuarantinePathLocked(file, reason)
+        try {
+            copyPreservedChunkAndVerifyLocked(file, target)
+        } catch (error: Exception) {
+            runCatching { Files.deleteIfExists(target.toPath()) }
+            throw error
+        }
+    }
+
+    private fun reserveQuarantinePathLocked(file: File, reason: String): File {
         ensureQuarantineDirectoryDurableLocked()
         var suffix = 0
         while (true) {
@@ -1534,17 +1529,8 @@ internal class PersistentAudioChunkStore internal constructor(
             } catch (error: Exception) {
                 throw IOException("Unable to reserve preserved chunk path: ${target.absolutePath}", error)
             }
-            if (!reserved) {
-                suffix++
-                continue
-            }
-            try {
-                copyPreservedChunkAndVerifyLocked(file, target)
-            } catch (error: Exception) {
-                runCatching { Files.deleteIfExists(target.toPath()) }
-                throw error
-            }
-            return
+            if (reserved) return target
+            suffix++
         }
     }
 

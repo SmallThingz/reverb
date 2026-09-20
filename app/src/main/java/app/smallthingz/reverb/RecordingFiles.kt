@@ -291,7 +291,7 @@ private fun configuredExportTreePreferenceRaw(context: Context): String? {
 
 fun getConfiguredExportTreeUri(context: Context): Uri? {
     val raw = configuredExportTreePreferenceRaw(context) ?: return null
-    if (!documentTreeIdIsValid(raw)) {
+    if (!configuredExportTreePreferenceIsUsable(raw)) {
         throw IllegalStateException("Unreadable durable export tree authority")
     }
     return raw.toUri()
@@ -316,7 +316,7 @@ fun setConfiguredExportTreeUri(
     treeUri: Uri?,
 ): Boolean {
     val updatedValue = treeUri?.toString()
-    if (updatedValue != null && !documentTreeIdIsValid(updatedValue)) return false
+    if (!configuredExportTreePreferenceIsUsable(updatedValue)) return false
     val preferences = getRecorderPreferences(context)
     val previousValue = preferences.snapshotDurablePreferenceValue(PrefKey.EXPORT_DIRECTORY_URI)
     return commitConfiguredExportTreeUriChange(
@@ -1871,21 +1871,6 @@ private fun buildStatFileIdentity(
 
 internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String): Boolean =
     storedIdentity.isNotBlank() && currentIdentity.isNotBlank() && storedIdentity == currentIdentity
-
-internal fun scannedRecordingIdentityRemainsCurrent(
-    storageType: RecordingStorageType,
-    beforeValidation: String,
-    afterValidation: String,
-): Boolean {
-    if (beforeValidation.isBlank()) return true
-    if (afterValidation.isBlank()) return false
-    return when (storageType) {
-        RecordingStorageType.FILE -> fileIdentityMatches(beforeValidation, afterValidation)
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> providerRecordingIdentityMatches(beforeValidation, afterValidation)
-    }
-}
 
 internal fun sameFileObjectAcrossRename(before: String, after: String): Boolean {
     if (before.isBlank() || after.isBlank()) return false

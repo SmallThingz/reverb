@@ -390,12 +390,6 @@ internal fun getConfiguredBufferAvailability(context: Context): ConfiguredBuffer
         sampleFormat = getConfiguredPcmSampleFormat(context),
     )
 
-fun isConfiguredOneShotBufferEnabled(context: Context): Boolean =
-    getConfiguredBufferAvailability(context).oneShotEnabled
-
-fun isConfiguredLoopingBufferEnabled(context: Context): Boolean =
-    getConfiguredBufferAvailability(context).loopingEnabled
-
 fun isOnboardingPending(context: Context): Boolean {
     return !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
 }
@@ -662,52 +656,6 @@ fun formatDurationInput(seconds: Long): String {
     }
 }
 
-fun estimateExportSizeBytes(
-    format: ExportFormat,
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-    durationSeconds: Long,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): Long {
-    if (sampleRate <= 0 || channelCount <= 0 || durationSeconds <= 0L) {
-        return 0L
-    }
-    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
-    val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
-    if (bps <= 0L) return 0L
-    val headerBytes = wavHeaderBytes(sampleFormat)
-    return if (durationSeconds > (Long.MAX_VALUE - headerBytes - 1L) / bps) {
-        Long.MAX_VALUE
-    } else {
-        val payloadBytes = durationSeconds * bps
-        headerBytes + payloadBytes + wavDataPaddingBytes(payloadBytes)
-    }
-}
-
-fun estimateExportDurationSeconds(
-    format: ExportFormat,
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-    sizeBytes: Long,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): Long {
-    if (sampleRate <= 0 || channelCount <= 0 || sizeBytes <= 0L) {
-        return 0L
-    }
-    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
-    val bps = bytesPerSecond(sampleRate, channelCount, sampleFormat)
-    if (bps <= 0L) return 0L
-    val payloadBudget = (sizeBytes - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
-    var duration = payloadBudget / bps
-    if (duration > 0L) {
-        val payloadBytes = duration * bps
-        if (payloadBytes + wavDataPaddingBytes(payloadBytes) > payloadBudget) duration--
-    }
-    return duration
-}
-
 fun exportFileSizeLimitBytes(format: ExportFormat): Long =
     // RIFF ChunkSize is fileSize - 8, so a max unsigned-32 ChunkSize permits eight
     // additional physical file bytes beyond 0xFFFF_FFFF.
@@ -721,27 +669,8 @@ fun exportPayloadLimitBytes(
     return if (sampleFormat == PcmSampleFormat.PCM_8) (budget - 1L).coerceAtLeast(0L) else budget
 }
 
-private fun wavDataPaddingBytes(dataSize: Long): Long = dataSize and 1L
-
 private fun wavHeaderBytes(sampleFormat: PcmSampleFormat): Long =
     if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_WAV_HEADER_BYTES else PCM_WAV_HEADER_BYTES
-
-fun exportDurationLimitSeconds(
-    format: ExportFormat,
-    codec: ExportCodec,
-    sampleRate: Int,
-    channelCount: Int,
-    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): Long {
-    return estimateExportDurationSeconds(
-        format = format,
-        codec = codec,
-        sampleRate = sampleRate,
-        channelCount = channelCount,
-        sizeBytes = exportFileSizeLimitBytes(format),
-        sampleFormat = sampleFormat,
-    )
-}
 
 fun exportDurationLimitExactSeconds(
     format: ExportFormat,

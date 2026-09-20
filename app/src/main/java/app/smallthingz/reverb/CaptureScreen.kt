@@ -919,6 +919,43 @@ fun CaptureScreen(
         )
     }
 
+    fun startOwnedExport(
+        recorder: ReverbService?,
+        range: ExportRange,
+        snapshot: ReverbService.TimelineSnapshot?,
+    ) {
+        startExport(
+            context = context,
+            service = recorder,
+            range = range,
+            snapshot = snapshot,
+            setSaving = { isSaving = it },
+            onStatus = { saveStatus = it },
+            onError = { errorMessage = it },
+            onSaved = onRecordingSaved,
+            onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
+            onReceiverTerminal = { receiver ->
+                if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
+            },
+        )
+    }
+
+    fun queueOrStartExport(
+        recorder: ReverbService?,
+        range: ExportRange,
+        snapshot: ReverbService.TimelineSnapshot,
+    ) {
+        if (range.warningDurationSeconds != null) {
+            clampWarningSeconds = range.warningDurationSeconds
+            pendingExportRange = range
+            closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
+            pendingExportSnapshot = snapshot
+            showExportClampDialog = true
+        } else {
+            startOwnedExport(recorder, range, snapshot)
+        }
+    }
+
     if (showExportClampDialog) {
         if (pendingExportRange == null) {
             showExportClampDialog = false
@@ -931,18 +968,7 @@ fun CaptureScreen(
                     val snapshot = pendingExportSnapshot
                     pendingExportRange = null
                     pendingExportSnapshot = null
-                    startExport(
-                        context, service, range,
-                        snapshot = snapshot,
-                        setSaving = { isSaving = it },
-                        onStatus = { saveStatus = it },
-                        onError = { errorMessage = it },
-                        onSaved = onRecordingSaved,
-                        onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
-                        onReceiverTerminal = { receiver ->
-                            if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
-                        },
-                    )
+                    startOwnedExport(service, range, snapshot)
                 },
                 onDismiss = {
                     showExportClampDialog = false
@@ -1034,26 +1060,7 @@ fun CaptureScreen(
                             val range = builtRange.copy(
                                 rememberOnSave = ExportRangeMemory(bufferSlot, snapshot.durationSeconds),
                             )
-                            if (range.warningDurationSeconds != null) {
-                                clampWarningSeconds = range.warningDurationSeconds
-                                pendingExportRange = range
-                                closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
-                                pendingExportSnapshot = snapshot
-                                showExportClampDialog = true
-                            } else {
-                                startExport(
-                                    context, s, range,
-                                    snapshot = snapshot,
-                                    setSaving = { isSaving = it },
-                                    onStatus = { saveStatus = it },
-                                    onError = { errorMessage = it },
-                                    onSaved = onRecordingSaved,
-                                    onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
-                                    onReceiverTerminal = { receiver ->
-                                        if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
-                                    },
-                                )
-                            }
+                            queueOrStartExport(s, range, snapshot)
                         }
                     }
                 }
@@ -1156,26 +1163,7 @@ fun CaptureScreen(
             rangeSnapshot = null
             rangeSnapshotBuffer = null
             invalidateTimelineSnapshotPreparation()
-            if (range.warningDurationSeconds != null) {
-                clampWarningSeconds = range.warningDurationSeconds
-                pendingExportRange = range
-                closeCaptureSnapshotsBestEffort(pendingExportSnapshot)
-                pendingExportSnapshot = snapshot
-                showExportClampDialog = true
-            } else {
-                startExport(
-                    context, service, range,
-                    snapshot = snapshot,
-                    setSaving = { isSaving = it },
-                    onStatus = { saveStatus = it },
-                    onError = { errorMessage = it },
-                    onSaved = onRecordingSaved,
-                    onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
-                    onReceiverTerminal = { receiver ->
-                        if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
-                    },
-                )
-            }
+            queueOrStartExport(service, range, snapshot)
         }
 
         MainCaptureContent(

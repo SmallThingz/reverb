@@ -28,13 +28,13 @@ class OutputCleanupJournalConcurrencyTest {
 
         assertEquals(
             setOf(newer),
-            pendingOutputCleanupEntriesAfterExactRemoval(setOf(newer), old),
+            pendingOutputCleanupEntriesAfterExactRemovals(setOf(newer), setOf(old)),
         )
         assertEquals(
             setOf(newer),
-            pendingOutputCleanupEntriesAfterExactRemoval(setOf(old, newer), old),
+            pendingOutputCleanupEntriesAfterExactRemovals(setOf(old, newer), setOf(old)),
         )
-        assertTrue(pendingOutputCleanupEntriesAfterExactRemoval(setOf(old), old).isEmpty())
+        assertTrue(pendingOutputCleanupEntriesAfterExactRemovals(setOf(old), setOf(old)).isEmpty())
     }
     @Test
     fun staleVerifiedStagingRemoval_cannotRevokeNewerMarkerForSameId() {

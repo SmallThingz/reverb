@@ -681,13 +681,10 @@ class ReverbService : Service() {
                     onException = { error -> Log.e(TAG, "Capture destination commit threw", error) },
                 )
             ) {
-                val rollbackPersisted = restoreCaptureIntentPreferences(
+                val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
                     prefs = prefs,
                     snapshot = previousPreferences,
-                )
-                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = true,
-                    rollbackPersisted = rollbackPersisted,
                 )
                 if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                     Log.e(TAG, "Unable to durably restore capture destination after failed selection")
@@ -774,6 +771,19 @@ class ReverbService : Service() {
     private fun rejectedListeningCommand(): ListeningCommandResult =
         ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
 
+    private fun restoreCaptureIntentAfterFailedMutation(
+        prefs: SharedPreferences,
+        snapshot: CaptureIntentPreferenceSnapshot,
+        authorityWasValid: Boolean,
+    ): Boolean {
+        val rollbackPersisted = restoreCaptureIntentPreferences(prefs, snapshot)
+        durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
+            authorityWasValid = authorityWasValid,
+            rollbackPersisted = rollbackPersisted,
+        )
+        return rollbackPersisted
+    }
+
     private fun setListeningEnabled(
         enabled: Boolean,
         requestedBufferSlot: BufferSlot? = null,
@@ -823,13 +833,10 @@ class ReverbService : Service() {
                         onException = { error -> Log.e(TAG, "Recorder intent commit threw", error) },
                     )
                 ) {
-                    val rollbackPersisted = restoreCaptureIntentPreferences(
+                    val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
                         prefs = prefs,
                         snapshot = previousPreferences,
-                    )
-                    durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                         authorityWasValid = authorityWasValid,
-                        rollbackPersisted = rollbackPersisted,
                     )
                     if (captureCommandRollbackRequiresFailClosed(rollbackPersisted)) {
                         Log.e(TAG, "Unable to durably restore recorder intent after failed command")
@@ -878,13 +885,10 @@ class ReverbService : Service() {
                         if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
                     }
                     ExplicitCaptureStopDisposition.REJECT_REARMED -> {
-                        val rollbackPersisted = restoreCaptureIntentPreferences(
+                        val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
                             prefs = prefs,
                             snapshot = previousPreferences,
-                        )
-                        durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                             authorityWasValid = authorityWasValid,
-                            rollbackPersisted = rollbackPersisted,
                         )
                         if (!rollbackPersisted) {
                             Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
@@ -1009,13 +1013,10 @@ class ReverbService : Service() {
                     onException = { error -> Log.e(TAG, "Capture handoff commit threw", error) },
                 )
             ) {
-                val rollbackPersisted = restoreCaptureIntentPreferences(
+                val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
                     prefs = prefs,
                     snapshot = previousPreferences,
-                )
-                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = true,
-                    rollbackPersisted = rollbackPersisted,
                 )
                 rollbackFailed = captureCommandRollbackRequiresFailClosed(rollbackPersisted)
                 if (rollbackFailed) {
@@ -2479,13 +2480,10 @@ class ReverbService : Service() {
                 // commit() already changed this process' in-memory preferences. Restore the
                 // previous intent as well as we can so a failed planned stop cannot silently
                 // become a durable Stop or masquerade as one in this process.
-                val rollbackPersisted = restoreCaptureIntentPreferences(
+                val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
                     prefs = prefs,
                     snapshot = previousPreferences,
-                )
-                durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = durableCaptureIntentAuthorityValid,
-                    rollbackPersisted = rollbackPersisted,
                 )
                 if (!rollbackPersisted) {
                     Log.e(TAG, "Unable to restore listening intent after failed automatic stop")
@@ -2998,35 +2996,6 @@ class ReverbService : Service() {
         stopSelfResult(startId)
     }
 
-    internal fun getRecordingTileSnapshot(callback: (RecordingTileSnapshot) -> Unit) {
-        if (serviceDestroying) {
-            postRecordingTileSnapshot(callback, failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking()))
-            return
-        }
-        if (!audioHandler.post {
-                val snapshot = publishQuickTileSnapshotOnAudioThread(refreshTiles = false)
-                postRecordingTileSnapshot(callback, snapshot)
-            }
-        ) {
-            postRecordingTileSnapshot(callback, failClosedRecordingTileSnapshot(RecordingQuickTileStateCache.readNonBlocking()))
-        }
-    }
-
-    private fun postRecordingTileSnapshot(
-        callback: (RecordingTileSnapshot) -> Unit,
-        snapshot: RecordingTileSnapshot,
-    ) {
-        mainHandler.post {
-            callback(
-                runtimeRecordingTileSnapshotForDelivery(
-                    serviceDestroying = serviceDestroying,
-                    sampledSnapshot = snapshot,
-                    cachedSnapshot = RecordingQuickTileStateCache.readCachedOrNull(),
-                ),
-            )
-        }
-    }
-
     fun getState(callback: StateCallback) {
         if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
             postUnavailableState(callback)
@@ -3352,9 +3321,6 @@ class ReverbService : Service() {
             null
         }
     }
-
-    fun clearBuffer(bufferSlot: BufferSlot = BufferSlot.LOOPING): Boolean =
-        startClearBuffer(bufferSlot) != null
 
     fun cancelBufferClear(operationId: Long): Boolean = synchronized(listeningIntentLock) {
         // Serialize user cancellation with onDestroy so a stale binder cannot convert teardown
@@ -4821,16 +4787,6 @@ internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
             throw error
         }
     }
-}
-
-internal fun runtimeRecordingTileSnapshotForDelivery(
-    serviceDestroying: Boolean,
-    sampledSnapshot: RecordingTileSnapshot,
-    cachedSnapshot: RecordingTileSnapshot?,
-): RecordingTileSnapshot = if (serviceRuntimeReadMayExecute(serviceDestroying)) {
-    sampledSnapshot
-} else {
-    failClosedRecordingTileSnapshot(cachedSnapshot)
 }
 
 internal fun captureReadShouldReschedule(
