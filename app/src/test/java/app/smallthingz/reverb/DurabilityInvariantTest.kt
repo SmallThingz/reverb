@@ -1361,6 +1361,7 @@ class DurabilityInvariantTest {
 
         assertTrue(mediaStorePublicationMatchesExpected("clip.wav", expected, exact))
         assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, exact.copy(pending = true)))
+        assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, exact.copy(pending = null)))
         assertFalse(mediaStorePublicationMatchesExpected("clip.wav", expected, exact.copy(displayName = "other.wav")))
         assertFalse(
             mediaStorePublicationMatchesExpected(

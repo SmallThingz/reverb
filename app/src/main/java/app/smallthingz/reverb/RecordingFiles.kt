@@ -852,7 +852,7 @@ private fun requireCurrentOutputFingerprint(
 
 internal data class MediaStorePublicationObservation(
     val displayName: String,
-    val pending: Boolean,
+    val pending: Boolean?,
     val fingerprint: StableOutputFingerprint,
 )
 
@@ -862,14 +862,14 @@ internal fun mediaStorePublicationMatchesExpected(
     observation: MediaStorePublicationObservation?,
 ): Boolean {
     val current = observation ?: return false
-    return !current.pending &&
+    return current.pending == false &&
         current.displayName == finalDisplayName &&
         verifiedProviderPublicationMatches(expectedFingerprint, current.fingerprint)
 }
 
 private data class MediaStorePublicationMetadata(
     val displayName: String,
-    val pending: Boolean,
+    val pending: Boolean?,
 )
 
 private fun queryMediaStorePublicationMetadata(
@@ -885,7 +885,8 @@ private fun queryMediaStorePublicationMetadata(
     )?.use { cursor ->
         if (!cursor.moveToFirst()) return@use null
         val name = cursor.getString(0)?.takeIf { it.isNotBlank() } ?: return@use null
-        MediaStorePublicationMetadata(name, cursor.getInt(1) != 0)
+        val pending = if (cursor.isNull(1)) null else cursor.getInt(1) != 0
+        MediaStorePublicationMetadata(name, pending)
     }
 }.getOrNull()
 
