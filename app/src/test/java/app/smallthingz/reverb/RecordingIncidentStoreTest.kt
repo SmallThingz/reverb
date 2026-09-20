@@ -243,6 +243,29 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun captureSessionMerge_rejectsDifferentKnownProcessStarts() {
+        val first = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            pid = 42,
+            processStartedAtMillis = 5_000L,
+            captureArmedAtMillis = 9_000L,
+        )
+        val reusedPid = first.copy(
+            occurredAtMillis = 20_000L,
+            processStartedAtMillis = 15_000L,
+        )
+
+        assertFalse(recordingIncidentsShareCaptureSession(first, reusedPid))
+        assertTrue(recordingIncidentsShareCaptureSession(first, first.copy(occurredAtMillis = 11_000L)))
+        assertTrue(
+            recordingIncidentsShareCaptureSession(
+                first.copy(processStartedAtMillis = -1L),
+                first,
+            ),
+        )
+    }
+
+    @Test
     fun provisionalServiceStopMergesLaterExitEvidenceWithoutDuplicatingSession() {
         val provisional = RecordingIncident(
             occurredAtMillis = 10_000L,

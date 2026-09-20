@@ -101,8 +101,16 @@ internal inline fun runIncidentHistoryMutation(
 internal fun recordingIncidentsShareCaptureSession(
     left: RecordingIncident,
     right: RecordingIncident,
-): Boolean = left.pid > 0 && right.pid == left.pid &&
-    left.captureArmedAtMillis > 0L && right.captureArmedAtMillis == left.captureArmedAtMillis
+): Boolean {
+    if (left.pid <= 0 || right.pid != left.pid) return false
+    if (left.captureArmedAtMillis <= 0L || right.captureArmedAtMillis != left.captureArmedAtMillis) return false
+    if (left.processStartedAtMillis > 0L && right.processStartedAtMillis > 0L &&
+        left.processStartedAtMillis != right.processStartedAtMillis
+    ) {
+        return false
+    }
+    return true
+}
 
 internal fun recordingIncidentReferenceMatches(
     candidate: RecordingIncident,
