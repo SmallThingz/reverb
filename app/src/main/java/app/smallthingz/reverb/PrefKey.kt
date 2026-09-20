@@ -93,6 +93,36 @@ internal fun durablePreferenceValueSnapshot(
 internal fun SharedPreferences.snapshotDurablePreferenceValue(key: PrefKey): DurablePreferenceValueSnapshot =
     durablePreferenceValueSnapshot(all, key)
 
+private const val FAIL_CLOSED_DURABLE_PREFERENCE_SENTINEL = "__reverb_unrestorable_raw_value__"
+
+internal fun durablePreferenceSnapshotIsExactlyRestorable(
+    snapshot: DurablePreferenceValueSnapshot,
+): Boolean {
+    if (!snapshot.present) return true
+    return when (val value = snapshot.value) {
+        is String, is Int, is Long, is Float, is Boolean -> true
+        is Set<*> -> value.all { it is String }
+        else -> false
+    }
+}
+
+private fun PrefKey.usesDurableStringSetStorage(): Boolean = when (this) {
+    PrefKey.PENDING_RECORDING_DELETIONS,
+    PrefKey.PENDING_OUTPUT_CLEANUP,
+    PrefKey.VERIFIED_EXPORT_STAGING,
+    -> true
+    else -> false
+}
+
+private fun SharedPreferences.Editor.putFailClosedDurablePreferenceSurrogate(
+    key: PrefKey,
+): SharedPreferences.Editor =
+    if (key.usesDurableStringSetStorage()) {
+        putString(key, FAIL_CLOSED_DURABLE_PREFERENCE_SENTINEL)
+    } else {
+        putStringSet(key, emptySet())
+    }
+
 @Suppress("UNCHECKED_CAST")
 internal fun SharedPreferences.Editor.restoreDurablePreferenceValue(
     key: PrefKey,
@@ -106,15 +136,18 @@ internal fun SharedPreferences.Editor.restoreDurablePreferenceValue(
         is Float -> putFloat(key.name, value)
         is Boolean -> putBoolean(key, value)
         is Set<*> -> {
-            if (value.any { it !is String }) {
-                throw IllegalStateException("Unsupported durable preference set for ${key.name}")
+            if (value.all { it is String }) {
+                putStringSet(key, (value as Set<String>).toSet())
+            } else {
+                putFailClosedDurablePreferenceSurrogate(key)
             }
-            putStringSet(key, (value as Set<String>).toSet())
         }
-        null -> putString(key.name, null)
-        else -> throw IllegalStateException(
-            "Unsupported durable preference value ${value::class.java.name} for ${key.name}",
-        )
+        // SharedPreferences XML can contain named null/unsupported values that Editor cannot
+        // reproduce. Never silently remove them: absence can enable defaults/legacy bootstrap.
+        // Replace the failed transaction rollback with a deliberately wrong-type durable value
+        // so authority-bearing typed readers remain fail-closed.
+        null -> putFailClosedDurablePreferenceSurrogate(key)
+        else -> putFailClosedDurablePreferenceSurrogate(key)
     }
 }
 
