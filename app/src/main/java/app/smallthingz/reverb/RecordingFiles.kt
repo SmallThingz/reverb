@@ -930,69 +930,44 @@ private fun finalizeMediaStoreOutputTarget(
     } catch (error: Exception) {
         IOException("MediaStore publication result is uncertain: $uri", error)
     }
-    var recoveredPublication: MediaStorePublicationObservation? = null
-    if (updateFailure != null) {
-        val observation = readStableMediaStorePublicationObservation(context, uri)
-        if (!mediaStorePublicationMatchesExpected(finalName, expectedFingerprint, observation)) {
-            // Binder/provider calls can fail after committing an update. If the row is already
-            // visible but cannot be proven to be the exact verified staging object under the
-            // requested final name, keep that URI out of Reverb's Library without granting
-            // deletion authority. A still-pending row remains hidden and keeps its recovery marker.
-            if (observation?.pending == false) {
-                val suppressed = suppressProviderOutputWithoutDeletion(
-                    context = context,
-                    storageType = RecordingStorageType.MEDIASTORE,
-                    id = uri.toString(),
-                    digest = expectedFingerprint.digest,
-                )
-                if (suppressed) {
-                    if (!removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)) {
-                        Log.w(TAG, "Unable to revoke recovery for ambiguous MediaStore publish ${target.id}")
-                    }
-                } else {
-                    Log.w(TAG, "Unable to durably suppress ambiguous MediaStore publish $uri")
+
+    // A positive provider status is not the publication postcondition. The row can still be
+    // pending, renamed, replaced, or otherwise externally changed before Reverb adopts it.
+    // Re-observe one stable metadata/content snapshot on every path and require the exact final
+    // name plus positively non-pending state before granting publication authority.
+    val publication = readStableMediaStorePublicationObservation(context, uri)
+    if (!mediaStorePublicationMatchesExpected(finalName, expectedFingerprint, publication)) {
+        // If the row is positively visible already, keep the uncertain result out of the Library
+        // without granting delete authority. Pending/unknown rows keep their verified staging
+        // recovery marker so later recovery can classify them safely.
+        if (publication?.pending == false) {
+            val suppressed = suppressProviderOutputWithoutDeletion(
+                context = context,
+                storageType = RecordingStorageType.MEDIASTORE,
+                id = uri.toString(),
+                digest = expectedFingerprint.digest,
+            )
+            if (suppressed) {
+                if (!removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)) {
+                    Log.w(TAG, "Unable to revoke recovery for ambiguous MediaStore publish " + target.id)
                 }
+            } else {
+                Log.w(TAG, "Unable to durably suppress ambiguous MediaStore publish $uri")
             }
-            throw updateFailure
         }
-        recoveredPublication = observation
+        throw updateFailure ?: IOException("Unable to verify MediaStore publication postcondition: $uri")
     }
-    val published = recoveredPublication?.fingerprint
-        ?: readStableOutputFingerprint(context, RecordingStorageType.MEDIASTORE, uri.toString())
-    if (published == null || !verifiedProviderPublicationMatches(expectedFingerprint, published)) {
-        // The provider already crossed the visibility boundary. Equal bytes are not proof that
-        // the object at this URI is still the staging object we verified, so never manufacture
-        // deletion authority from the post-publish observation. Suppression keeps the uncertain
-        // result out of Reverb's Library while preserving the bytes for manual/provider recovery.
-        val suppressed = suppressProviderOutputWithoutDeletion(
-            context = context,
-            storageType = RecordingStorageType.MEDIASTORE,
-            id = uri.toString(),
-            digest = expectedFingerprint.digest,
-        )
-        if (suppressed) {
-            if (!removeVerifiedExportStaging(context, target.storageType, target.id, expectedFingerprint)) {
-                Log.w(TAG, "Unable to revoke recovery for unsafe MediaStore publish ${target.id}")
-            }
-        } else {
-            Log.w(TAG, "Unable to durably suppress unsafe MediaStore publish $uri")
-        }
-        throw IOException(
-            if (published == null) "Unable to verify published MediaStore recording"
-            else "Published MediaStore recording no longer matches verified staging",
-        )
-    }
+
+    val published = requireNotNull(publication).fingerprint
     val publishedIdentity = published.providerIdentity
         ?.takeIf { it.isNotBlank() }
         ?: throw IOException("Published MediaStore recording has no stable identity")
-    val actualName = recoveredPublication?.displayName
-        ?: queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() }
-        ?: finalName
     return target.copy(
-        displayName = actualName,
+        displayName = publication.displayName,
         staging = false,
         publishedIdentity = publishedIdentity,
     )
+
 }
 
 @Throws(IOException::class)
@@ -1587,6 +1562,7 @@ internal fun resolveProviderCatalogObservation(
                 MediaStore.MediaColumns.DATE_MODIFIED,
                 MediaStore.MediaColumns.GENERATION_MODIFIED,
                 MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.IS_PENDING,
             )
         } else {
             arrayOf(
@@ -1594,13 +1570,19 @@ internal fun resolveProviderCatalogObservation(
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.DATE_MODIFIED,
                 MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.IS_PENDING,
             )
         }
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst() || cursor.isNull(0)) return@use null
             val relativePathIndex = if (useGeneration) 4 else 3
+            val pendingIndex = if (useGeneration) 5 else 4
             if (cursor.isNull(relativePathIndex) ||
-                !mediaStoreRelativePathIsManaged(cursor.getString(relativePathIndex))
+                !mediaStoreRelativePathIsManaged(cursor.getString(relativePathIndex)) ||
+                !mediaStoreCatalogObservationIsPublished(
+                    pendingKnown = !cursor.isNull(pendingIndex),
+                    pending = if (cursor.isNull(pendingIndex)) false else cursor.getInt(pendingIndex) != 0,
+                )
             ) {
                 return@use null
             }
@@ -3066,6 +3048,11 @@ internal fun mediaStoreListedPendingState(
     pendingKnown: Boolean,
     pending: Boolean,
 ): Boolean? = pending.takeIf { pendingKnown }
+
+internal fun mediaStoreCatalogObservationIsPublished(
+    pendingKnown: Boolean,
+    pending: Boolean,
+): Boolean = mediaStoreListedPendingState(pendingKnown, pending) == false
 
 internal fun canReuseKnownMediaStoreRecording(
     existing: RecordingEntity?,

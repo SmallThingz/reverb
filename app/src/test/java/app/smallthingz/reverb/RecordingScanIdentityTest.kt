@@ -58,6 +58,34 @@ class RecordingScanIdentityTest {
     }
 
     @Test
+    fun mediaStoreCatalogObservation_requiresKnownPublishedState() {
+        assertTrue(
+            mediaStoreCatalogObservationIsPublished(
+                pendingKnown = true,
+                pending = false,
+            ),
+        )
+        assertFalse(
+            mediaStoreCatalogObservationIsPublished(
+                pendingKnown = true,
+                pending = true,
+            ),
+        )
+        assertFalse(
+            mediaStoreCatalogObservationIsPublished(
+                pendingKnown = false,
+                pending = false,
+            ),
+        )
+        assertFalse(
+            mediaStoreCatalogObservationIsPublished(
+                pendingKnown = false,
+                pending = true,
+            ),
+        )
+    }
+
+    @Test
     fun mediaStoreListing_requiresKnownPendingState() {
         assertEquals(false, mediaStoreListedPendingState(pendingKnown = true, pending = false))
         assertEquals(true, mediaStoreListedPendingState(pendingKnown = true, pending = true))
