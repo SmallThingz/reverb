@@ -112,19 +112,19 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         override suspend fun listAll(): List<RecordingEntity> {
             return readableDatabase.query(
                 TABLE_RECORDINGS,
+                recordingCatalogProjection(),
                 null,
                 null,
                 null,
                 null,
-                null,
-                "$COLUMN_STARTED_AT_MILLIS DESC, $COLUMN_CREATED_AT_MILLIS DESC",
+                recordingCatalogOrderBy(),
             ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
         }
 
         override suspend fun findById(id: String): RecordingEntity? {
             return readableDatabase.query(
                 TABLE_RECORDINGS,
-                null,
+                recordingCatalogProjection(),
                 "$COLUMN_ID = ?",
                 arrayOf(id),
                 null,
@@ -137,12 +137,12 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
         override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> {
             return readableDatabase.query(
                 TABLE_RECORDINGS,
-                null,
+                recordingCatalogProjection(),
                 "$COLUMN_DIRECTORY_ID = ?",
                 arrayOf(directoryId),
                 null,
                 null,
-                "$COLUMN_STARTED_AT_MILLIS DESC, $COLUMN_CREATED_AT_MILLIS DESC",
+                recordingCatalogOrderBy(),
             ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
         }
 
@@ -667,6 +667,67 @@ internal fun resolveRecordingCatalogStorageType(
 }
 
 internal const val MAX_RECORDING_CATALOG_INITIAL_CAPACITY = 1_024
+internal const val MAX_RECORDING_CATALOG_TEXT_CHARS = 32 * 1_024
+internal const val MAX_RECORDING_CATALOG_WAVEFORM_CHARS = 4 * 1_024
+
+private const val INVALID_LEGACY_STORAGE_TYPE_SENTINEL = "__invalid_storage_type__"
+
+private fun recordingCatalogBoundedTextProjection(
+    column: String,
+    maxChars: Int = MAX_RECORDING_CATALOG_TEXT_CHARS,
+): String = "CASE WHEN typeof(" + column + ") = 'text' THEN substr(" + column + ", 1, " +
+    (maxChars + 1) + ") ELSE NULL END AS " + column
+
+private fun recordingCatalogIntegerProjection(
+    column: String,
+    invalidSql: String = "-1",
+): String = "CASE WHEN typeof(" + column + ") = 'integer' THEN " + column +
+    " ELSE " + invalidSql + " END AS " + column
+
+private fun recordingCatalogLegacyStorageProjection(): String {
+    val column = RecordingDatabase.COLUMN_STORAGE_TYPE
+    return "CASE WHEN typeof(" + column + ") = 'null' THEN NULL " +
+        "WHEN typeof(" + column + ") = 'text' THEN substr(" + column + ", 1, " +
+        (MAX_RECORDING_CATALOG_TEXT_CHARS + 1) + ") ELSE '" +
+        INVALID_LEGACY_STORAGE_TYPE_SENTINEL + "' END AS " + column
+}
+
+private fun recordingCatalogNullableIntegerProjection(column: String): String =
+    "CASE WHEN typeof(" + column + ") = 'null' THEN NULL " +
+        "WHEN typeof(" + column + ") = 'integer' THEN " + column +
+        " ELSE -1 END AS " + column
+
+internal fun recordingCatalogProjection(): Array<String> = arrayOf(
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_ID),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DISPLAY_NAME),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_MIME_TYPE),
+    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_STARTED_AT_MILLIS),
+    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_DURATION_MILLIS),
+    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_SIZE_BYTES),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_CODEC_SUMMARY),
+    recordingCatalogLegacyStorageProjection(),
+    recordingCatalogIntegerProjection(
+        RecordingDatabase.COLUMN_STORAGE_TYPE_CODE,
+        invalidSql = Long.MAX_VALUE.toString(),
+    ),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DIRECTORY_ID),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_FILE_IDENTITY),
+    recordingCatalogBoundedTextProjection(
+        RecordingDatabase.COLUMN_WAVEFORM_DATA,
+        MAX_RECORDING_CATALOG_WAVEFORM_CHARS,
+    ),
+    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_WAVEFORM_REVISION),
+    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_CREATED_AT_MILLIS),
+    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS),
+    recordingCatalogNullableIntegerProjection(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS),
+)
+
+private fun recordingCatalogDescendingIntegerOrder(column: String): String =
+    "CASE WHEN typeof(" + column + ") = 'integer' THEN " + column + " ELSE -1 END DESC"
+
+internal fun recordingCatalogOrderBy(): String =
+    recordingCatalogDescendingIntegerOrder(RecordingDatabase.COLUMN_STARTED_AT_MILLIS) + ", " +
+        recordingCatalogDescendingIntegerOrder(RecordingDatabase.COLUMN_CREATED_AT_MILLIS)
 
 internal fun recordingCatalogInitialCapacity(rowCount: Int): Int =
     rowCount.coerceIn(0, MAX_RECORDING_CATALOG_INITIAL_CAPACITY)
@@ -678,8 +739,13 @@ internal inline fun recordingCatalogIntegerColumn(
 
 internal inline fun recordingCatalogTextColumn(
     fieldType: Int,
+    maxChars: Int = MAX_RECORDING_CATALOG_TEXT_CHARS,
     read: () -> String?,
-): String? = if (fieldType == Cursor.FIELD_TYPE_STRING) read() else null
+): String? {
+    if (fieldType != Cursor.FIELD_TYPE_STRING) return null
+    val value = read() ?: return null
+    return value.takeIf { it.length <= maxChars }
+}
 
 internal fun recordingCatalogCoreFieldsAreValid(
     id: String?,
@@ -741,8 +807,8 @@ private fun readRecordings(
     val lastSeenAtMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS)
     val missingSinceMillisIndex = cursor.getColumnIndexOrThrow(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS)
 
-    fun textColumn(index: Int): String? =
-        recordingCatalogTextColumn(cursor.getType(index)) { cursor.getString(index) }
+    fun textColumn(index: Int, maxChars: Int = MAX_RECORDING_CATALOG_TEXT_CHARS): String? =
+        recordingCatalogTextColumn(cursor.getType(index), maxChars) { cursor.getString(index) }
 
     fun integerColumn(index: Int): Long? =
         recordingCatalogIntegerColumn(cursor.getType(index)) { cursor.getLong(index) }
@@ -791,7 +857,10 @@ private fun readRecordings(
         }
         val legacyStorageType = when (cursor.getType(storageTypeIndex)) {
             Cursor.FIELD_TYPE_NULL -> null
-            Cursor.FIELD_TYPE_STRING -> cursor.getString(storageTypeIndex)
+            Cursor.FIELD_TYPE_STRING -> textColumn(storageTypeIndex) ?: run {
+                Log.w("RecordingDatabase", "Skipping catalog row with oversized legacy storage type: $id")
+                continue
+            }
             else -> {
                 Log.w("RecordingDatabase", "Skipping catalog row with malformed legacy storage type: $id")
                 continue
@@ -828,7 +897,10 @@ private fun readRecordings(
                 storageType = storage,
                 directoryId = requireNotNull(directoryId),
                 fileIdentity = textColumn(fileIdentityIndex).orEmpty(),
-                waveformData = textColumn(waveformDataIndex).orEmpty(),
+                waveformData = textColumn(
+                    waveformDataIndex,
+                    MAX_RECORDING_CATALOG_WAVEFORM_CHARS,
+                ).orEmpty(),
                 waveformRevision = textColumn(waveformRevisionIndex).orEmpty(),
                 createdAtMillis = createdAtMillis,
                 lastSeenAtMillis = lastSeenAtMillis,
