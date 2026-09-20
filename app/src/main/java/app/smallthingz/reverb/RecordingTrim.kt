@@ -96,8 +96,10 @@ private fun writeTrimmedRecordingCopy(
             val selectedFrames = endFrame - startFrame
             if (selectedFrames <= 0L) throw IOException("Trim range contains no audio")
 
-            val startedAtMillis = recording.startedAtMillis +
-                (startFrame * 1000L / layout.sampleRate.toLong())
+            val startedAtMillis = recordingTimestampWithOffset(
+                startedAtMillis = recording.startedAtMillis,
+                offsetMillis = startFrame * 1000L / layout.sampleRate.toLong(),
+            )
             val outputTarget = createOutputTarget(
                 context = context,
                 requestedDisplayName = "${trimmedRecordingBaseName(recording.displayName)}.wav",
@@ -166,6 +168,19 @@ private fun writeTrimmedRecordingCopy(
     } catch (error: Exception) {
         if (!verifiedComplete) cleanupTrimTarget(context, target, cleanupFingerprint)
         throw error
+    }
+}
+
+internal fun recordingTimestampWithOffset(
+    startedAtMillis: Long,
+    offsetMillis: Long,
+): Long {
+    require(startedAtMillis >= 0L) { "Recording timestamp must be non-negative" }
+    require(offsetMillis >= 0L) { "Recording timestamp offset must be non-negative" }
+    return if (startedAtMillis > Long.MAX_VALUE - offsetMillis) {
+        Long.MAX_VALUE
+    } else {
+        startedAtMillis + offsetMillis
     }
 }
 
