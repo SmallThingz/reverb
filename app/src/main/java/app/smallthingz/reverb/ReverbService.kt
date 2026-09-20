@@ -109,6 +109,31 @@ internal inline fun commitRecorderPreferenceMutation(
     false
 }
 
+internal data class CaptureIntentPreferenceSnapshot(
+    val enabled: DurablePreferenceValueSnapshot,
+    val bufferSlot: DurablePreferenceValueSnapshot,
+)
+
+internal fun snapshotCaptureIntentPreferences(
+    prefs: SharedPreferences,
+): CaptureIntentPreferenceSnapshot = CaptureIntentPreferenceSnapshot(
+    enabled = prefs.snapshotDurablePreferenceValue(PrefKey.AUDIO_MEMORY_ENABLED),
+    bufferSlot = prefs.snapshotDurablePreferenceValue(PrefKey.CAPTURE_BUFFER_SLOT),
+)
+
+internal fun restoreCaptureIntentPreferences(
+    prefs: SharedPreferences,
+    snapshot: CaptureIntentPreferenceSnapshot,
+): Boolean {
+    val editor = prefs.edit()
+        .restoreDurablePreferenceValue(PrefKey.AUDIO_MEMORY_ENABLED, snapshot.enabled)
+        .restoreDurablePreferenceValue(PrefKey.CAPTURE_BUFFER_SLOT, snapshot.bufferSlot)
+    return commitRecorderPreferenceMutation(
+        commit = editor::commit,
+        onException = { error -> Log.e("ReverbService", "Recorder intent rollback commit threw", error) },
+    )
+}
+
 internal fun quickTileStartedLifetimeMayStop(
     serviceDestroying: Boolean,
     listeningIntentEnabled: Boolean,
@@ -637,6 +662,7 @@ class ReverbService : Service() {
             }
             if (!durableCaptureIntentAuthorityValid) return@synchronized null
             val previousStoredSlot = durableCaptureBufferSlot
+            val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             previousActiveBuffer = activeBufferSlot
             val resolvedGeneration = if (activeBufferSlot == bufferSlot && previousStoredSlot == bufferSlot) {
                 listeningCommandGeneration.get()
@@ -656,8 +682,8 @@ class ReverbService : Service() {
                 )
             ) {
                 val rollbackPersisted = restoreCaptureIntentPreferences(
-                    prefs,
-                    previousStoredSlot = previousStoredSlot,
+                    prefs = prefs,
+                    snapshot = previousPreferences,
                 )
                 durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = true,
@@ -767,6 +793,7 @@ class ReverbService : Service() {
             val authorityWasValid = durableCaptureIntentAuthorityValid
             val previousEnabled = durableListeningIntentEnabled
             val previousStoredSlot = durableCaptureBufferSlot
+            val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             val requestedSlot = requestedBufferSlot ?: persistedCaptureBufferSlot() ?: activeBufferSlot
             val runtimeSlotChanged = enabled && requestedSlot != activeBufferSlot
             val stopIntentChanged = !enabled && previousEnabled
@@ -796,10 +823,9 @@ class ReverbService : Service() {
                         onException = { error -> Log.e(TAG, "Recorder intent commit threw", error) },
                     )
                 ) {
-                    val rollbackPersisted = authorityWasValid && restoreCaptureIntentPreferences(
+                    val rollbackPersisted = restoreCaptureIntentPreferences(
                         prefs = prefs,
-                        previousEnabled = previousEnabled,
-                        previousStoredSlot = previousStoredSlot,
+                        snapshot = previousPreferences,
                     )
                     durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                         authorityWasValid = authorityWasValid,
@@ -854,8 +880,7 @@ class ReverbService : Service() {
                     ExplicitCaptureStopDisposition.REJECT_REARMED -> {
                         val rollbackPersisted = restoreCaptureIntentPreferences(
                             prefs = prefs,
-                            previousEnabled = previousEnabled,
-                            previousStoredSlot = previousStoredSlot,
+                            snapshot = previousPreferences,
                         )
                         durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                             authorityWasValid = authorityWasValid,
@@ -912,21 +937,6 @@ class ReverbService : Service() {
             innerStopListening()
         }
         return ListeningCommandResult(accepted = true, generation = generation)
-    }
-
-    private fun restoreCaptureIntentPreferences(
-        prefs: SharedPreferences,
-        previousEnabled: Boolean? = null,
-        previousStoredSlot: BufferSlot?,
-    ): Boolean {
-        val editor = prefs.edit()
-        if (previousEnabled != null) editor.putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled)
-        if (previousStoredSlot == null) editor.remove(PrefKey.CAPTURE_BUFFER_SLOT)
-        else editor.putInt(PrefKey.CAPTURE_BUFFER_SLOT, previousStoredSlot.storageCode.toInt())
-        return commitRecorderPreferenceMutation(
-            commit = editor::commit,
-            onException = { error -> Log.e(TAG, "Recorder intent rollback commit threw", error) },
-        )
     }
 
     private fun isListeningEnabled(): Boolean = synchronized(listeningIntentLock) {
@@ -988,6 +998,7 @@ class ReverbService : Service() {
 
             val prefs = getRecorderPreferences(this)
             val previousStoredSlot = durableCaptureBufferSlot
+            val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             val listeningEnabled = durableListeningIntentEnabled
             failedWhileListening = isLogicalListeningState(state, listeningEnabled)
             if (captureSlotNeedsPersistence(previousStoredSlot, resolved) &&
@@ -999,8 +1010,8 @@ class ReverbService : Service() {
                 )
             ) {
                 val rollbackPersisted = restoreCaptureIntentPreferences(
-                    prefs,
-                    previousStoredSlot = previousStoredSlot,
+                    prefs = prefs,
+                    snapshot = previousPreferences,
                 )
                 durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = true,
@@ -2460,7 +2471,7 @@ class ReverbService : Service() {
                 )
             ) return
             val prefs = getRecorderPreferences(this)
-            val previousEnabled = durableListeningIntentEnabled
+            val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             val committed = commitRecorderPreferenceMutation(
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
                 onException = { error -> Log.e(TAG, "Automatic Stop commit threw", error) },
@@ -2469,9 +2480,9 @@ class ReverbService : Service() {
                 // commit() already changed this process' in-memory preferences. Restore the
                 // previous intent as well as we can so a failed planned stop cannot silently
                 // become a durable Stop or masquerade as one in this process.
-                val rollbackPersisted = commitRecorderPreferenceMutation(
-                    commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, previousEnabled).commit() },
-                    onException = { error -> Log.e(TAG, "Automatic Stop rollback commit threw", error) },
+                val rollbackPersisted = restoreCaptureIntentPreferences(
+                    prefs = prefs,
+                    snapshot = previousPreferences,
                 )
                 durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
                     authorityWasValid = durableCaptureIntentAuthorityValid,
@@ -2779,20 +2790,31 @@ class ReverbService : Service() {
         val persisted = synchronized(listeningIntentLock) {
             if (serviceDestroying || generation != listeningCommandGeneration.get()) return
             val prefs = getRecorderPreferences(this)
+            val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             val committed = commitRecorderPreferenceMutation(
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
                 onException = { commitError ->
                     Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
                 },
             )
-            if (!committed) durableCaptureIntentAuthorityValid = false
+            if (!committed) {
+                val rollbackPersisted = restoreCaptureIntentPreferences(
+                    prefs = prefs,
+                    snapshot = previousPreferences,
+                )
+                if (!rollbackPersisted) {
+                    Log.e(TAG, "Unable to restore recorder intent after failed fatal stop")
+                }
+                // This failed Service instance must not act on recorder authority again. Restoring
+                // the exact raw preference pair only prevents the failed commit's process-local
+                // mutation from masquerading as durable state if a later Service is created in
+                // the same process.
+                durableCaptureIntentAuthorityValid = false
+            }
             durableListeningIntentEnabled = false
-            // A fatal recorder failure must invalidate the active capture even if the
-            // preference write cannot reach disk. SharedPreferences has already applied
-            // the value to its in-memory map when commit() returns false, so rolling it
-            // back to true here would leave the stopped service claiming listening is
-            // enabled. A later process may retry the user's durable intent if disk still
-            // contains true.
+            // Runtime capture has failed regardless of preference persistence. Keep this Service's
+            // in-memory intent disabled and authority invalid on commit failure; a later Service
+            // may retry the prior durable intent only after decoding the restored/disk state.
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_READY
