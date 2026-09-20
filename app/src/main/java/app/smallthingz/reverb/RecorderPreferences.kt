@@ -400,6 +400,23 @@ fun isOnboardingPending(context: Context): Boolean {
     return !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
 }
 
+private val ONBOARDING_TRANSACTION_PREFERENCE_KEYS = listOf(
+    PrefKey.ONBOARDING_SHOWN,
+    PrefKey.RETENTION_MODE,
+    PrefKey.ONE_SHOT_RETENTION_SECONDS,
+    PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
+    PrefKey.RETENTION_SECONDS,
+    PrefKey.AUDIO_MEMORY_SIZE,
+    PrefKey.RETENTION_CONFIG_DIGEST,
+)
+
+internal fun onboardingPreferenceRollbackSnapshot(
+    rawPreferences: Map<String, *>,
+): Map<PrefKey, DurablePreferenceValueSnapshot> =
+    ONBOARDING_TRANSACTION_PREFERENCE_KEYS.associateWith { key ->
+        durablePreferenceValueSnapshot(rawPreferences, key)
+    }
+
 @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
 fun finishOnboarding(
     context: Context,
@@ -446,6 +463,7 @@ fun finishOnboarding(
             )
         }
         val prefs = getRecorderPreferences(context)
+        val rollbackPreferences = onboardingPreferenceRollbackSnapshot(prefs.all)
         persistRetentionTransaction(
             writeNewRecovery = { writeRetentionRecoveryConfiguration(context, updated) },
             commitNewPreferences = {
@@ -461,15 +479,11 @@ fun finishOnboarding(
             },
             restoreRecovery = { writeRetentionRecoveryConfiguration(context, current) },
             restorePreferences = {
-                prefs.edit()
-                    .putBoolean(PrefKey.ONBOARDING_SHOWN, false)
-                    .putInt(PrefKey.RETENTION_MODE, current.mode.storageCode.toInt())
-                    .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, current.oneShotSeconds)
-                    .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, current.oneShotSizeBytes)
-                    .putLong(PrefKey.RETENTION_SECONDS, current.loopingSeconds)
-                    .putLong(PrefKey.AUDIO_MEMORY_SIZE, current.loopingSizeBytes)
-                    .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(current))
-                    .commit()
+                val editor = prefs.edit()
+                rollbackPreferences.forEach { (key, snapshot) ->
+                    editor.restoreDurablePreferenceValue(key, snapshot)
+                }
+                editor.commit()
             },
         )
     }
