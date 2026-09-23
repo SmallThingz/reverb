@@ -1,204 +1,961 @@
 # Reverb UI invariants
 
 - Buffer switching is one stationary capture surface, never a pager or sliding screen transition.
-- On buffer changes, the blob and buffer-specific bottom actions use a depth flip. The Library icon stays static and must never flip.
-- Buffer flips pivot around the visual center, never an edge. One-shot→Looping and Looping→One-shot use opposite Y-rotation signs; the outgoing face reaches ±90° and the incoming face enters from the complementary ∓90° so tap, swipe, and cancelled reversals stay physically coherent.
+- On buffer changes, the blob and buffer-specific bottom actions use a depth flip. The Library icon stays static and
+  must never flip.
+- Buffer flips pivot around the visual center, never an edge. One-shot→Looping and Looping→One-shot use opposite
+  Y-rotation signs; the outgoing face reaches ±90° and the incoming face enters from the complementary ∓90° so tap,
+  swipe, and cancelled reversals stay physically coherent.
 - The Library glyph is the Material Rounded bulleted-list icon (`FormatListBulleted`).
 - Library normal and selection top bars use the same 58dp content height; multi-select uses `SelectAll`.
 - Library vertical gestures reserve 13% on each side for close and the center 74% for pull-to-refresh.
-- The currently displayed buffer page owns the selector highlight; the other buffer stays visually dimmed even if it is the active capture destination. Disabled buffers remain viewable, show Off, and cannot become active.
-- Quick Settings tile taps must never launch any Activity or collapse into Reverb: when Android permits microphone capture, usable tiles start/switch capture, the recording tile stops, and disabled/full is unavailable. A TileService click is short-lived SystemUI work: synchronously transfer the command to ReverbService's started lifetime before SystemUI can stop/destroy the TileService; never make the action depend on an async recorder bind owned by the tile lifecycle. Releasing that QS started lifetime must preserve every other Service owner, including an accepted counted Settings runtime apply, so a newer QS `startId` cannot `stopSelfResult()` an older Settings keepalive. If Android blocks a cold microphone start, fail closed/inactive instead of surfacing UI. Opening Reverb from a tile is long-press only via `QS_TILE_PREFERENCES`.
-- A Service-start lifetime handoff is accepted only when `startService()` / `startForegroundService()` returns a non-null component. A null status follows the same fail-closed/error path as a thrown start failure; no UI, TileService, export, Clear, retention, or capture path may treat "no exception" alone as started lifetime ownership.
-- Quick Settings tile state is derived from live `ReverbService` runtime state while SystemUI is listening, never from a stale process-global recording flag; if live state is unavailable, fail closed as not recording. Runtime state/QS snapshots queued before Service teardown must recheck the destroy boundary again when their main-thread callback is delivered, because teardown may publish stopped state between audio-thread sampling and callback dispatch. While capture is running, only the non-recording buffer tile shows its retained duration; the actually recording tile shows `Recording` without a timer so SystemUI cannot present a frozen live time. When capture is stopped, both tiles may show their retained durations. Persisted tile fallback fields are non-authoritative caches and must never synchronously block the audio handler, Service teardown, Settings-without-Service fallback, or TileService main thread: render a memory-only fail-closed snapshot immediately, then hydrate authoritative persisted stopped state on the tile IO worker, rejecting that result if newer runtime state arrived.
-- Destroying a Quick Settings TileService invalidates any in-flight action generation before unbinding; recorder callbacks already queued for that tile must never execute START/SWITCH/STOP after the tile service lifecycle has ended. A deferred keyguard `unlockAndRun` callback must also fail before recorder bind/action creation if the TileService was destroyed while waiting for unlock.
-- When the recorder Service stops, persisted recorder/settings state owns tile enabled/full/destination fields; the prior live snapshot may contribute only its latest duration counters. Service teardown must not republish stale settings over a concurrent durable Settings commit.
-- Quick Settings buffer handoffs deactivate the old tile before activating the new tile; never allow a frame where both buffer tiles render ACTIVE. A brief neither-active handoff frame is acceptable while SystemUI acknowledges the source update. Service-owned tile clicks bind their sampled state to the recorder command generation and resample on a concurrent capture-intent mutation rather than applying a START/SWITCH/STOP decision derived from stale state.
-- Quick Settings live TileService listeners use an explicitly registered/unregistered strong identity registry. Do not use `WeakHashMap` for this live listener set: GC may clear weak keys during iteration and Android has produced a main-thread `NoSuchElementException` from that race.
-- The Incidents button sits immediately left of Settings and uses a warning/error glyph. A durably armed, actually-running capture session may be suppressed only by an explicit known-capture-stop transition; a persisted disabled-listening preference is not proof that the already-armed session stopped. Persistence/audio failures that actually halt an armed capture are interruption incidents, not known stops. Transparent AudioRecord/config restarts retain the same capture-session marker; a fresh same-process start may not overwrite an unresolved armed marker. If that armed process dies, every observed Android process-exit reason is an incident, including force-stop/user-requested exits, package reinstall/update/state changes, permission changes, crashes, ANRs, signals, memory/resource/system kills, unknown/other reasons, and clean self-exit without a prior known stop. Package `lastUpdateTime` changes must never discard an armed marker. Reboots while armed create a synthetic incident from the boot boundary; pre-Android-11 process restarts create a generic incident when detailed exit evidence is unavailable. Missing/delayed ApplicationExitInfo is retained in a durable pending-session queue and retried instead of being treated as a clean exit; once recovery proves an armed marker belongs to a dead prior process, publish a provisional incident immediately and later enrich that same capture-session card when Android exit evidence arrives; pending-session saturation must fail capture closed rather than evict unresolved evidence; generic `Service.onDestroy()` is not a known-stop transition: if capture is still armed it records a provisional interruption while keeping the marker armed, and later Android process-exit evidence merges into that same capture-session incident. Each incident preserves its outage start and actual capture-resume time plus available per-exit Android evidence, and process-local history revisions refresh the top-bar alert when recovery completes after UI startup. Transient incident-history/recovery failures retry the same revision with bounded backoff; Application startup recovery is best-effort background work, while capture start and every history retry retain the synchronized mandatory recovery barrier so an armed previous-process marker cannot be overwritten or stay invisible merely because startup recovery is delayed/failed. Incident/session/pending `AtomicFile` publication and removal count as durable only after the no-backup parent directory crosses a successful durability barrier; ambiguous base/backup/new backing state fails closed instead of being treated as absence, and every decoded incident/session/pending payload must end at exact EOF so a valid prefix plus trailing corrupt bytes is never accepted as clean state. If a pre-commit incident `AtomicFile` write fails, `failWrite()` rollback failure is suppressed onto that original write error rather than replacing it; once `finishWrite()` committed, later directory-sync failure must never invoke rollback against the published file. An `AtomicFile.openRead()` `FileNotFoundException` is authoritative absence only after the base/backup/new tri-state probe is positively `MISSING`; otherwise propagate the read failure and preserve every backing artifact. Cards prioritize incident-specific data instead of repeated boilerplate. Incident cards are checked-state history: tapping anywhere on a card (or its state icon) toggles checked/unchecked, long-pressing either opens an on-demand Copy/Delete menu; explicit deletion hides the card durably and preserves an identity tombstone so delayed exit evidence cannot resurrect it, and checked history never deletes the incident or keeps the top-bar incident icon red. Durable incident-history revision owns all incident-history UI convergence; individual toggle coroutine return values and panel-open actions must not launch/apply parallel history snapshots that can overwrite newer state, and the revision collector is latest-only so a superseded read/retry cannot transiently repaint older history. Cards show `Stopped at <time> for <duration>` only; restart time is not rendered because it is inferable. The incident kind persists as an explicit byte code. If provisional same-process Service-stop history publication fails, keep one process-local retry per exact process/armed-session boundary (preserving the first outage boundary rather than appending duplicate retries), signal the history retry stream, and retry before either history delivery or a fresh capture can replace the marker; prior-process or newer-session markers must never be relabeled as the current Service stop. Incident-history merge uses PID plus capture-arm time for legacy compatibility, but when both records carry a positive process-start timestamp that timestamp must match too so PID reuse cannot merge distinct process lifetimes. Exact occurred-at timestamp is only a legacy reference fallback when at least one record lacks capture-session identity; it must never override conflicting known PID/arm/process-start identity for merge or acknowledgement targeting. Same-process capture interruptions use the same exact-session retry discipline for transient marker/history failures, but after their incident is durable they must retire that armed marker; a failed disarm remains retryable instead of silently leaving the marker armed for the rest of the live process. Checked/unchecked incident taps transfer their durable history mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted toggle, and storage failure is queued through process feedback.
-- The launcher icon is the canonical Reverb brand artwork. In-app Reverb marks render `ic_launcher_foreground` directly on `launcher_background`, so geometry and Android 12+ Material You colors cannot drift. `app/src/main/icon.svg` and the Fastlane icon are static circular repository/store mirrors of that same launcher geometry using the baseline launcher colors, matching Reverb’s launcher presentation on the reference device; Android 13+ keeps the monochrome themed-icon mask.
-- Startup uses the native/AndroidX splash only: Android 12+ declares the platform starting-window splash attributes directly, and the centered R uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot consume all visible motion. No keep-on-screen condition, exit listener, timer, delay, or animation completion may extend launch time; if the app draws first, the splash animation is cut off. Onboarding retention hydration and its final durability transaction run off the main thread; do not instantiate saveable buffer choices from placeholder values or allow edits while the final transaction owns them. Onboarding buffer/retention hydration retries transient durable-read failures with the same bounded UI backoff as other recovery surfaces, and final onboarding persistence maps ordinary I/O exceptions to the existing failed-finish state instead of escaping the lifecycle coroutine or leaving `finishing` stuck. Once Finish is accepted, ownership transfers synchronously to a process-lifetime IO scope before the callback returns; the onboarding retention transaction is non-cancellable through Activity/lifecycle teardown and uses application context, while a dead Activity may lose only its UI continuation, never the already-submitted durable commit.
-- Buffer selector cards are navigation only, exactly like horizontal swipes: they change the displayed buffer and never change the active capture destination or listening state. Never wire selector navigation to `selectCaptureBuffer`, `enableListening`, or `disableListening`.
-- The blob is the capture control. Tapping a usable displayed blob starts it when idle, stops it when already recording, or switches capture from the other active buffer to it without an intermediate stop. Tapping One-shot may take capture from Looping only when One-shot is enabled and not full; disabled/full One-shot must leave Looping recording untouched.
-- Background capture uses one-second microphone read batches whenever the app UI is not foreground, independent of screen state or transient non-UI service bindings, while live visualization keeps its 8 ms cadence. An in-flight microphone read belongs to the capture buffer that owned it when the blocking read began: destination-only handoffs may commit that final read to the old buffer instead of dropping PCM, but Stop, service teardown, timeout, or capture/persistence failure invalidates capture continuity so PCM can never cross a stopped/interrupted boundary. When One-shot fills mid-read, overflow may enter Looping only if Looping already owns the destination or that automatic destination handoff commits successfully; a failed handoff must not write the remainder after the persistence-failure boundary. The 1 Hz durability barrier is capture-driven rather than an independent timer, so it piggybacks on microphone-read wakeups; it may update already-listening QS tiles in-process but must not wake SystemUI or rewrite tile-duration preferences every second.
-- While the live blob visualizer is attached, microphone reads run at a display-rate low-latency cadence and every completed read is analyzed; do not add a second coarse analysis throttle. Active blob animation schedules the next display vsync directly rather than layering a fixed timer over Choreographer.
-- Capture UI foreground/visualizer registration is owner-scoped: stale Activity/Compose disposal may remove only its own foreground lease/callback and must never clear a newer visible client. Capture ServiceConnection callbacks are likewise bound to one explicit bind lifetime; callbacks queued after unbind/dispose must not repopulate or clear state owned by a newer binding. Read-style recorder binder requests always deliver a terminal callback; if audio-thread teardown rejects the request, return a fail-closed state instead of leaving Capture/QS waiting indefinitely. Foreground registration may follow lifecycle/window focus, while `AudioBlobView` must derive shown/focus state from the live View (`isShown` / `hasWindowFocus()`) instead of caching attachment-time values because AndroidView may attach before its Compose parent/window becomes active.
-- Service teardown is also a terminal boundary for UI owner registration: `onDestroy()` clears UI-foreground and visualizer ownership, stale foreground/callback registration after that boundary is rejected or self-revoked, and teardown-time release/unregister remains allowed so a dying Service cannot retain dead Activity/Compose owners.
-- The stationary home `AndroidView` is reused across One-shot/Looping flips; when the displayed buffer controller changes, transfer that existing `AudioBlobView` attachment in the `update` path. Never rely on `factory` running again after a buffer flip, or the visible blob stops receiving audio frames.
-- Sticky-service restart initialization must ensure actual microphone capture with the latest listening generation after resolving the persisted buffer. Logical `STATE_LISTENING` alone is not proof that PCM is flowing; buffer resolution may advance the generation and stale queued starts must be replaced.
+- The currently displayed buffer page owns the selector highlight; the other buffer stays visually dimmed even if it is
+  the active capture destination. Disabled buffers remain viewable, show Off, and cannot become active.
+- Quick Settings tile taps must never launch any Activity or collapse into Reverb: when Android permits microphone
+  capture, usable tiles start/switch capture, the recording tile stops, and disabled/full is unavailable. A TileService
+  click is short-lived SystemUI work: synchronously transfer the command to ReverbService's started lifetime before
+  SystemUI can stop/destroy the TileService; never make the action depend on an async recorder bind owned by the tile
+  lifecycle. Releasing that QS started lifetime must preserve every other Service owner, including an accepted counted
+  Settings runtime apply, so a newer QS `startId` cannot `stopSelfResult()` an older Settings keepalive. If Android
+  blocks a cold microphone start, fail closed/inactive instead of surfacing UI. Opening Reverb from a tile is long-press
+  only via `QS_TILE_PREFERENCES`.
+- A Service-start lifetime handoff is accepted only when `startService()` / `startForegroundService()` returns a
+  non-null component. A null status follows the same fail-closed/error path as a thrown start failure; no UI,
+  TileService, export, Clear, retention, or capture path may treat "no exception" alone as started lifetime ownership.
+- Quick Settings tile state is derived from live `ReverbService` runtime state while SystemUI is listening, never from a
+  stale process-global recording flag; if live state is unavailable, fail closed as not recording. Runtime state/QS
+  snapshots queued before Service teardown must recheck the destroy boundary again when their main-thread callback is
+  delivered, because teardown may publish stopped state between audio-thread sampling and callback dispatch. While
+  capture is running, only the non-recording buffer tile shows its retained duration; the actually recording tile shows
+  `Recording` without a timer so SystemUI cannot present a frozen live time. When capture is stopped, both tiles may
+  show their retained durations. Persisted tile fallback fields are non-authoritative caches and must never
+  synchronously block the audio handler, Service teardown, Settings-without-Service fallback, or TileService main
+  thread: render a memory-only fail-closed snapshot immediately, then hydrate authoritative persisted stopped state on
+  the tile IO worker, rejecting that result if newer runtime state arrived.
+- Destroying a Quick Settings TileService invalidates any in-flight action generation before unbinding; recorder
+  callbacks already queued for that tile must never execute START/SWITCH/STOP after the tile service lifecycle has
+  ended. A deferred keyguard `unlockAndRun` callback must also fail before recorder bind/action creation if the
+  TileService was destroyed while waiting for unlock.
+- When the recorder Service stops, persisted recorder/settings state owns tile enabled/full/destination fields; the
+  prior live snapshot may contribute only its latest duration counters. Service teardown must not republish stale
+  settings over a concurrent durable Settings commit.
+- Quick Settings buffer handoffs deactivate the old tile before activating the new tile; never allow a frame where both
+  buffer tiles render ACTIVE. A brief neither-active handoff frame is acceptable while SystemUI acknowledges the source
+  update. Service-owned tile clicks bind their sampled state to the recorder command generation and resample on a
+  concurrent capture-intent mutation rather than applying a START/SWITCH/STOP decision derived from stale state.
+- Quick Settings live TileService listeners use an explicitly registered/unregistered strong identity registry. Do not
+  use `WeakHashMap` for this live listener set: GC may clear weak keys during iteration and Android has produced a
+  main-thread `NoSuchElementException` from that race.
+- The Incidents button sits immediately left of Settings and uses a warning/error glyph. A durably armed,
+  actually-running capture session may be suppressed only by an explicit known-capture-stop transition; a persisted
+  disabled-listening preference is not proof that the already-armed session stopped. Persistence/audio failures that
+  actually halt an armed capture are interruption incidents, not known stops. Transparent AudioRecord/config restarts
+  retain the same capture-session marker; a fresh same-process start may not overwrite an unresolved armed marker. If
+  that armed process dies, every observed Android process-exit reason is an incident, including
+  force-stop/user-requested exits, package reinstall/update/state changes, permission changes, crashes, ANRs, signals,
+  memory/resource/system kills, unknown/other reasons, and clean self-exit without a prior known stop. Package
+  `lastUpdateTime` changes must never discard an armed marker. Reboots while armed create a synthetic incident from the
+  boot boundary; pre-Android-11 process restarts create a generic incident when detailed exit evidence is unavailable.
+  Missing/delayed ApplicationExitInfo is retained in a durable pending-session queue and retried instead of being
+  treated as a clean exit; once recovery proves an armed marker belongs to a dead prior process, publish a provisional
+  incident immediately and later enrich that same capture-session card when Android exit evidence arrives;
+  pending-session saturation must fail capture closed rather than evict unresolved evidence; generic
+  `Service.onDestroy()` is not a known-stop transition: if capture is still armed it records a provisional interruption
+  while keeping the marker armed, and later Android process-exit evidence merges into that same capture-session
+  incident. Each incident preserves its outage start and actual capture-resume time plus available per-exit Android
+  evidence, and process-local history revisions refresh the top-bar alert when recovery completes after UI startup.
+  Transient incident-history/recovery failures retry the same revision with bounded backoff; Application startup
+  recovery is best-effort background work, while capture start and every history retry retain the synchronized mandatory
+  recovery barrier so an armed previous-process marker cannot be overwritten or stay invisible merely because startup
+  recovery is delayed/failed. Incident/session/pending `AtomicFile` publication and removal count as durable only after
+  the no-backup parent directory crosses a successful durability barrier; ambiguous base/backup/new backing state fails
+  closed instead of being treated as absence, and every decoded incident/session/pending payload must end at exact EOF
+  so a valid prefix plus trailing corrupt bytes is never accepted as clean state. If a pre-commit incident `AtomicFile`
+  write fails, `failWrite()` rollback failure is suppressed onto that original write error rather than replacing it;
+  once `finishWrite()` committed, later directory-sync failure must never invoke rollback against the published file. An
+  `AtomicFile.openRead()` `FileNotFoundException` is authoritative absence only after the base/backup/new tri-state
+  probe is positively `MISSING`; otherwise propagate the read failure and preserve every backing artifact. Cards
+  prioritize incident-specific data instead of repeated boilerplate. Incident cards are checked-state history: tapping
+  anywhere on a card (or its state icon) toggles checked/unchecked, long-pressing either opens an on-demand Copy/Delete
+  menu; explicit deletion hides the card durably and preserves an identity tombstone so delayed exit evidence cannot
+  resurrect it, and checked history never deletes the incident or keeps the top-bar incident icon red. Durable
+  incident-history revision owns all incident-history UI convergence; individual toggle coroutine return values and
+  panel-open actions must not launch/apply parallel history snapshots that can overwrite newer state, and the revision
+  collector is latest-only so a superseded read/retry cannot transiently repaint older history. Cards show `Stopped at
+  <time> for <duration>` only; restart time is not rendered because it is inferable. The incident kind persists as an
+  explicit byte code. If provisional same-process Service-stop history publication fails, keep one process-local retry
+  per exact process/armed-session boundary (preserving the first outage boundary rather than appending duplicate
+  retries), signal the history retry stream, and retry before either history delivery or a fresh capture can replace the
+  marker; prior-process or newer-session markers must never be relabeled as the current Service stop. Incident-history
+  merge uses PID plus capture-arm time for legacy compatibility, but when both records carry a positive process-start
+  timestamp that timestamp must match too so PID reuse cannot merge distinct process lifetimes. Exact occurred-at
+  timestamp is only a legacy reference fallback when at least one record lacks capture-session identity; it must never
+  override conflicting known PID/arm/process-start identity for merge or acknowledgement targeting. Same-process capture
+  interruptions use the same exact-session retry discipline for transient marker/history failures, but after their
+  incident is durable they must retire that armed marker; a failed disarm remains retryable instead of silently leaving
+  the marker armed for the rest of the live process. Checked/unchecked incident taps transfer their durable history
+  mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
+  toggle, and storage failure is queued through process feedback.
+- The launcher icon is the canonical Reverb brand artwork. In-app Reverb marks render `ic_launcher_foreground` directly
+  on `launcher_background`, so geometry and Android 12+ Material You colors cannot drift. `app/src/main/icon.svg` and
+  the Fastlane icon are static circular repository/store mirrors of that same launcher geometry using the baseline
+  launcher colors, matching Reverb’s launcher presentation on the reference device; Android 13+ keeps the monochrome
+  themed-icon mask.
+- Startup uses the native/AndroidX splash only: Android 12+ declares the platform starting-window splash attributes
+  directly, and the centered R uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot
+  consume all visible motion. No keep-on-screen condition, exit listener, timer, delay, or animation completion may
+  extend launch time; if the app draws first, the splash animation is cut off. Onboarding retention hydration and its
+  final durability transaction run off the main thread; do not instantiate saveable buffer choices from placeholder
+  values or allow edits while the final transaction owns them. Onboarding buffer/retention hydration retries transient
+  durable-read failures with the same bounded UI backoff as other recovery surfaces, and final onboarding persistence
+  maps ordinary I/O exceptions to the existing failed-finish state instead of escaping the lifecycle coroutine or
+  leaving `finishing` stuck. Once Finish is accepted, ownership transfers synchronously to a process-lifetime IO scope
+  before the callback returns; the onboarding retention transaction is non-cancellable through Activity/lifecycle
+  teardown and uses application context, while a dead Activity may lose only its UI continuation, never the
+  already-submitted durable commit.
+- Buffer selector cards are navigation only, exactly like horizontal swipes: they change the displayed buffer and never
+  change the active capture destination or listening state. Never wire selector navigation to `selectCaptureBuffer`,
+  `enableListening`, or `disableListening`.
+- The blob is the capture control. Tapping a usable displayed blob starts it when idle, stops it when already recording,
+  or switches capture from the other active buffer to it without an intermediate stop. Tapping One-shot may take capture
+  from Looping only when One-shot is enabled and not full; disabled/full One-shot must leave Looping recording
+  untouched.
+- Background capture uses one-second microphone read batches whenever the app UI is not foreground, independent of
+  screen state or transient non-UI service bindings, while live visualization keeps its 8 ms cadence. An in-flight
+  microphone read belongs to the capture buffer that owned it when the blocking read began: destination-only handoffs
+  may commit that final read to the old buffer instead of dropping PCM, but Stop, service teardown, timeout, or
+  capture/persistence failure invalidates capture continuity so PCM can never cross a stopped/interrupted boundary. When
+  One-shot fills mid-read, overflow may enter Looping only if Looping already owns the destination or that automatic
+  destination handoff commits successfully; a failed handoff must not write the remainder after the persistence-failure
+  boundary. The 1 Hz durability barrier is capture-driven rather than an independent timer, so it piggybacks on
+  microphone-read wakeups; it may update already-listening QS tiles in-process but must not wake SystemUI or rewrite
+  tile-duration preferences every second.
+- While the live blob visualizer is attached, microphone reads run at a display-rate low-latency cadence and every
+  completed read is analyzed; do not add a second coarse analysis throttle. Active blob animation schedules the next
+  display vsync directly rather than layering a fixed timer over Choreographer.
+- Capture UI foreground/visualizer registration is owner-scoped: stale Activity/Compose disposal may remove only its own
+  foreground lease/callback and must never clear a newer visible client. Capture ServiceConnection callbacks are
+  likewise bound to one explicit bind lifetime; callbacks queued after unbind/dispose must not repopulate or clear state
+  owned by a newer binding. Read-style recorder binder requests always deliver a terminal callback; if audio-thread
+  teardown rejects the request, return a fail-closed state instead of leaving Capture/QS waiting indefinitely.
+  Foreground registration may follow lifecycle/window focus, while `AudioBlobView` must derive shown/focus state from
+  the live View (`isShown` / `hasWindowFocus()`) instead of caching attachment-time values because AndroidView may
+  attach before its Compose parent/window becomes active.
+- Service teardown is also a terminal boundary for UI owner registration: `onDestroy()` clears UI-foreground and
+  visualizer ownership, stale foreground/callback registration after that boundary is rejected or self-revoked, and
+  teardown-time release/unregister remains allowed so a dying Service cannot retain dead Activity/Compose owners.
+- The stationary home `AndroidView` is reused across One-shot/Looping flips; when the displayed buffer controller
+  changes, transfer that existing `AudioBlobView` attachment in the `update` path. Never rely on `factory` running again
+  after a buffer flip, or the visible blob stops receiving audio frames.
+- Sticky-service restart initialization must ensure actual microphone capture with the latest listening generation after
+  resolving the persisted buffer. Logical `STATE_LISTENING` alone is not proof that PCM is flowing; buffer resolution
+  may advance the generation and stale queued starts must be replaced.
 - The Library action is always visible and must open even when the library is empty.
-- Both buffer readouts use the retention mode resolved and actually applied by `ReverbService` for their primary metric. Capture Compose must not synchronously read retention recovery/preferences to choose readout order; before the first hydrated Service snapshot, show a neutral readout and keep capture actions locked.
+- Both buffer readouts use the retention mode resolved and actually applied by `ReverbService` for their primary metric.
+  Capture Compose must not synchronously read retention recovery/preferences to choose readout order; before the first
+  hydrated Service snapshot, show a neutral readout and keep capture actions locked.
 - Export-limit warnings appear only inside export flows; never place them on the capture blob.
-- Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides whether to finish or return.
+- Main vertical panel reveals and horizontal buffer flips track gesture progress continuously; release only decides
+  whether to finish or return.
 
-- Library recording playback expands the tapped recording card vertically in place; never replace it with a player dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim. Backing file/provider identity checks and descriptor opens run off the main thread; descriptor ownership stays outside Compose state. Player preparation captures its effect-key player during composition; a null-keyed effect must never read a player installed later by DisposableEffect and prepare the same owner twice. Every asynchronous MediaPlayer callback must belong to the exact currently owned player/revision and a non-disposed lifecycle; a newer revision resetting shared playback flags must never make a queued callback from an old released player current again. MediaPlayer error cleanup releases the player and pinned verified descriptor before invoking UI failure callbacks, so a throwing callback cannot retain playback resources.
-- Descriptor-backed child stream construction must not leak the parent descriptor: if child construction fails, close the parent, keep the construction failure primary, and suppress any cleanup failure. Identity rejection after a descriptor has already been acquired follows the same rule: close the rejected descriptor and suppress close failure on an existing identity/open rejection; when rejection is represented only by a nullable/no-result return, a close failure must surface rather than being discarded. Validate writer configuration before acquiring any writable descriptor/stream, so rejected configuration cannot leak or mutate an output target. Descriptor-backed streams use one close owner for the stream/descriptor lifetime; provider reads/copies use ParcelFileDescriptor auto-close streams instead of nested independent owners. Provider PCM/waveform reads bind the selected provider identity before open, immediately after descriptor acquisition and before consuming any bytes, and again after the read; replacement bytes must never be parsed before the handoff identity is proved. Native media resources follow the same post-acquisition rule: if MediaPlayer, AudioTrack, or AudioRecord configuration fails after construction, release the acquired owner before propagating that configuration failure and suppress any release failure on the primary. AudioTrack preview/shuttle admission treats nonpositive platform minimum-buffer results as errors rather than flooring them into a seemingly valid size, and ownership transfers only after the built track is initialized. Terminal `AudioRecord.release()` failure is user-visible process feedback; clear ownership before the one release attempt and never retry an uncertain native owner. Terminal preview `AudioTrack.release()` failure is likewise process feedback; cleanup remains terminal-once and never escapes lifecycle teardown. Terminal close failure from an owned saved-recording reader is observable and must not be hidden behind `runCatching`; mark the reader closed before invoking its one terminal close so a failed close is not retried against uncertain ownership. Shuttle and inline MediaPlayer teardown report native player release and pinned-source close failures through process feedback without turning cleanup into playback failure or external-viewer fallback. For output writers, terminal close failure remains a save failure, with an earlier write/finalization failure kept primary and close failure suppressed.
-- Temporary `AudioRecord` capability probes retain ownership through terminal release: a configuration is cacheable as supported only after the probe recorder releases successfully; probe/setup/release failure returns unsupported rather than leaking or caching an uncertain native owner.
-- `MediaMetadataRetriever` probes own the retriever through terminal release. Metadata/release failure invalidates only optional media metadata and falls back to already-verified recording structure; never keep metadata from a probe whose native owner did not release cleanly.
-- Non-rendered lifecycle/bookkeeping state such as coroutine Job handles, async generation counters, and callback guards stays in plain remembered holders rather than Compose state; bookkeeping changes must not trigger recomposition.
-- Library playback and inline trim reuse the exact range-export spring fine-seek control: same puck, 2D pull field, nonlinear seek math, hit target, and play/pause tap semantics. Fine seek never becomes silent seek/pause: Library hands audio from MediaPlayer to the same continuous grain shuttle and resumes normal playback on release. Trim has only Start/End boundaries: the last-touched boundary itself becomes the audition cursor, and fine seek edits/auditions that exact edge without a third trim cursor. Waveform-body scrubbing moves the already-active boundary; only touching the other boundary marker switches which edge is the cursor.
-- Long-pressing an expanded recording card to open its context menu must preserve the card expansion; opening the menu is not a collapse action.
-- Once inline trim Save is committed, the expanded recording card keeps its outer click/long-press interactions locked until that save finishes; do not let collapse, selection, rename, or delete dispose or retarget the trim completion flow. The committed trim transaction and terminal delivery survive Activity/Compose cancellation: a visible attached row gets the normal inline result, while paused/hidden/detached completion also uses the saved-recording notification/feedback fallback; hidden retained callbacks may clear local busy/error state but must not launch Library reconciliation until the normal reopen/resume path. Inline-trim terminal delivery uses the shared terminal/fallback discipline: if a visible callback throws, run detached notification/feedback fallback first, keep that callback failure primary, suppress fallback/cleanup failures on it, and always clear terminal receiver ownership.
-- Saved recording waveforms are cached in the catalog against a content revision and mirrored into the open Library state; never reuse a cache after the physical content identity, size, or duration changes. A catalog-only/retained Library snapshot may preserve cheap metadata for first paint, but waveform trust is revoked whenever the Library loses current storage proof and restored only by that session's authoritative storage reconciliation.
-- Library editors, confirmations, errors, and permission prompts use Reverb-styled sheets instead of stock alert dialogs; About remains a custom animated top panel.
-- Settings choice identity is the typed enum/value, never its localized display label; labels are presentation-only so duplicate translations or locale changes cannot retarget a setting. Durable Settings commits/recovery fsyncs run off the main thread, with concurrent save actions suppressed until the transaction returns.
-- Retention Time/Size mode switches are presentation-only: preserve each mode's in-progress text drafts and independent precise backing values; only explicit undo/hydration or successful post-save normalization may rebuild those drafts from backing values.
-- Settings snapshots are immutable values rebuilt from UI state; do not reintroduce in-place snapshot mutation or field-by-field copy helpers. Initial durable Settings/retention hydration runs off the main thread and editable controls remain unavailable until that snapshot is applied; every active/inactive panel lifetime resets interaction readiness so a reopened retained panel may preserve its old pixels for panel animation but cannot accept pointer/accessibility edits before its fresh durable read. Reopening a clean retained Settings panel rehydrates from durable state again; hidden recovery/service repairs must not be overwritten by a stale in-memory settings baseline, and a hydration read that races a newer user edit must be discarded rather than overwriting that edit. A hydration read discarded because a newer edit revision won is supersession, not storage failure: never report it as I/O failure or strand interaction locked; a visible newer unsaved edit regains interaction immediately, while an otherwise clean panel retries a fresh durable snapshot. A settings durability transaction promotes only the exact snapshot submitted before its first suspension; edits made while IO is in flight remain a newer unsaved revision and must never be blessed by the older commit. Once that durability transaction begins, cancellation may not split a successful disk commit from recorder/tile runtime convergence; UI-only post-commit state remains lifecycle-owned. A successful commit may close Settings or start a follow-up move only when the live UI still matches that committed baseline; newer unsaved edits keep the panel/workflow open. The retained Settings composition binds `ReverbService` only while the panel is active (or while an already-started settings durability transaction is finishing) and the Activity is started; hidden idle Settings must not keep a stopped recorder service alive, and stale callbacks from retired binds must be ignored. Move-availability/provider scans are likewise active-panel work: closing Settings invalidates stale results and hidden rollback must not launch new scans. Settings durability/runtime-convergence exceptions use the same failed-save result as Boolean persistence failure while coroutine cancellation still propagates; a transient rollback-baseline/read/write exception must never escape a plain UI launch and strand the save workflow. Initial/reopen durable Settings hydration retries transient read failures with bounded backoff while the panel remains active/clean, keeps interaction locked until a complete snapshot succeeds, and surfaces the first failure through app feedback instead of letting a LaunchedEffect exception strand blank/stale Settings.
-- An accepted committed Settings runtime reload owns a counted started-Service lifetime before the binder callback returns; Activity unbind, export/Clear terminal convergence, or overlapping reloads must not stop the Service until the last queued audio-thread apply reaches terminal. The short-lived keepalive must preserve `START_STICKY` only while healthy durable capture intent still owns it.
-- Recorder preference enums and buffer-slot intents persist explicit stable byte codes (stored as SharedPreferences Ints); enum names/ordinals are legacy-read compatibility only, never new persistence identity. Legacy compatibility reads are side-effect free: only explicit mutations may write canonical codes, so a delayed settings/tile read cannot overwrite a newer durable save or capture handoff. Named null capture-authority keys are malformed state, not absent first-install defaults.
-- Durable enum state uses explicit stable byte codes wherever practical, including preferences, intents, journals, recording catalog rows, provider fingerprints, chunk metadata, and staging filenames; enum names/ordinals are legacy-read compatibility only. `RecordingEntity` carries typed `RecordingStorageType`; legacy string decoding stays at persistence/wire boundaries.
-- Derived durable filenames/tokens that previously incorporated enum names must recognize both the stable byte-code identity and every deployed legacy name identity during migration; ambiguity fails closed instead of abandoning or deleting uncertain data.
+- Library recording playback expands the tapped recording card vertically in place; never replace it with a player
+  dialog or separate player page. Reuse the range-export continuous waveform renderer for playback and trim. Backing
+  file/provider identity checks and descriptor opens run off the main thread; descriptor ownership stays outside Compose
+  state. Player preparation captures its effect-key player during composition; a null-keyed effect must never read a
+  player installed later by DisposableEffect and prepare the same owner twice. Every asynchronous MediaPlayer callback
+  must belong to the exact currently owned player/revision and a non-disposed lifecycle; a newer revision resetting
+  shared playback flags must never make a queued callback from an old released player current again. MediaPlayer error
+  cleanup releases the player and pinned verified descriptor before invoking UI failure callbacks, so a throwing
+  callback cannot retain playback resources.
+- Descriptor-backed child stream construction must not leak the parent descriptor: if child construction fails, close
+  the parent, keep the construction failure primary, and suppress any cleanup failure. Identity rejection after a
+  descriptor has already been acquired follows the same rule: close the rejected descriptor and suppress close failure
+  on an existing identity/open rejection; when rejection is represented only by a nullable/no-result return, a close
+  failure must surface rather than being discarded. Validate writer configuration before acquiring any writable
+  descriptor/stream, so rejected configuration cannot leak or mutate an output target. Descriptor-backed streams use one
+  close owner for the stream/descriptor lifetime; provider reads/copies use ParcelFileDescriptor auto-close streams
+  instead of nested independent owners. Provider PCM/waveform reads bind the selected provider identity before open,
+  immediately after descriptor acquisition and before consuming any bytes, and again after the read; replacement bytes
+  must never be parsed before the handoff identity is proved. Native media resources follow the same post-acquisition
+  rule: if MediaPlayer, AudioTrack, or AudioRecord configuration fails after construction, release the acquired owner
+  before propagating that configuration failure and suppress any release failure on the primary. AudioTrack
+  preview/shuttle admission treats nonpositive platform minimum-buffer results as errors rather than flooring them into
+  a seemingly valid size, and ownership transfers only after the built track is initialized. Terminal
+  `AudioRecord.release()` failure is user-visible process feedback; clear ownership before the one release attempt and
+  never retry an uncertain native owner. Terminal preview `AudioTrack.release()` failure is likewise process feedback;
+  cleanup remains terminal-once and never escapes lifecycle teardown. Terminal close failure from an owned
+  saved-recording reader is observable and must not be hidden behind `runCatching`; mark the reader closed before
+  invoking its one terminal close so a failed close is not retried against uncertain ownership. Shuttle and inline
+  MediaPlayer teardown report native player release and pinned-source close failures through process feedback without
+  turning cleanup into playback failure or external-viewer fallback. For output writers, terminal close failure remains
+  a save failure, with an earlier write/finalization failure kept primary and close failure suppressed.
+- Temporary `AudioRecord` capability probes retain ownership through terminal release: a configuration is cacheable as
+  supported only after the probe recorder releases successfully; probe/setup/release failure returns unsupported rather
+  than leaking or caching an uncertain native owner.
+- `MediaMetadataRetriever` probes own the retriever through terminal release. Metadata/release failure invalidates only
+  optional media metadata and falls back to already-verified recording structure; never keep metadata from a probe whose
+  native owner did not release cleanly.
+- Non-rendered lifecycle/bookkeeping state such as coroutine Job handles, async generation counters, and callback guards
+  stays in plain remembered holders rather than Compose state; bookkeeping changes must not trigger recomposition.
+- Library playback and inline trim reuse the exact range-export spring fine-seek control: same puck, 2D pull field,
+  nonlinear seek math, hit target, and play/pause tap semantics. Fine seek never becomes silent seek/pause: Library
+  hands audio from MediaPlayer to the same continuous grain shuttle and resumes normal playback on release. Trim has
+  only Start/End boundaries: the last-touched boundary itself becomes the audition cursor, and fine seek edits/auditions
+  that exact edge without a third trim cursor. Waveform-body scrubbing moves the already-active boundary; only touching
+  the other boundary marker switches which edge is the cursor.
+- Long-pressing an expanded recording card to open its context menu must preserve the card expansion; opening the menu
+  is not a collapse action.
+- Once inline trim Save is committed, the expanded recording card keeps its outer click/long-press interactions locked
+  until that save finishes; do not let collapse, selection, rename, or delete dispose or retarget the trim completion
+  flow. The committed trim transaction and terminal delivery survive Activity/Compose cancellation: a visible attached
+  row gets the normal inline result, while paused/hidden/detached completion also uses the saved-recording
+  notification/feedback fallback; hidden retained callbacks may clear local busy/error state but must not launch Library
+  reconciliation until the normal reopen/resume path. Inline-trim terminal delivery uses the shared terminal/fallback
+  discipline: if a visible callback throws, run detached notification/feedback fallback first, keep that callback
+  failure primary, suppress fallback/cleanup failures on it, and always clear terminal receiver ownership.
+- Saved recording waveforms are cached in the catalog against a content revision and mirrored into the open Library
+  state; never reuse a cache after the physical content identity, size, or duration changes. A catalog-only/retained
+  Library snapshot may preserve cheap metadata for first paint, but waveform trust is revoked whenever the Library loses
+  current storage proof and restored only by that session's authoritative storage reconciliation.
+- Library editors, confirmations, errors, and permission prompts use Reverb-styled sheets instead of stock alert
+  dialogs; About remains a custom animated top panel.
+- Settings choice identity is the typed enum/value, never its localized display label; labels are presentation-only so
+  duplicate translations or locale changes cannot retarget a setting. Durable Settings commits/recovery fsyncs run off
+  the main thread, with concurrent save actions suppressed until the transaction returns.
+- Retention Time/Size mode switches are presentation-only: preserve each mode's in-progress text drafts and independent
+  precise backing values; only explicit undo/hydration or successful post-save normalization may rebuild those drafts
+  from backing values.
+- Settings snapshots are immutable values rebuilt from UI state; do not reintroduce in-place snapshot mutation or
+  field-by-field copy helpers. Initial durable Settings/retention hydration runs off the main thread and editable
+  controls remain unavailable until that snapshot is applied; every active/inactive panel lifetime resets interaction
+  readiness so a reopened retained panel may preserve its old pixels for panel animation but cannot accept
+  pointer/accessibility edits before its fresh durable read. Reopening a clean retained Settings panel rehydrates from
+  durable state again; hidden recovery/service repairs must not be overwritten by a stale in-memory settings baseline,
+  and a hydration read that races a newer user edit must be discarded rather than overwriting that edit. A hydration
+  read discarded because a newer edit revision won is supersession, not storage failure: never report it as I/O failure
+  or strand interaction locked; a visible newer unsaved edit regains interaction immediately, while an otherwise clean
+  panel retries a fresh durable snapshot. A settings durability transaction promotes only the exact snapshot submitted
+  before its first suspension; edits made while IO is in flight remain a newer unsaved revision and must never be
+  blessed by the older commit. Once that durability transaction begins, cancellation may not split a successful disk
+  commit from recorder/tile runtime convergence; UI-only post-commit state remains lifecycle-owned. A successful commit
+  may close Settings or start a follow-up move only when the live UI still matches that committed baseline; newer
+  unsaved edits keep the panel/workflow open. The retained Settings composition binds `ReverbService` only while the
+  panel is active (or while an already-started settings durability transaction is finishing) and the Activity is
+  started; hidden idle Settings must not keep a stopped recorder service alive, and stale callbacks from retired binds
+  must be ignored. Move-availability/provider scans are likewise active-panel work: closing Settings invalidates stale
+  results and hidden rollback must not launch new scans. Settings durability/runtime-convergence exceptions use the same
+  failed-save result as Boolean persistence failure while coroutine cancellation still propagates; a transient
+  rollback-baseline/read/write exception must never escape a plain UI launch and strand the save workflow.
+  Initial/reopen durable Settings hydration retries transient read failures with bounded backoff while the panel remains
+  active/clean, keeps interaction locked until a complete snapshot succeeds, and surfaces the first failure through app
+  feedback instead of letting a LaunchedEffect exception strand blank/stale Settings.
+- An accepted committed Settings runtime reload owns a counted started-Service lifetime before the binder callback
+  returns; Activity unbind, export/Clear terminal convergence, or overlapping reloads must not stop the Service until
+  the last queued audio-thread apply reaches terminal. The short-lived keepalive must preserve `START_STICKY` only while
+  healthy durable capture intent still owns it.
+- Recorder preference enums and buffer-slot intents persist explicit stable byte codes (stored as SharedPreferences
+  Ints); enum names/ordinals are legacy-read compatibility only, never new persistence identity. Legacy compatibility
+  reads are side-effect free: only explicit mutations may write canonical codes, so a delayed settings/tile read cannot
+  overwrite a newer durable save or capture handoff. Named null capture-authority keys are malformed state, not absent
+  first-install defaults.
+- Durable enum state uses explicit stable byte codes wherever practical, including preferences, intents, journals,
+  recording catalog rows, provider fingerprints, chunk metadata, and staging filenames; enum names/ordinals are
+  legacy-read compatibility only. `RecordingEntity` carries typed `RecordingStorageType`; legacy string decoding stays
+  at persistence/wire boundaries.
+- Derived durable filenames/tokens that previously incorporated enum names must recognize both the stable byte-code
+  identity and every deployed legacy name identity during migration; ambiguity fails closed instead of abandoning or
+  deleting uncertain data.
 
 # Reverb durability invariants
 
-- Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or replace the source recording as part of trim.
-- Trim output timestamps use checked/saturating offset arithmetic; a large but otherwise admitted catalog timestamp must never wrap a derived saved recording timestamp negative.
-- Provider-backed trim requires a pre-existing stable provider identity and revalidates the selected source after the last source read while the verified target is still hidden; identity-less provider rows remain playback-only until reconciliation establishes identity, and source uncertainty/change must fail before recovery-marker grant or final-name publication.
-- Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved audio.
-- Library/catalog read uncertainty is never an authoritative empty Library: preserve the last known rows, keep first-load pending, and let storage reconciliation retry; the empty-state UI may render only after the local catalog first paint has completed authoritatively. Catalog-corruption first paint signals unavailable after preservation/reset instead of publishing a transient empty snapshot.
-- Library refresh replays pending output cleanup once, best-effort, before its multi-directory scan, then records which directories were reconciled successfully and skips the later per-row fallback probe for those directories; a cleanup-replay failure must not make unrelated directories unavailable. Failed/unavailable directory scans remain eligible for individual fail-closed asset probes, while the configured destination keeps its existing enumeration-failure protection. A null FILE directory listing is authoritative empty only when the directory is positively `MISSING`; `PRESENT`/`UNAVAILABLE` listing failures abort that reconciliation scope and preserve catalog rows. The same rule applies per entry: metadata/stream I/O uncertainty aborts the scope rather than making a known recording disappear, while positively missing/non-regular entries and structurally invalid readable audio may be skipped. Structural WAV validation returns invalid only for malformed/truncated bytes and propagates actual I/O failures. Directory scanners still read the current suppression set and independently fail closed if that state is unavailable, but must not re-hash/re-query the same cleanup journal on every location.
-- MediaStore index metadata (including reported duration) is not structural recording proof. New or identity-changed non-pending rows must pass the same complete supported-WAV validation as FILE/SAF discovery before catalog adoption; only an already-known row with the same stable MediaStore identity/name/size may reuse validated catalog metadata without reopening the audio.
-- Byte-derived catalog metadata must remain bound to the physical revision that was validated: for new/changed FILE, SAF, or MediaStore rows with a nonblank stable identity, re-read that identity after structural/media inspection and abort the reconciliation scope if it changed or became unavailable. Identity-less rows may remain visible but stay non-authoritative and are revalidated on later refreshes; if a provider identity becomes available after descriptor acquisition, it must remain the same revision through the read rather than letting an identity-less pre-scan bypass stability checks.
-- New/changed FILE discovery pins one descriptor across structural validation, media inspection, size, and fallback timestamp sampling. When a stable pre-scan FILE identity exists, that descriptor must match it, remain unchanged through the read, and still match the current path before catalog metadata is accepted. Identity-less discovery may remain visible only as non-authoritative metadata with a blank catalog identity, but any available descriptor identity must remain stable through the read; if path identity becomes available by scan completion it must bind to that same descriptor revision.
-- Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source deletion.
-- Verified exports survive metadata/UI/service failures; service teardown is not user cancellation, and main-thread service teardown must not await in-flight export executor completion. Once teardown owns the Service, late export-start/export-only/export-terminal paths may not promote or restore foreground state on that dying instance.
-- CaptureScreen binds the recorder frame-first for startup latency, but also schedules a short main-loop fallback so keyguard/occlusion cannot suppress the only bind forever; retired bind callbacks remain generation-rejected. A bound recorder suspended by microphone-FGS restrictions retries durable capture only when Reverb’s tracked UI actually becomes foreground/focused; a bind alone is not foreground proof.
-- Capture state rehydration follows a newly started or switched active buffer into the visible page, including Quick Settings actions, but steady polling must not override a manual view of the inactive buffer.
-- UI-started exports may outlive the Capture composition. When that UI stops or disposes, the retained export receiver releases all Activity/Compose callbacks and finishes with application-context bookkeeping/notification only; detached terminal success/failure must remain user-visible through a system notification when notification permission/channel delivery is available, because transient in-app feedback may have no active host. If detached success cannot show that notification, queue acknowledged process feedback so the next resumed host still reports completion; notification delivery failure must not become silent success. The Service must never retain a dead Capture UI for the export lifetime. Capture timeline-snapshot release is best-effort UI cleanup: a release/storage-cleanup failure must never abort disposal, disconnect reset, dialog dismissal, stale-callback rejection, or the user-visible save-failure path, and every owned snapshot still gets a release attempt.
-- Detached save-success notifications are identity-bound per recording: simultaneous/repeated saved outputs must not overwrite another recording's notification. The visible notification may replace by logical recording ID, but its tap `PendingIntent` identity is bound to both recording ID and stable file/provider revision so `FLAG_UPDATE_CURRENT` can never retarget an already-issued tap token to later bytes that reuse the same path/URI.
-- Capture export receivers are terminal-once. Synchronous submission failure must go through the same receiver terminal path so Capture bookkeeping cannot retain a failed receiver or deliver duplicate terminal UI/notifications. Terminal receiver cleanup/detachment is a `finally` responsibility: a throwing UI success/failure/cancel callback may propagate, but must not leave the receiver attached or the active-receiver bookkeeping slot retained after terminal delivery. If an attached save success/failure callback throws before confirming delivery, run the same notification/feedback fallback first, then rethrow that original callback failure with any fallback failure suppressed on it.
-- A newly resumed Capture UI rehydrates app-owned export activity from the live Service state. Detached export work must keep capture/export controls busy until the Service reports the export terminal, even though the old UI receiver remains detached.
-- Export cancellation is accepted only before verified final-name publication claims the export token. Once publication begins, Cancel loses the race and must not interrupt or clean up the published verified audio; later catalog/metadata failure preserves the recording. Cancellation caused by Android/system foreground-service timeout is a failed save, not a user cancellation: it must deliver the receiver failure path so attached UI or detached notification/feedback surfaces the failure; only explicit user Cancel is terminal-silent. Export range-lease release is cleanup-only: a retention/storage failure while releasing pinned source chunks must be reported but must not prevent partial-output cleanup, export-state clearing, foreground convergence, or the already-owned terminal result. Service-owned timeline-snapshot release is cleanup-only as well: rejection or foreground-lifetime failure must still deliver its receiver terminal even if releasing the caller snapshot reports a retention/storage failure.
-- Post-publication catalog failure is metadata-only only while the exact pinned output identity remains current. Physical identity loss must surface as save failure while preserving the already-committed uncertain object; trim also refreshes authoritative Library storage. Ordinary catalog persistence failure still preserves verified save success and relies on reconciliation to repair metadata.
-- FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial output must never enter the Library as a finished recording. SAF providers that cannot rename verified staging fail closed instead of copying into a visible final-name document; a URI-changing SAF publish must also positively retire the original staging URI. If an unsafe provider rename has already returned an uncertain final URI, suppress both that result and any surviving staging URI without granting physical-delete authority, and revoke automatic staging recovery so refresh cannot manufacture repeated copies.
-- Persisted SAF read grants are retained as recovery paths for existing recordings; do not add pending-grant bookkeeping unless an explicit, verified grant-release workflow actually consumes it.
-- Legacy old-session `export` staging may use structural recovery only for an exact, internally consistent supported WAV container with frame-aligned data, and the exact structurally validated bytes must digest-match the stable fingerprint carried into publication; `copy` staging and current-process staging remain hidden and non-destructive.
-- New export/trim staging may proceed to final publication only after its durable verification record is persisted and still matches the exact content and stable FILE/provider object identity; unverified tracked staging remains hidden, cleanup revokes recovery authority before destructive removal, and publication carries that exact identity proof through finalization and catalog registration instead of re-resolving a path/URI that could already have been replaced. Recovery-marker removal is fingerprint-bound as well: stale completion for a reused staging path/URI may remove only the marker for the exact verified bytes/object identity it owns, never a newer same-ID marker.
-- An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping the service alive; UI unbind/recorder stop must not destroy export work.
-- Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable recording intent; retry on a foreground bind or explicit start.
-- Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery artifacts are preserved, not silently deleted. Closing a multi-chunk lease must attempt every record release even if an earlier release triggers retention/index cleanup failure; preserve the first close failure and suppress later ones rather than leaving later chunks permanently pinned.
-- Recovery must distinguish positively missing storage from unavailable metadata/I/O: raw-buffer chunks/tombstones and catalog DB sidecars fail closed on uncertainty, and preservation copies atomically reserve their destination then verify both copy bytes and source stability before destructive source changes.
-- ACTIVE raw-buffer crash recovery must verify the latest valid checkpointed payload prefix against its persisted geometry and checksum before extending recovery into later uncheckpointed bytes; a corrupt or shortened durable prefix is preserved/quarantined, never re-hashed and re-certified as live audio.
-- An active PCM append may have physically written a prefix before surfacing `IOException`. After a failed append, account only complete frames proven by the file position, preserve any torn tail before truncating it, restore the exact logical/physical append boundary before further writes, and block checkpoint/finalization if that boundary cannot be proven.
-- Automatic retention may trim or retire a finalized raw-buffer chunk only after revalidating its exact persisted size and checksum; checksum-mismatched bytes must remain preserved and must never be re-certified through a freshly checksummed trim. Explicit Clear remains the only operation authorized to destroy all retained history regardless of decodability.
-- Explicit buffer Clear is incremental background work: retire at most one durability-complete chunk per store-monitor acquisition, publish progress from memory, and honor Cancel only between completed retirement steps so a durability boundary is never interrupted. Each step must revalidate the accepted capture-command generation and refuse the current durable capture target; cancellation/supersession preserves the newest remaining history and never resurrects already-retired chunks.
-- Physical deletion intents are versioned and content-fingerprinted; after process loss, never replay physical deletion against a present asset. Replay may only wait, abandon the intent, or finish catalog cleanup after confirmed deletion/absence. Torn recognized deletion records may recover only their target ID for suppression; they never regain destructive authority. Before dropping that suppression, any unowned hidden FILE deletion claim in the same source directory must be durably published under a visible recovery name, while claims still owned by valid deletion/output-cleanup journals remain untouched; malformed journal state must never strand user bytes permanently under `.reverb-delete-*.pending`. Torn FILE recovery may scan/publish claims only for a direct child of Reverb's managed FILE roots; relative, nested, or out-of-root source IDs remain suppression-only.
-- A verified move target becomes recoverable before source cleanup; immediately before cataloging it as that recoverable authority, revalidate the exact target identity because external writers are outside Reverb’s repository lock. Target loss at any later source-cleanup stage is still a failed move, not “moved with cleanup failure”; keep the source and report cleanup failure only when the destination remains current but source retirement is unsafe. Source destruction is durably bound to that destination too: new move-deletion journal entries persist target storage/id/identity, provider source deletion rechecks the target immediately before delete, and FILE claim replay after process loss may delete the claimed source only while that exact target still exists with the same content; otherwise restore/publish the source and revoke the deletion attempt. Legacy explicit-delete/output-cleanup journals gain no target authority. A multi-recording move pins the exact destination submitted by the Move action before its Settings save, and every copy in that batch uses that URI/default target even if preferences change before the repository IO starts or while the move is running. Once that Settings commit succeeds, the accepted physical move batch and its process-level terminal result are lifecycle-independent and must survive Activity/Compose cancellation. Automatic legacy migration likewise snapshots default-destination admission once immediately before its batch, then pins that admitted default target; never split one migration decision across multiple live preference reads. Absolute FILE paths are not enough: replay may create/read/delete claims only when the source and any FILE move target are direct children of Reverb's current managed FILE roots; out-of-root records stay suppression-only.
-- Interrupted move recovery never infers source→target ownership from matching bytes, timestamps, names, or metadata alone. Without a durable transaction marker tying them together, preserve existing targets and make a fresh verified copy rather than deleting a source against an unrelated equal recording.
-- A move candidate must prove destructive source identity before copying. If Reverb cannot later authorize deletion of that exact source object, skip the move rather than create a verified duplicate that can never be safely retired.
-- Provider-backed move/copy source reads pin the selected object across the descriptor-open handoff: require the stored provider identity before open and revalidate that same identity after acquiring the read descriptor before copying any bytes. A pre-open URI check alone is not authority to copy whatever object a provider may return after a replacement race.
-- SAF document identity metadata is sampled from one strict provider query row. Never compose destructive provider identity from separate size/modified-time calls that can straddle a replacement and synthesize a revision that never existed. Missing size/revision metadata is non-authoritative.
-- MediaStore identity likewise requires a known size plus a real generation or modified-time revision from the same query row; nullable metadata is uncertainty, not zero-valued identity.
-- Durable capture intent/destination changes use synchronous persistence; startup decodes those authority fields strictly and malformed type/enum data is a persistence failure, never an invented Stop or default slot. After successful decode the Service reads only its verified in-memory intent/slot cache under the same lifetime lock, and updates that cache only after an accepted durable command; explicit Start/Stop may repair invalid authority with a canonical pair, while destination-only selection fails closed until authority is valid. A successful canonical Stop repair clears only the persistence block caused by invalid capture authority after the known-Stop marker is also durable; unrelated storage/persistence failures remain blocked. If a capture intent/destination write fails and its rollback is not durably proven, or a fatal recorder Stop cannot persist its intent, revoke capture-authority validity immediately so destination-only commands cannot act on unproven state; only a later canonical Start/Stop may re-establish authority. User/QS destination selection and audio-thread automatic fallback resolve, persist, mutate the active slot, and version the handoff under that same lock, so an older fallback resolution cannot overwrite a newer selection and QS handoff source/target identity comes from the winning transaction. Active PCM is force-synced on a bounded background cadence, and replacement PCM must be durable before retention evicts older audio.
-- Synchronous recorder-intent `SharedPreferences.commit()` exceptions are failed transactions, not uncaught Service/binder failures: capture start/stop/selection/automatic handoff and their rollback writes catch/log thrown commits and follow the same fail-closed rollback/pause path as a false commit result. Every failed recorder-intent/destination mutation restores the exact prior representable raw SharedPreferences values/types before returning failure, including malformed or legacy encodings; Editor-unrepresentable corruption restores to a deliberately wrong-type fail-closed surrogate rather than absence/default; otherwise Android's process-local map can make an undurable repair look authoritative to a later Service instance in the same process. Fatal audio-stop failure still invalidates the dying Service's in-memory recorder authority even when that exact raw rollback succeeds.
-- Automatic capture stop because no writable buffer remains is a known stop only after both `listening=false` and the known-Stop incident transition commit durably under the Service lifetime lock. It must not begin after Service teardown owns that lock, because generic teardown is not a user/automatic Stop and must preserve retryable capture intent. If either commit fails, preserve/restore prior intent when capture can continue; otherwise classify the forced stop as a persistence interruption and fail closed. Explicit Stop whose incident transition fails may reject and continue only after both the exact prior armed marker and prior enabled capture intent are durably restored; if either rollback remains uncertain, pause/stop capture as a persistence interruption rather than continue with unprovable restart or incident state.
-- Capture-stop sealing errors are never diagnostic-only: audio-input failure and foreground-service timeout paths must report active-store seal failure instead of swallowing it. When another terminal cause already exists, preserve that cause in the user-facing message and append the seal/persistence failure rather than overwriting either one.
-- Incremental buffer Clear owns a foreground-service lifetime after acceptance so Activity/Compose unbind cannot terminate it mid-retirement. It may reuse microphone foreground ownership while capture remains live, otherwise it uses data-sync ownership until terminal; if that required foreground transition fails, cancel the Clear as a failure instead of continuing unprotected. User Cancel is neutral, but platform data-sync timeout and generic Service teardown convert an otherwise-live clear terminal to failure; a user Cancel that already won keeps its neutral terminal. Cancellation is observed only between durable chunk-retirement steps; once a retirement step is in flight, any exception from that step remains a failed Clear even if Cancel/teardown arrives concurrently. Executor-start/storage/teardown failures release that started/foreground lifetime, and failures with no foreground Capture host are queued through process feedback rather than disappearing when the Service stops.
-- Clear Cancel acceptance is serialized with the Service lifetime lock: a stale binder after `serviceDestroying` wins must be rejected and may never relabel teardown failure as neutral user cancellation.
-- Generic `Service.onDestroy()` preserves the microphone read already in flight, starts no new capture read after teardown begins, seals/releases that batch, then records the provisional service-stop boundary. Slow initialization and its main-thread continuation must treat `serviceDestroying` as terminal and may never resurrect capture/foreground work after teardown begins; teardown-induced `AudioRecord` failures must never be classified as recorder failures or persist the user capture intent off. Once audio-thread teardown has been queued, request `quitSafely()` before unrelated main-thread teardown so later work cannot queue behind the terminal close; that task exclusively owns persistent-store close even if the main-thread wait times out; inactive/no-microphone teardown does not synchronously wait for slow store initialization/recovery, and an active-capture timeout path may release `AudioRecord` to unblock its queued owner then waits once more for that owner before publishing the stop boundary, but must never close stores underneath earlier queued work. Recorder commands that mutate durable capture intent/destination, clear retained audio, begin a new export, cancel an export, or apply committed Settings reject once teardown owns the Service; explicit Clear, export start/Cancel, and committed Settings-reload acceptance are serialized with that lifetime lock so accepted commands occur before terminal teardown rather than being acknowledged behind it; Clear is never allowed to target the buffer owned by durable capture intent, and its queued destructive task is bound to the accepted listening-command generation so an automatic/user handoff while the confirmation is open cannot erase newly captured PCM; if that accepted Clear completes after teardown begins, the stopped Quick Settings fallback must record zero duration (and clear one-shot Full) only after the storage clear actually succeeds; queued recorder-state reads recheck teardown on the audio thread and return unavailable instead of touching closed stores or reporting normal teardown as persistence failure; timeline snapshot requests fail closed with a terminal null callback at both audio-thread execution and main-thread delivery, releasing any sampled lease if Service teardown wins before delivery; a live snapshot handoff keeps Service ownership until the callback returns successfully, so a throwing callback must close the sampled lease before propagating the same failure; teardown must not consume suspended-capture retry flags because the next live Service owns that recovery; a durable known Stop disarms its capture-session marker under the same lifetime lock that `onDestroy()` uses before classifying an armed session, so Stop cannot race into a false interruption incident. Explicit Stop/failure/timeout paths still invalidate capture continuity immediately. Snapshot release failures at main-handler rejection/teardown/callback-failure boundaries are reported as persistent-store failures without replacing the required terminal callback; if the callback itself throws it remains primary and the release failure is suppressed on it.
-- Wake-lock acquisition retains the just-created platform owner until setup either succeeds or cleanup completes: if reference-count configuration/acquire throws, release a partially held lock, keep the setup failure primary with cleanup failure suppressed, report the optional-runtime failure, and leave capture running without publishing the failed owner. Wake-lock teardown is terminal-once: clear the owned `WakeLock` reference before the platform release attempt, report release/isHeld failure through process feedback, and never let wake-lock cleanup abort later Service teardown or retry an uncertain owner.
-- FILE catalog entries bind to a stable filesystem-object identity; stale path reuse must fail closed for delete/rename/read/play/share/copy, and explicit FILE deletion must atomically claim the selected object under a journaled tombstone before destruction. Claim replay binds content digest and file identity from one descriptor-bound stable fingerprint and rechecks that verified identity immediately at the unlink boundary; a changed claim is restored/published instead of deleted. Legacy/non-descriptor-bindable claim identities retain suppression/recovery semantics but never regain unlink authority: restore or visibly preserve those bytes instead. Granted FILE URIs revalidate that identity again at the FileProvider open boundary so path reuse between share/open intent creation and the consumer read cannot expose replacement bytes; metadata queries, including MIME `getType()`, require current identity proof, query rows sample only an identity-verified descriptor, and the sharing provider must not inherit destructive FileProvider deletion. Provider-backed external open/share uses Reverb's read-only identity-bound proxy URI rather than handing the upstream content URI directly to another app; its MIME/query metadata and payload opens all require the expected provider identity to remain current, and payload open revalidates provider identity after acquiring the upstream descriptor before returning that pinned descriptor. Provider rows without a stable identity fail closed for external delegation and direct byte-reading playback/waveform/trim work until reconciliation establishes one; legacy/bootstrap metadata may remain visible, but a blank provider identity is never read authority. The saved-recording notification trampoline has no feedback host; if identity verification/open delegation fails or no compatible viewer exists, queue the error and return to MainActivity so the failure is immediately visible instead of finishing to an empty screen.
-- Direct saved-recording WAV readers use a complete RIFF structural boundary before playback/waveform/trim: declared RIFF size must equal the physical file, every chunk/padding byte must stay inside that container, `fmt`/`data` are unique, byte-rate/block-align must match the decoded PCM format, and `data` must contain an exact whole number of frames. Never stop parsing early and turn a valid prefix plus malformed/trailing bytes into apparently valid audio, and do not retain a parallel lenient duration-only parser that future call sites could accidentally treat as structural proof.
+- Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or
+  replace the source recording as part of trim.
+- Trim output timestamps use checked/saturating offset arithmetic; a large but otherwise admitted catalog timestamp must
+  never wrap a derived saved recording timestamp negative.
+- Provider-backed trim requires a pre-existing stable provider identity and revalidates the selected source after the
+  last source read while the verified target is still hidden; identity-less provider rows remain playback-only until
+  reconciliation establishes identity, and source uncertainty/change must fail before recovery-marker grant or
+  final-name publication.
+- Missing or temporarily unavailable audio is never deletion evidence; only explicit user deletion may destroy saved
+  audio.
+- Library/catalog read uncertainty is never an authoritative empty Library: preserve the last known rows, keep
+  first-load pending, and let storage reconciliation retry; the empty-state UI may render only after the local catalog
+  first paint has completed authoritatively. Catalog-corruption first paint signals unavailable after preservation/reset
+  instead of publishing a transient empty snapshot.
+- Library refresh replays pending output cleanup once, best-effort, before its multi-directory scan, then records which
+  directories were reconciled successfully and skips the later per-row fallback probe for those directories; a
+  cleanup-replay failure must not make unrelated directories unavailable. Failed/unavailable directory scans remain
+  eligible for individual fail-closed asset probes, while the configured destination keeps its existing
+  enumeration-failure protection. A null FILE directory listing is authoritative empty only when the directory is
+  positively `MISSING`; `PRESENT`/`UNAVAILABLE` listing failures abort that reconciliation scope and preserve catalog
+  rows. The same rule applies per entry: metadata/stream I/O uncertainty aborts the scope rather than making a known
+  recording disappear, while positively missing/non-regular entries and structurally invalid readable audio may be
+  skipped. Structural WAV validation returns invalid only for malformed/truncated bytes and propagates actual I/O
+  failures. Directory scanners still read the current suppression set and independently fail closed if that state is
+  unavailable, but must not re-hash/re-query the same cleanup journal on every location.
+- MediaStore index metadata (including reported duration) is not structural recording proof. New or identity-changed
+  non-pending rows must pass the same complete supported-WAV validation as FILE/SAF discovery before catalog adoption;
+  only an already-known row with the same stable MediaStore identity/name/size may reuse validated catalog metadata
+  without reopening the audio.
+- Byte-derived catalog metadata must remain bound to the physical revision that was validated: for new/changed FILE,
+  SAF, or MediaStore rows with a nonblank stable identity, re-read that identity after structural/media inspection and
+  abort the reconciliation scope if it changed or became unavailable. Identity-less rows may remain visible but stay
+  non-authoritative and are revalidated on later refreshes; if a provider identity becomes available after descriptor
+  acquisition, it must remain the same revision through the read rather than letting an identity-less pre-scan bypass
+  stability checks.
+- New/changed FILE discovery pins one descriptor across structural validation, media inspection, size, and fallback
+  timestamp sampling. When a stable pre-scan FILE identity exists, that descriptor must match it, remain unchanged
+  through the read, and still match the current path before catalog metadata is accepted. Identity-less discovery may
+  remain visible only as non-authoritative metadata with a blank catalog identity, but any available descriptor identity
+  must remain stable through the read; if path identity becomes available by scan completion it must bind to that same
+  descriptor revision.
+- Destructive actions are journaled/retryable. Moves are copy + fsync + byte verification + catalog commit before source
+  deletion.
+- Verified exports survive metadata/UI/service failures; service teardown is not user cancellation, and main-thread
+  service teardown must not await in-flight export executor completion. Once teardown owns the Service, late
+  export-start/export-only/export-terminal paths may not promote or restore foreground state on that dying instance.
+- CaptureScreen binds the recorder frame-first for startup latency, but also schedules a short main-loop fallback so
+  keyguard/occlusion cannot suppress the only bind forever; retired bind callbacks remain generation-rejected. A bound
+  recorder suspended by microphone-FGS restrictions retries durable capture only when Reverb’s tracked UI actually
+  becomes foreground/focused; a bind alone is not foreground proof.
+- Capture state rehydration follows a newly started or switched active buffer into the visible page, including Quick
+  Settings actions, but steady polling must not override a manual view of the inactive buffer.
+- UI-started exports may outlive the Capture composition. When that UI stops or disposes, the retained export receiver
+  releases all Activity/Compose callbacks and finishes with application-context bookkeeping/notification only; detached
+  terminal success/failure must remain user-visible through a system notification when notification permission/channel
+  delivery is available, because transient in-app feedback may have no active host. If detached success cannot show that
+  notification, queue acknowledged process feedback so the next resumed host still reports completion; notification
+  delivery failure must not become silent success. The Service must never retain a dead Capture UI for the export
+  lifetime. Capture timeline-snapshot release is best-effort UI cleanup: a release/storage-cleanup failure must never
+  abort disposal, disconnect reset, dialog dismissal, stale-callback rejection, or the user-visible save-failure path,
+  and every owned snapshot still gets a release attempt.
+- Detached save-success notifications are identity-bound per recording: simultaneous/repeated saved outputs must not
+  overwrite another recording's notification. The visible notification may replace by logical recording ID, but its tap
+  `PendingIntent` identity is bound to both recording ID and stable file/provider revision so `FLAG_UPDATE_CURRENT` can
+  never retarget an already-issued tap token to later bytes that reuse the same path/URI.
+- Capture export receivers are terminal-once. Synchronous submission failure must go through the same receiver terminal
+  path so Capture bookkeeping cannot retain a failed receiver or deliver duplicate terminal UI/notifications. Terminal
+  receiver cleanup/detachment is a `finally` responsibility: a throwing UI success/failure/cancel callback may
+  propagate, but must not leave the receiver attached or the active-receiver bookkeeping slot retained after terminal
+  delivery. If an attached save success/failure callback throws before confirming delivery, run the same
+  notification/feedback fallback first, then rethrow that original callback failure with any fallback failure suppressed
+  on it.
+- A newly resumed Capture UI rehydrates app-owned export activity from the live Service state. Detached export work must
+  keep capture/export controls busy until the Service reports the export terminal, even though the old UI receiver
+  remains detached.
+- Export cancellation is accepted only before verified final-name publication claims the export token. Once publication
+  begins, Cancel loses the race and must not interrupt or clean up the published verified audio; later catalog/metadata
+  failure preserves the recording. Cancellation caused by Android/system foreground-service timeout is a failed save,
+  not a user cancellation: it must deliver the receiver failure path so attached UI or detached notification/feedback
+  surfaces the failure; only explicit user Cancel is terminal-silent. Export range-lease release is cleanup-only: a
+  retention/storage failure while releasing pinned source chunks must be reported but must not prevent partial-output
+  cleanup, export-state clearing, foreground convergence, or the already-owned terminal result. Service-owned
+  timeline-snapshot release is cleanup-only as well: rejection or foreground-lifetime failure must still deliver its
+  receiver terminal even if releasing the caller snapshot reports a retention/storage failure.
+- Post-publication catalog failure is metadata-only only while the exact pinned output identity remains current.
+  Physical identity loss must surface as save failure while preserving the already-committed uncertain object; trim also
+  refreshes authoritative Library storage. Ordinary catalog persistence failure still preserves verified save success
+  and relies on reconciliation to repair metadata.
+- FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial
+  output must never enter the Library as a finished recording. SAF providers that cannot rename verified staging fail
+  closed instead of copying into a visible final-name document; a URI-changing SAF publish must also positively retire
+  the original staging URI. If an unsafe provider rename has already returned an uncertain final URI, suppress both that
+  result and any surviving staging URI without granting physical-delete authority, and revoke automatic staging recovery
+  so refresh cannot manufacture repeated copies.
+- Persisted SAF read grants are retained as recovery paths for existing recordings; do not add pending-grant bookkeeping
+  unless an explicit, verified grant-release workflow actually consumes it.
+- Legacy old-session `export` staging may use structural recovery only for an exact, internally consistent supported WAV
+  container with frame-aligned data, and the exact structurally validated bytes must digest-match the stable fingerprint
+  carried into publication; `copy` staging and current-process staging remain hidden and non-destructive.
+- New export/trim staging may proceed to final publication only after its durable verification record is persisted and
+  still matches the exact content and stable FILE/provider object identity; unverified tracked staging remains hidden,
+  cleanup revokes recovery authority before destructive removal, and publication carries that exact identity proof
+  through finalization and catalog registration instead of re-resolving a path/URI that could already have been
+  replaced. Recovery-marker removal is fingerprint-bound as well: stale completion for a reused staging path/URI may
+  remove only the marker for the exact verified bytes/object identity it owns, never a newer same-ID marker.
+- An active export owns an Android `dataSync` foreground-service lifetime when microphone capture is not already keeping
+  the service alive; UI unbind/recorder stop must not destroy export work.
+- Android microphone foreground-service eligibility failures pause runtime capture but must preserve the durable
+  recording intent; retry on a foreground bind or explicit start.
+- Buffer read leases keep their referenced chunks readable across clear/retention changes; ambiguous or corrupt recovery
+  artifacts are preserved, not silently deleted. Closing a multi-chunk lease must attempt every record release even if
+  an earlier release triggers retention/index cleanup failure; preserve the first close failure and suppress later ones
+  rather than leaving later chunks permanently pinned.
+- Recovery must distinguish positively missing storage from unavailable metadata/I/O: raw-buffer chunks/tombstones and
+  catalog DB sidecars fail closed on uncertainty, and preservation copies atomically reserve their destination then
+  verify both copy bytes and source stability before destructive source changes.
+- ACTIVE raw-buffer crash recovery must verify the latest valid checkpointed payload prefix against its persisted
+  geometry and checksum before extending recovery into later uncheckpointed bytes; a corrupt or shortened durable prefix
+  is preserved/quarantined, never re-hashed and re-certified as live audio.
+- An active PCM append may have physically written a prefix before surfacing `IOException`. After a failed append,
+  account only complete frames proven by the file position, preserve any torn tail before truncating it, restore the
+  exact logical/physical append boundary before further writes, and block checkpoint/finalization if that boundary
+  cannot be proven.
+- Automatic retention may trim or retire a finalized raw-buffer chunk only after revalidating its exact persisted size
+  and checksum; checksum-mismatched bytes must remain preserved and must never be re-certified through a freshly
+  checksummed trim. Explicit Clear remains the only operation authorized to destroy all retained history regardless of
+  decodability.
+- Explicit buffer Clear is incremental background work: retire at most one durability-complete chunk per store-monitor
+  acquisition, publish progress from memory, and honor Cancel only between completed retirement steps so a durability
+  boundary is never interrupted. Each step must revalidate the accepted capture-command generation and refuse the
+  current durable capture target; cancellation/supersession preserves the newest remaining history and never resurrects
+  already-retired chunks.
+- Physical deletion intents are versioned and content-fingerprinted; after process loss, never replay physical deletion
+  against a present asset. Replay may only wait, abandon the intent, or finish catalog cleanup after confirmed
+  deletion/absence. Torn recognized deletion records may recover only their target ID for suppression; they never regain
+  destructive authority. Before dropping that suppression, any unowned hidden FILE deletion claim in the same source
+  directory must be durably published under a visible recovery name, while claims still owned by valid
+  deletion/output-cleanup journals remain untouched; malformed journal state must never strand user bytes permanently
+  under `.reverb-delete-*.pending`. Torn FILE recovery may scan/publish claims only for a direct child of Reverb's
+  managed FILE roots; relative, nested, or out-of-root source IDs remain suppression-only.
+- A verified move target becomes recoverable before source cleanup; immediately before cataloging it as that recoverable
+  authority, revalidate the exact target identity because external writers are outside Reverb’s repository lock. Target
+  loss at any later source-cleanup stage is still a failed move, not “moved with cleanup failure”; keep the source and
+  report cleanup failure only when the destination remains current but source retirement is unsafe. Source destruction
+  is durably bound to that destination too: new move-deletion journal entries persist target storage/id/identity,
+  provider source deletion rechecks the target immediately before delete, and FILE claim replay after process loss may
+  delete the claimed source only while that exact target still exists with the same content; otherwise restore/publish
+  the source and revoke the deletion attempt. Legacy explicit-delete/output-cleanup journals gain no target authority. A
+  multi-recording move pins the exact destination submitted by the Move action before its Settings save, and every copy
+  in that batch uses that URI/default target even if preferences change before the repository IO starts or while the
+  move is running. Once that Settings commit succeeds, the accepted physical move batch and its process-level terminal
+  result are lifecycle-independent and must survive Activity/Compose cancellation. Automatic legacy migration likewise
+  snapshots default-destination admission once immediately before its batch, then pins that admitted default target;
+  never split one migration decision across multiple live preference reads. Absolute FILE paths are not enough: replay
+  may create/read/delete claims only when the source and any FILE move target are direct children of Reverb's current
+  managed FILE roots; out-of-root records stay suppression-only.
+- Interrupted move recovery never infers source→target ownership from matching bytes, timestamps, names, or metadata
+  alone. Without a durable transaction marker tying them together, preserve existing targets and make a fresh verified
+  copy rather than deleting a source against an unrelated equal recording.
+- A move candidate must prove destructive source identity before copying. If Reverb cannot later authorize deletion of
+  that exact source object, skip the move rather than create a verified duplicate that can never be safely retired.
+- Provider-backed move/copy source reads pin the selected object across the descriptor-open handoff: require the stored
+  provider identity before open and revalidate that same identity after acquiring the read descriptor before copying any
+  bytes. A pre-open URI check alone is not authority to copy whatever object a provider may return after a replacement
+  race.
+- SAF document identity metadata is sampled from one strict provider query row. Never compose destructive provider
+  identity from separate size/modified-time calls that can straddle a replacement and synthesize a revision that never
+  existed. Missing size/revision metadata is non-authoritative.
+- MediaStore identity likewise requires a known size plus a real generation or modified-time revision from the same
+  query row; nullable metadata is uncertainty, not zero-valued identity.
+- Durable capture intent/destination changes use synchronous persistence; startup decodes those authority fields
+  strictly and malformed type/enum data is a persistence failure, never an invented Stop or default slot. After
+  successful decode the Service reads only its verified in-memory intent/slot cache under the same lifetime lock, and
+  updates that cache only after an accepted durable command; explicit Start/Stop may repair invalid authority with a
+  canonical pair, while destination-only selection fails closed until authority is valid. A successful canonical Stop
+  repair clears only the persistence block caused by invalid capture authority after the known-Stop marker is also
+  durable; unrelated storage/persistence failures remain blocked. If a capture intent/destination write fails and its
+  rollback is not durably proven, or a fatal recorder Stop cannot persist its intent, revoke capture-authority validity
+  immediately so destination-only commands cannot act on unproven state; only a later canonical Start/Stop may
+  re-establish authority. User/QS destination selection and audio-thread automatic fallback resolve, persist, mutate the
+  active slot, and version the handoff under that same lock, so an older fallback resolution cannot overwrite a newer
+  selection and QS handoff source/target identity comes from the winning transaction. Active PCM is force-synced on a
+  bounded background cadence, and replacement PCM must be durable before retention evicts older audio.
+- Synchronous recorder-intent `SharedPreferences.commit()` exceptions are failed transactions, not uncaught
+  Service/binder failures: capture start/stop/selection/automatic handoff and their rollback writes catch/log thrown
+  commits and follow the same fail-closed rollback/pause path as a false commit result. Every failed
+  recorder-intent/destination mutation restores the exact prior representable raw SharedPreferences values/types before
+  returning failure, including malformed or legacy encodings; Editor-unrepresentable corruption restores to a
+  deliberately wrong-type fail-closed surrogate rather than absence/default; otherwise Android's process-local map can
+  make an undurable repair look authoritative to a later Service instance in the same process. Fatal audio-stop failure
+  still invalidates the dying Service's in-memory recorder authority even when that exact raw rollback succeeds.
+- Automatic capture stop because no writable buffer remains is a known stop only after both `listening=false` and the
+  known-Stop incident transition commit durably under the Service lifetime lock. It must not begin after Service
+  teardown owns that lock, because generic teardown is not a user/automatic Stop and must preserve retryable capture
+  intent. If either commit fails, preserve/restore prior intent when capture can continue; otherwise classify the forced
+  stop as a persistence interruption and fail closed. Explicit Stop whose incident transition fails may reject and
+  continue only after both the exact prior armed marker and prior enabled capture intent are durably restored; if either
+  rollback remains uncertain, pause/stop capture as a persistence interruption rather than continue with unprovable
+  restart or incident state.
+- Capture-stop sealing errors are never diagnostic-only: audio-input failure and foreground-service timeout paths must
+  report active-store seal failure instead of swallowing it. When another terminal cause already exists, preserve that
+  cause in the user-facing message and append the seal/persistence failure rather than overwriting either one.
+- Incremental buffer Clear owns a foreground-service lifetime after acceptance so Activity/Compose unbind cannot
+  terminate it mid-retirement. It may reuse microphone foreground ownership while capture remains live, otherwise it
+  uses data-sync ownership until terminal; if that required foreground transition fails, cancel the Clear as a failure
+  instead of continuing unprotected. User Cancel is neutral, but platform data-sync timeout and generic Service teardown
+  convert an otherwise-live clear terminal to failure; a user Cancel that already won keeps its neutral terminal.
+  Cancellation is observed only between durable chunk-retirement steps; once a retirement step is in flight, any
+  exception from that step remains a failed Clear even if Cancel/teardown arrives concurrently.
+  Executor-start/storage/teardown failures release that started/foreground lifetime, and failures with no foreground
+  Capture host are queued through process feedback rather than disappearing when the Service stops.
+- Clear Cancel acceptance is serialized with the Service lifetime lock: a stale binder after `serviceDestroying` wins
+  must be rejected and may never relabel teardown failure as neutral user cancellation.
+- Generic `Service.onDestroy()` preserves the microphone read already in flight, starts no new capture read after
+  teardown begins, seals/releases that batch, then records the provisional service-stop boundary. Slow initialization
+  and its main-thread continuation must treat `serviceDestroying` as terminal and may never resurrect capture/foreground
+  work after teardown begins; teardown-induced `AudioRecord` failures must never be classified as recorder failures or
+  persist the user capture intent off. Once audio-thread teardown has been queued, request `quitSafely()` before
+  unrelated main-thread teardown so later work cannot queue behind the terminal close; that task exclusively owns
+  persistent-store close even if the main-thread wait times out; inactive/no-microphone teardown does not synchronously
+  wait for slow store initialization/recovery, and an active-capture timeout path may release `AudioRecord` to unblock
+  its queued owner then waits once more for that owner before publishing the stop boundary, but must never close stores
+  underneath earlier queued work. Recorder commands that mutate durable capture intent/destination, clear retained
+  audio, begin a new export, cancel an export, or apply committed Settings reject once teardown owns the Service;
+  explicit Clear, export start/Cancel, and committed Settings-reload acceptance are serialized with that lifetime lock
+  so accepted commands occur before terminal teardown rather than being acknowledged behind it; Clear is never allowed
+  to target the buffer owned by durable capture intent, and its queued destructive task is bound to the accepted
+  listening-command generation so an automatic/user handoff while the confirmation is open cannot erase newly captured
+  PCM; if that accepted Clear completes after teardown begins, the stopped Quick Settings fallback must record zero
+  duration (and clear one-shot Full) only after the storage clear actually succeeds; queued recorder-state reads recheck
+  teardown on the audio thread and return unavailable instead of touching closed stores or reporting normal teardown as
+  persistence failure; timeline snapshot requests fail closed with a terminal null callback at both audio-thread
+  execution and main-thread delivery, releasing any sampled lease if Service teardown wins before delivery; a live
+  snapshot handoff keeps Service ownership until the callback returns successfully, so a throwing callback must close
+  the sampled lease before propagating the same failure; teardown must not consume suspended-capture retry flags because
+  the next live Service owns that recovery; a durable known Stop disarms its capture-session marker under the same
+  lifetime lock that `onDestroy()` uses before classifying an armed session, so Stop cannot race into a false
+  interruption incident. Explicit Stop/failure/timeout paths still invalidate capture continuity immediately. Snapshot
+  release failures at main-handler rejection/teardown/callback-failure boundaries are reported as persistent-store
+  failures without replacing the required terminal callback; if the callback itself throws it remains primary and the
+  release failure is suppressed on it.
+- Wake-lock acquisition retains the just-created platform owner until setup either succeeds or cleanup completes: if
+  reference-count configuration/acquire throws, release a partially held lock, keep the setup failure primary with
+  cleanup failure suppressed, report the optional-runtime failure, and leave capture running without publishing the
+  failed owner. Wake-lock teardown is terminal-once: clear the owned `WakeLock` reference before the platform release
+  attempt, report release/isHeld failure through process feedback, and never let wake-lock cleanup abort later Service
+  teardown or retry an uncertain owner.
+- FILE catalog entries bind to a stable filesystem-object identity; stale path reuse must fail closed for
+  delete/rename/read/play/share/copy, and explicit FILE deletion must atomically claim the selected object under a
+  journaled tombstone before destruction. Claim replay binds content digest and file identity from one descriptor-bound
+  stable fingerprint and rechecks that verified identity immediately at the unlink boundary; a changed claim is
+  restored/published instead of deleted. Legacy/non-descriptor-bindable claim identities retain suppression/recovery
+  semantics but never regain unlink authority: restore or visibly preserve those bytes instead. Granted FILE URIs
+  revalidate that identity again at the FileProvider open boundary so path reuse between share/open intent creation and
+  the consumer read cannot expose replacement bytes; metadata queries, including MIME `getType()`, require current
+  identity proof, query rows sample only an identity-verified descriptor, and the sharing provider must not inherit
+  destructive FileProvider deletion. Provider-backed external open/share uses Reverb's read-only identity-bound proxy
+  URI rather than handing the upstream content URI directly to another app; its MIME/query metadata and payload opens
+  all require the expected provider identity to remain current, and payload open revalidates provider identity after
+  acquiring the upstream descriptor before returning that pinned descriptor. Provider rows without a stable identity
+  fail closed for external delegation and direct byte-reading playback/waveform/trim work until reconciliation
+  establishes one; legacy/bootstrap metadata may remain visible, but a blank provider identity is never read authority.
+  The saved-recording notification trampoline has no feedback host; if identity verification/open delegation fails or no
+  compatible viewer exists, queue the error and return to MainActivity so the failure is immediately visible instead of
+  finishing to an empty screen.
+- Direct saved-recording WAV readers use a complete RIFF structural boundary before playback/waveform/trim: declared
+  RIFF size must equal the physical file, every chunk/padding byte must stay inside that container, `fmt`/`data` are
+  unique, byte-rate/block-align must match the decoded PCM format, and `data` must contain an exact whole number of
+  frames. Never stop parsing early and turn a valid prefix plus malformed/trailing bytes into apparently valid audio,
+  and do not retain a parallel lenient duration-only parser that future call sites could accidentally treat as
+  structural proof.
 - Retention zero means a capture buffer is Off, never cleared; only explicit Clear may destroy all retained history.
-- Retention prefs carry a digest and a CRC-checked no-backup recovery snapshot; no retention that can evict audio may reach a chunk store until that exact config is durably recoverable. Only a positively missing recovery journal qualifies for legacy digest-less bootstrap; corrupt or unreadable recovery is not absence. The fixed-size recovery snapshot must be read with a hard size bound plus one oversize sentinel byte, never `readBytes()` or another unbounded allocation before validating its 48-byte format. If history exists and retention provenance is unprovable, fail closed instead of applying defaults.
-- AtomicFile-backed retention/incident authority is no-follow: `base`, `.bak`, and `.new` must all be regular-or-missing before read/write, non-regular/unavailable backing is uncertainty rather than absence, and reads bind the opened descriptor to the recovered regular base before and after decoding so path replacement cannot substitute durable state.
-- Retention preference commits and the recovery journal form one serialized transaction: persist the recovery snapshot first, then commit preferences, and do not let retention readers observe the in-process gap. Boolean failure or a thrown write/commit must attempt every required rollback side before returning/propagating, because a failed SharedPreferences commit may already have mutated process-memory state; preserve the original transaction exception and suppress rollback failures. If a crash leaves the two durable copies disagreeing while history exists, capture fails closed and the UI reads the recovery copy for explicit resolution. Recovery-file publication counts its directory barrier as successful only when both fsync and the directory-descriptor close succeed; always attempt close after an fsync failure, and never silently turn a close failure into durability success.
-- Retention recovery/preferences rollback Boolean results are durability status, not advisory: every rollback side must be attempted, false counts as rollback failure exactly like an exception, and a primary transaction exception keeps rollback failures suppressed rather than losing them.
-- Home/Quick Settings/cached recorder sizing use the same fail-closed operational retention resolution as capture: ambiguous or unprovable retention with existing history means buffers are unavailable/zero until resolved, never enabled from defaults.
-- The operational retention history-presence probe is no-follow at the chunk-directory boundary: only a positively missing real directory proves no history. A symlink, non-directory entry, unreadable path, or failed directory listing is possible retained data/uncertainty and must keep default retention fail-closed.
-- In-place PCM boundary rewrites require atomic same-directory replacement; never fall back to non-atomic replacement of the only live audio chunk.
-- Atomic retention chunk replacement errors are state-uncertain until the live path is re-hashed against both the exact original and exact replacement. A positively observed replacement completes the runtime handoff; a positively observed original fails without changing runtime geometry; any unclassifiable result preserves the temp artifact and poisons that store instance so stale geometry cannot mutate storage before restart recovery.
-- Provider-backed move source deletion is content-fingerprinted and journaled before deletion; crash replay may finish metadata cleanup but must never replay physical provider deletion.
-- Provider deletion crosses into catalog cleanup only after the exact journaled provider asset is positively observed missing. Positive absence after an authorized delete attempt is terminal even when the provider call returned false or threw after committing; a success return followed by unavailable/present state keeps the deletion journal for later reconciliation.
-- SAF create/publish/rename collision checks use direct child-document queries that propagate provider failure; AndroidX `DocumentFile.findFile/listFiles` empty-on-error behavior is never authoritative evidence that a name is free.
-- A provider-returned output URI is not writable authority by itself. MediaStore insertion initializes SIZE=0 for the newly owned pending row because the platform may leave size null until first open; this is only initial metadata, and the acquired writable descriptor must independently prove zero size before any bytes are written. Before creation handoff and again at the actual writable-descriptor handoff, MediaStore must prove the exact requested high-entropy staging name, known zero size, pending state, and target relative path; SAF must prove the returned URI is the exact known-zero-size file child from a strict re-list of the selected tree. FILE staging reopens without create/truncate flags and must still match the original created object plus a zero-size descriptor before any byte is written. Unknown/nonempty/mismatched creation results are preserved untouched and fail closed.
-- Post-write verification remains bound to the object created before the write, not merely to equal bytes found later at the same staging path/URI. FILE verification must retain the original file object across ctime/content changes; provider staging with a usable creation identity must retain the same provider object across revision/size changes before recovery/publication or cleanup authority is granted.
-- MediaStore create/publish/rename collision checks also fail closed: a null/unavailable name-query cursor is not evidence that a display name is free.
-- MediaStore publication transport failure is state-uncertain: re-read the exact URI and accept success only when the verified staging bytes/object are now non-pending under the exact requested final name. A visible but unproven result is suppression-only and never gains delete authority; a still-pending result keeps recovery authority.
-- MediaStore publication postconditions require IS_PENDING to be positively observed false. A null/unknown pending column is state-uncertain and must never be coerced to published authority, even when name/content identity otherwise match.
-- MediaStore publication success is a postcondition, not the provider update status: every publish path, including a positive update row count, must re-observe one stable exact row and prove the requested final name, IS_PENDING=false, and the verified staging fingerprint before granting published authority. MediaStore catalog registration/rebind must again reject pending or unknown pending state at the commit boundary.
-- MediaStore discovery requires IS_PENDING to be positively known before a row can enter finished-recording reconciliation. A null/unknown pending state is not equivalent to false and must be skipped until visibility can be observed authoritatively.
-- Document-provider rename rebinds only after byte-for-byte content continuity is reverified. A same-URI rename must also retain the same provider object identity; a URI-changing rename must additionally positively retire the old URI.
-- Provider rename transport/row-count failure is state-uncertain, not automatic failure: recover success only when the exact selected bytes/object are positively re-observed under the requested name; a positively unchanged MediaStore object is a definite no-op, while copy-like/identity-uncertain document results remain failed and any discovered extra candidate is suppression-only.
-- Document output publication transport failure is also state-uncertain: re-enumerate the exact tree and recover success only from one exact final-name candidate that passes the same byte/object continuity rule; a same-byte visible but unproven candidate is suppression-only and never gains deletion authority.
-- A SAF publication/rename URI handoff may change the document ID only within the exact stored tree authority. A provider-returned out-of-tree URI is state-uncertain and must be resolved through the stored tree's stable listing; equal bytes and retirement of the old URI do not authorize migration into another tree.
-- Provider rename failure is split by mutation boundary: pre-mutation rejection may remain an inline failure, but once MediaStore/SAF may have applied the rename, transport failure or lost post-mutation identity/content proof is state-uncertain and must propagate to the Library's authoritative refresh path instead of collapsing to `null`.
-- FILE rename likewise treats a non-collision `Files.move` I/O failure as state-uncertain because Java does not guarantee the source/target state after a failed move; only a positive target collision is a normal retryable no-op.
-- Saved-recording rename is metadata-only: FILE, MediaStore, and document catalog rebind may reuse duration/codec/waveform metadata only after exact selected-byte continuity is reverified across the rename. Same-object byte change or I/O uncertainty must fail the rebind and reconcile from storage; FILE rename should restore the original name without suppression when possible rather than hide changed user data. Because external writers are outside Reverb's mutation lock, the exact renamed identity is revalidated again immediately before the catalog transaction; a stale post-rename result must never be committed merely because the in-process rename was serialized.
-- Failed/cancelled provider output cleanup follows the same rule: never clear its suppression journal merely because a provider delete call reports success; clear it only after the exact output is positively observed absent. Provider delete transport failure is state-uncertain rather than definite failure: still observe the journaled URI after the attempt, and positive absence may retire cleanup immediately while present/unavailable remains fail-closed.
-- Explicit looping-retention shrink keeps the maximum newest frame-aligned window; partial boundary trimming waits for active read leases rather than dropping an extra whole chunk. Size-mode boundary rounding must cap the requested excess to the chunk's whole-frame payload before rounding up, so extreme `Long` retention arithmetic can never overflow into a negative trim size.
-- Service-owned retention cleanup is deferred background maintenance: Settings/configure, capture append/seal, and read-lease release never batch-retire history on the audio/caller thread. Each maintenance pass mutates at most one durability-complete unit per store, preserves looping newest / one-shot oldest exact boundaries, retries lease-blocked partial trims, and any storage failure pauses capture fail-closed. Ongoing capture wakes maintenance on the bounded durability-sync cadence rather than every microphone read. Scheduler `active`/`queued` ownership is one synchronized state: a stale no-work observation cannot revoke an already-claimed pass, and every queued/running pass is identity-bound so `clear()` or a newer claim makes late completion a no-op instead of resurrecting backlog or revoking newer ownership. A pending export/Clear token is not foreground ownership by itself: retention may borrow higher-priority lifetime only after a nonzero FGS type exists, otherwise it acquires its own dataSync lifetime and the higher-priority operation later refreshes its notification. If retention foreground protection fails and clears scheduler ownership, both direct maintenance admission and Service stop convergence must re-check that ownership after the protection attempt and schedule stop convergence instead of leaving an ownerless started/foreground Service. Any foreground-service timeout is terminal for the current retention maintenance generation so seal/checkpoint work cannot restart it before teardown.
+- Retention prefs carry a digest and a CRC-checked no-backup recovery snapshot; no retention that can evict audio may
+  reach a chunk store until that exact config is durably recoverable. Only a positively missing recovery journal
+  qualifies for legacy digest-less bootstrap; corrupt or unreadable recovery is not absence. The fixed-size recovery
+  snapshot must be read with a hard size bound plus one oversize sentinel byte, never `readBytes()` or another unbounded
+  allocation before validating its 48-byte format. If history exists and retention provenance is unprovable, fail closed
+  instead of applying defaults.
+- AtomicFile-backed retention/incident authority is no-follow: `base`, `.bak`, and `.new` must all be regular-or-missing
+  before read/write, non-regular/unavailable backing is uncertainty rather than absence, and reads bind the opened
+  descriptor to the recovered regular base before and after decoding so path replacement cannot substitute durable
+  state.
+- Retention preference commits and the recovery journal form one serialized transaction: persist the recovery snapshot
+  first, then commit preferences, and do not let retention readers observe the in-process gap. Boolean failure or a
+  thrown write/commit must attempt every required rollback side before returning/propagating, because a failed
+  SharedPreferences commit may already have mutated process-memory state; preserve the original transaction exception
+  and suppress rollback failures. If a crash leaves the two durable copies disagreeing while history exists, capture
+  fails closed and the UI reads the recovery copy for explicit resolution. Recovery-file publication counts its
+  directory barrier as successful only when both fsync and the directory-descriptor close succeed; always attempt close
+  after an fsync failure, and never silently turn a close failure into durability success.
+- Retention recovery/preferences rollback Boolean results are durability status, not advisory: every rollback side must
+  be attempted, false counts as rollback failure exactly like an exception, and a primary transaction exception keeps
+  rollback failures suppressed rather than losing them.
+- Home/Quick Settings/cached recorder sizing use the same fail-closed operational retention resolution as capture:
+  ambiguous or unprovable retention with existing history means buffers are unavailable/zero until resolved, never
+  enabled from defaults.
+- The operational retention history-presence probe is no-follow at the chunk-directory boundary: only a positively
+  missing real directory proves no history. A symlink, non-directory entry, unreadable path, or failed directory listing
+  is possible retained data/uncertainty and must keep default retention fail-closed.
+- In-place PCM boundary rewrites require atomic same-directory replacement; never fall back to non-atomic replacement of
+  the only live audio chunk.
+- Atomic retention chunk replacement errors are state-uncertain until the live path is re-hashed against both the exact
+  original and exact replacement. A positively observed replacement completes the runtime handoff; a positively observed
+  original fails without changing runtime geometry; any unclassifiable result preserves the temp artifact and poisons
+  that store instance so stale geometry cannot mutate storage before restart recovery.
+- Provider-backed move source deletion is content-fingerprinted and journaled before deletion; crash replay may finish
+  metadata cleanup but must never replay physical provider deletion.
+- Provider deletion crosses into catalog cleanup only after the exact journaled provider asset is positively observed
+  missing. Positive absence after an authorized delete attempt is terminal even when the provider call returned false or
+  threw after committing; a success return followed by unavailable/present state keeps the deletion journal for later
+  reconciliation.
+- SAF create/publish/rename collision checks use direct child-document queries that propagate provider failure; AndroidX
+  `DocumentFile.findFile/listFiles` empty-on-error behavior is never authoritative evidence that a name is free.
+- A provider-returned output URI is not writable authority by itself. MediaStore insertion initializes SIZE=0 for the
+  newly owned pending row because the platform may leave size null until first open; this is only initial metadata, and
+  the acquired writable descriptor must independently prove zero size before any bytes are written. Before creation
+  handoff and again at the actual writable-descriptor handoff, MediaStore must prove the exact requested high-entropy
+  staging name, known zero size, pending state, and target relative path; SAF must prove the returned URI is the exact
+  known-zero-size file child from a strict re-list of the selected tree. FILE staging reopens without create/truncate
+  flags and must still match the original created object plus a zero-size descriptor before any byte is written.
+  Unknown/nonempty/mismatched creation results are preserved untouched and fail closed.
+- Post-write verification remains bound to the object created before the write, not merely to equal bytes found later at
+  the same staging path/URI. FILE verification must retain the original file object across ctime/content changes;
+  provider staging with a usable creation identity must retain the same provider object across revision/size changes
+  before recovery/publication or cleanup authority is granted.
+- MediaStore create/publish/rename collision checks also fail closed: a null/unavailable name-query cursor is not
+  evidence that a display name is free.
+- MediaStore publication transport failure is state-uncertain: re-read the exact URI and accept success only when the
+  verified staging bytes/object are now non-pending under the exact requested final name. A visible but unproven result
+  is suppression-only and never gains delete authority; a still-pending result keeps recovery authority.
+- MediaStore publication postconditions require IS_PENDING to be positively observed false. A null/unknown pending
+  column is state-uncertain and must never be coerced to published authority, even when name/content identity otherwise
+  match.
+- MediaStore publication success is a postcondition, not the provider update status: every publish path, including a
+  positive update row count, must re-observe one stable exact row and prove the requested final name, IS_PENDING=false,
+  and the verified staging fingerprint before granting published authority. MediaStore catalog registration/rebind must
+  again reject pending or unknown pending state at the commit boundary.
+- MediaStore discovery requires IS_PENDING to be positively known before a row can enter finished-recording
+  reconciliation. A null/unknown pending state is not equivalent to false and must be skipped until visibility can be
+  observed authoritatively.
+- Document-provider rename rebinds only after byte-for-byte content continuity is reverified. A same-URI rename must
+  also retain the same provider object identity; a URI-changing rename must additionally positively retire the old URI.
+- Provider rename transport/row-count failure is state-uncertain, not automatic failure: recover success only when the
+  exact selected bytes/object are positively re-observed under the requested name; a positively unchanged MediaStore
+  object is a definite no-op, while copy-like/identity-uncertain document results remain failed and any discovered extra
+  candidate is suppression-only.
+- Document output publication transport failure is also state-uncertain: re-enumerate the exact tree and recover success
+  only from one exact final-name candidate that passes the same byte/object continuity rule; a same-byte visible but
+  unproven candidate is suppression-only and never gains deletion authority.
+- A SAF publication/rename URI handoff may change the document ID only within the exact stored tree authority. A
+  provider-returned out-of-tree URI is state-uncertain and must be resolved through the stored tree's stable listing;
+  equal bytes and retirement of the old URI do not authorize migration into another tree.
+- Provider rename failure is split by mutation boundary: pre-mutation rejection may remain an inline failure, but once
+  MediaStore/SAF may have applied the rename, transport failure or lost post-mutation identity/content proof is
+  state-uncertain and must propagate to the Library's authoritative refresh path instead of collapsing to `null`.
+- FILE rename likewise treats a non-collision `Files.move` I/O failure as state-uncertain because Java does not
+  guarantee the source/target state after a failed move; only a positive target collision is a normal retryable no-op.
+- Saved-recording rename is metadata-only: FILE, MediaStore, and document catalog rebind may reuse
+  duration/codec/waveform metadata only after exact selected-byte continuity is reverified across the rename.
+  Same-object byte change or I/O uncertainty must fail the rebind and reconcile from storage; FILE rename should restore
+  the original name without suppression when possible rather than hide changed user data. Because external writers are
+  outside Reverb's mutation lock, the exact renamed identity is revalidated again immediately before the catalog
+  transaction; a stale post-rename result must never be committed merely because the in-process rename was serialized.
+- Failed/cancelled provider output cleanup follows the same rule: never clear its suppression journal merely because a
+  provider delete call reports success; clear it only after the exact output is positively observed absent. Provider
+  delete transport failure is state-uncertain rather than definite failure: still observe the journaled URI after the
+  attempt, and positive absence may retire cleanup immediately while present/unavailable remains fail-closed.
+- Explicit looping-retention shrink keeps the maximum newest frame-aligned window; partial boundary trimming waits for
+  active read leases rather than dropping an extra whole chunk. Size-mode boundary rounding must cap the requested
+  excess to the chunk's whole-frame payload before rounding up, so extreme `Long` retention arithmetic can never
+  overflow into a negative trim size.
+- Service-owned retention cleanup is deferred background maintenance: Settings/configure, capture append/seal, and
+  read-lease release never batch-retire history on the audio/caller thread. Each maintenance pass mutates at most one
+  durability-complete unit per store, preserves looping newest / one-shot oldest exact boundaries, retries lease-blocked
+  partial trims, and any storage failure pauses capture fail-closed. Ongoing capture wakes maintenance on the bounded
+  durability-sync cadence rather than every microphone read. Scheduler `active`/`queued` ownership is one synchronized
+  state: a stale no-work observation cannot revoke an already-claimed pass, and every queued/running pass is
+  identity-bound so `clear()` or a newer claim makes late completion a no-op instead of resurrecting backlog or revoking
+  newer ownership. A pending export/Clear token is not foreground ownership by itself: retention may borrow
+  higher-priority lifetime only after a nonzero FGS type exists, otherwise it acquires its own dataSync lifetime and the
+  higher-priority operation later refreshes its notification. If retention foreground protection fails and clears
+  scheduler ownership, both direct maintenance admission and Service stop convergence must re-check that ownership after
+  the protection attempt and schedule stop convergence instead of leaving an ownerless started/foreground Service. Any
+  foreground-service timeout is terminal for the current retention maintenance generation so seal/checkpoint work cannot
+  restart it before teardown.
 
-- Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob renderer/animation to implement the timeline.
-- Range Export selection duration uses the native custom-drawn cylindrical `HH : MM : SS` wheel with an infinite `1x`/`5x`/`15x` profile wheel; hours always step by one and profiles change only minute/second steps. Its dial divisions are one shared projected grid per wheel: each horizontal separator is drawn once at the half-step between adjacent values and the two vertical rails join those exact projected endpoints, moving/fading with cylinder depth rather than forming fixed selection boxes or per-value doubled borders. The wheel maximum is the stricter of the exact export payload limit and the duration actually reachable by moving the selected Start/End boundary while keeping the opposite boundary fixed, so unreachable durations must never appear as normal selectable dial values. The export-limit hour/minute/second boundary is always present when it is the active limit even when off-profile; existing export-over-limit values remain temporarily representable and render error-colored, and Export stays disabled while the exact selected duration exceeds that same payload limit. The selected center face keeps hierarchical error coloring, while every above/below option is error-colored only when selecting that specific option with the other two fields unchanged would still exceed the exact wheel limit. Editing duration defaults to Start until another boundary is selected. A duration-wheel interaction pins its Start/End target at pointer/scroll start through snap/settle; other range edits and Export stay locked until the native terminal callback, and any newer boundary edit invalidates the pending wheel commit instead of being overwritten by it. Drag-frame rendering stays entirely inside the View and commits the duration to Compose only after the wheel snaps/settles.
-- Range Export has no redundant `selected`/`scrubbing` captions and no separate two-buffer selector bar; the bottom export bar itself contains the compact exported-buffer pill (`One-shot` or `Looping`) using the matching buffer icon and a deliberately dim primary-container tint.
-- Successful exports remember their actual saved selection per buffer as selection length plus offset from the timeline end; range export restores that end-relative selection. If the old offset no longer fits, preserve selection length and move toward the new end; if the new buffer is shorter than the old selection, use the full available buffer; failed/cancelled exports never overwrite this memory.
-- Range-export fine adjustment is a 2D spring field: horizontal pull controls direction/base jog rate and is intentionally more sensitive than Y, upward pull accelerates, downward pull increases precision, jog rate is a percentage of total timeline duration, Y uses a tall low-sensitivity cosh field that stiffens toward horizontal edges, the foreground-colored puck tracks touch X 1:1 inside its visual bounds while seek sensitivity is applied separately, and release returns monotonically to center.
-- The range-export fine-adjust puck is also the play/pause control: a tap listens without moving either boundary. With Start active it plays forward from Start toward End; with End active it plays a short lead-in that terminates exactly at End. Movement beyond touch slop turns the same puck gesture into audible fine adjustment of the active boundary.
-- Range waveform previews use a fixed source-sample budget independent of history length, build off the UI thread, and publish left-to-right while the unrevealed suffix remains animated.
-- Range waveform chunk readers own each RandomAccessFile exactly once: switching chunks or finishing sampling must surface terminal reader-close failure, preserve any earlier read failure as primary with close failure suppressed, and never retry a failed close from `finally`.
-- Range Export and Library Trim use the same waveform selection material: audio inside Start/End is full-strength and waveform outside those bounds is dimmed exactly like the unplayed suffix in normal Library playback. There is no independent range/trim cursor: the active Start or End boundary transforms into the shared cursor visual, while the inactive edge stays the shared boundary visual. Waveform-body gestures continue moving the active edge rather than implicitly retargeting the opposite boundary. When the active edge reaches the minimum gap, continued motion pushes the opposite edge in the same direction, preserving the minimum gap; this must let a collapsed range parked at either timeline corner move away without first selecting the obscured marker. Marker drags must measure pointer motion in timeline-stable coordinates rather than the moving marker hitbox’s local coordinates. All rendered marker lines/grips stay thin while their interaction hitboxes remain large. Marker height is derived from the waveform renderer’s settled 95% maximum envelope plus a 2% total margin, never screenshot-tuned.
+- Range export is a home-screen state layered around the existing AudioBlobView; do not modify or restyle the blob
+  renderer/animation to implement the timeline.
+- Range Export selection duration uses the native custom-drawn cylindrical `HH : MM : SS` wheel with an infinite
+  `1x`/`5x`/`15x` profile wheel; hours always step by one and profiles change only minute/second steps. Its dial
+  divisions are one shared projected grid per wheel: each horizontal separator is drawn once at the half-step between
+  adjacent values and the two vertical rails join those exact projected endpoints, moving/fading with cylinder depth
+  rather than forming fixed selection boxes or per-value doubled borders. The wheel maximum is the stricter of the exact
+  export payload limit and the duration actually reachable by moving the selected Start/End boundary while keeping the
+  opposite boundary fixed, so unreachable durations must never appear as normal selectable dial values. The export-limit
+  hour/minute/second boundary is always present when it is the active limit even when off-profile; existing
+  export-over-limit values remain temporarily representable and render error-colored, and Export stays disabled while
+  the exact selected duration exceeds that same payload limit. The selected center face keeps hierarchical error
+  coloring, while every above/below option is error-colored only when selecting that specific option with the other two
+  fields unchanged would still exceed the exact wheel limit. Editing duration defaults to Start until another boundary
+  is selected. A duration-wheel interaction pins its Start/End target at pointer/scroll start through snap/settle; other
+  range edits and Export stay locked until the native terminal callback, and any newer boundary edit invalidates the
+  pending wheel commit instead of being overwritten by it. Drag-frame rendering stays entirely inside the View and
+  commits the duration to Compose only after the wheel snaps/settles.
+- Range Export has no redundant `selected`/`scrubbing` captions and no separate two-buffer selector bar; the bottom
+  export bar itself contains the compact exported-buffer pill (`One-shot` or `Looping`) using the matching buffer icon
+  and a deliberately dim primary-container tint.
+- Successful exports remember their actual saved selection per buffer as selection length plus offset from the timeline
+  end; range export restores that end-relative selection. If the old offset no longer fits, preserve selection length
+  and move toward the new end; if the new buffer is shorter than the old selection, use the full available buffer;
+  failed/cancelled exports never overwrite this memory.
+- Range-export fine adjustment is a 2D spring field: horizontal pull controls direction/base jog rate and is
+  intentionally more sensitive than Y, upward pull accelerates, downward pull increases precision, jog rate is a
+  percentage of total timeline duration, Y uses a tall low-sensitivity cosh field that stiffens toward horizontal edges,
+  the foreground-colored puck tracks touch X 1:1 inside its visual bounds while seek sensitivity is applied separately,
+  and release returns monotonically to center.
+- The range-export fine-adjust puck is also the play/pause control: a tap listens without moving either boundary. With
+  Start active it plays forward from Start toward End; with End active it plays a short lead-in that terminates exactly
+  at End. Movement beyond touch slop turns the same puck gesture into audible fine adjustment of the active boundary.
+- Range waveform previews use a fixed source-sample budget independent of history length, build off the UI thread, and
+  publish left-to-right while the unrevealed suffix remains animated.
+- Range waveform chunk readers own each RandomAccessFile exactly once: switching chunks or finishing sampling must
+  surface terminal reader-close failure, preserve any earlier read failure as primary with close failure suppressed, and
+  never retry a failed close from `finally`.
+- Range Export and Library Trim use the same waveform selection material: audio inside Start/End is full-strength and
+  waveform outside those bounds is dimmed exactly like the unplayed suffix in normal Library playback. There is no
+  independent range/trim cursor: the active Start or End boundary transforms into the shared cursor visual, while the
+  inactive edge stays the shared boundary visual. Waveform-body gestures continue moving the active edge rather than
+  implicitly retargeting the opposite boundary. When the active edge reaches the minimum gap, continued motion pushes
+  the opposite edge in the same direction, preserving the minimum gap; this must let a collapsed range parked at either
+  timeline corner move away without first selecting the obscured marker. Marker drags must measure pointer motion in
+  timeline-stable coordinates rather than the moving marker hitbox’s local coordinates. All rendered marker lines/grips
+  stay thin while their interaction hitboxes remain large. Marker height is derived from the waveform renderer’s settled
+  95% maximum envelope plus a 2% total margin, never screenshot-tuned.
 - Blob-to-range transitions may transform the containing UI, but must not modify `AudioBlobView` rendering semantics.
-- Range waveform construction is two-pass: a cheap coarse left-to-right materialization, then a finer fixed-budget left-to-right refinement; neither pass scales source reads with history duration.
-- Keep the shared two-pass waveform worker/publication pipeline in `buildProgressiveWaveform`; Range Export and Library playback must not grow separate channel/worker implementations.
-- Direct timeline gestures invalidate focused time drafts; focused time fields must relinquish focus and resync when playback/scrubbing moves their target, while explicit export commits a valid focused draft first. Ordinary Start/End focus handoff commits the previous valid edited draft before transferring edit ownership; an invalid previous draft remains owned by its original field and must not be silently overwritten by focusing the other field. Merely focusing or switching away from an untouched rounded time presentation must release edit ownership without parsing that display text back into the precise range endpoint.
-- Android Back while range export is active dismisses range-export mode and releases/cancels its snapshot preparation; only Back from normal home may leave the app.
-- Retired raw-buffer chunks persist an identity-bound tombstone before leaving the live timeline; index loss must never resurrect explicitly cleared or retention-evicted audio, including chunks held by abandoned read leases. Tombstone recovery reads are strictly bounded to the tiny wire format; oversized/corrupt marker files fail closed and remain preserved instead of being loaded wholesale.
-- If a retirement-tombstone rename becomes visible but its directory fsync fails, runtime follows the visible retirement but physical chunk deletion remains blocked until the tombstone directory later crosses a successful durability barrier. Tombstone removal likewise retains ownership until the retired-directory removal barrier succeeds; normal retired chunks keep their retired-id owner, while stale-marker cleanup keeps a process-local removal-barrier owner even after the marker becomes visibly absent. ID reuse must retry that fsync before creating replacement audio.
-- Predictive Back mirrors each surface’s actual reverse navigation: Onboarding pages, Settings, Library, Incidents, range export, Library multi-select/inline trim/inline player, and About all track their live reverse transition; shared `ReverbActionSheet` surfaces use Material3's native predictive-back dialog path, and root Home stays unhandled so Android owns app-to-launcher preview. Releasing a committed predictive gesture must continue from the exact release progress to its visual terminal before the logical Back mutation; never reset predictive progress to zero at commit. Retained Settings/Library panels suppress their ordinary second close animation after a predictive commit so the completed gesture cannot snap the panel back open.
-- Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss handler must stay disabled while an expanded inline player owns Back.
-- Cancelled or failed pre-commit outputs use a content-fingerprinted cleanup journal; Library recovery suppresses those exact assets until deletion succeeds, and identity reuse must never authorize deletion of replacement bytes. If FILE publication moves an unexpected object into a visible final name before post-move identity verification rejects it, persist content-bound suppression-only metadata for that visible path before attempting to hide it again; the unexpected identity never gains delete authority, and a rollback rename whose directory fsync fails is not durable evidence that the final name cannot reappear after a crash. Identity-less FILE suppression bypasses deletion-claim replay so recovery can clear it only after the path is durably absent or different content replaces it; equal bytes remain suppressed without delete authority. Same-ID cleanup/recovery authority records are append-only until independently classified/retired; a stale producer may never overwrite a newer record merely because the path/URI string was reused. Terminal cleanup reports success only after the exact observed cleanup entries are durably retired; a journal commit failure remains deferred cleanup even if the physical asset is already absent/deleted.
-- Destructive/suppression journal `SharedPreferences.commit()` failure must synchronously restore that key's prior process-local map before returning failure. Android updates the in-memory map before disk completion, so same-process replay must never consume an undurable added authority or forget an authority whose removal failed durability.
-- Durable suppression/deletion/staging `StringSet` journals are hard-bounded by entry count, per-entry length, and total characters on both read and write. Oversized or corrupt sets fail closed; never evict entries to make room because every retained entry may carry suppression or destructive authority.
-- Direct durable export-directory preference writes use the same failed-commit rollback discipline: a failed set/remove must restore the exact prior representable process-local SharedPreferences value and type before returning failure so same-process readers cannot observe an undurable destination or reinterpret malformed authority as the default destination. If corrupt XML contains a named null or another value Android Editor cannot reproduce, rollback must persist a deliberately wrong-type fail-closed surrogate rather than silently remove it; the same rule applies to Settings/onboarding raw rollback. Successful explicit save may repair malformed state.
-- Failed Settings rollback restores raw values only for preference keys actually submitted by that transaction; representable values restore exactly and unrepresentable corruption follows the fail-closed surrogate rule above. QUICK_TILE_ONE_SHOT_FULL participates only when that save itself invalidated the cache, so an unrelated failed save cannot overwrite a newer runtime Full update.
-- Failed Settings rollback of QUICK_TILE_ONE_SHOT_FULL is generation-coordinated with live Service Full observations. Every authoritative store observation advances the runtime generation even when the process-local preference already equals that value; otherwise a temporary Settings write could suppress the generation bump and a failed rollback could restore stale Full state. Runtime observation and the Settings rollback snapshot/correction share only a tiny nonblocking preference lock, and the audio thread never waits on the Settings disk commit.
-- Failed onboarding retention transactions restore the raw pre-transaction values for every submitted preference key; representable values restore exactly and Editor-unrepresentable corruption restores to the shared fail-closed surrogate. A failed Finish must not mark onboarding shown or canonicalize malformed/missing retention preferences in process memory.
-- Automated output cleanup requires both content and the originally verified descriptor-bindable stable object/provider identity before physical deletion; never derive new deletion authority from whatever equal-byte object currently occupies a path/URI. Legacy/NIO FILE identities and unsafe identity-less provider cleanup remain suppression-only and fail-closed; replay may recover an old hidden claim to visible/preserved bytes, but it must keep the cleanup journal until the original path is positively absent or replaced.
-- If physical rename succeeds but the catalog commit fails, keep that catalog failure primary. Physical rollback failure and stale-row cleanup failure are terminal recovery evidence and must be suppressed onto the primary error rather than discarded; when rollback cannot prove the original ID was restored, still attempt to retire the stale catalog row.
-- Provider output verification/fingerprints that grant publication or cleanup authority pin identity across descriptor acquisition as well as the full content read: sample the provider identity before open, immediately after acquiring the read descriptor, and after verification/hashing; any transition fails closed without granting authority.
-- Malformed output-cleanup journal entries never gain destructive authority; when their target ID is still recoverable, retain them as suppression-only metadata so journal corruption cannot expose uncertain failed/cancelled output.
-- Full deletion/output-cleanup/export-staging journal records must also carry a storage-valid target ID before they regain authority: FILE IDs are absolute paths with a parent, DOCUMENT IDs must be tree-scoped item URIs (`/tree/<root>/document/<item>`), and MEDIASTORE IDs must be concrete audio-row URIs under Android's `media` provider (`/<volume>/audio/media/<id>`). Invalid full records may still contribute recoverable suppression IDs, never cleanup/replay authority.
-- MediaStore row identity is scoped to Reverb's managed `Music/Reverb/` relative path: identity/catalog observations must read `RELATIVE_PATH` in the same provider row as size/revision metadata and fail closed when that path is missing or different, so a valid MediaStore row URI outside Reverb's directory never gains read/mutation authority.
-- Copy/publish failure cleanup is bound to the exact verified output fingerprint. If the source changes or cannot be revalidated after a verified copy, preserve that copy on later failure instead of risking destruction of the only retained version.
-- Export/trim cleanup requires a whole-output digest returned by exact WAV header/payload/EOF verification; before that authority exists, retain hidden staging rather than deleting an unproven path or provider object. A WAV payload write failure poisons that writer: later close may release descriptor ownership but must not rewrite the header, pad, truncate, force/finalize, or produce a payload digest, because hidden staging may already contain an unverified physically written prefix.
-- WAV export limits use the RIFF `ChunkSize` boundary, which is physical file size minus the first 8 bytes: UI/service sizing may therefore allow `0xFFFF_FFFF + 8` physical bytes, while payload limits still account for the actual PCM/float header, odd-byte data padding, and whole output frames. Keep UI/service limits and `WavAudioFileWriter` on this same boundary.
-- Chunk-store close/checkpoint failures must surface to the service; after an atomic retention-boundary replacement becomes visible, in-memory geometry must follow the published bytes even if the following directory fsync reports failure.
-- If active-chunk creation fails after reserving the file, close the acquired descriptor without replacing the primary failure and retire the created path through the same durable chunk-directory barrier as normal deletion; cleanup uncertainty is suppressed onto the primary error, never silently discarded.
-- The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its appearance must not shrink its touch target.
-- Recording catalog metadata/waveform caches are identity-bound; identity uncertainty may preserve known metadata continuity but must invalidate cache trust, and identity-sensitive actions must revalidate before use. Reconciliation hides an old row when the path/URI is positively present as a different known identity, while identity uncertainty remains unavailable rather than being treated as missing.
-- User-initiated recording mutations are bound to the selected asset identity; delayed delete/undo work and queued rename requests must never retarget a later object that reuses the same path or provider URI. Once Rename is submitted, its physical mutation and terminal result survive Activity/Compose cancellation; detached success/failure uses process feedback rather than disappearing silently. Rename terminal delivery uses the same fallback/cleanup discipline as saves: a throwing visible callback still runs detached fallback, preserves the callback failure as primary with fallback/cleanup failures suppressed, and always releases terminal bookkeeping. Once a delete undo window closes, the committed foreground batch owns its physical identity-bound deletes through completion; panel/lifecycle teardown must not enqueue a duplicate background batch, while pre-commit teardown may transfer ownership to the repository cleanup scope. Background delete failure reporting is owned by the acknowledged process feedback queue before an awaited refresh clears the optimistic Library transaction; do not emit a second Library-local failure card for the same batch. After a committed foreground delete attempt finishes its non-cancellable physical phase, terminal optimistic-state release is part of that same non-cancellable ownership: remove successful rows before releasing exact pending targets so failed targets reappear and successful targets cannot flicker back, and route delete-phase failure to process feedback if the Library owner is cancelled/inactive before local reporting. A rejected URI-changing document rename suppression-hides the returned candidate while it still matches the selected bytes, but never grants deletion authority; same-URI uncertainty must not hide the selected source. If a FILE rename moves an unexpected replacement object before detecting the identity race, persist content-bound suppression-only metadata for the visible requested target before rollback; a rollback whose directory fsync fails is not proof that the requested target cannot reappear after a crash. Lifecycle-scope launches that hand an accepted Rename, Trim, Settings Save, or Move into `NonCancellable` ownership start `UNDISPATCHED`, so the ownership handoff occurs before the click callback returns and disposal cannot cancel the coroutine in the launch gap. Claim replay may retire a catalog row only after physical deletion succeeds; `MISMATCH_PRESERVED` restores/preserves bytes and retires only the deletion intent so reconciliation can keep or rebind the row.
-- MediaStore/SAF rename may refresh revision metadata, but catalog rebind requires the same stable provider object/content before/after the mutation and a positively observed requested display name; never synthesize the requested name when the provider postcondition is unavailable, and never adopt whatever object happens to occupy the URI after a rename race. A SAF `renameDocument()` return URI is direct authority only when it remains tree-scoped to the recording's stored tree; canonical/out-of-tree returns must be resolved through the same stable tree-listing postcondition instead.
-- Catalog registration/rebind after save, rename, or verified move requires both current stable identity and current display-name proof at the SQLite commit boundary; SAF/MediaStore must derive both from one provider-row observation so separate queries cannot straddle an external metadata mutation. External metadata changes between storage verification and catalog commit fail closed into reconciliation instead of persisting stale names.
-- A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed. Catalog materialization must bound any initial collection allocation before per-row validation so an oversized/corrupt row count cannot force a giant heap reservation ahead of malformed-row isolation.
-- A malformed individual catalog row never gains storage-type authority and must not make healthy rows unreadable: accept canonical storage codes only when blank/legacy metadata is compatible, skip conflicting/unknown rows, and let authoritative storage reconciliation rediscover and replace them.
-- Catalog row isolation starts before typed cursor coercion: inspect SQLite field types before calling numeric/text getters, skip wrong-type required fields instead of parsing them, and treat wrong-type derived text as empty/fallback metadata so one corrupt row cannot abort healthy Library materialization.
-- Catalog isolation also starts before Android CursorWindow materialization: DAO reads project every dynamic-typed SQLite value through type-gated bounded expressions, including wrong-type values stored in INTEGER columns, so one oversized corrupt field cannot abort the query before per-row validation runs.
-- Catalog row isolation also rejects unsafe core identity/location or negative persisted geometry while tolerating safe empty derived metadata; one malformed row must never abort healthy Library rows or turn an empty ID into filesystem/provider authority.
-- Catalog row location is storage-specific authority: FILE rows require an absolute direct-child path under one of Reverb's managed FILE directories (legacy app-private or shared Music/Reverb); DOCUMENT rows require a tree-scoped item URI whose authority/tree ID exactly matches the stored tree URI; and MediaStore rows require a scoped MediaStore audio-row URI plus the canonical MediaStore directory marker. Malformed/unmanaged locations are skipped for authoritative reconciliation.
-- FILE authority never follows symbolic links: path observation, identity resolution, verified opens, output fingerprinting, staging admission, managed-directory listing, managed-directory creation, and directory durability barriers must reject a symlink final entry; directory fsync must bind the same non-following directory identity before and after the barrier, so a stable managed-root link cannot expose or redirect bytes outside Reverb's managed FILE roots. Path identity uses non-following `lstat` when available and re-samples non-following NIO attributes before fallback; staging recovery binds its pre-open path identity to the opened descriptor before reading any bytes, then rechecks path/descriptor identity after the read.
-- New local FILE staging entries are created through an exclusive non-following descriptor and must bind that exact descriptor to the path both before and after the directory durability barrier. Creation/barrier/close uncertainty preserves the hidden staging path untouched; never delete by pathname on creation failure because an external replacement may already own that name.
-- Corrupt catalog preservation stages into a `.partial` recovery directory, verifies the frozen DB/sidecar membership and content digests before and after copy, and atomically publishes plus fsyncs the recovery parent before the active database may be reset.
-- Corrupt catalog reset is identity-bound to the exact database/sidecar objects frozen before preservation. After the recovery snapshot is durable, revalidate the complete backing set and every file identity before destructive reset; a recreated/replaced DB or newly appeared sidecar must be preserved and fail closed instead of being deleted as the old corrupt catalog.
-- Corrupt-catalog singleton reset clears the `RecordingDatabase` owner only after its close succeeds. A close failure leaves the exact helper retained and propagates so recovery cannot open a second helper over an uncertain still-owned SQLite handle.
-- Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in draw/layout phases so dragging does not recompose the range timeline.
-- Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread; teardown belongs on the preview/release workers.
-- Range preview/shuttle disposal may race a final UI gesture: rejected worker submissions are lifecycle no-ops, and AudioTrack release fallback stays off the caller thread instead of surfacing `RejectedExecutionException` or blocking UI; if even that fallback thread cannot start, report the lost terminal release owner through the preview cleanup feedback path rather than swallowing it. Preview/shuttle child timeline-range release and CaptureScreen parent-snapshot disposal are cleanup-only: retention/storage failure must be reported through the Service-owned snapshot reporter, but must not become a playback/lifecycle failure or stop later cleanup objects from closing. CaptureScreen dispatches parent `TimelineSnapshot` release to process-lifetime IO before returning from UI cleanup so an in-flight synchronized waveform read can never block the Compose/main caller.
-- Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while accumulating the exact integrated delta.
-- Range/Library fine-adjust shuttle audio follows the puck direction: right is forward and left is reverse. The shuttle transport rate is the actual source seconds traversed per real second after timeline-duration scaling, never raw puck percentage. Audible grain speed follows that transport rate from normal pitch up to a 3x ceiling while source-head catch-up remains free to move faster; slow sub-1x motion keeps normal pitch and becomes sparse rather than replaying near-identical grains. Prefer 96 kHz shuttle processing/output, but fall back to 48 kHz if either the capability query or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog motion, continuous grains overlap on one persistent low-latency AudioTrack, and a small verified normalized PCM source window is reused across adjacent grains instead of rescanning durable storage per hop.
-- Range Export is an accepted-work boundary in the click callback: after a valid text draft commits, focus cleanup is best-effort and the export callback runs synchronously before returning. Never defer the pinned-snapshot handoff through View.post() or another lifecycle-owned queue.
-- Saved-recording shuttle positions are bounded by the opened audio source duration, not catalog duration metadata; range-selection memory is non-durability UI state and must not add synchronous filesystem writes to the main-thread export-success callback.
-- Saved-recording PCM range extraction keeps source/output allocation arithmetic in `Long`/finite `Double` until explicit `Int`-array bounds are proven; oversized/corrupt duration or sample-rate requests fail with `IOException` before multiplication can wrap into a small or negative allocation.
-- Saved-recording fine-seek keeps MediaPlayer audible until the first shuttle grain is actually queued. If shuttle playback then fails non-cancellably while it owns audible playback, hand control back to the still-open MediaPlayer only while the same scrub gesture is active/resumable and the lifecycle is resumed; cancellation/newer gestures remain silent.
-- Blob-to-range uses one continuous material path after the initial renderer handoff: its bounds and envelope morph from the blob body into the timeline waveform; never implement this transition as overlapping blob/timeline opacity fades.
-- Home save-status cards sit above the fixed capture-control cluster with a deliberate gap; they must never cover the buffer selector or bottom actions.
-- Process-local app feedback is a bounded acknowledged queue: background posts remain pending until a `RESUMED` host displays the queue head for its full duration, lifecycle cancellation must not consume that head, a stale acknowledgement may never remove a newer event, and capacity pressure must preserve the unacknowledged head while shedding only older tail events.
-- Blob-to-range zero-pass material stays light/primary throughout the morph; never insert a dark unresolved placeholder between a light blob and the light final timeline.
-- Range waveform sampling/publication waits until the opening blob-to-timeline morph is essentially settled; the light zero-pass body provides immediate feedback so construction work never competes with the geometry animation.
-- Blob-to-range source geometry is never screenshot/eyeball calibrated: measure the actual composed home blob/root bounds, derive base body diameter from AudioBlobView’s renderer equation (`0.095 + life * (0.235 + activity * 0.018)`), and align source/target centers from layout coordinates; zero-pass progress 0 is an analytic oval transformed into that exact source circle.
-- Blob-to-range interaction readiness is owned by the opening animation once the morph starts; later live source-geometry/activity updates must never cancel the readiness waiter and strand settled range controls disabled.
-- Blob-to-range source geometry is frozen at the renderer handoff for that range snapshot; later service/visualizer activity may not move the source endpoint during the in-flight morph.
+- Range waveform construction is two-pass: a cheap coarse left-to-right materialization, then a finer fixed-budget
+  left-to-right refinement; neither pass scales source reads with history duration.
+- Keep the shared two-pass waveform worker/publication pipeline in `buildProgressiveWaveform`; Range Export and Library
+  playback must not grow separate channel/worker implementations.
+- Direct timeline gestures invalidate focused time drafts; focused time fields must relinquish focus and resync when
+  playback/scrubbing moves their target, while explicit export commits a valid focused draft first. Ordinary Start/End
+  focus handoff commits the previous valid edited draft before transferring edit ownership; an invalid previous draft
+  remains owned by its original field and must not be silently overwritten by focusing the other field. Merely focusing
+  or switching away from an untouched rounded time presentation must release edit ownership without parsing that display
+  text back into the precise range endpoint.
+- Android Back while range export is active dismisses range-export mode and releases/cancels its snapshot preparation;
+  only Back from normal home may leave the app.
+- Retired raw-buffer chunks persist an identity-bound tombstone before leaving the live timeline; index loss must never
+  resurrect explicitly cleared or retention-evicted audio, including chunks held by abandoned read leases. Tombstone
+  recovery reads are strictly bounded to the tiny wire format; oversized/corrupt marker files fail closed and remain
+  preserved instead of being loaded wholesale.
+- If a retirement-tombstone rename becomes visible but its directory fsync fails, runtime follows the visible retirement
+  but physical chunk deletion remains blocked until the tombstone directory later crosses a successful durability
+  barrier. Tombstone removal likewise retains ownership until the retired-directory removal barrier succeeds; normal
+  retired chunks keep their retired-id owner, while stale-marker cleanup keeps a process-local removal-barrier owner
+  even after the marker becomes visibly absent. ID reuse must retry that fsync before creating replacement audio.
+- Predictive Back mirrors each surface’s actual reverse navigation: Onboarding pages, Settings, Library, Incidents,
+  range export, Library multi-select/inline trim/inline player, and About all track their live reverse transition;
+  shared `ReverbActionSheet` surfaces use Material3's native predictive-back dialog path, and root Home stays unhandled
+  so Android owns app-to-launcher preview. Releasing a committed predictive gesture must continue from the exact release
+  progress to its visual terminal before the logical Back mutation; never reset predictive progress to zero at commit.
+  Retained Settings/Library panels suppress their ordinary second close animation after a predictive commit so the
+  completed gesture cannot snap the panel back open.
+- Library predictive Back order is multi-select → inline trim → inline player → Library; the parent Library dismiss
+  handler must stay disabled while an expanded inline player owns Back.
+- Cancelled or failed pre-commit outputs use a content-fingerprinted cleanup journal; Library recovery suppresses those
+  exact assets until deletion succeeds, and identity reuse must never authorize deletion of replacement bytes. If FILE
+  publication moves an unexpected object into a visible final name before post-move identity verification rejects it,
+  persist content-bound suppression-only metadata for that visible path before attempting to hide it again; the
+  unexpected identity never gains delete authority, and a rollback rename whose directory fsync fails is not durable
+  evidence that the final name cannot reappear after a crash. Identity-less FILE suppression bypasses deletion-claim
+  replay so recovery can clear it only after the path is durably absent or different content replaces it; equal bytes
+  remain suppressed without delete authority. Same-ID cleanup/recovery authority records are append-only until
+  independently classified/retired; a stale producer may never overwrite a newer record merely because the path/URI
+  string was reused. Terminal cleanup reports success only after the exact observed cleanup entries are durably retired;
+  a journal commit failure remains deferred cleanup even if the physical asset is already absent/deleted.
+- Destructive/suppression journal `SharedPreferences.commit()` failure must synchronously restore that key's prior
+  process-local map before returning failure. Android updates the in-memory map before disk completion, so same-process
+  replay must never consume an undurable added authority or forget an authority whose removal failed durability.
+- Durable suppression/deletion/staging `StringSet` journals are hard-bounded by entry count, per-entry length, and total
+  characters on both read and write. Oversized or corrupt sets fail closed; never evict entries to make room because
+  every retained entry may carry suppression or destructive authority.
+- Direct durable export-directory preference writes use the same failed-commit rollback discipline: a failed set/remove
+  must restore the exact prior representable process-local SharedPreferences value and type before returning failure so
+  same-process readers cannot observe an undurable destination or reinterpret malformed authority as the default
+  destination. If corrupt XML contains a named null or another value Android Editor cannot reproduce, rollback must
+  persist a deliberately wrong-type fail-closed surrogate rather than silently remove it; the same rule applies to
+  Settings/onboarding raw rollback. Successful explicit save may repair malformed state.
+- Failed Settings rollback restores raw values only for preference keys actually submitted by that transaction;
+  representable values restore exactly and unrepresentable corruption follows the fail-closed surrogate rule above.
+  QUICK_TILE_ONE_SHOT_FULL participates only when that save itself invalidated the cache, so an unrelated failed save
+  cannot overwrite a newer runtime Full update.
+- Failed Settings rollback of QUICK_TILE_ONE_SHOT_FULL is generation-coordinated with live Service Full observations.
+  Every authoritative store observation advances the runtime generation even when the process-local preference already
+  equals that value; otherwise a temporary Settings write could suppress the generation bump and a failed rollback could
+  restore stale Full state. Runtime observation and the Settings rollback snapshot/correction share only a tiny
+  nonblocking preference lock, and the audio thread never waits on the Settings disk commit.
+- Failed onboarding retention transactions restore the raw pre-transaction values for every submitted preference key;
+  representable values restore exactly and Editor-unrepresentable corruption restores to the shared fail-closed
+  surrogate. A failed Finish must not mark onboarding shown or canonicalize malformed/missing retention preferences in
+  process memory.
+- Automated output cleanup requires both content and the originally verified descriptor-bindable stable object/provider
+  identity before physical deletion; never derive new deletion authority from whatever equal-byte object currently
+  occupies a path/URI. Legacy/NIO FILE identities and unsafe identity-less provider cleanup remain suppression-only and
+  fail-closed; replay may recover an old hidden claim to visible/preserved bytes, but it must keep the cleanup journal
+  until the original path is positively absent or replaced.
+- If physical rename succeeds but the catalog commit fails, keep that catalog failure primary. Physical rollback failure
+  and stale-row cleanup failure are terminal recovery evidence and must be suppressed onto the primary error rather than
+  discarded; when rollback cannot prove the original ID was restored, still attempt to retire the stale catalog row.
+- Provider output verification/fingerprints that grant publication or cleanup authority pin identity across descriptor
+  acquisition as well as the full content read: sample the provider identity before open, immediately after acquiring
+  the read descriptor, and after verification/hashing; any transition fails closed without granting authority.
+- Malformed output-cleanup journal entries never gain destructive authority; when their target ID is still recoverable,
+  retain them as suppression-only metadata so journal corruption cannot expose uncertain failed/cancelled output.
+- Full deletion/output-cleanup/export-staging journal records must also carry a storage-valid target ID before they
+  regain authority: FILE IDs are absolute paths with a parent, DOCUMENT IDs must be tree-scoped item URIs
+  (`/tree/<root>/document/<item>`), and MEDIASTORE IDs must be concrete audio-row URIs under Android's `media` provider
+  (`/<volume>/audio/media/<id>`). Invalid full records may still contribute recoverable suppression IDs, never
+  cleanup/replay authority.
+- MediaStore row identity is scoped to Reverb's managed `Music/Reverb/` relative path: identity/catalog observations
+  must read `RELATIVE_PATH` in the same provider row as size/revision metadata and fail closed when that path is missing
+  or different, so a valid MediaStore row URI outside Reverb's directory never gains read/mutation authority.
+- Copy/publish failure cleanup is bound to the exact verified output fingerprint. If the source changes or cannot be
+  revalidated after a verified copy, preserve that copy on later failure instead of risking destruction of the only
+  retained version.
+- Export/trim cleanup requires a whole-output digest returned by exact WAV header/payload/EOF verification; before that
+  authority exists, retain hidden staging rather than deleting an unproven path or provider object. A WAV payload write
+  failure poisons that writer: later close may release descriptor ownership but must not rewrite the header, pad,
+  truncate, force/finalize, or produce a payload digest, because hidden staging may already contain an unverified
+  physically written prefix.
+- WAV export limits use the RIFF `ChunkSize` boundary, which is physical file size minus the first 8 bytes: UI/service
+  sizing may therefore allow `0xFFFF_FFFF + 8` physical bytes, while payload limits still account for the actual
+  PCM/float header, odd-byte data padding, and whole output frames. Keep UI/service limits and `WavAudioFileWriter` on
+  this same boundary.
+- Chunk-store close/checkpoint failures must surface to the service; after an atomic retention-boundary replacement
+  becomes visible, in-memory geometry must follow the published bytes even if the following directory fsync reports
+  failure.
+- If active-chunk creation fails after reserving the file, close the acquired descriptor without replacing the primary
+  failure and retire the created path through the same durable chunk-directory barrier as normal deletion; cleanup
+  uncertainty is suppressed onto the primary error, never silently discarded.
+- The range-export play/fine-adjust puck is 48dp visually with a larger 64dp interaction footprint; shrinking its
+  appearance must not shrink its touch target.
+- Recording catalog metadata/waveform caches are identity-bound; identity uncertainty may preserve known metadata
+  continuity but must invalidate cache trust, and identity-sensitive actions must revalidate before use. Reconciliation
+  hides an old row when the path/URI is positively present as a different known identity, while identity uncertainty
+  remains unavailable rather than being treated as missing.
+- User-initiated recording mutations are bound to the selected asset identity; delayed delete/undo work and queued
+  rename requests must never retarget a later object that reuses the same path or provider URI. Once Rename is
+  submitted, its physical mutation and terminal result survive Activity/Compose cancellation; detached success/failure
+  uses process feedback rather than disappearing silently. Rename terminal delivery uses the same fallback/cleanup
+  discipline as saves: a throwing visible callback still runs detached fallback, preserves the callback failure as
+  primary with fallback/cleanup failures suppressed, and always releases terminal bookkeeping. Once a delete undo window
+  closes, the committed foreground batch owns its physical identity-bound deletes through completion; panel/lifecycle
+  teardown must not enqueue a duplicate background batch, while pre-commit teardown may transfer ownership to the
+  repository cleanup scope. Background delete failure reporting is owned by the acknowledged process feedback queue
+  before an awaited refresh clears the optimistic Library transaction; do not emit a second Library-local failure card
+  for the same batch. After a committed foreground delete attempt finishes its non-cancellable physical phase, terminal
+  optimistic-state release is part of that same non-cancellable ownership: remove successful rows before releasing exact
+  pending targets so failed targets reappear and successful targets cannot flicker back, and route delete-phase failure
+  to process feedback if the Library owner is cancelled/inactive before local reporting. A rejected URI-changing
+  document rename suppression-hides the returned candidate while it still matches the selected bytes, but never grants
+  deletion authority; same-URI uncertainty must not hide the selected source. If a FILE rename moves an unexpected
+  replacement object before detecting the identity race, persist content-bound suppression-only metadata for the visible
+  requested target before rollback; a rollback whose directory fsync fails is not proof that the requested target cannot
+  reappear after a crash. Lifecycle-scope launches that hand an accepted Rename, Trim, Settings Save, or Move into
+  `NonCancellable` ownership start `UNDISPATCHED`, so the ownership handoff occurs before the click callback returns and
+  disposal cannot cancel the coroutine in the launch gap. Claim replay may retire a catalog row only after physical
+  deletion succeeds; `MISMATCH_PRESERVED` restores/preserves bytes and retires only the deletion intent so
+  reconciliation can keep or rebind the row.
+- MediaStore/SAF rename may refresh revision metadata, but catalog rebind requires the same stable provider
+  object/content before/after the mutation and a positively observed requested display name; never synthesize the
+  requested name when the provider postcondition is unavailable, and never adopt whatever object happens to occupy the
+  URI after a rename race. A SAF `renameDocument()` return URI is direct authority only when it remains tree-scoped to
+  the recording's stored tree; canonical/out-of-tree returns must be resolved through the same stable tree-listing
+  postcondition instead.
+- Catalog registration/rebind after save, rename, or verified move requires both current stable identity and current
+  display-name proof at the SQLite commit boundary; SAF/MediaStore must derive both from one provider-row observation so
+  separate queries cannot straddle an external metadata mutation. External metadata changes between storage verification
+  and catalog commit fail closed into reconciliation instead of persisting stale names.
+- A corrupt recording catalog is preserved with its SQLite sidecars before reset; saved audio/storage scans are
+  authoritative for rebuilding the catalog, while downgrade/version failures remain non-destructive and fail closed.
+  Catalog materialization must bound any initial collection allocation before per-row validation so an oversized/corrupt
+  row count cannot force a giant heap reservation ahead of malformed-row isolation.
+- A malformed individual catalog row never gains storage-type authority and must not make healthy rows unreadable:
+  accept canonical storage codes only when blank/legacy metadata is compatible, skip conflicting/unknown rows, and let
+  authoritative storage reconciliation rediscover and replace them.
+- Catalog row isolation starts before typed cursor coercion: inspect SQLite field types before calling numeric/text
+  getters, skip wrong-type required fields instead of parsing them, and treat wrong-type derived text as empty/fallback
+  metadata so one corrupt row cannot abort healthy Library materialization.
+- Catalog isolation also starts before Android CursorWindow materialization: DAO reads project every dynamic-typed
+  SQLite value through type-gated bounded expressions, including wrong-type values stored in INTEGER columns, so one
+  oversized corrupt field cannot abort the query before per-row validation runs.
+- Catalog row isolation also rejects unsafe core identity/location or negative persisted geometry while tolerating safe
+  empty derived metadata; one malformed row must never abort healthy Library rows or turn an empty ID into
+  filesystem/provider authority.
+- Catalog row location is storage-specific authority: FILE rows require an absolute direct-child path under one of
+  Reverb's managed FILE directories (legacy app-private or shared Music/Reverb); DOCUMENT rows require a tree-scoped
+  item URI whose authority/tree ID exactly matches the stored tree URI; and MediaStore rows require a scoped MediaStore
+  audio-row URI plus the canonical MediaStore directory marker. Malformed/unmanaged locations are skipped for
+  authoritative reconciliation.
+- FILE authority never follows symbolic links: path observation, identity resolution, verified opens, output
+  fingerprinting, staging admission, managed-directory listing, managed-directory creation, and directory durability
+  barriers must reject a symlink final entry; directory fsync must bind the same non-following directory identity before
+  and after the barrier, so a stable managed-root link cannot expose or redirect bytes outside Reverb's managed FILE
+  roots. Path identity uses non-following `lstat` when available and re-samples non-following NIO attributes before
+  fallback; staging recovery binds its pre-open path identity to the opened descriptor before reading any bytes, then
+  rechecks path/descriptor identity after the read.
+- New local FILE staging entries are created through an exclusive non-following descriptor and must bind that exact
+  descriptor to the path both before and after the directory durability barrier. Creation/barrier/close uncertainty
+  preserves the hidden staging path untouched; never delete by pathname on creation failure because an external
+  replacement may already own that name.
+- Corrupt catalog preservation stages into a `.partial` recovery directory, verifies the frozen DB/sidecar membership
+  and content digests before and after copy, and atomically publishes plus fsyncs the recovery parent before the active
+  database may be reset.
+- Corrupt catalog reset is identity-bound to the exact database/sidecar objects frozen before preservation. After the
+  recovery snapshot is durable, revalidate the complete backing set and every file identity before destructive reset; a
+  recreated/replaced DB or newly appeared sidecar must be preserved and fail closed instead of being deleted as the old
+  corrupt catalog.
+- Corrupt-catalog singleton reset clears the `RecordingDatabase` owner only after its close succeeds. A close failure
+  leaves the exact helper retained and propagates so recovery cannot open a second helper over an uncertain still-owned
+  SQLite handle.
+- Range fine-adjust pointer motion must stay out of Compose composition: high-frequency puck state is consumed in
+  draw/layout phases so dragging does not recompose the range timeline.
+- Range scrub/fine-adjust audio audition must never stop, flush, or release AudioTrack on the Compose main thread;
+  teardown belongs on the preview/release workers.
+- Range preview/shuttle disposal may race a final UI gesture: rejected worker submissions are lifecycle no-ops, and
+  AudioTrack release fallback stays off the caller thread instead of surfacing `RejectedExecutionException` or blocking
+  UI; if even that fallback thread cannot start, report the lost terminal release owner through the preview cleanup
+  feedback path rather than swallowing it. Preview/shuttle child timeline-range release and CaptureScreen
+  parent-snapshot disposal are cleanup-only: retention/storage failure must be reported through the Service-owned
+  snapshot reporter, but must not become a playback/lifecycle failure or stop later cleanup objects from closing.
+  CaptureScreen dispatches parent `TimelineSnapshot` release to process-lifetime IO before returning from UI cleanup so
+  an in-flight synchronized waveform read can never block the Compose/main caller.
+- Range fine-adjust keeps the puck at display-rate but coalesces expensive timeline state commits to about 30 Hz while
+  accumulating the exact integrated delta.
+- Range/Library fine-adjust shuttle audio follows the puck direction: right is forward and left is reverse. The shuttle
+  transport rate is the actual source seconds traversed per real second after timeline-duration scaling, never raw puck
+  percentage. Audible grain speed follows that transport rate from normal pitch up to a 3x ceiling while source-head
+  catch-up remains free to move faster; slow sub-1x motion keeps normal pitch and becomes sparse rather than replaying
+  near-identical grains. Prefer 96 kHz shuttle processing/output, but fall back to 48 kHz if either the capability query
+  or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog
+  motion, continuous grains overlap on one persistent low-latency AudioTrack, and a small verified normalized PCM source
+  window is reused across adjacent grains instead of rescanning durable storage per hop.
+- Range Export is an accepted-work boundary in the click callback: after a valid text draft commits, focus cleanup is
+  best-effort and the export callback runs synchronously before returning. Never defer the pinned-snapshot handoff
+  through View.post() or another lifecycle-owned queue.
+- Saved-recording shuttle positions are bounded by the opened audio source duration, not catalog duration metadata;
+  range-selection memory is non-durability UI state and must not add synchronous filesystem writes to the main-thread
+  export-success callback.
+- Saved-recording PCM range extraction keeps source/output allocation arithmetic in `Long`/finite `Double` until
+  explicit `Int`-array bounds are proven; oversized/corrupt duration or sample-rate requests fail with `IOException`
+  before multiplication can wrap into a small or negative allocation.
+- Saved-recording fine-seek keeps MediaPlayer audible until the first shuttle grain is actually queued. If shuttle
+  playback then fails non-cancellably while it owns audible playback, hand control back to the still-open MediaPlayer
+  only while the same scrub gesture is active/resumable and the lifecycle is resumed; cancellation/newer gestures remain
+  silent.
+- Blob-to-range uses one continuous material path after the initial renderer handoff: its bounds and envelope morph from
+  the blob body into the timeline waveform; never implement this transition as overlapping blob/timeline opacity fades.
+- Home save-status cards sit above the fixed capture-control cluster with a deliberate gap; they must never cover the
+  buffer selector or bottom actions.
+- Process-local app feedback is a bounded acknowledged queue: background posts remain pending until a `RESUMED` host
+  displays the queue head for its full duration, lifecycle cancellation must not consume that head, a stale
+  acknowledgement may never remove a newer event, and capacity pressure must preserve the unacknowledged head while
+  shedding only older tail events.
+- Blob-to-range zero-pass material stays light/primary throughout the morph; never insert a dark unresolved placeholder
+  between a light blob and the light final timeline.
+- Range waveform sampling/publication waits until the opening blob-to-timeline morph is essentially settled; the light
+  zero-pass body provides immediate feedback so construction work never competes with the geometry animation.
+- Blob-to-range source geometry is never screenshot/eyeball calibrated: measure the actual composed home blob/root
+  bounds, derive base body diameter from AudioBlobView’s renderer equation (`0.095 + life * (0.235 + activity *
+  0.018)`), and align source/target centers from layout coordinates; zero-pass progress 0 is an analytic oval
+  transformed into that exact source circle.
+- Blob-to-range interaction readiness is owned by the opening animation once the morph starts; later live
+  source-geometry/activity updates must never cancel the readiness waiter and strand settled range controls disabled.
+- Blob-to-range source geometry is frozen at the renderer handoff for that range snapshot; later service/visualizer
+  activity may not move the source endpoint during the in-flight morph.
 
-- Physical saved-recording mutations are process-exclusive per recording identity: trim, rename, delete, explicit move, and legacy migration cannot overlap on the same row. Inline Trim Save keeps that reservation through its non-cancellable physical save/catalog registration, so close/reopen, player disposal, refresh, or revision changes must not re-enable conflicting actions before terminal.
-- Incident rows use text prepared on the background history-read path, with shared date/time formatters per snapshot; lazy-row composition and scrolling must not format timestamps or diagnostic strings. Incident back progress is read in the graphics layer, not the root composition.
-- Inline playback serializes asynchronous MediaPlayer seeks and resumes only after the newest queued target completes; the trim-end monitor must not inspect a stale pre-seek position. Resuming after editing the End boundary auditions its lead-in rather than starting exactly at the stop boundary. Pause and teardown revoke pending seek resume intent.
-- Library and range-preview pause/hidden/disposal boundaries revoke both pending-seek and scrub-resume intent. Cancelled fine-seek and boundary gestures must not execute normal-release playback or audition; range preview admission requires a visible resumed host, including delayed gesture cleanup. Inline trim Save stops preview before accepting the transaction.
+- Physical saved-recording mutations are process-exclusive per recording identity: trim, rename, delete, explicit move,
+  and legacy migration cannot overlap on the same row. Inline Trim Save keeps that reservation through its
+  non-cancellable physical save/catalog registration, so close/reopen, player disposal, refresh, or revision changes
+  must not re-enable conflicting actions before terminal.
+- Incident rows use text prepared on the background history-read path, with shared date/time formatters per snapshot;
+  lazy-row composition and scrolling must not format timestamps or diagnostic strings. Incident back progress is read in
+  the graphics layer, not the root composition.
+- Inline playback serializes asynchronous MediaPlayer seeks and resumes only after the newest queued target completes;
+  the trim-end monitor must not inspect a stale pre-seek position. Resuming after editing the End boundary auditions its
+  lead-in rather than starting exactly at the stop boundary. Pause and teardown revoke pending seek resume intent.
+- Library and range-preview pause/hidden/disposal boundaries revoke both pending-seek and scrub-resume intent. Cancelled
+  fine-seek and boundary gestures must not execute normal-release playback or audition; range preview admission requires
+  a visible resumed host, including delayed gesture cleanup. Inline trim Save stops preview before accepting the
+  transaction.
