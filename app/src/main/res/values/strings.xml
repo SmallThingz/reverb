@@ -178,6 +178,7 @@
     <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
     <string name="incident_mark_checked">Mark incident checked</string>
     <string name="incident_mark_unchecked">Mark incident unchecked</string>
+    <string name="incident_copy">Copy</string>
     <string name="incident_copy_label">Reverb incident</string>
     <string name="incident_copied">Incident copied.</string>
     <string name="incident_update_failed">Couldn\'t update incident.</string>

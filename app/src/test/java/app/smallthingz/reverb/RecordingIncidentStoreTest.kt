@@ -12,6 +12,58 @@ import org.junit.Test
 
 class RecordingIncidentStoreTest {
     @Test
+    fun preparedHistory_preservesDetailsAndNewestFirstOrder() {
+        val older = RecordingIncident(occurredAtMillis = 1_000L, acknowledgedAtMillis = 2_000L)
+        val newer = RecordingIncident(
+            occurredAtMillis = 86_401_000L,
+            resumedAtMillis = 86_403_000L,
+            pid = 42,
+            exitReason = ApplicationExitInfo.REASON_CRASH,
+            description = "Details",
+        )
+        val prepared = prepareIncidentHistory(
+            listOf(older, newer),
+            java.util.Locale.US,
+            java.time.ZoneId.of("UTC"),
+        )
+        assertEquals(listOf(newer, older), prepared.rows.map { it.incident })
+        assertEquals("Fri, 2 Jan 1970", prepared.rows.first().date)
+        assertTrue(prepared.rows.first().stopSummary.startsWith("Stopped at 12:00:01 AM for "))
+        assertTrue(prepared.rows.first().cause.contains("PID 42"))
+        assertEquals("Details", prepared.rows.first().description)
+        assertTrue(prepared.hasAlert)
+        assertFalse(prepareIncidentHistory(listOf(older)).hasAlert)
+    }
+
+    @Test
+    fun deletedIncident_staysDeletedWhenLateExitEvidenceArrives() {
+        val deleted = RecordingIncident(
+            occurredAtMillis = 100L,
+            acknowledgedAtMillis = Long.MIN_VALUE,
+            pid = 42,
+            captureArmedAtMillis = 50L,
+        )
+        val enriched = mergeRecordingIncidentEvidence(
+            deleted,
+            deleted.copy(acknowledgedAtMillis = 0L, exitReason = ApplicationExitInfo.REASON_CRASH),
+        )
+        assertTrue(enriched.deleted)
+        assertEquals(ApplicationExitInfo.REASON_CRASH, enriched.exitReason)
+        assertTrue(toggleRecordingIncidentAcknowledgement(enriched, 200L).deleted)
+    }
+
+    @Test
+    fun incidentCap_preservesDeletedIdentity() {
+        val deleted = RecordingIncident(occurredAtMillis = 1L, acknowledgedAtMillis = Long.MIN_VALUE)
+        val visible = RecordingIncident(occurredAtMillis = 2L)
+        val appended = appendRecordingIncidentPreservingDeletions(
+            listOf(deleted, visible), RecordingIncident(occurredAtMillis = 3L), limit = 2,
+        )
+        assertTrue(appended.contains(deleted))
+        assertFalse(appended.contains(visible))
+    }
+
+    @Test
     fun incidentPayloadExactRead_acceptsExactEof() {
         val input = DataInputStream(ByteArrayInputStream(byteArrayOf(7)))
 

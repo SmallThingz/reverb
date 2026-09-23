@@ -35,6 +35,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -630,6 +633,7 @@ internal class RangeExportEditorState(
     val selectionDurationEditing: Boolean
         get() = selectionDurationInteraction.active
 
+    private var playbackAllowed = true
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
     private var lastAuditionAtMillis = 0L
@@ -860,6 +864,7 @@ internal class RangeExportEditorState(
     }
 
     fun beginFineAdjust(shuttleRate: Float) {
+        if (!playbackAllowed) return
         invalidateSelectionDurationCommit()
         invalidateTextEditing()
         resumeAfterScrub = isPlaying
@@ -914,21 +919,30 @@ internal class RangeExportEditorState(
     }
 
     fun pausePreview() {
+        resumeAfterScrub = false
+        isScrubbing = false
         if (fineAdjustShuttleActive) {
             fineAdjustShuttleActive = false
             previewController.stopShuttle()
             isScrubbing = false
         }
-        if (!isPlaying) return
         previewController.stop()
         isPlaying = false
     }
 
+    fun setPlaybackAllowed(allowed: Boolean) {
+        playbackAllowed = allowed
+        if (!allowed) pausePreview()
+    }
+
     fun close() {
+        playbackAllowed = false
+        pausePreview()
         previewController.close()
     }
 
     private fun startPreview() {
+        if (!playbackAllowed) return
         val readySnapshot = snapshot ?: return
         if (durationSeconds <= 0f) return
         previewError = null
@@ -953,7 +967,7 @@ internal class RangeExportEditorState(
     }
 
     private fun auditionSelectedBoundary(force: Boolean = false) {
-        if (fineAdjustShuttleActive) return
+        if (!playbackAllowed || fineAdjustShuttleActive) return
         val readySnapshot = snapshot ?: return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAuditionAtMillis < 55L) return
@@ -1051,6 +1065,24 @@ internal fun RangeExportHomeContent(
         if (backProgress > 0f) {
             state.invalidateTextEditing()
             state.pausePreview()
+        }
+    }
+    val previewLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(state, previewLifecycleOwner, visualizerVisible) {
+        state.setPlaybackAllowed(
+            visualizerVisible && previewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+        )
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> state.setPlaybackAllowed(visualizerVisible)
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> state.setPlaybackAllowed(false)
+                else -> Unit
+            }
+        }
+        previewLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            previewLifecycleOwner.lifecycle.removeObserver(observer)
+            state.setPlaybackAllowed(false)
         }
     }
     DisposableEffect(state) {
@@ -1271,6 +1303,9 @@ private fun RangeExportTimeline(
                                     )
                                 }
                             }
+                        } catch (cancelled: CancellationException) {
+                            state.pausePreview()
+                            throw cancelled
                         } finally {
                             state.endBoundaryScrub()
                         }
@@ -1480,6 +1515,7 @@ private fun RangeTimelineBar(
                 }
                 val markerCenterAtDown = xPx()
                 var dragging = false
+                var gestureCancelled = false
                 try {
                     while (true) {
                         val event = awaitPointerEvent()
@@ -1501,9 +1537,13 @@ private fun RangeTimelineBar(
                             state.updateBoundaryScrub(target, requested)
                         }
                     }
+                } catch (cancelled: CancellationException) {
+                    gestureCancelled = true
+                    state.pausePreview()
+                    throw cancelled
                 } finally {
                     if (dragging) state.endBoundaryScrub()
-                    else state.beginBoundaryEdit(target)
+                    else if (!gestureCancelled) state.beginBoundaryEdit(target)
                 }
             }
         }
@@ -1695,6 +1735,7 @@ private fun SpringFineAdjust(
         onFineAdjust = { deltaSeconds, _ -> state.fineAdjust(deltaSeconds) },
         onUpdateFineAdjustShuttle = state::updateFineAdjustShuttle,
         onEndFineAdjust = state::endFineAdjust,
+        onCancelFineAdjust = state::pausePreview,
         modifier = modifier,
     )
 }
@@ -1711,6 +1752,7 @@ internal fun SpringFineSeekControl(
     onFineAdjust: (Float, Float) -> Unit,
     onUpdateFineAdjustShuttle: (Float, Float) -> Unit,
     onEndFineAdjust: () -> Unit,
+    onCancelFineAdjust: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1727,7 +1769,7 @@ internal fun SpringFineSeekControl(
             dragging = false
             horizontalPull = 0f
             rawVerticalPull = 0f
-            onEndFineAdjust()
+            onCancelFineAdjust()
         }
     }
 
@@ -1881,6 +1923,12 @@ internal fun SpringFineSeekControl(
                             change.consume()
                         }
                     }
+                } catch (cancelled: CancellationException) {
+                    fineAdjustStarted = false
+                    dragging = false
+                    commitAccumulator.reset()
+                    onCancelFineAdjust()
+                    throw cancelled
                 } finally {
                     if (fineAdjustStarted) {
                         val finalDeltaSeconds = commitAccumulator.takeDelta()

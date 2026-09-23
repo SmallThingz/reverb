@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,6 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,11 +46,11 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToLong
 
-private fun incidentDateFormatter(): DateTimeFormatter =
-    DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
+private fun incidentDateFormatter(locale: Locale = Locale.getDefault()): DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE, d MMM yyyy", locale)
 
-private fun incidentClockFormatter(): DateTimeFormatter =
-    DateTimeFormatter.ofPattern("h:mm:ss a", Locale.getDefault())
+private fun incidentClockFormatter(locale: Locale = Locale.getDefault()): DateTimeFormatter =
+    DateTimeFormatter.ofPattern("h:mm:ss a", locale)
 
 internal fun formatRecordingIncidentTime(timestampMillis: Long): String =
     incidentDateFormatter().format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
@@ -78,9 +83,13 @@ internal fun recordingExitReasonLabel(reason: Int): String = when (reason) {
     else -> "Process exit $reason"
 }
 
-internal fun formatIncidentStopSummary(incident: RecordingIncident): String {
-    val stoppedAt = incidentClockFormatter().format(
-        Instant.ofEpochMilli(incident.occurredAtMillis).atZone(ZoneId.systemDefault()),
+internal fun formatIncidentStopSummary(
+    incident: RecordingIncident,
+    clockFormatter: DateTimeFormatter = incidentClockFormatter(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): String {
+    val stoppedAt = clockFormatter.format(
+        Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone),
     )
     val duration = recordingIncidentDowntimeMillis(incident)?.let { millis ->
         val seconds = (millis / 1_000L + if (millis % 1_000L == 0L) 0L else 1L)
@@ -149,19 +158,60 @@ private fun incidentAgeLine(incident: RecordingIncident): String = buildList {
     }
 }.joinToString(" · ")
 
+// Prepared off the UI thread once per durable revision, not when a lazy row enters composition.
+internal data class IncidentPresentation(
+    val incident: RecordingIncident,
+    val key: String,
+    val date: String,
+    val stopSummary: String,
+    val cause: String,
+    val runtime: String,
+    val age: String,
+    val description: String?,
+) {
+    val hasDetails: Boolean
+        get() = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
+}
+
+internal class IncidentHistoryPresentation(val rows: List<IncidentPresentation>) {
+    val hasAlert: Boolean = rows.any { !it.incident.acknowledged }
+}
+
+internal fun prepareIncidentHistory(
+    incidents: List<RecordingIncident>,
+    locale: Locale = Locale.getDefault(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): IncidentHistoryPresentation {
+    val dateFormatter = incidentDateFormatter(locale)
+    val clockFormatter = incidentClockFormatter(locale)
+    return IncidentHistoryPresentation(incidents.asReversed().map { incident ->
+        IncidentPresentation(
+            incident = incident,
+            key = "${incident.kind.storageCode}:${incident.occurredAtMillis}",
+            date = dateFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone)),
+            stopSummary = formatIncidentStopSummary(incident, clockFormatter, zone),
+            cause = incidentCauseLine(incident),
+            runtime = incidentRuntimeLine(incident),
+            age = incidentAgeLine(incident),
+            description = incident.description?.takeIf { it.isNotBlank() },
+        )
+    })
+}
+
 @Composable
 internal fun IncidentsScreen(
-    incidents: List<RecordingIncident>,
+    history: IncidentHistoryPresentation,
     onBack: () -> Unit,
     onToggleAcknowledged: (RecordingIncident) -> Unit,
+    onDelete: (RecordingIncident) -> Unit,
     modifier: Modifier = Modifier,
-    backProgress: Float = 0f,
+    backProgress: () -> Float = { 0f },
     backDirection: Float = 1f,
 ) {
     val noiseBrush = rememberAppNoiseBrush()
-    val progress = backProgress.coerceIn(0f, 1f)
     Surface(
         modifier = modifier.graphicsLayer {
+            val progress = backProgress().coerceIn(0f, 1f)
             translationX = backDirection * size.width * 0.08f * progress
             alpha = 1f - progress * 0.18f
         },
@@ -183,7 +233,7 @@ internal fun IncidentsScreen(
                 )
             }
 
-            if (incidents.isEmpty()) {
+            if (history.rows.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Icon(AppIcons.incidents, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(34.dp))
@@ -202,10 +252,15 @@ internal fun IncidentsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(
-                        items = incidents.asReversed(),
-                        key = { incident -> "${incident.kind.storageCode}:${incident.occurredAtMillis}" },
-                    ) { incident ->
-                        IncidentCard(incident = incident, onToggleAcknowledged = { onToggleAcknowledged(incident) })
+                        items = history.rows,
+                        key = { it.key },
+                    ) { row ->
+                        IncidentCard(
+                            row = row,
+                            modifier = Modifier.animateItem(),
+                            onToggleAcknowledged = { onToggleAcknowledged(row.incident) },
+                            onDelete = { onDelete(row.incident) },
+                        )
                     }
                 }
             }
@@ -215,23 +270,26 @@ internal fun IncidentsScreen(
 
 @Composable
 private fun IncidentCard(
-    incident: RecordingIncident,
+    row: IncidentPresentation,
     onToggleAcknowledged: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    var menuCreated by remember { mutableStateOf(false) }
+    val incident = row.incident
     val unacknowledged = !incident.acknowledged
-    val date = remember(incident.occurredAtMillis) { formatRecordingIncidentTime(incident.occurredAtMillis) }
-    val stopSummary = remember(incident.occurredAtMillis, incident.resumedAtMillis) {
-        formatIncidentStopSummary(incident)
-    }
-    val cause = remember(incident) { incidentCauseLine(incident) }
-    val runtime = remember(incident) { incidentRuntimeLine(incident) }
-    val age = remember(incident) { incidentAgeLine(incident) }
-    val description = incident.description?.takeIf { it.isNotBlank() }
+    val date = row.date
+    val stopSummary = row.stopSummary
+    val cause = row.cause
+    val runtime = row.runtime
+    val age = row.age
+    val description = row.description
     val context = LocalContext.current
     val copyLabel = stringResource(R.string.incident_copy_label)
     val copiedMessage = stringResource(R.string.incident_copied)
-    val copyText = remember(incident, date, stopSummary, cause, runtime, age, description) {
-        buildList {
+    val copyIncident = {
+        val copyText = buildList {
             add(date)
             add(stopSummary)
             if (cause.isNotEmpty()) add(cause)
@@ -239,64 +297,84 @@ private fun IncidentCard(
             if (age.isNotEmpty()) add(age)
             if (description != null) add(description)
         }.joinToString("\n")
-    }
-    val copyIncident = {
         context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
             ClipData.newPlainText(copyLabel, copyText),
         )
         AppFeedbackCenter.post(copiedMessage, FeedbackTone.SUCCESS)
     }
-    val hasDetails = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
+    val hasDetails = row.hasDetails
     val border = if (unacknowledged) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
     val fill = if (unacknowledged) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerHigh
 
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onToggleAcknowledged,
-                onLongClick = copyIncident,
-            ),
-        shape = RoundedCornerShape(18.dp),
-        color = fill,
-        border = BorderStroke(1.dp, border),
-    ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text(date, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                    Text(stopSummary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Box(modifier) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onToggleAcknowledged,
+                    onLongClick = { menuCreated = true; menuExpanded = true },
+                ),
+            shape = RoundedCornerShape(18.dp),
+            color = fill,
+            border = BorderStroke(1.dp, border),
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(date, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text(stopSummary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .combinedClickable(
+                                onClick = onToggleAcknowledged,
+                                onLongClick = { menuCreated = true; menuExpanded = true },
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (incident.acknowledged) AppIcons.checked else AppIcons.unchecked,
+                            contentDescription = stringResource(
+                                if (incident.acknowledged) R.string.incident_mark_unchecked
+                                else R.string.incident_mark_checked,
+                            ),
+                            tint = if (unacknowledged) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .combinedClickable(
-                            onClick = onToggleAcknowledged,
-                            onLongClick = copyIncident,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (incident.acknowledged) AppIcons.checked else AppIcons.unchecked,
-                        contentDescription = stringResource(
-                            if (incident.acknowledged) R.string.incident_mark_unchecked
-                            else R.string.incident_mark_checked,
-                        ),
-                        tint = if (unacknowledged) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(22.dp),
-                    )
+                if (hasDetails) {
+                    HorizontalDivider(color = border.copy(alpha = 0.55f))
+                    if (cause.isNotEmpty()) Text(cause, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    if (runtime.isNotEmpty()) Text(runtime, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (age.isNotEmpty()) Text(age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (description != null) Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (hasDetails) {
-                HorizontalDivider(color = border.copy(alpha = 0.55f))
-                if (cause.isNotEmpty()) Text(cause, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                if (runtime.isNotEmpty()) Text(runtime, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (age.isNotEmpty()) Text(age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (description != null) Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        // Create on first use, then retain through the popup exit animation.
+        if (menuCreated) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                shape = RoundedCornerShape(18.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.incident_copy)) },
+                    leadingIcon = { Icon(AppIcons.copy, contentDescription = null) },
+                    onClick = { menuExpanded = false; copyIncident() },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(AppIcons.delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    onClick = { menuExpanded = false; onDelete() },
+                )
             }
         }
     }

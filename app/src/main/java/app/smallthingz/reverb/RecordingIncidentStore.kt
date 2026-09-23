@@ -67,6 +67,9 @@ internal data class RecordingIncident(
     val captureArmedAtMillis: Long = -1L,
     val description: String? = null,
 ) {
+    // Keep an identity tombstone so delayed exit evidence cannot resurrect user-deleted cards.
+    // This sentinel uses the existing signed history field and survives format-compatible reads.
+    val deleted: Boolean get() = acknowledgedAtMillis == Long.MIN_VALUE
     val acknowledged: Boolean get() = acknowledgedAtMillis > 0L
     val recoveryPending: Boolean get() = resumedAtMillis == 0L
 }
@@ -74,9 +77,26 @@ internal data class RecordingIncident(
 internal fun toggleRecordingIncidentAcknowledgement(
     incident: RecordingIncident,
     acknowledgedAtMillis: Long,
-): RecordingIncident = incident.copy(
+): RecordingIncident = if (incident.deleted) incident else incident.copy(
     acknowledgedAtMillis = if (incident.acknowledged) 0L else acknowledgedAtMillis.coerceAtLeast(1L),
 )
+
+internal fun appendRecordingIncidentPreservingDeletions(
+    existing: List<RecordingIncident>,
+    incident: RecordingIncident,
+    limit: Int,
+): List<RecordingIncident> {
+    if (existing.count { it.deleted } >= limit) {
+        throw IOException("Incident history is full of deletion markers")
+    }
+    val updated = (existing + incident).sortedBy { it.occurredAtMillis }.toMutableList()
+    while (updated.size > limit) {
+        val evictable = updated.indexOfFirst { !it.deleted }
+        if (evictable < 0) throw IOException("Incident history is full of deletion markers")
+        updated.removeAt(evictable)
+    }
+    return updated
+}
 
 internal inline fun throwIncidentAtomicWriteFailure(
     primaryFailure: Throwable,
@@ -154,7 +174,7 @@ internal fun mergeRecordingIncidentEvidence(
         occurredAtMillis = minOf(existing.occurredAtMillis, incoming.occurredAtMillis),
         resumedAtMillis = existing.resumedAtMillis.takeIf { it > 0L }
             ?: incoming.resumedAtMillis,
-        acknowledgedAtMillis = existing.acknowledgedAtMillis.takeIf { it > 0L }
+        acknowledgedAtMillis = existing.acknowledgedAtMillis.takeIf { it > 0L || existing.deleted }
             ?: incoming.acknowledgedAtMillis,
         description = base.description ?: existing.description ?: incoming.description,
     )
@@ -559,7 +579,35 @@ internal object RecordingIncidentStore {
         // so retry the complete prior-session recovery here too; otherwise one transient startup
         // failure can leave an armed previous-process marker invisible until capture starts again.
         recoverPriorSessionIfNeeded(appContext)
-        return readHistory(historyFile(appContext))
+        return readHistory(historyFile(appContext)).filterNot { it.deleted }
+    }
+
+    fun deleteIncidentInBackground(context: Context, incident: RecordingIncident) {
+        val appContext = context.applicationContext
+        historyMutationScope.launch {
+            runIncidentHistoryMutation(
+                mutation = { deleteIncident(appContext, incident) },
+                onFailure = {
+                    AppFeedbackCenter.post(
+                        appContext.getString(R.string.incident_update_failed),
+                        FeedbackTone.ERROR,
+                    )
+                },
+            )
+        }
+    }
+
+    @Synchronized
+    private fun deleteIncident(context: Context, incident: RecordingIncident) {
+        val file = historyFile(context)
+        val existing = readHistory(file)
+        val index = existing.indexOfFirst { recordingIncidentReferenceMatches(it, incident) }
+        if (index < 0 || existing[index].deleted) return
+        val updated = existing.toMutableList().apply {
+            this[index] = this[index].copy(acknowledgedAtMillis = Long.MIN_VALUE)
+        }
+        writeHistory(file, updated)
+        signalHistoryChanged()
     }
 
     fun toggleIncidentAcknowledgedInBackground(context: Context, incident: RecordingIncident) {
@@ -775,7 +823,9 @@ internal object RecordingIncidentStore {
             val marker = pendingSession.marker
             val exit = historicalExit(context, marker)
             when (recordingExitDisposition(exit?.reason)) {
-                RecordingExitDisposition.PENDING -> remaining += pendingSession
+                RecordingExitDisposition.PENDING -> {
+                    remaining += pendingSession
+                }
                 RecordingExitDisposition.INCIDENT -> {
                     appendIncident(
                         context,
@@ -932,7 +982,7 @@ internal object RecordingIncidentStore {
                 this[index] = mergeRecordingIncidentEvidence(this[index], incident)
             }.sortedBy { it.occurredAtMillis }
         } else {
-            (existing + incident).sortedBy { it.occurredAtMillis }.takeLast(MAX_INCIDENTS)
+            appendRecordingIncidentPreservingDeletions(existing, incident, MAX_INCIDENTS)
         }
         if (updated == existing) return
         writeHistory(file, updated)

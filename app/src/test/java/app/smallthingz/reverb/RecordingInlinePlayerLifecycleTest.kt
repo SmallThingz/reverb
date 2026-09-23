@@ -6,6 +6,28 @@ import org.junit.Test
 
 class RecordingInlinePlayerLifecycleTest {
     @Test
+    fun hideOrPause_revokesBothWaveformAndPendingSeekResume() {
+        val state = InlinePlayerBookkeeping()
+        state.resumeAfterScrub = true
+        state.seeks.request(1_000, true)
+        state.revokeResume()
+        assertFalse(state.resumeAfterScrub)
+        assertFalse(state.seeks.resume)
+        // The in-flight seek still needs its callback drained; revocation must not
+        // falsely admit another simultaneous native seek.
+        assertTrue(state.seeks.pending)
+        state.seeks.completed()
+        assertFalse(state.seeks.resume)
+    }
+
+    @Test
+    fun initialPlayback_waitsWhileHiddenOrEditing() {
+        assertFalse(inlinePlaybackShouldAutoStart(true, true, true, blocked = true))
+        assertTrue(inlinePlaybackShouldAutoStart(true, true, true, blocked = false))
+        assertFalse(inlinePlaybackShouldAutoStart(true, false, true, blocked = false))
+    }
+
+    @Test
     fun mediaPlayerCallback_requiresExactLivePlayerOwnership() {
         assertTrue(
             inlinePlaybackCallbackIsCurrent(

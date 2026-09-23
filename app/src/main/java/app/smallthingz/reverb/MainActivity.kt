@@ -957,18 +957,20 @@ private fun MainScreen(
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
-    var recordingIncidents by remember { mutableStateOf<List<RecordingIncident>>(emptyList()) }
-    val hasIncidentAlert = recordingIncidents.any { !it.acknowledged }
+    var incidentHistory by remember { mutableStateOf(IncidentHistoryPresentation(emptyList())) }
+    val hasIncidentAlert = incidentHistory.hasAlert
 
     suspend fun loadIncidents(): Boolean {
         val loaded = try {
-            withContext(Dispatchers.IO) { RecordingIncidentStore.readIncidents(context) }
+            withContext(Dispatchers.IO) {
+                prepareIncidentHistory(RecordingIncidentStore.readIncidents(context))
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return false
         }
-        recordingIncidents = loaded
+        incidentHistory = loaded
         return true
     }
 
@@ -1277,10 +1279,11 @@ private fun MainScreen(
 
         if (showIncidents) {
             IncidentsScreen(
-                incidents = recordingIncidents,
+                history = incidentHistory,
                 onBack = { showIncidents = false },
                 onToggleAcknowledged = ::toggleIncidentAcknowledged,
-                backProgress = incidentsBackMotion.progress.value,
+                onDelete = { RecordingIncidentStore.deleteIncidentInBackground(context, it) },
+                backProgress = { incidentsBackMotion.progress.value },
                 backDirection = predictiveBackHorizontalDirection(incidentsBackMotion.swipeEdge),
                 modifier = Modifier
                     .fillMaxSize()

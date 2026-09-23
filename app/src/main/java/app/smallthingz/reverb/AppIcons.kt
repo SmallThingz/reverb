@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
@@ -43,6 +44,7 @@ internal object AppIcons {
     val settings: ImageVector = Icons.Rounded.Settings
     val incidents: ImageVector = Icons.Rounded.Warning
     val share: ImageVector = Icons.Rounded.Share
+    val copy: ImageVector = Icons.Rounded.ContentCopy
     val delete: ImageVector = Icons.Rounded.Delete
     val edit: ImageVector = Icons.Rounded.Edit
     val info: ImageVector = Icons.Rounded.Info
