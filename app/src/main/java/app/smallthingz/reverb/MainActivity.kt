@@ -62,7 +62,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
@@ -1216,7 +1215,6 @@ private fun MainScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = libraryContentTopPadding)
-                            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .appNoise(noiseBrush),
                     )
