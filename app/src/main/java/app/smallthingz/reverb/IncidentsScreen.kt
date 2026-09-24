@@ -55,9 +55,6 @@ private fun incidentDateFormatter(locale: Locale = Locale.getDefault()): DateTim
 private fun incidentClockFormatter(locale: Locale = Locale.getDefault()): DateTimeFormatter =
     DateTimeFormatter.ofPattern("h:mm:ss a", locale)
 
-internal fun formatRecordingIncidentTime(timestampMillis: Long): String =
-    incidentDateFormatter().format(Instant.ofEpochMilli(timestampMillis).atZone(ZoneId.systemDefault()))
-
 internal fun recordingIncidentDowntimeMillis(incident: RecordingIncident): Long? =
     incident.resumedAtMillis.takeIf { it > 0L }?.let { resumed ->
         (resumed - incident.occurredAtMillis).coerceAtLeast(0L)

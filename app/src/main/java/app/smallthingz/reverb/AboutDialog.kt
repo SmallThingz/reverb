@@ -1,6 +1,5 @@
 package app.smallthingz.reverb
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -166,7 +165,12 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
 
                     Surface(
                         onClick = {
-                            linkError = if (openGithub(context)) null else resources.getString(R.string.no_app_available)
+                            linkError = try {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, GITHUB_REPO_URL.toUri()))
+                                null
+                            } catch (_: RuntimeException) {
+                                resources.getString(R.string.no_app_available)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(20.dp),
@@ -206,16 +210,5 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                 }
             }
         }
-    }
-}
-
-private fun openGithub(context: Context): Boolean {
-    return try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, GITHUB_REPO_URL.toUri()))
-        true
-    } catch (_: ActivityNotFoundException) {
-        false
-    } catch (_: RuntimeException) {
-        false
     }
 }

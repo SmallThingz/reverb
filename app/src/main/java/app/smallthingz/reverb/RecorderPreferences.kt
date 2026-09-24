@@ -39,6 +39,14 @@ private data class InputConfigKey(
     val sampleFormat: PcmSampleFormat,
 )
 
+internal val Enum<*>.legacyPrefValue: String get() = name.lowercase()
+
+private inline fun <T> Iterable<T>.entryByStorageCode(value: Int, code: (T) -> Byte): T? =
+    firstOrNull { code(it).toInt() == value }
+
+private fun <T : Enum<T>> Iterable<T>.entryByLegacyValue(value: String?, default: T): T =
+    firstOrNull { it.legacyPrefValue == value } ?: default
+
 enum class RetentionMode(val storageCode: Byte) {
     SIZE(0),
     TIME(1),
@@ -46,7 +54,7 @@ enum class RetentionMode(val storageCode: Byte) {
 
     companion object {
         fun fromStorageOrNull(value: Int): RetentionMode? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, RetentionMode::storageCode)
     }
 }
 
@@ -57,16 +65,14 @@ enum class ExportFormat(
     WAV(R.string.format_wav, 1),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
     val extension: String get() = "wav"
     val outputMimeType: String get() = "audio/wav"
 
     companion object {
         fun fromStorageCode(value: Int): ExportFormat? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, ExportFormat::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): ExportFormat =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: WAV
+        fun fromLegacyPrefValue(value: String?): ExportFormat = entries.entryByLegacyValue(value, WAV)
     }
 }
 
@@ -74,14 +80,11 @@ enum class ExportCodec(val storageCode: Byte) {
     PCM_16(1),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
-
     companion object {
         fun fromStorageCode(value: Int): ExportCodec? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, ExportCodec::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): ExportCodec =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: PCM_16
+        fun fromLegacyPrefValue(value: String?): ExportCodec = entries.entryByLegacyValue(value, PCM_16)
     }
 }
 
@@ -101,14 +104,11 @@ enum class PcmSampleFormat(
     PCM_FLOAT(R.string.sample_format_float_32, 32, 4, AudioFormat.ENCODING_PCM_FLOAT, WAVE_FORMAT_IEEE_FLOAT, 3),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
-
     companion object {
         fun fromStorageCode(value: Int): PcmSampleFormat? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, PcmSampleFormat::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): PcmSampleFormat =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: PCM_16
+        fun fromLegacyPrefValue(value: String?): PcmSampleFormat = entries.entryByLegacyValue(value, PCM_16)
     }
 }
 
@@ -149,7 +149,7 @@ enum class AudioSourceMode(
         fun defaultMode(): AudioSourceMode = preferredOrder.first()
 
         fun fromStorageCode(value: Int): AudioSourceMode =
-            entries.firstOrNull { it.storageCode.toInt() == value } ?: defaultMode()
+            entries.entryByStorageCode(value, AudioSourceMode::storageCode) ?: defaultMode()
 
         fun availableModes(): List<AudioSourceMode> = preferredOrder.filter { mode ->
             !mode.requiresPrivilegedCapturePermission &&
@@ -169,14 +169,11 @@ enum class InputRouteMode(
     BUILTIN_MIC(R.string.input_route_builtin_mic, 1),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
-
     companion object {
         fun fromStorageCode(value: Int): InputRouteMode? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, InputRouteMode::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): InputRouteMode =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: AUTO
+        fun fromLegacyPrefValue(value: String?): InputRouteMode = entries.entryByLegacyValue(value, AUTO)
     }
 }
 
@@ -190,14 +187,11 @@ enum class ChannelMode(
     STEREO(R.string.channel_mode_stereo, 2, AudioFormat.CHANNEL_IN_STEREO, 2),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
-
     companion object {
         fun fromStorageCode(value: Int): ChannelMode? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, ChannelMode::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): ChannelMode =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: MONO
+        fun fromLegacyPrefValue(value: String?): ChannelMode = entries.entryByLegacyValue(value, MONO)
     }
 }
 
@@ -210,14 +204,11 @@ enum class AppThemeMode(
     DARK(R.string.theme_dark, 2),
     ;
 
-    val legacyPrefValue: String get() = name.lowercase()
-
     companion object {
         fun fromStorageCode(value: Int): AppThemeMode? =
-            entries.firstOrNull { it.storageCode.toInt() == value }
+            entries.entryByStorageCode(value, AppThemeMode::storageCode)
 
-        fun fromLegacyPrefValue(value: String?): AppThemeMode =
-            entries.firstOrNull { it.legacyPrefValue == value } ?: SYSTEM
+        fun fromLegacyPrefValue(value: String?): AppThemeMode = entries.entryByLegacyValue(value, SYSTEM)
     }
 }
 
@@ -664,12 +655,10 @@ fun exportPayloadLimitBytes(
     format: ExportFormat,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
 ): Long {
-    val budget = (exportFileSizeLimitBytes(format) - wavHeaderBytes(sampleFormat)).coerceAtLeast(0L)
+    val headerBytes = if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_WAV_HEADER_BYTES else PCM_WAV_HEADER_BYTES
+    val budget = (exportFileSizeLimitBytes(format) - headerBytes).coerceAtLeast(0L)
     return if (sampleFormat == PcmSampleFormat.PCM_8) (budget - 1L).coerceAtLeast(0L) else budget
 }
-
-private fun wavHeaderBytes(sampleFormat: PcmSampleFormat): Long =
-    if (sampleFormat == PcmSampleFormat.PCM_FLOAT) FLOAT_WAV_HEADER_BYTES else PCM_WAV_HEADER_BYTES
 
 fun exportDurationLimitExactSeconds(
     format: ExportFormat,
