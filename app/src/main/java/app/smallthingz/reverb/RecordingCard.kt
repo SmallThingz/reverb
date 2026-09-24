@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -115,18 +116,35 @@ private fun RecordingSummaryCard(
     expandedContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val chrome = appChrome()
+    val selectionAnimation = tween<androidx.compose.ui.graphics.Color>(
+        durationMillis = 180,
+        easing = FastOutSlowInEasing,
+    )
     val bgColor by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.56f)
         else chrome.field,
+        animationSpec = selectionAnimation,
         label = "recordingCardColor",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.48f) else chrome.border,
+        animationSpec = selectionAnimation,
+        label = "recordingCardBorder",
     )
     val iconBackground by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else chrome.raised,
+        animationSpec = selectionAnimation,
         label = "recordingCardIconBackground",
     )
     val iconTint by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary else chrome.ink,
+        animationSpec = selectionAnimation,
         label = "recordingCardIconTint",
+    )
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (selectionActive && !isSelected) 0.75f else 1f,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "recordingCardSelectionAlpha",
     )
     Surface(
         modifier = modifier.animateContentSize(
@@ -134,7 +152,7 @@ private fun RecordingSummaryCard(
         ),
         shape = RoundedCornerShape(16.dp),
         color = bgColor,
-        border = BorderStroke(1.dp, chrome.border),
+        border = BorderStroke(1.dp, borderColor),
         tonalElevation = 0.dp,
     ) {
         val iconInteractionModifier = if (interactionsEnabled && onClick != null) {
@@ -156,7 +174,7 @@ private fun RecordingSummaryCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .alpha(if (selectionActive && !isSelected) 0.75f else 1f),
+                .alpha(contentAlpha),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
