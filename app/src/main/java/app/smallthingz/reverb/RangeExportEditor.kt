@@ -554,7 +554,8 @@ internal fun rangeFineTuneShuttleRate(
 ): Float {
     val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
     if (duration <= 0f) return 0f
-    // Pitch follows actual source seconds traversed per real second, not control percentage.
+    // Transport follows actual source seconds traversed per real second, not control percentage.
+    // Audible pitch is compressed separately by the shuttle renderer.
     return rangeFineTuneTimelineRate(
         horizontalPull = rangeFineTuneSeekPull(horizontalPull),
         verticalPull = verticalPull,

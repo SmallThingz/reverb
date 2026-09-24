@@ -41,6 +41,7 @@ private const val SHUTTLE_MIN_SOURCE_RATE = 0.02f
 private const val SHUTTLE_MAX_SOURCE_RATE = 4_096f
 private const val SHUTTLE_MIN_AUDIBLE_SPEED = 1f
 private const val SHUTTLE_MAX_AUDIBLE_SPEED = 3f
+private const val SHUTTLE_PITCH_GAIN_PER_TRANSPORT_GAIN = 0.1f
 private const val SHUTTLE_MAX_SOURCE_GRAIN_SECONDS =
     SHUTTLE_GRAIN_OUTPUT_SECONDS * SHUTTLE_MAX_AUDIBLE_SPEED
 private const val SHUTTLE_CACHE_HALF_SPAN_SECONDS =
@@ -238,9 +239,12 @@ internal fun transformShuttlePcm16Mono(input: ByteArray, signedRate: Float): Byt
     return output
 }
 
-internal fun shuttleAudibleSpeed(signedRate: Float): Float =
-    abs(signedRate.takeIf { it.isFinite() } ?: 0f)
-        .coerceIn(SHUTTLE_MIN_AUDIBLE_SPEED, SHUTTLE_MAX_AUDIBLE_SPEED)
+internal fun shuttleAudibleSpeed(signedRate: Float): Float {
+    val transportSpeed = abs(signedRate.takeIf { it.isFinite() } ?: 0f)
+    if (transportSpeed <= 1f) return SHUTTLE_MIN_AUDIBLE_SPEED
+    return (1f + (transportSpeed - 1f) * SHUTTLE_PITCH_GAIN_PER_TRANSPORT_GAIN)
+        .coerceAtMost(SHUTTLE_MAX_AUDIBLE_SPEED)
+}
 
 internal fun sanitizedShuttlePositionSeconds(positionSeconds: Double): Double =
     positionSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0

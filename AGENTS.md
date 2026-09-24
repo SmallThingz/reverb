@@ -905,9 +905,9 @@
   accumulating the exact integrated delta.
 - Range/Library fine-adjust shuttle audio follows the puck direction: right is forward and left is reverse. The shuttle
   transport rate is the actual source seconds traversed per real second after timeline-duration scaling, never raw puck
-  percentage. Audible grain speed follows that transport rate from normal pitch up to a 3x ceiling while source-head
-  catch-up remains free to move faster; slow sub-1x motion keeps normal pitch and becomes sparse rather than replaying
-  near-identical grains. Prefer 96 kHz shuttle processing/output, but fall back to 48 kHz if either the capability query
+  percentage. Audible pitch compresses transport gain at 10% (2x transport -> 1.1x pitch) up to the existing 3x ceiling,
+  while source-head catch-up remains free to move faster. Slow sub-1x motion keeps normal pitch and becomes sparse rather
+  than replaying near-identical grains. Prefer 96 kHz shuttle processing/output, but fall back to 48 kHz if either the capability query
   or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog
   motion, continuous grains overlap on one persistent low-latency AudioTrack, and a small verified normalized PCM source
   window is reused across adjacent grains instead of rescanning durable storage per hop.

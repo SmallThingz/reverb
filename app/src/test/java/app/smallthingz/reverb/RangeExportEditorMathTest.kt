@@ -564,9 +564,9 @@ class RangeExportEditorMathTest {
         val shortClipEdge = rangeFineTuneShuttleRate(1f, 0f, 20f)
         val longClipEdge = rangeFineTuneShuttleRate(1f, 0f, 200f)
         assertTrue(shortClipEdge in 1f..1.3f)
-        assertEquals(shortClipEdge, shuttleAudibleSpeed(shortClipEdge), 0.0001f)
+        assertTrue(shuttleAudibleSpeed(shortClipEdge) in 1f..1.03f)
         assertTrue(longClipEdge > 3f)
-        assertEquals(3f, shuttleAudibleSpeed(longClipEdge), 0f)
+        assertTrue(shuttleAudibleSpeed(longClipEdge) < longClipEdge)
     }
 
     @Test
@@ -702,19 +702,24 @@ class RangeExportEditorMathTest {
         )
 
         val twice = transformShuttlePcm16Mono(source, 2f)
-        assertEquals(4, twice.size / 2)
+        assertEquals(7, twice.size / 2)
         assertEquals(100, decode(twice).first())
         assertEquals(800, decode(twice).last())
         val reverseTwice = transformShuttlePcm16Mono(source, -2f)
+        assertEquals(7, reverseTwice.size / 2)
         assertEquals(800, decode(reverseTwice).first())
         assertEquals(100, decode(reverseTwice).last())
         val eightTimes = transformShuttlePcm16Mono(source, 8f)
-        assertEquals(3, eightTimes.size / 2)
-        assertEquals(3f, shuttleAudibleSpeed(8f), 0f)
-        assertEquals(3f, shuttleAudibleSpeed(-8f), 0f)
+        assertEquals(5, eightTimes.size / 2)
+        assertEquals(1.1f, shuttleAudibleSpeed(2f), 0.0001f)
+        assertEquals(1.1f, shuttleAudibleSpeed(-2f), 0.0001f)
+        assertEquals(1.7f, shuttleAudibleSpeed(8f), 0.0001f)
+        assertEquals(1.7f, shuttleAudibleSpeed(-8f), 0.0001f)
+        assertEquals(3f, shuttleAudibleSpeed(21f), 0f)
+        assertEquals(3f, shuttleAudibleSpeed(200f), 0f)
         assertEquals(1f, shuttleAudibleSpeed(0.2f), 0f)
         assertEquals(0.024, shuttleSourceGrainSeconds(1f), 0.000001)
-        assertEquals(0.072, shuttleSourceGrainSeconds(8f), 0.000001)
+        assertEquals(0.0408, shuttleSourceGrainSeconds(8f), 0.000001)
     }
 
     @Test
