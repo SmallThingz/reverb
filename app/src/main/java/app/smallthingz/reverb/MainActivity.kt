@@ -1071,9 +1071,13 @@ private fun MainScreen(
                             panelDragTarget = when {
                                 offset.y <= size.height * 0.48f -> {
                                     settingsBufferTargetCode = -1
+                                    settingsBackMotion.beginForwardMotion()
                                     MainPanelDragTarget.SETTINGS
                                 }
-                                offset.y >= size.height * 0.52f -> MainPanelDragTarget.LIBRARY
+                                offset.y >= size.height * 0.52f -> {
+                                    libraryBackMotion.beginForwardMotion()
+                                    MainPanelDragTarget.LIBRARY
+                                }
                                 else -> null
                             }
                         },

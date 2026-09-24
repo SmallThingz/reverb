@@ -26,6 +26,11 @@ internal class PredictiveBackMotionState {
     var swipeEdge by mutableIntStateOf(BackEventCompat.EDGE_NONE)
     var gestureActive by mutableStateOf(false)
     var commitCompleted by mutableStateOf(false)
+
+    fun beginForwardMotion() {
+        // A retained panel must not carry a completed Back dismissal into its next reveal.
+        commitCompleted = false
+    }
 }
 
 internal fun predictiveBackCommitDurationMillis(progress: Float): Int {

@@ -2114,7 +2114,7 @@ private fun RangeExportControls(
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
-    val exportEnabled = state.snapshotReady && canExport && !state.selectionDurationEditing
+    val exportEnabled = state.snapshotReady && canExport
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     val focusManager = LocalFocusManager.current

@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,6 +33,15 @@ class PredictiveBackMotionTest {
         assertEquals(22, predictiveBackCommitDurationMillis(0.9f))
         assertEquals(0, predictiveBackCommitDurationMillis(1f))
         assertEquals(0, predictiveBackCommitDurationMillis(2f))
+    }
+
+    @Test
+    fun retainedPanel_newForwardMotionClearsCompletedDismissal() {
+        val state = PredictiveBackMotionState().apply { commitCompleted = true }
+
+        state.beginForwardMotion()
+
+        assertFalse(state.commitCompleted)
     }
 
     @Test
