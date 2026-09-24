@@ -1242,9 +1242,10 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        ThemeSelector(
-                            selectedTheme = selectedTheme,
-                            onThemeSelected = { theme ->
+                        SettingsSegmentedControl(
+                            items = AppThemeMode.entries,
+                            selected = selectedTheme,
+                            onSelected = { theme ->
                                 if (theme != selectedTheme) {
                                     selectedTheme = theme
                                     onThemeChanged(theme)
@@ -1253,7 +1254,25 @@ fun SettingsScreen(
                                 }
                             },
                             modifier = Modifier.weight(1f),
-                        )
+                        ) { theme, contentColor ->
+                            val icon = when (theme) {
+                                AppThemeMode.SYSTEM -> AppIcons.themeSystem
+                                AppThemeMode.LIGHT -> AppIcons.themeLight
+                                AppThemeMode.DARK -> AppIcons.themeDark
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(icon, null, Modifier.size(16.dp), contentColor)
+                                Text(
+                                    stringResource(theme.labelRes),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = contentColor,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                     Spacer(Modifier.height(12.dp))
                 }
@@ -1599,7 +1618,7 @@ private fun ReverbSwitch(
 private fun ReliabilityRow(
     title: String,
     summary: String,
-    trailing: (@Composable () -> Unit)? = null,
+    trailing: @Composable () -> Unit,
 ) {
     val chrome = appChrome()
     Surface(
@@ -1631,7 +1650,7 @@ private fun ReliabilityRow(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
-            trailing?.invoke()
+            trailing()
         }
     }
 }
@@ -1673,7 +1692,22 @@ private fun RetentionSection(
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            RetentionModeSelector(activeMode, onModeSelected)
+            SettingsSegmentedControl(
+                items = RETENTION_MODE_OPTIONS,
+                selected = activeMode,
+                onSelected = onModeSelected,
+                modifier = Modifier.width(126.dp),
+            ) { mode, contentColor ->
+                Text(
+                    text = stringResource(
+                        if (mode == RetentionMode.TIME) R.string.retention_time_label
+                        else R.string.retention_size_mode_label,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = contentColor,
+                    maxLines = 1,
+                )
+            }
         }
 
         val chrome = appChrome()
@@ -1737,35 +1771,12 @@ private fun RetentionSection(
 }
 
 @Composable
-private fun RetentionModeSelector(
-    activeMode: RetentionMode,
-    onModeSelected: (RetentionMode) -> Unit,
-) {
-    SettingsSegmentedControl(
-        itemCount = RETENTION_MODE_OPTIONS.size,
-        selectedIndex = RETENTION_MODE_OPTIONS.indexOf(activeMode),
-        onSelected = { onModeSelected(RETENTION_MODE_OPTIONS[it]) },
-        modifier = Modifier.width(126.dp),
-    ) { index, contentColor ->
-        Text(
-            text = stringResource(
-                if (RETENTION_MODE_OPTIONS[index] == RetentionMode.TIME) R.string.retention_time_label
-                else R.string.retention_size_mode_label,
-            ),
-            style = MaterialTheme.typography.bodyMedium,
-            color = contentColor,
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
-private fun SettingsSegmentedControl(
-    itemCount: Int,
-    selectedIndex: Int,
-    onSelected: (Int) -> Unit,
+private fun <T> SettingsSegmentedControl(
+    items: List<T>,
+    selected: T,
+    onSelected: (T) -> Unit,
     modifier: Modifier = Modifier,
-    content: @Composable (index: Int, contentColor: Color) -> Unit,
+    content: @Composable (item: T, contentColor: Color) -> Unit,
 ) {
     val chrome = appChrome()
     Surface(
@@ -1774,19 +1785,15 @@ private fun SettingsSegmentedControl(
         color = chrome.field,
         border = BorderStroke(1.dp, chrome.border),
     ) {
-        Row(
-            modifier = Modifier
-                .padding(4.dp)
-                .selectableGroup(),
-        ) {
-            repeat(itemCount) { index ->
-                val selected = index == selectedIndex
+        Row(Modifier.padding(4.dp).selectableGroup()) {
+            items.forEach { item ->
+                val isSelected = item == selected
                 val backgroundColor by animateColorAsState(
-                    targetValue = if (selected) chrome.raised else Color.Transparent,
+                    if (isSelected) chrome.raised else Color.Transparent,
                     label = "settings-segment-background",
                 )
                 val contentColor by animateColorAsState(
-                    targetValue = if (selected) chrome.ink else chrome.muted,
+                    if (isSelected) chrome.ink else chrome.muted,
                     label = "settings-segment-content",
                 )
                 Box(
@@ -1796,13 +1803,13 @@ private fun SettingsSegmentedControl(
                         .clip(RoundedCornerShape(22.dp))
                         .background(backgroundColor)
                         .selectable(
-                            selected = selected,
-                            onClick = { onSelected(index) },
+                            selected = isSelected,
+                            onClick = { onSelected(item) },
                             role = Role.RadioButton,
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    content(index, contentColor)
+                    content(item, contentColor)
                 }
             }
         }
@@ -1917,45 +1924,6 @@ private fun SectionTitle(text: String) {
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
     )
-}
-
-@Composable
-private fun ThemeSelector(
-    selectedTheme: AppThemeMode,
-    onThemeSelected: (AppThemeMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val themes = AppThemeMode.entries
-    SettingsSegmentedControl(
-        itemCount = themes.size,
-        selectedIndex = themes.indexOf(selectedTheme),
-        onSelected = { onThemeSelected(themes[it]) },
-        modifier = modifier,
-    ) { index, contentColor ->
-        val theme = themes[index]
-        val icon = when (theme) {
-            AppThemeMode.SYSTEM -> AppIcons.themeSystem
-            AppThemeMode.LIGHT -> AppIcons.themeLight
-            AppThemeMode.DARK -> AppIcons.themeDark
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = stringResource(theme.labelRes),
-                style = MaterialTheme.typography.bodyMedium,
-                color = contentColor,
-                maxLines = 1,
-            )
-        }
-    }
 }
 
 @Composable

@@ -135,15 +135,10 @@ internal fun FeedbackCard(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    val container = when (tone) {
-        FeedbackTone.ERROR -> MaterialTheme.colorScheme.errorContainer
-        FeedbackTone.SUCCESS -> MaterialTheme.colorScheme.primaryContainer
-        FeedbackTone.INFO -> MaterialTheme.colorScheme.surfaceContainerHigh
-    }
-    val content = when (tone) {
-        FeedbackTone.ERROR -> MaterialTheme.colorScheme.onErrorContainer
-        FeedbackTone.SUCCESS -> MaterialTheme.colorScheme.onPrimaryContainer
-        FeedbackTone.INFO -> MaterialTheme.colorScheme.onSurface
+    val (container, content) = when (tone) {
+        FeedbackTone.ERROR -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        FeedbackTone.SUCCESS -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        FeedbackTone.INFO -> MaterialTheme.colorScheme.surfaceContainerHigh to MaterialTheme.colorScheme.onSurface
     }
 
     Surface(
