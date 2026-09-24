@@ -40,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,7 +61,6 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
@@ -87,43 +85,6 @@ import kotlin.math.sign
 import kotlin.math.tanh
 
 internal enum class RangeEditTarget { START, END }
-
-internal data class RangeTextEditDraft(
-    val target: RangeEditTarget,
-    val initialText: String,
-    val text: String,
-) {
-    val edited: Boolean get() = text != initialText
-}
-
-internal fun beginRangeTextEditDraft(
-    active: RangeTextEditDraft?,
-    target: RangeEditTarget,
-    text: String,
-): RangeTextEditDraft? = when {
-    active == null -> RangeTextEditDraft(target = target, initialText = text, text = text)
-    active.target == target -> active.copy(text = text)
-    else -> null
-}
-
-internal fun rangeTextEditNeedsCommitBeforeFocusHandoff(
-    active: RangeTextEditDraft?,
-    target: RangeEditTarget,
-): Boolean = active != null && active.target != target
-
-internal inline fun dispatchCommittedRangeExport(
-    commitDraft: () -> Boolean,
-    clearFocus: () -> Unit,
-    export: () -> Unit,
-): Boolean {
-    if (!commitDraft()) return false
-    // Focus cleanup is presentation-only. Once the click has committed a valid draft, transfer
-    // export ownership synchronously before this callback can return; View.post() can be rejected
-    // during teardown and can also defer work past the lifetime that owns the pinned snapshot.
-    runCatching(clearFocus)
-    export()
-    return true
-}
 
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
@@ -620,9 +581,6 @@ internal class RangeExportEditorState(
         private set
     var previewError by mutableStateOf<String?>(null)
         private set
-    var textEditGeneration by mutableLongStateOf(0L)
-        private set
-    private var activeTextEdit: RangeTextEditDraft? = null
     private var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
 
     val selectionDurationEditing: Boolean
@@ -652,7 +610,6 @@ internal class RangeExportEditorState(
         get() = snapshot != null
 
     fun attachSnapshot(value: ReverbService.TimelineSnapshot) {
-        invalidateTextEditing()
         invalidateSelectionDurationCommit()
         val previousDuration = durationSeconds
         val nextDuration = rangeTimelineDurationSeconds(value.durationSeconds.toFloat())
@@ -707,47 +664,6 @@ internal class RangeExportEditorState(
         waveformLoading = false
     }
 
-    fun beginTextEditing(target: RangeEditTarget, draft: String): Boolean {
-        if (rangeTextEditNeedsCommitBeforeFocusHandoff(activeTextEdit, target) &&
-            !commitActiveTextEditing()
-        ) {
-            return false
-        }
-        val next = beginRangeTextEditDraft(activeTextEdit, target, draft) ?: return false
-        invalidateSelectionDurationCommit()
-        activeTextEdit = next
-        return true
-    }
-
-    fun updateTextDraft(target: RangeEditTarget, draft: String) {
-        val active = activeTextEdit ?: return
-        if (active.target == target) activeTextEdit = active.copy(text = draft)
-    }
-
-    fun commitActiveTextEditing(): Boolean {
-        val active = activeTextEdit ?: return true
-        if (active.edited) {
-            val parsed = parseRangeTimeInput(active.text)?.toFloat() ?: return false
-            if (!commitTarget(active.target, parsed)) return false
-        }
-        // The field renders a rounded presentation string. An untouched focus session must
-        // release ownership without parsing that rounded text back into the precise endpoint.
-        activeTextEdit = null
-        textEditGeneration++
-        return true
-    }
-
-    fun commitTextEditingOnBlur(target: RangeEditTarget): Boolean {
-        val active = activeTextEdit ?: return true
-        if (active.target != target) return true
-        return commitActiveTextEditing()
-    }
-
-    fun invalidateTextEditing() {
-        activeTextEdit = null
-        textEditGeneration++
-    }
-
     fun selectTarget(target: RangeEditTarget) {
         invalidateSelectionDurationCommit()
         lastTarget = target
@@ -769,9 +685,6 @@ internal class RangeExportEditorState(
         // Native wheel state settles after the pointer is released. Pin the edit owner now so
         // the delayed terminal commit and reachable cap belong to this exact interaction.
         selectionDurationInteraction = selectionDurationInteraction.begin(lastTarget)
-        if (activeTextEdit != null) {
-            invalidateTextEditing()
-        }
         pausePreview()
     }
 
@@ -834,7 +747,6 @@ internal class RangeExportEditorState(
     }
 
     fun beginBoundaryScrub(target: RangeEditTarget) {
-        invalidateTextEditing()
         selectTarget(target)
         resumeAfterScrub = isPlaying || previewStarting
         if (isPlaying || previewStarting) {
@@ -863,7 +775,6 @@ internal class RangeExportEditorState(
     fun beginFineAdjust(shuttleRate: Float) {
         if (!playbackAllowed) return
         invalidateSelectionDurationCommit()
-        invalidateTextEditing()
         resumeAfterScrub = isPlaying || previewStarting
         if (isPlaying || previewStarting) {
             previewStarting = false
@@ -912,7 +823,6 @@ internal class RangeExportEditorState(
     }
 
     fun togglePreview() {
-        invalidateTextEditing()
         if (isPlaying || previewStarting) pausePreview() else startPreview()
     }
 
@@ -1076,7 +986,6 @@ internal fun RangeExportHomeContent(
     }
     LaunchedEffect(backProgress > 0f) {
         if (backProgress > 0f) {
-            state.invalidateTextEditing()
             state.pausePreview()
         }
     }
@@ -1265,7 +1174,6 @@ private fun RangeExportTimeline(
     onTargetBoundsInRoot: (Rect) -> Unit,
 ) {
     val density = LocalDensity.current
-    val focusManager = LocalFocusManager.current
     val timelineTop = 42.dp
     val timelineHeight = 146.dp
     val horizontalInset = 12.dp
@@ -1296,8 +1204,6 @@ private fun RangeExportTimeline(
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = true)
                         if (!interactionEnabled) return@awaitEachGesture
-                        state.invalidateTextEditing()
-                        focusManager.clearFocus(force = true)
                         val downSeconds = secondsFor(down.position.x + insetPx)
                         val target = state.lastTarget
                         state.beginBoundaryScrub(target)
@@ -1506,7 +1412,6 @@ private fun RangeTimelineBar(
     visualAlpha: Float,
 ) {
     val density = LocalDensity.current
-    val focusManager = LocalFocusManager.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
     val active = state.lastTarget == target
 
@@ -1517,8 +1422,6 @@ private fun RangeTimelineBar(
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 down.consume()
-                state.invalidateTextEditing()
-                focusManager.clearFocus(force = true)
                 state.selectTarget(target)
                 val origin = when (target) {
                     RangeEditTarget.START -> state.startSeconds
@@ -1633,21 +1536,15 @@ private fun SpringFineAdjust(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val focusManager = LocalFocusManager.current
     SpringFineSeekControl(
         enabled = enabled && state.snapshotReady,
         isPlaying = state.isPlaying,
         durationSeconds = state.durationSeconds,
         interactionKey = state.lastTarget,
         onTogglePlayback = {
-            val accepted = state.commitActiveTextEditing()
-            focusManager.clearFocus(force = true)
-            if (accepted && state.snapshotReady) state.togglePreview()
+            if (state.snapshotReady) state.togglePreview()
         },
-        onInteractionStart = {
-            state.invalidateTextEditing()
-            focusManager.clearFocus(force = true)
-        },
+        onInteractionStart = {},
         onBeginFineAdjust = state::beginFineAdjust,
         onFineAdjust = { deltaSeconds, _ -> state.fineAdjust(deltaSeconds) },
         onUpdateFineAdjustShuttle = state::updateFineAdjustShuttle,
@@ -2034,20 +1931,6 @@ private fun RangeExportControls(
     val exportEnabled = state.snapshotReady && canExport
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
-    val focusManager = LocalFocusManager.current
-    val discardDraftOnPointerDown = Modifier.pointerInput(state) {
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            state.invalidateTextEditing()
-            focusManager.clearFocus(force = true)
-            var pressed = true
-            while (pressed) {
-                val event = awaitPointerEvent()
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                pressed = change.pressed
-            }
-        }
-    }
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = chrome.field,
@@ -2060,12 +1943,8 @@ private fun RangeExportControls(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
-                onClick = {
-                    state.invalidateTextEditing()
-                    focusManager.clearFocus(force = true)
-                    onCancel()
-                },
-                modifier = Modifier.size(50.dp).then(discardDraftOnPointerDown),
+                onClick = onCancel,
+                modifier = Modifier.size(50.dp),
             ) {
                 Icon(
                     imageVector = AppIcons.close,
@@ -2112,15 +1991,7 @@ private fun RangeExportControls(
                 }
             }
             Surface(
-                onClick = {
-                    // Export is a commit boundary. A valid draft becomes the range; an invalid
-                    // draft blocks export rather than leaking a stale value into the request.
-                    dispatchCommittedRangeExport(
-                        commitDraft = state::commitActiveTextEditing,
-                        clearFocus = { focusManager.clearFocus(force = true) },
-                        export = onExport,
-                    )
-                },
+                onClick = onExport,
                 enabled = exportEnabled,
                 shape = RoundedCornerShape(20.dp),
                 color = exportContainerColor,

@@ -32,27 +32,6 @@ internal fun formatRangeTimeInput(seconds: Double): String {
     return "$base.$tenth"
 }
 
-internal fun parseRangeTimeInput(value: String): Double? {
-    val parts = value.trim().split(':')
-    if (parts.size !in 1..3 || parts.any { it.isBlank() }) return null
-
-    val secondsPart = parts.last().toDoubleOrNull() ?: return null
-    if (!secondsPart.isFinite() || secondsPart < 0.0 || (parts.size > 1 && secondsPart >= 60.0)) return null
-
-    val minutes = if (parts.size >= 2) parts[parts.size - 2].toLongOrNull() ?: return null else 0L
-    if (minutes < 0L || (parts.size == 3 && minutes >= 60L)) return null
-    val hours = if (parts.size == 3) parts[0].toLongOrNull() ?: return null else 0L
-    if (hours < 0L) return null
-
-    val wholeSeconds = try {
-        Math.addExact(Math.multiplyExact(hours, 3_600L), Math.multiplyExact(minutes, 60L))
-    } catch (_: ArithmeticException) {
-        return null
-    }
-    val result = wholeSeconds.toDouble() + secondsPart
-    return result.takeIf { it.isFinite() }
-}
-
 fun formatShortFileSize(size: Long): String {
     val mebibytes = size.coerceAtLeast(0L) / (1024.0 * 1024.0)
     val formatter = sizeFormatter.get() ?: error("sizeFormatter not initialized")

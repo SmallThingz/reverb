@@ -2507,14 +2507,8 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun rangeTimeInput_preservesSubSecondBounds_withoutRoundingIntoFuture() {
-        val available = 60.9999
-        val formatted = formatRangeTimeInput(available)
-        val parsed = requireNotNull(parseRangeTimeInput(formatted))
-
-        assertEquals("1:00.9", formatted)
-        assertTrue(parsed <= available)
-        assertTrue(available - parsed < 0.1001)
+    fun rangeTimeInput_doesNotRoundIntoFuture() {
+        assertEquals("1:00.9", formatRangeTimeInput(60.9999))
     }
 
     @Test
@@ -2524,16 +2518,6 @@ class FormattingAndHistoryMathTest {
         assertEquals("1:01.0", formatRangeTimeInput(61.0))
         assertEquals("1:01.9", formatRangeTimeInput(61.999))
         assertEquals("1:01:01.1", formatRangeTimeInput(3661.199))
-    }
-
-    @Test
-    fun rangeTimeInput_parsesClockValuesWithMilliseconds() {
-        assertEquals(60.6, requireNotNull(parseRangeTimeInput("1:00.600")), 0.000001)
-        assertEquals(3661.125, requireNotNull(parseRangeTimeInput("1:01:01.125")), 0.000001)
-        assertEquals(5.25, requireNotNull(parseRangeTimeInput("5.250")), 0.000001)
-        assertEquals(null, parseRangeTimeInput("1:60.000"))
-        assertEquals(null, parseRangeTimeInput("1:60:00.000"))
-        assertEquals(null, parseRangeTimeInput("-1:00.000"))
     }
 
     @Test

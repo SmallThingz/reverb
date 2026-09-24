@@ -715,12 +715,8 @@
   left-to-right refinement; neither pass scales source reads with history duration.
 - Keep the shared two-pass waveform worker/publication pipeline in `buildProgressiveWaveform`; Range Export and Library
   playback must not grow separate channel/worker implementations.
-- Direct timeline gestures invalidate focused time drafts; focused time fields must relinquish focus and resync when
-  playback/scrubbing moves their target, while explicit export commits a valid focused draft first. Ordinary Start/End
-  focus handoff commits the previous valid edited draft before transferring edit ownership; an invalid previous draft
-  remains owned by its original field and must not be silently overwritten by focusing the other field. Merely focusing
-  or switching away from an untouched rounded time presentation must release edit ownership without parsing that display
-  text back into the precise range endpoint.
+- Range Start/End times are display-only labels. Timeline, marker, duration-wheel, and fine-seek gestures own range
+  edits directly; do not reintroduce a parallel text-draft/edit-ownership subsystem.
 - Android Back while range export is active dismisses range-export mode and releases/cancels its snapshot preparation;
   only Back from normal home may leave the app.
 - Retired raw-buffer chunks persist an identity-bound tombstone before leaving the live timeline; index loss must never
@@ -919,9 +915,8 @@
   or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog
   motion, continuous grains overlap on one persistent low-latency AudioTrack, and a small verified normalized PCM source
   window is reused across adjacent grains instead of rescanning durable storage per hop.
-- Range Export is an accepted-work boundary in the click callback: after a valid text draft commits, focus cleanup is
-  best-effort and the export callback runs synchronously before returning. Never defer the pinned-snapshot handoff
-  through View.post() or another lifecycle-owned queue.
+- Range Export is an accepted-work boundary in the click callback: the export callback runs synchronously before
+  returning. Never defer the pinned-snapshot handoff through View.post() or another lifecycle-owned queue.
 - Saved-recording shuttle positions are bounded by the opened audio source duration, not catalog duration metadata;
   range-selection memory is non-durability UI state and must not add synchronous filesystem writes to the main-thread
   export-success callback.
