@@ -6,7 +6,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
@@ -328,9 +327,6 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
 
 fun isWakeLockEnabled(context: Context): Boolean =
     getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
-
-fun isDebuggableBuild(context: Context): Boolean =
-    context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
 fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
@@ -700,7 +696,7 @@ fun resolveOperationalSampleRate(
 
 fun supportedInputRouteModes(context: Context): List<InputRouteMode> = buildList {
     add(InputRouteMode.AUTO)
-    if (hasBuiltInMicrophone(context)) add(InputRouteMode.BUILTIN_MIC)
+    if (findBuiltInMicrophone(context) != null) add(InputRouteMode.BUILTIN_MIC)
 }
 
 fun standardSampleRates(): List<Int> = STANDARD_SAMPLE_RATES
@@ -710,8 +706,6 @@ fun sampleRateLabel(sampleRate: Int): String {
     val fracDigits = (sampleRate % 1000).toString().padStart(3, '0').dropLastWhile { it == '0' }
     return "${sampleRate / 1000}.${fracDigits} kHz"
 }
-
-fun hasBuiltInMicrophone(context: Context): Boolean = findBuiltInMicrophone(context) != null
 
 fun findBuiltInMicrophone(context: Context): AudioDeviceInfo? = runCatching {
     val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager

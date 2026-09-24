@@ -11,33 +11,8 @@ private val sizeFormatter = object : ThreadLocal<DecimalFormat>() {
         DecimalFormat(FORMAT_SIZE_MIB, DecimalFormatSymbols(Locale.US))
 }
 
-
-
-fun formatShortTimer(seconds: Float): String {
-    val totalSeconds = seconds.toInt().coerceAtLeast(0)
-    val hours = totalSeconds / 3600
-    val minutes = (totalSeconds % 3600) / 60
-    val secs = totalSeconds % 60
-
-    return if (hours > 0) {
-        val hs = hours.toString()
-        val chars = CharArray(hs.length + 6)
-        var i = 0
-        for (c in hs) chars[i++] = c
-        chars[i++] = ':'; chars[i++] = DIGIT_0[minutes / 10]; chars[i++] = DIGIT_0[minutes % 10]
-        chars[i++] = ':'; chars[i++] = DIGIT_0[secs / 10]; chars[i] = DIGIT_0[secs % 10]
-        String(chars)
-    } else if (minutes >= 10) {
-        val chars = CharArray(5)
-        chars[0] = DIGIT_0[minutes / 10]; chars[1] = DIGIT_0[minutes % 10]
-        chars[2] = ':'; chars[3] = DIGIT_0[secs / 10]; chars[4] = DIGIT_0[secs % 10]
-        String(chars)
-    } else {
-        val chars = CharArray(4)
-        chars[0] = DIGIT_0[minutes]; chars[1] = ':'; chars[2] = DIGIT_0[secs / 10]; chars[3] = DIGIT_0[secs % 10]
-        String(chars)
-    }
-}
+fun formatShortTimer(seconds: Float): String =
+    formatDurationInput(seconds.toInt().coerceAtLeast(0))
 
 internal fun formatRangeTimeInput(seconds: Double): String {
     val safeSeconds = if (seconds.isFinite()) seconds.coerceAtLeast(0.0) else 0.0
@@ -97,6 +72,5 @@ fun formatSavedRecordingDuration(context: Context, durationMillis: Long): String
     }
 }
 
-fun formatPlaybackTime(durationMillis: Int): String {
-    return formatShortTimer(durationMillis.coerceAtLeast(0) / 1000f)
-}
+fun formatPlaybackTime(durationMillis: Int): String =
+    formatShortTimer(durationMillis.coerceAtLeast(0) / 1000f)

@@ -2081,9 +2081,8 @@ private fun formatRetentionMinutesEstimate(seconds: Long): String {
 }
 
 
-private fun bytesToMegabytes(bytes: Long): Double {
-    return (bytes.coerceAtLeast(0L) / BYTES_IN_MEGABYTE.toDouble())
-}
+private fun bytesToMegabytes(bytes: Long): Double =
+    bytes.coerceAtLeast(0L) / BYTES_IN_MEGABYTE.toDouble()
 
 internal fun rawMegabytesToBytes(memoryInMegabytes: Double): Long {
     if (memoryInMegabytes <= 0.0) return 0L
@@ -2091,13 +2090,8 @@ internal fun rawMegabytesToBytes(memoryInMegabytes: Double): Long {
     return (memoryInMegabytes * BYTES_IN_MEGABYTE.toDouble()).roundToLong()
 }
 
-internal fun parseRetentionSizeMib(value: String): Double? {
-    return value.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
-}
-
-internal fun formatRetentionSizeMib(value: Double): String {
-    return retentionSizeFormatter.format(value.coerceAtLeast(0.0))
-}
+internal fun parseRetentionSizeMib(value: String): Double? =
+    value.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
 
 internal fun formatRetentionSizeBytes(bytes: Long): String =
-    formatRetentionSizeMib(bytesToMegabytes(bytes))
+    retentionSizeFormatter.format(bytesToMegabytes(bytes))
