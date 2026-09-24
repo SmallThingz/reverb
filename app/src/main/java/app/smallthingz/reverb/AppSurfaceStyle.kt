@@ -2,10 +2,6 @@ package app.smallthingz.reverb
 
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -77,19 +73,4 @@ internal fun rememberAppNoiseBrush(seed: Int = APP_NOISE_SEED_BACKGROUND): Brush
 
 internal fun Modifier.appNoise(brush: Brush): Modifier = drawBehind {
     drawRect(brush = brush)
-}
-
-@Composable
-internal fun ReverbNoiseBackground(
-    modifier: Modifier = Modifier,
-    content: @Composable BoxScope.() -> Unit,
-) {
-    val brush = rememberAppNoiseBrush()
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
-            .appNoise(brush),
-        content = content,
-    )
 }

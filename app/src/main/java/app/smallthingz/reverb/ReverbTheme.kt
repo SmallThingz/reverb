@@ -2,8 +2,10 @@ package app.smallthingz.reverb
 
 import android.app.Activity
 import android.os.Build
-import android.view.Window
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
@@ -13,6 +15,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +77,7 @@ fun ReverbTheme(
     )
 }
 
+@Suppress("DEPRECATION")
 @Composable
 private fun ReverbThemeBase(
     darkTheme: Boolean,
@@ -86,24 +90,23 @@ private fun ReverbThemeBase(
             val window = (view.context as? Activity)?.window ?: return@SideEffect
             val insetsController = WindowCompat.getInsetsController(window, view)
             WindowCompat.setDecorFitsSystemWindows(window, false)
-            setLegacySystemBarColors(window, Color.Transparent.toArgb())
+            val transparent = Color.Transparent.toArgb()
+            window.statusBarColor = transparent
+            window.navigationBarColor = transparent
             insetsController.isAppearanceLightStatusBars = !darkTheme
             insetsController.isAppearanceLightNavigationBars = !darkTheme
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = ReverbTypography,
-    ) {
-        ReverbNoiseBackground {
+    MaterialTheme(colorScheme = colorScheme, typography = ReverbTypography) {
+        val noiseBrush = rememberAppNoiseBrush()
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface)
+                .appNoise(noiseBrush),
+        ) {
             content()
         }
     }
-}
-
-@Suppress("DEPRECATION")
-private fun setLegacySystemBarColors(window: Window, color: Int) {
-    window.statusBarColor = color
-    window.navigationBarColor = color
 }

@@ -1059,12 +1059,13 @@ fun CaptureScreen(
                             )
                             return@acquireTimelineSnapshot
                         }
-                        handleExport(context, s, snapshot.durationSeconds.toFloat()) { builtRange ->
-                            val range = builtRange.copy(
-                                rememberOnSave = ExportRangeMemory(bufferSlot, snapshot.durationSeconds),
-                            )
-                            queueOrStartExport(s, range, snapshot)
-                        }
+                        val range = buildCustomExportRange(
+                            availableSeconds = snapshot.durationSeconds,
+                            requestedStartSeconds = 0f,
+                            requestedEndSeconds = snapshot.durationSeconds.toFloat(),
+                            exportConfig = currentExportConfig(context, s),
+                        ).copy(rememberOnSave = ExportRangeMemory(bufferSlot, snapshot.durationSeconds))
+                        queueOrStartExport(s, range, snapshot)
                     }
                 }
             }
@@ -2525,30 +2526,6 @@ private fun buildCustomExportRange(
             startSeconds = (end.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),
             endSeconds = end,
             warningDurationSeconds = maxDuration.toFloat(),
-        )
-    }
-}
-
-private fun handleExport(
-    context: Context,
-    service: ReverbService?,
-    bufferSeconds: Float,
-    onRange: (ExportRange) -> Unit,
-) {
-    val exportConfig = currentExportConfig(context, service)
-    val maxDuration = exportDurationLimitExactSeconds(
-        exportConfig.format, exportConfig.codec, exportConfig.sampleRate,
-        exportConfig.channelCount, exportConfig.sampleFormat,
-    )
-    if (rangeExportSelectionWithinLimit(bufferSeconds.toDouble(), maxDuration)) {
-        onRange(ExportRange(0f, bufferSeconds, null))
-    } else {
-        onRange(
-            ExportRange(
-                startSeconds = (bufferSeconds.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),
-                endSeconds = bufferSeconds,
-                warningDurationSeconds = maxDuration.toFloat(),
-            ),
         )
     }
 }

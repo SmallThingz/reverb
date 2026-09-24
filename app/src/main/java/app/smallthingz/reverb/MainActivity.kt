@@ -183,7 +183,9 @@ class MainActivity : ComponentActivity() {
                 if (showOnboarding) {
                     val onboardingBuffers = onboardingBufferAvailability
                     if (onboardingBuffers == null) {
-                        OnboardingLoadingScreen()
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
                     } else {
                     OnboardingScreen(
                         microphoneAllowed = microphonePermissionGranted,
@@ -433,16 +435,6 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
     AppThemeMode.SYSTEM -> systemDarkTheme
     AppThemeMode.LIGHT -> false
     AppThemeMode.DARK -> true
-}
-
-@Composable
-private fun OnboardingLoadingScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator()
-    }
 }
 
 @Composable
