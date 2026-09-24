@@ -263,15 +263,17 @@ class MainActivity : ComponentActivity() {
                     }
                 } else {
                     if (showPermissionDenied) {
-                        PermissionDeniedSheet(
+                        ReverbMessageSheet(
+                            title = stringResource(R.string.permission_required),
                             message = requiredPermissionMessage(),
-                            onAllow = {
+                            onDismiss = { showPermissionDenied = false },
+                            confirmLabel = stringResource(R.string.allow),
+                            onConfirm = {
                                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                     data = Uri.fromParts(URI_SCHEME_PACKAGE, packageName, null)
                                 }
                                 startActivity(intent)
                             },
-                            onDismiss = { showPermissionDenied = false },
                         )
                     }
                     MainScreen(
@@ -845,30 +847,6 @@ private fun OnboardingProgressDot(active: Boolean) {
         shape = RoundedCornerShape(99.dp),
         color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
     ) {}
-}
-
-@Composable
-private fun PermissionDeniedSheet(
-    message: String,
-    onAllow: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ReverbActionSheet(
-        title = stringResource(R.string.permission_required),
-        onDismiss = onDismiss,
-        content = {
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        actions = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = onAllow) { Text(stringResource(R.string.allow)) }
-        },
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

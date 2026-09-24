@@ -9,14 +9,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -86,3 +89,31 @@ internal fun ReverbActionSheet(
         }
     }
 }
+
+@Composable
+internal fun ReverbMessageSheet(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    confirmLabel: String? = null,
+    onConfirm: (() -> Unit)? = null,
+) = ReverbActionSheet(
+    title = title,
+    onDismiss = onDismiss,
+    content = {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    },
+    actions = {
+        if (confirmLabel != null && onConfirm != null) {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onConfirm) { Text(confirmLabel) }
+        } else {
+            Button(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+        }
+    },
+)

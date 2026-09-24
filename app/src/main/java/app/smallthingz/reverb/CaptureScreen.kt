@@ -1233,7 +1233,8 @@ fun CaptureScreen(
     }
 
     errorMessage?.let { msg ->
-        ErrorSheet(
+        ReverbMessageSheet(
+            title = stringResource(R.string.error),
             message = msg,
             onDismiss = { errorMessage = null },
         )
@@ -2297,27 +2298,6 @@ private fun AudioBlobControl(
             }
         }
     }
-}
-
-@Composable
-private fun ErrorSheet(
-    message: String,
-    onDismiss: () -> Unit,
-) {
-    ReverbActionSheet(
-        title = stringResource(R.string.error),
-        onDismiss = onDismiss,
-        content = {
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        actions = {
-            Button(onClick = onDismiss) { Text(stringResource(R.string.close)) }
-        },
-    )
 }
 
 @Composable

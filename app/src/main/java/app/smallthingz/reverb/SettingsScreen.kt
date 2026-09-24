@@ -124,8 +124,6 @@ data class SettingsSnapshot(
 private data class SettingsInitialConfiguration(
     val themeMode: AppThemeMode,
     val retention: RetentionConfiguration,
-    val format: ExportFormat,
-    val codec: ExportCodec,
     val sampleFormat: PcmSampleFormat,
     val route: InputRouteMode,
     val source: AudioSourceMode,
@@ -307,8 +305,6 @@ fun SettingsScreen(
 
     // Selected values
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
-    var selectedFormat by remember { mutableStateOf(supportedFormats().first()) }
-    var selectedCodec by remember { mutableStateOf(supportedCodecs(supportedFormats().first()).first()) }
     var selectedSampleFormat by remember { mutableStateOf(PcmSampleFormat.PCM_16) }
     var selectedSource by remember { mutableStateOf(AudioSourceMode.availableModes().first()) }
     var selectedChannelMode by remember { mutableStateOf(ChannelMode.MONO) }
@@ -323,8 +319,6 @@ fun SettingsScreen(
     var selectedExportTreeUri by remember { mutableStateOf<Uri?>(null) }
 
     // Available options lists (recomputed on changes)
-    var availableFormats by remember { mutableStateOf(supportedFormats()) }
-    var availableCodecs by remember { mutableStateOf(supportedCodecs(supportedFormats().first())) }
     var availableSourceModes by remember { mutableStateOf(AudioSourceMode.availableModes()) }
     var availableChannelModes by remember { mutableStateOf(ChannelMode.entries.toList()) }
     var availableRouteModes by remember { mutableStateOf(supportedInputRouteModes(context)) }
@@ -417,18 +411,6 @@ fun SettingsScreen(
         refreshChannelModes(preferredChannelMode, preferredRate)
     }
 
-    fun refreshCodecOptions(
-        preferredCodec: ExportCodec? = null,
-        preferredSource: AudioSourceMode? = null,
-        preferredChannelMode: ChannelMode? = null,
-        preferredRate: Int? = null,
-    ) {
-        availableCodecs = supportedCodecs(selectedFormat)
-        val codec = preferredCodec?.takeIf { it in availableCodecs } ?: availableCodecs.first()
-        selectedCodec = codec
-        refreshSourceModes(preferredSource, preferredChannelMode, preferredRate)
-    }
-
     fun currentSettingsSnapshot(wakeLockEnabled: Boolean = currentSnapshot.wakeLockEnabled) = SettingsSnapshot(
         themeMode = selectedTheme,
         retentionMode = activeRetentionMode,
@@ -436,8 +418,8 @@ fun SettingsScreen(
         oneShotRetentionSizeBytes = oneShotRetentionSizeBytesValue,
         loopingRetentionTime = loopingRetentionTimeSecondsValue,
         loopingRetentionSizeBytes = loopingRetentionSizeBytesValue,
-        format = selectedFormat,
-        codec = selectedCodec,
+        format = ExportFormat.WAV,
+        codec = ExportCodec.PCM_16,
         sampleFormat = selectedSampleFormat,
         source = selectedSource,
         channelMode = selectedChannelMode,
@@ -536,16 +518,13 @@ fun SettingsScreen(
         selectedExportTreeUri = prev.exportDirectoryUri?.let(Uri::parse)
         selectedTheme = prev.themeMode
         onThemeChanged(prev.themeMode)
-        selectedFormat = prev.format ?: availableFormats.first()
-        selectedCodec = prev.codec ?: availableCodecs.first()
         selectedRoute = prev.route ?: availableRouteModes.first()
         selectedSampleFormat = prev.sampleFormat
         selectedSource = prev.source ?: availableSourceModes.first()
         selectedChannelMode = prev.channelMode ?: ChannelMode.MONO
         selectedSampleRate = prev.sampleRate.takeIf { it > 0 } ?: selectedSampleRate
 
-        refreshCodecOptions(
-            preferredCodec = prev.codec,
+        refreshSourceModes(
             preferredSource = prev.source,
             preferredChannelMode = prev.channelMode,
             preferredRate = prev.sampleRate,
@@ -610,8 +589,8 @@ fun SettingsScreen(
             return false
         }
 
-        val format = selectedFormat
-        val codec = selectedCodec
+        val format = ExportFormat.WAV
+        val codec = ExportCodec.PCM_16
         val sampleFormat = selectedSampleFormat
         val channelMode = selectedChannelMode
         val route = selectedRoute
@@ -834,8 +813,6 @@ fun SettingsScreen(
             SettingsInitialConfiguration(
                 themeMode = getConfiguredThemeMode(context),
                 retention = retentionConfigurationForRead(context),
-                format = getConfiguredOutputFormat(context),
-                codec = getConfiguredOutputCodec(context),
                 sampleFormat = getConfiguredPcmSampleFormat(context),
                 route = getConfiguredInputRouteMode(context),
                 source = getConfiguredAudioSourceMode(context),
@@ -855,8 +832,6 @@ fun SettingsScreen(
             .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
         val storedOneShotSizeBytes = retention.oneShotSizeBytes
         val storedLoopingSizeBytes = retention.loopingSizeBytes
-        val configuredFormat = initial.format
-        val configuredCodec = initial.codec
         val configuredSampleFormatVal = initial.sampleFormat
         val configuredRouteVal = initial.route
         val configuredSourceVal = initial.source
@@ -872,17 +847,12 @@ fun SettingsScreen(
         selectedExportTreeUri = configuredExportTreeUriVal
 
         selectedTheme = configuredThemeMode
-
-        availableFormats = supportedFormats()
-        selectedFormat = configuredFormat.takeIf { it in availableFormats } ?: availableFormats.first()
-
         availableRouteModes = supportedInputRouteModes(context)
         selectedRoute = configuredRouteVal.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
 
         selectedSampleFormat = configuredSampleFormatVal
 
-        refreshCodecOptions(
-            preferredCodec = configuredCodec,
+        refreshSourceModes(
             preferredSource = configuredSourceVal,
             preferredChannelMode = configuredChannelModeVal,
             preferredRate = configuredRateVal,
@@ -1332,26 +1302,6 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (availableFormats.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.format_label),
-                        selectedValue = selectedFormat,
-                        options = availableFormats,
-                        optionLabel = { resources.getString(it.labelRes) },
-                        onOptionSelected = { format ->
-                            selectedFormat = format
-                            refreshCodecOptions(
-                                preferredCodec = selectedCodec,
-                                preferredSource = selectedSource,
-                                preferredChannelMode = selectedChannelMode,
-                                preferredRate = selectedSampleRate,
-                            )
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
                 if (availableChannelModes.size > 1) {
                     SettingsDropdown(
                         active = active,
