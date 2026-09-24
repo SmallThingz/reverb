@@ -910,8 +910,19 @@ private fun MainScreen(
         enabled = showIncidents && !showAboutDialog,
         onBack = { showIncidents = false },
     )
+    val incidentsPredictiveDismissCommitted = incidentsBackMotion.commitCompleted && !showIncidents
+    val incidentsSettledProgress by animateFloatAsState(
+        targetValue = if (showIncidents) 1f else 0f,
+        animationSpec = if (incidentsPredictiveDismissCommitted) {
+            snap()
+        } else {
+            tween(PANEL_SETTLE_DURATION_MS)
+        },
+        label = "incidents-panel-progress",
+    )
+    val incidentsOverlayVisible = showIncidents || incidentsSettledProgress > 0f
     val libraryBackMotion = rememberPredictiveBackMotion(
-        enabled = showLibrary && !showSettings && !showIncidents && !librarySelectionActive &&
+        enabled = showLibrary && !showSettings && !incidentsOverlayVisible && !librarySelectionActive &&
             !libraryExpandedRecordingActive && !showAboutDialog,
         onBack = { showLibrary = false },
     )
@@ -1060,10 +1071,10 @@ private fun MainScreen(
                 .background(MaterialTheme.colorScheme.surface)
                 .appNoise(noiseBrush)
                 .semantics {
-                    if (showSettings || showLibrary || showIncidents || showAboutDialog) hideFromAccessibility()
+                    if (showSettings || showLibrary || incidentsOverlayVisible || showAboutDialog) hideFromAccessibility()
                 }
-                .pointerInput(showSettings, showLibrary, showIncidents, showAboutDialog) {
-                    if (showSettings || showLibrary || showIncidents || showAboutDialog) return@pointerInput
+                .pointerInput(showSettings, showLibrary, incidentsOverlayVisible, showAboutDialog) {
+                    if (showSettings || showLibrary || incidentsOverlayVisible || showAboutDialog) return@pointerInput
                     detectVerticalDragGestures(
                         onDragStart = { offset ->
                             settingsDragProgress = 0f
@@ -1130,7 +1141,7 @@ private fun MainScreen(
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
                 if (permissionsGranted) {
                     CaptureScreen(
-                        visualizerVisible = !showSettings && !showLibrary && !showIncidents && !showAboutDialog,
+                        visualizerVisible = !showSettings && !showLibrary && !incidentsOverlayVisible && !showAboutDialog,
                         onOpenLibrary = { showLibrary = true },
                         onRecordingSaved = { refreshLibrarySnapshot() },
                         onOpenBufferSettings = { bufferSlot ->
@@ -1226,7 +1237,7 @@ private fun MainScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = libraryTopPadding),
-                        active = showLibrary && !showIncidents && !showAboutDialog,
+                        active = showLibrary && !incidentsOverlayVisible && !showAboutDialog,
                         initialRecordings = librarySnapshot,
                         onSelectionActiveChange = { librarySelectionActive = it },
                         onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
@@ -1279,14 +1290,21 @@ private fun MainScreen(
             }
         }
 
-        if (showIncidents) {
+        if (incidentsOverlayVisible) {
             IncidentsScreen(
                 history = incidentHistory,
                 onBack = { showIncidents = false },
                 onToggleAcknowledged = ::toggleIncidentAcknowledged,
                 onDelete = { RecordingIncidentStore.deleteIncidentInBackground(context, it) },
-                backProgress = { incidentsBackMotion.progress.value },
-                backDirection = predictiveBackHorizontalDirection(incidentsBackMotion.swipeEdge),
+                openProgress = {
+                    predictiveBackPanelOpenProgress(
+                        settledProgress = incidentsSettledProgress,
+                        gestureActive = incidentsBackMotion.gestureActive,
+                        gestureProgress = incidentsBackMotion.progress.value,
+                        commitCompleted = incidentsBackMotion.commitCompleted,
+                        surfaceVisible = showIncidents,
+                    )
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(6f),

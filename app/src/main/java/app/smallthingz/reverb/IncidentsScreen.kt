@@ -205,15 +205,14 @@ internal fun IncidentsScreen(
     onToggleAcknowledged: (RecordingIncident) -> Unit,
     onDelete: (RecordingIncident) -> Unit,
     modifier: Modifier = Modifier,
-    backProgress: () -> Float = { 0f },
-    backDirection: Float = 1f,
+    openProgress: () -> Float = { 1f },
 ) {
     val noiseBrush = rememberAppNoiseBrush()
     Surface(
         modifier = modifier.graphicsLayer {
-            val progress = backProgress().coerceIn(0f, 1f)
-            translationX = backDirection * size.width * 0.08f * progress
-            alpha = 1f - progress * 0.18f
+            val progress = openProgress().coerceIn(0f, 1f)
+            translationX = size.width * 0.08f * (1f - progress)
+            alpha = 0.82f + progress * 0.18f
         },
         color = MaterialTheme.colorScheme.surface,
     ) {

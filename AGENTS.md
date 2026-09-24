@@ -950,8 +950,9 @@
   non-cancellable physical save/catalog registration, so close/reopen, player disposal, refresh, or revision changes
   must not re-enable conflicting actions before terminal.
 - Incident rows use text prepared on the background history-read path, with shared date/time formatters per snapshot;
-  lazy-row composition and scrolling must not format timestamps or diagnostic strings. Incident back progress is read in
-  the graphics layer, not the root composition.
+  lazy-row composition and scrolling must not format timestamps or diagnostic strings. Incidents open and close through
+  one reversible open-progress path: tap-open animates toward the settled screen, while the back button and predictive
+  Back drive that exact path in reverse. Predictive back progress is read in the graphics layer, not root composition.
 - Inline playback serializes asynchronous MediaPlayer seeks and resumes only after the newest queued target completes;
   the trim-end monitor must not inspect a stale pre-seek position. Resuming after editing the End boundary auditions its
   lead-in rather than starting exactly at the stop boundary. Pause and teardown revoke pending seek resume intent.
