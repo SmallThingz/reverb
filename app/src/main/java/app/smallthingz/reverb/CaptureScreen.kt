@@ -65,6 +65,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -1948,14 +1949,17 @@ private fun BufferSegment(
         label = "bufferContent",
     )
 
+    val segmentShape = RoundedCornerShape(16.dp)
     Surface(
-        modifier = Modifier.selectable(
-            selected = selected,
-            enabled = interactionEnabled,
-            role = Role.Tab,
-            onClick = onClick,
-        ),
-        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .clip(segmentShape)
+            .selectable(
+                selected = selected,
+                enabled = interactionEnabled,
+                role = Role.Tab,
+                onClick = onClick,
+            ),
+        shape = segmentShape,
         color = containerColor,
     ) {
         Row(

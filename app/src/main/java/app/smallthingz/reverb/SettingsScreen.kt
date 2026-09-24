@@ -9,10 +9,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +35,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -1450,7 +1453,8 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f),
                         )
                         if (selectedExportTreeUri != null) {
-                            IconButton(
+                            val storageActionShape = RoundedCornerShape(14.dp)
+                            Surface(
                                 onClick = {
                                     selectedExportTreeUri = null
                                     refreshExportDirectoryUi()
@@ -1458,38 +1462,42 @@ fun SettingsScreen(
                                     currentSnapshot = currentSettingsSnapshot()
                                     pushUndoState()
                                 },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(chrome.raised),
+                                modifier = Modifier.size(48.dp),
+                                shape = storageActionShape,
+                                color = chrome.raised,
                             ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = AppIcons.reset,
+                                        contentDescription = stringResource(R.string.default_folder),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                        Surface(
+                            onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) },
+                            modifier = Modifier.size(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = chrome.raised,
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = AppIcons.reset,
-                                    contentDescription = stringResource(R.string.default_folder),
+                                    imageVector = AppIcons.folder,
+                                    contentDescription = stringResource(R.string.choose_folder),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                        }
-                        IconButton(
-                            onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(chrome.raised),
-                        ) {
-                            Icon(
-                                imageVector = AppIcons.folder,
-                                contentDescription = stringResource(R.string.choose_folder),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                         }
                     }
                     TextButton(
                         onClick = { moveExistingRecordings() },
                         enabled = canMove && !settingsPersisting,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(chrome.raised),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = chrome.raised,
+                            disabledContainerColor = chrome.raised,
+                        ),
                     ) {
                         Text(stringResource(R.string.move_recordings))
                     }
@@ -1528,6 +1536,12 @@ private fun ReverbSwitch(
 ) {
     val colors = MaterialTheme.colorScheme
     val chrome = appChrome()
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressedOverlayAlpha by animateFloatAsState(
+        targetValue = if (pressed) 0.12f else 0f,
+        label = "reverbSwitchPressedOverlay",
+    )
     val trackColor by animateColorAsState(
         targetValue = if (checked) colors.primary else chrome.raised,
         label = "reverbSwitchTrack",
@@ -1546,23 +1560,37 @@ private fun ReverbSwitch(
             .size(48.dp)
             .toggleable(
                 value = checked,
+                interactionSource = interactionSource,
+                indication = null,
                 role = Role.Switch,
                 onValueChange = onCheckedChange,
             ),
         contentAlignment = Alignment.Center,
     ) {
+        val trackShape = RoundedCornerShape(13.dp)
         Box(
             modifier = Modifier
                 .size(width = 44.dp, height = 26.dp)
-                .background(trackColor, RoundedCornerShape(13.dp))
-                .padding(4.dp),
+                .clip(trackShape)
+                .background(trackColor),
         ) {
             Box(
                 modifier = Modifier
-                    .offset { androidx.compose.ui.unit.IntOffset(thumbOffset.roundToPx(), 0) }
-                    .size(18.dp)
-                    .background(thumbColor, RoundedCornerShape(50)),
+                    .fillMaxSize()
+                    .background(colors.onSurface.copy(alpha = pressedOverlayAlpha)),
             )
+            Box(
+                modifier = Modifier
+                    .padding(4.dp)
+                    .fillMaxSize(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset { androidx.compose.ui.unit.IntOffset(thumbOffset.roundToPx(), 0) }
+                        .size(18.dp)
+                        .background(thumbColor, RoundedCornerShape(50)),
+                )
+            }
         }
     }
 }
@@ -1952,9 +1980,8 @@ private fun <T> SettingsDropdown(
 
     Box(modifier = modifier) {
         Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = true },
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             color = containerColor,
             border = BorderStroke(1.dp, chrome.border),
@@ -1998,6 +2025,7 @@ private fun <T> SettingsDropdown(
                 val selected = option == selectedValue
                 val optionText = optionLabel(option)
                 DropdownMenuItem(
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                     text = {
                         Text(
                             text = optionText,

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -36,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -314,14 +316,16 @@ private fun IncidentCard(
     val fill = if (unacknowledged) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surfaceContainerHigh
 
     Box(modifier) {
+        val cardShape = RoundedCornerShape(18.dp)
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
+                .clip(cardShape)
                 .combinedClickable(
                     onClick = onToggleAcknowledged,
                     onLongClick = { menuCreated = true; menuExpanded = true },
                 ),
-            shape = RoundedCornerShape(18.dp),
+            shape = cardShape,
             color = fill,
             border = BorderStroke(1.dp, border),
         ) {
@@ -334,6 +338,7 @@ private fun IncidentCard(
                     Box(
                         modifier = Modifier
                             .size(46.dp)
+                            .clip(CircleShape)
                             .combinedClickable(
                                 onClick = onToggleAcknowledged,
                                 onLongClick = { menuCreated = true; menuExpanded = true },
@@ -373,11 +378,13 @@ private fun IncidentCard(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
                 DropdownMenuItem(
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                     text = { Text(stringResource(R.string.incident_copy)) },
                     leadingIcon = { Icon(AppIcons.copy, contentDescription = null) },
                     onClick = { menuExpanded = false; copyIncident() },
                 )
                 DropdownMenuItem(
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                     text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
                     leadingIcon = { Icon(AppIcons.delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                     onClick = { menuExpanded = false; onDelete() },

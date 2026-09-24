@@ -151,6 +151,9 @@
   resolving the persisted buffer. Logical `STATE_LISTENING` alone is not proof that PCM is flowing; buffer resolution
   may advance the generation and stale queued starts must be replaced.
 - The Library action is always visible and must open even when the library is empty.
+- Custom rounded controls keep one geometry for visuals and press feedback: the clickable/selectable indication must be
+  clipped by the same shape as the visible surface. Do not put a raw rectangular interaction modifier outside a rounded
+  Surface, and round popup-menu item indications to match Reverb's menu styling.
 - Both buffer readouts use the retention mode resolved and actually applied by `ReverbService` for their primary metric.
   Capture Compose must not synchronously read retention recovery/preferences to choose readout order; before the first
   hydrated Service snapshot, show a neutral readout and keep capture actions locked.

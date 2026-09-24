@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
@@ -1149,30 +1150,35 @@ private fun RecordingItem(
             containerColor = chrome.raised,
         ) {
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.rename_recording), color = chrome.ink) },
                 onClick = onRename,
                 leadingIcon = { Icon(AppIcons.edit, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.recording_info), color = chrome.ink) },
                 onClick = onInfo,
                 leadingIcon = { Icon(AppIcons.info, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.share_recording), color = chrome.ink) },
                 onClick = onShare,
                 leadingIcon = { Icon(AppIcons.share, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.trim_recording), color = chrome.ink) },
                 onClick = onTrim,
                 leadingIcon = { Icon(AppIcons.trim, contentDescription = null, tint = chrome.ink) },
             )
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
                 onClick = onDelete,
@@ -1181,6 +1187,7 @@ private fun RecordingItem(
                 },
             )
             DropdownMenuItem(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                 enabled = !operationBusy,
                 text = { Text(stringResource(R.string.multi_select), color = chrome.ink) },
                 onClick = onMultiSelect,
