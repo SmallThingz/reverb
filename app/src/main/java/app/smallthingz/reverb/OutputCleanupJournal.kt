@@ -71,14 +71,62 @@ internal inline fun providerDeleteAttemptCompleted(
     return providerOutputCleanupCompleted(observeState())
 }
 
-internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord): String = buildString {
-    append(OUTPUT_CLEANUP_RECORD_VERSION).append('|')
-    append(record.storageType.storageCode.toInt()).append('|')
-    append(encodeCleanupField(record.id)).append('|')
-    append(record.byteCount).append('|')
-    append(record.sha256Hex.lowercase()).append('|')
-    append(encodeCleanupField(record.fileKey.orEmpty())).append('|')
-    append(encodeCleanupField(record.providerIdentity.orEmpty()))
+private fun encodeCleanupRecord(
+    version: String,
+    storageType: RecordingStorageType,
+    id: String,
+    byteCount: Long,
+    sha256Hex: String,
+    fileKey: String?,
+    providerIdentity: String?,
+): String = buildString {
+    append(version).append('|')
+    append(storageType.storageCode.toInt()).append('|')
+    append(encodeCleanupField(id)).append('|')
+    append(byteCount).append('|')
+    append(sha256Hex.lowercase()).append('|')
+    append(encodeCleanupField(fileKey.orEmpty())).append('|')
+    append(encodeCleanupField(providerIdentity.orEmpty()))
+}
+
+internal fun encodePendingOutputCleanupRecord(record: PendingOutputCleanupRecord): String =
+    encodeCleanupRecord(
+        OUTPUT_CLEANUP_RECORD_VERSION,
+        record.storageType,
+        record.id,
+        record.byteCount,
+        record.sha256Hex,
+        record.fileKey,
+        record.providerIdentity,
+    )
+
+private data class DecodedCleanupRecord(
+    val storageType: RecordingStorageType,
+    val id: String,
+    val byteCount: Long,
+    val sha256Hex: String,
+    val fileKey: String?,
+    val providerIdentity: String?,
+)
+
+private fun decodeCleanupRecordFields(
+    parts: List<String>,
+    storageType: RecordingStorageType,
+    allowZeroBytes: Boolean,
+): DecodedCleanupRecord? {
+    val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
+    if (!recordingStorageIdIsValid(storageType, id)) return null
+    val byteCount = parts[3].toLongOrNull()?.takeIf { if (allowZeroBytes) it >= 0L else it > 0L } ?: return null
+    val sha256Hex = parts[4].lowercase()
+    if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
+    return DecodedCleanupRecord(
+        storageType = storageType,
+        id = id,
+        byteCount = byteCount,
+        sha256Hex = sha256Hex,
+        fileKey = decodeCleanupField(parts[5])?.takeIf { it.isNotBlank() },
+        providerIdentity = parts.getOrNull(6)?.let(::decodeCleanupField)?.takeIf { it.isNotBlank() },
+    )
 }
 
 internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanupRecord? {
@@ -97,29 +145,27 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
             parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
         else -> null
     } ?: return null
-    val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
-    if (!recordingStorageIdIsValid(storageType, id)) return null
-    val byteCount = parts[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
-    val sha256Hex = parts[4].lowercase()
-    if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
-    val fileKey = decodeCleanupField(parts[5])?.takeIf { it.isNotBlank() }
-    val providerIdentity = if (parts.size == 7) {
-        decodeCleanupField(parts[6])?.takeIf { it.isNotBlank() }
-    } else {
-        null
-    }
-    return PendingOutputCleanupRecord(storageType, id, byteCount, sha256Hex, fileKey, providerIdentity)
+    val fields = decodeCleanupRecordFields(parts, storageType, allowZeroBytes = true) ?: return null
+    return PendingOutputCleanupRecord(
+        fields.storageType,
+        fields.id,
+        fields.byteCount,
+        fields.sha256Hex,
+        fields.fileKey,
+        fields.providerIdentity,
+    )
 }
 
-internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String = buildString {
-    append(VERIFIED_EXPORT_STAGING_VERSION).append('|')
-    append(record.storageType.storageCode.toInt()).append('|')
-    append(encodeCleanupField(record.id)).append('|')
-    append(record.byteCount).append('|')
-    append(record.sha256Hex.lowercase()).append('|')
-    append(encodeCleanupField(record.fileKey.orEmpty())).append('|')
-    append(encodeCleanupField(record.providerIdentity.orEmpty()))
-}
+internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String =
+    encodeCleanupRecord(
+        VERIFIED_EXPORT_STAGING_VERSION,
+        record.storageType,
+        record.id,
+        record.byteCount,
+        record.sha256Hex,
+        record.fileKey,
+        record.providerIdentity,
+    )
 
 internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagingRecord? {
     val parts = raw.split('|')
@@ -129,14 +175,15 @@ internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagi
         VERIFIED_EXPORT_STAGING_VERSION -> parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
         else -> null
     } ?: return null
-    val id = decodeCleanupField(parts[2])?.takeIf { it.isNotBlank() } ?: return null
-    if (!recordingStorageIdIsValid(storageType, id)) return null
-    val byteCount = parts[3].toLongOrNull()?.takeIf { it > 0L } ?: return null
-    val sha256Hex = parts[4].lowercase()
-    if (sha256Hex.length != 64 || sha256Hex.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
-    val fileKey = decodeCleanupField(parts[5])?.takeIf { it.isNotBlank() }
-    val providerIdentity = decodeCleanupField(parts[6])?.takeIf { it.isNotBlank() }
-    return VerifiedExportStagingRecord(storageType, id, byteCount, sha256Hex, fileKey, providerIdentity)
+    val fields = decodeCleanupRecordFields(parts, storageType, allowZeroBytes = false) ?: return null
+    return VerifiedExportStagingRecord(
+        fields.storageType,
+        fields.id,
+        fields.byteCount,
+        fields.sha256Hex,
+        fields.fileKey,
+        fields.providerIdentity,
+    )
 }
 
 internal enum class PendingOutputCleanupMatch {

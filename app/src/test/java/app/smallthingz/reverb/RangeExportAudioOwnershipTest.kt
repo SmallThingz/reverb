@@ -35,8 +35,8 @@ class RangeExportAudioOwnershipTest {
         val expected = IOException("thread start failed")
         var observed: Throwable? = null
 
-        startPreviewReleaseFallbackReportingFailure(
-            start = { throw expected },
+        runCleanupReportingThrowable(
+            cleanup = { throw expected },
             onFailure = { observed = it },
         )
 
@@ -45,8 +45,8 @@ class RangeExportAudioOwnershipTest {
 
     @Test
     fun previewReleaseFallbackReporterFailure_cannotEscapeCleanup() {
-        startPreviewReleaseFallbackReportingFailure(
-            start = { throw IOException("thread start failed") },
+        runCleanupReportingThrowable(
+            cleanup = { throw IOException("thread start failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )
     }
@@ -56,8 +56,8 @@ class RangeExportAudioOwnershipTest {
         val expected = IOException("release failed")
         var observed: Throwable? = null
 
-        releasePreviewTrackReportingFailure(
-            release = { throw expected },
+        runCleanupReportingThrowable(
+            cleanup = { throw expected },
             onFailure = { observed = it },
         )
 
@@ -66,8 +66,8 @@ class RangeExportAudioOwnershipTest {
 
     @Test
     fun previewTrackReleaseReporterFailure_cannotEscapeCleanup() {
-        releasePreviewTrackReportingFailure(
-            release = { throw IOException("release failed") },
+        runCleanupReportingThrowable(
+            cleanup = { throw IOException("release failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )
     }
@@ -120,8 +120,8 @@ class RangeExportAudioOwnershipTest {
         var released = false
         var reported = false
 
-        releasePreviewTrackReportingFailure(
-            release = { released = true },
+        runCleanupReportingThrowable(
+            cleanup = { released = true },
             onFailure = { reported = true },
         )
 

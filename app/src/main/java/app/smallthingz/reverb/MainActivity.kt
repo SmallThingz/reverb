@@ -188,14 +188,16 @@ class MainActivity : ComponentActivity() {
                         }
                     } else {
                     OnboardingScreen(
-                        microphoneAllowed = microphonePermissionGranted,
-                        storageAllowed = storagePermissionGranted,
-                        storagePermissionRequired = requiresLegacyStoragePermission(),
-                        recoveryAllowed = mediaRecoveryAllowed,
-                        recoveryPermissionRequired = mediaRecoveryPermission() != null,
-                        notificationAllowed = notificationPermissionGranted,
-                        notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-                        batteryOptimizationAllowed = batteryOptimizationAllowed,
+                        status = OnboardingStatus(
+                            microphoneAllowed = microphonePermissionGranted,
+                            storageAllowed = storagePermissionGranted,
+                            storagePermissionRequired = requiresLegacyStoragePermission(),
+                            recoveryAllowed = mediaRecoveryAllowed,
+                            recoveryPermissionRequired = mediaRecoveryPermission() != null,
+                            notificationAllowed = notificationPermissionGranted,
+                            notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                            batteryOptimizationAllowed = batteryOptimizationAllowed,
+                        ),
                         initialOneShotEnabled = onboardingBuffers.oneShotEnabled,
                         initialLoopingEnabled = onboardingBuffers.loopingEnabled,
                         finishing = onboardingFinishing,
@@ -265,7 +267,11 @@ class MainActivity : ComponentActivity() {
                     if (showPermissionDenied) {
                         ReverbMessageSheet(
                             title = stringResource(R.string.permission_required),
-                            message = requiredPermissionMessage(),
+                            message = when {
+                                !hasMicrophonePermission() -> getString(R.string.permission_required_message)
+                                !hasLegacyStoragePermission() -> getString(R.string.storage_permission_required_message)
+                                else -> getString(R.string.permission_required_message)
+                            },
                             onDismiss = { showPermissionDenied = false },
                             confirmLabel = stringResource(R.string.allow),
                             onConfirm = {
@@ -392,12 +398,6 @@ class MainActivity : ComponentActivity() {
     private fun hasMediaRecoveryPermission(): Boolean =
         mediaRecoveryPermission()?.let { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } ?: true
 
-    private fun requiredPermissionMessage(): String = when {
-        !hasMicrophonePermission() -> getString(R.string.permission_required_message)
-        !hasLegacyStoragePermission() -> getString(R.string.storage_permission_required_message)
-        else -> getString(R.string.permission_required_message)
-    }
-
     private fun hasNotificationPermission(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -439,16 +439,20 @@ private fun AppThemeMode.isDark(systemDarkTheme: Boolean): Boolean = when (this)
     AppThemeMode.DARK -> true
 }
 
+private data class OnboardingStatus(
+    val microphoneAllowed: Boolean,
+    val storageAllowed: Boolean,
+    val storagePermissionRequired: Boolean,
+    val recoveryAllowed: Boolean,
+    val recoveryPermissionRequired: Boolean,
+    val notificationAllowed: Boolean,
+    val notificationPermissionRequired: Boolean,
+    val batteryOptimizationAllowed: Boolean,
+)
+
 @Composable
 private fun OnboardingScreen(
-    microphoneAllowed: Boolean,
-    storageAllowed: Boolean,
-    storagePermissionRequired: Boolean,
-    recoveryAllowed: Boolean,
-    recoveryPermissionRequired: Boolean,
-    notificationAllowed: Boolean,
-    notificationPermissionRequired: Boolean,
-    batteryOptimizationAllowed: Boolean,
+    status: OnboardingStatus,
     initialOneShotEnabled: Boolean,
     initialLoopingEnabled: Boolean,
     finishing: Boolean,
@@ -474,14 +478,7 @@ private fun OnboardingScreen(
         if (backMotion.gestureActive && page > 0) {
             OnboardingPage(
                 page = page - 1,
-                microphoneAllowed = microphoneAllowed,
-                storageAllowed = storageAllowed,
-                storagePermissionRequired = storagePermissionRequired,
-                recoveryAllowed = recoveryAllowed,
-                recoveryPermissionRequired = recoveryPermissionRequired,
-                notificationAllowed = notificationAllowed,
-                notificationPermissionRequired = notificationPermissionRequired,
-                batteryOptimizationAllowed = batteryOptimizationAllowed,
+                status = status,
                 oneShotEnabled = oneShotEnabled,
                 loopingEnabled = loopingEnabled,
                 interactionEnabled = false,
@@ -508,14 +505,7 @@ private fun OnboardingScreen(
 
         OnboardingPage(
             page = page,
-            microphoneAllowed = microphoneAllowed,
-            storageAllowed = storageAllowed,
-            storagePermissionRequired = storagePermissionRequired,
-            recoveryAllowed = recoveryAllowed,
-            recoveryPermissionRequired = recoveryPermissionRequired,
-            notificationAllowed = notificationAllowed,
-            notificationPermissionRequired = notificationPermissionRequired,
-            batteryOptimizationAllowed = batteryOptimizationAllowed,
+            status = status,
             oneShotEnabled = oneShotEnabled,
             loopingEnabled = loopingEnabled,
             interactionEnabled = !finishing,
@@ -543,14 +533,7 @@ private fun OnboardingScreen(
 @Composable
 private fun OnboardingPage(
     page: Int,
-    microphoneAllowed: Boolean,
-    storageAllowed: Boolean,
-    storagePermissionRequired: Boolean,
-    recoveryAllowed: Boolean,
-    recoveryPermissionRequired: Boolean,
-    notificationAllowed: Boolean,
-    notificationPermissionRequired: Boolean,
-    batteryOptimizationAllowed: Boolean,
+    status: OnboardingStatus,
     oneShotEnabled: Boolean,
     loopingEnabled: Boolean,
     interactionEnabled: Boolean,
@@ -595,28 +578,28 @@ private fun OnboardingPage(
                             marker = "●",
                             title = stringResource(R.string.onboarding_microphone_title),
                             body = stringResource(R.string.onboarding_microphone_body),
-                            allowed = microphoneAllowed,
+                            allowed = status.microphoneAllowed,
                             canRequest = interactionEnabled,
                             onAllow = onRequestMicrophone,
                         )
-                        if (storagePermissionRequired) {
+                        if (status.storagePermissionRequired) {
                             Spacer(Modifier.height(12.dp))
                             OnboardingPermissionCard(
                                 marker = "S",
                                 title = stringResource(R.string.storage_settings_title),
                                 body = stringResource(R.string.onboarding_storage_body),
-                                allowed = storageAllowed,
+                                allowed = status.storageAllowed,
                                 canRequest = interactionEnabled,
                                 onAllow = onRequestStorage,
                             )
                         }
-                        if (recoveryPermissionRequired) {
+                        if (status.recoveryPermissionRequired) {
                             Spacer(Modifier.height(12.dp))
                             OnboardingPermissionCard(
                                 marker = "R",
                                 title = stringResource(R.string.recording_recovery_title),
                                 body = stringResource(R.string.recording_recovery_body),
-                                allowed = recoveryAllowed,
+                                allowed = status.recoveryAllowed,
                                 canRequest = interactionEnabled,
                                 onAllow = onRequestRecovery,
                             )
@@ -626,8 +609,8 @@ private fun OnboardingPage(
                             marker = "N",
                             title = stringResource(R.string.onboarding_notifications_title),
                             body = stringResource(R.string.onboarding_notifications_body),
-                            allowed = notificationAllowed,
-                            canRequest = interactionEnabled && notificationPermissionRequired,
+                            allowed = status.notificationAllowed,
+                            canRequest = interactionEnabled && status.notificationPermissionRequired,
                             onAllow = onRequestNotifications,
                         )
                     }
@@ -644,7 +627,7 @@ private fun OnboardingPage(
                         )
                         Spacer(Modifier.height(24.dp))
                         BackgroundOptimizationWarning(
-                            restricted = !batteryOptimizationAllowed,
+                            restricted = !status.batteryOptimizationAllowed,
                             onReview = onReviewBatteryOptimization,
                             modifier = Modifier.fillMaxWidth(),
                         )

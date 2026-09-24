@@ -162,17 +162,6 @@ internal fun quickTileRejectedCommandRequiresResample(
     sampledGeneration != Long.MIN_VALUE &&
     result.generation != sampledGeneration
 
-internal inline fun releaseTimelineSnapshotBestEffort(
-    release: () -> Unit,
-    onFailure: (Exception) -> Unit,
-) {
-    try {
-        release()
-    } catch (error: Exception) {
-        runCatching { onFailure(error) }
-    }
-}
-
 internal fun releaseExportLeaseOnceBestEffort(
     released: AtomicBoolean,
     release: () -> Unit,
@@ -601,21 +590,22 @@ class ReverbService : Service() {
         writer.println("  rawHistoryDirectory=${BUFFER_CACHE_FOLDER_NAME}/${BUFFER_CHUNKS_FOLDER_NAME}")
     }
 
+    private fun commandOneShotFull(bufferSlot: BufferSlot): Boolean? {
+        if (bufferSlot != BufferSlot.ONE_SHOT || !oneShotBufferEnabled) return false
+        return try {
+            oneShotAudioChunkStore.isFull()
+        } catch (error: Exception) {
+            if (!serviceDestroying) reportPersistentStoreFailure("read one-shot availability", error)
+            null
+        }
+    }
+
     fun enableListening(
         bufferSlot: BufferSlot,
         expectedGeneration: Long? = null,
     ): ListeningCommandResult {
         if (serviceDestroying) return rejectedListeningCommand()
-        val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
-            try {
-                oneShotAudioChunkStore.isFull()
-            } catch (error: Exception) {
-                if (!serviceDestroying) reportPersistentStoreFailure("read one-shot availability", error)
-                return rejectedListeningCommand()
-            }
-        } else {
-            false
-        }
+        val oneShotFull = commandOneShotFull(bufferSlot) ?: return rejectedListeningCommand()
         if (!canActivateCaptureBuffer(
                 requested = bufferSlot,
                 oneShotEnabled = oneShotBufferEnabled,
@@ -644,16 +634,7 @@ class ReverbService : Service() {
         expectedGeneration: Long? = null,
     ): ListeningCommandResult {
         if (serviceDestroying) return rejectedListeningCommand()
-        val oneShotFull = if (bufferSlot == BufferSlot.ONE_SHOT && oneShotBufferEnabled) {
-            try {
-                oneShotAudioChunkStore.isFull()
-            } catch (error: Exception) {
-                if (!serviceDestroying) reportPersistentStoreFailure("read one-shot availability", error)
-                return rejectedListeningCommand()
-            }
-        } else {
-            false
-        }
+        val oneShotFull = commandOneShotFull(bufferSlot) ?: return rejectedListeningCommand()
         val canActivate = canActivateCaptureBuffer(
             requested = bufferSlot,
             oneShotEnabled = oneShotBufferEnabled,
@@ -668,13 +649,7 @@ class ReverbService : Service() {
         var switchingWhileRecording = false
         var rollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
-            if (serviceDestroying || !recorderCommandGenerationMayApply(
-                    expectedGeneration = expectedGeneration,
-                    currentGeneration = listeningCommandGeneration.get(),
-                )
-            ) {
-                return rejectedListeningCommand()
-            }
+            if (!recorderCommandMayApply(expectedGeneration)) return rejectedListeningCommand()
             if (!durableCaptureIntentAuthorityValid) return@synchronized null
             val previousStoredSlot = durableCaptureBufferSlot
             val previousPreferences = snapshotCaptureIntentPreferences(prefs)
@@ -790,6 +765,12 @@ class ReverbService : Service() {
         }
     }
 
+    private fun recorderCommandMayApply(expectedGeneration: Long?): Boolean =
+        !serviceDestroying && recorderCommandGenerationMayApply(
+            expectedGeneration = expectedGeneration,
+            currentGeneration = listeningCommandGeneration.get(),
+        )
+
     private fun rejectedListeningCommand(): ListeningCommandResult =
         ListeningCommandResult(accepted = false, generation = listeningCommandGeneration.get())
 
@@ -825,13 +806,7 @@ class ReverbService : Service() {
         var stopIncidentStateFailure = false
         var intentRollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
-            if (serviceDestroying || !recorderCommandGenerationMayApply(
-                    expectedGeneration = expectedGeneration,
-                    currentGeneration = listeningCommandGeneration.get(),
-                )
-            ) {
-                return rejectedListeningCommand()
-            }
+            if (!recorderCommandMayApply(expectedGeneration)) return rejectedListeningCommand()
             val authorityWasValid = durableCaptureIntentAuthorityValid
             val previousEnabled = durableListeningIntentEnabled
             val previousStoredSlot = durableCaptureBufferSlot
@@ -1014,11 +989,6 @@ class ReverbService : Service() {
                 loopingEnabled = loopingBufferEnabled,
             )
         }
-
-    private fun switchActiveBufferOnAudioThread(
-        bufferSlot: BufferSlot,
-        notifyTiles: Boolean = true,
-    ): Boolean = switchResolvedCaptureBufferOnAudioThread(notifyTiles) { bufferSlot }
 
     private fun switchResolvedCaptureBufferOnAudioThread(
         notifyTiles: Boolean,
@@ -1505,43 +1475,14 @@ class ReverbService : Service() {
         receiver: AudioFileReceiver,
         newFileName: String,
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
-    ) {
-        val exportToken = beginExport(receiver) ?: run {
-            notifyReceiverFailure(
-                receiver,
-                getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
-            )
-            return
-        }
-        if (!ensureExportForegroundLifetime(exportToken, receiver)) return
-
-        if (!audioHandler.post {
-            try {
-                if (!isExportPending(exportToken)) return@post
-                flushAudioRecord()
-                if (!isExportPending(exportToken)) return@post
-
-                val store = chunkStore(bufferSlot)
-                val totalDuration = availableBufferedDurationSeconds(bufferSlot)
-                val requestedDuration = memorySeconds.toDouble().coerceAtLeast(0.0)
-                val end = totalDuration
-                val start = maxOf(0.0, end - requestedDuration)
-                val lease = acquireExportRange(store, start, end)
-                if (lease == null) {
-                    clearExportState(exportToken)
-                    finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
-                    return@post
-                }
-                exportBufferedRange(lease, receiver, newFileName, exportToken)
-            } catch (error: Exception) {
-                reportPersistentStoreFailure("prepare export", error)
-                clearExportState(exportToken)
-                finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
-            }
-        }) {
-            clearExportState(exportToken)
-            finishExportFailure(exportToken, receiver, getString(R.string.save_failed))
-        }
+    ) = queueBufferedExport(
+        bufferSlot = bufferSlot,
+        receiver = receiver,
+        newFileName = newFileName,
+        failureOperation = "prepare export",
+    ) { totalDuration ->
+        val end = totalDuration
+        maxOf(0.0, end - memorySeconds.toDouble().coerceAtLeast(0.0)) to end
     }
 
     fun dumpRecordingRange(
@@ -1550,6 +1491,22 @@ class ReverbService : Service() {
         receiver: AudioFileReceiver,
         newFileName: String,
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
+    ) = queueBufferedExport(
+        bufferSlot = bufferSlot,
+        receiver = receiver,
+        newFileName = newFileName,
+        failureOperation = "prepare range export",
+    ) { totalDuration ->
+        val start = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
+        start to endOffsetSeconds.toDouble().coerceIn(start, totalDuration)
+    }
+
+    private fun queueBufferedExport(
+        bufferSlot: BufferSlot,
+        receiver: AudioFileReceiver,
+        newFileName: String,
+        failureOperation: String,
+        selectRange: (totalDuration: Double) -> Pair<Double, Double>,
     ) {
         val exportToken = beginExport(receiver) ?: run {
             notifyReceiverFailure(
@@ -1561,28 +1518,27 @@ class ReverbService : Service() {
         if (!ensureExportForegroundLifetime(exportToken, receiver)) return
 
         if (!audioHandler.post {
-            try {
-                if (!isExportPending(exportToken)) return@post
-                flushAudioRecord()
-                if (!isExportPending(exportToken)) return@post
+                try {
+                    if (!isExportPending(exportToken)) return@post
+                    flushAudioRecord()
+                    if (!isExportPending(exportToken)) return@post
 
-                val store = chunkStore(bufferSlot)
-                val totalDuration = availableBufferedDurationSeconds(bufferSlot)
-                val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
-                val boundedEnd = endOffsetSeconds.toDouble().coerceIn(boundedStart, totalDuration)
-                val lease = acquireExportRange(store, boundedStart, boundedEnd)
-                if (lease == null) {
+                    val store = chunkStore(bufferSlot)
+                    val (start, end) = selectRange(availableBufferedDurationSeconds(bufferSlot))
+                    val lease = acquireExportRange(store, start, end)
+                    if (lease == null) {
+                        clearExportState(exportToken)
+                        finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
+                        return@post
+                    }
+                    exportBufferedRange(lease, receiver, newFileName, exportToken)
+                } catch (error: Exception) {
+                    reportPersistentStoreFailure(failureOperation, error)
                     clearExportState(exportToken)
-                    finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
-                    return@post
+                    finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
                 }
-                exportBufferedRange(lease, receiver, newFileName, exportToken)
-            } catch (error: Exception) {
-                reportPersistentStoreFailure("prepare range export", error)
-                clearExportState(exportToken)
-                finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
             }
-        }) {
+        ) {
             clearExportState(exportToken)
             finishExportFailure(exportToken, receiver, getString(R.string.save_failed))
         }
@@ -1652,8 +1608,8 @@ class ReverbService : Service() {
             )
         }
         if (!posted) {
-            releaseTimelineSnapshotBestEffort(
-                release = { snapshot?.close() },
+            runCleanupReportingException(
+                cleanup = { snapshot?.close() },
                 onFailure = onReleaseFailure,
             )
         }
@@ -1669,7 +1625,7 @@ class ReverbService : Service() {
         val exportConfig = getConfigurationSnapshot()
         val exportToken = beginExport(receiver)
         if (exportToken == null) {
-            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+            runCleanupReportingException(snapshot::close) { error ->
                 reportPersistentStoreFailure("release export-range snapshot", error)
             }
             notifyReceiverFailure(
@@ -1679,7 +1635,7 @@ class ReverbService : Service() {
             return
         }
         if (!ensureExportForegroundLifetime(exportToken, receiver)) {
-            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+            runCleanupReportingException(snapshot::close) { error ->
                 reportPersistentStoreFailure("release export-range snapshot", error)
             }
             return
@@ -1703,7 +1659,7 @@ class ReverbService : Service() {
             finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
             return
         } finally {
-            releaseTimelineSnapshotBestEffort(snapshot::close) { error ->
+            runCleanupReportingException(snapshot::close) { error ->
                 reportPersistentStoreFailure("release export-range snapshot", error)
             }
         }
@@ -2136,7 +2092,7 @@ class ReverbService : Service() {
                             Log.e(TAG, "Unable to register committed export ${recording.id}", error)
                             recording
                         }
-                        finishExportSuccess(exportToken, receiver, cataloguedRecording)
+                        deliverExportTerminal(exportToken, receiver) { fileReady(cataloguedRecording) }
                     } catch (cancelled: InterruptedIOException) {
                         Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
                         finishExportCancellation(exportToken, receiver)
@@ -2272,9 +2228,6 @@ class ReverbService : Service() {
     fun applyUpdatedPreferences(): Boolean =
         queueUpdatedPreferences(startedLifetimeAlreadyOwned = false)
 
-    private fun applyUpdatedPreferencesFromStartCommand(): Boolean =
-        queueUpdatedPreferences(startedLifetimeAlreadyOwned = true)
-
     private fun queueUpdatedPreferences(startedLifetimeAlreadyOwned: Boolean): Boolean =
         synchronized(listeningIntentLock) {
             // Returning true transfers this committed Settings reload out of the UI/bind lifetime.
@@ -2338,14 +2291,6 @@ class ReverbService : Service() {
         syncOneShotFullQuickTileOnAudioThread()
     }
 
-    private fun notifyReceiver(
-        receiver: AudioFileReceiver?,
-        recording: RecordingEntity,
-    ) {
-        receiver ?: return
-        mainHandler.post { receiver.fileReady(recording) }
-    }
-
     private fun notifyReceiverFailure(
         receiver: AudioFileReceiver?,
         message: String,
@@ -2355,19 +2300,13 @@ class ReverbService : Service() {
         mainHandler.post { receiver.fileFailed(message, error) }
     }
 
-    private fun notifyReceiverCancelled(receiver: AudioFileReceiver?) {
-        receiver ?: return
-        mainHandler.post { receiver.fileCancelled() }
-    }
-
-    private fun finishExportSuccess(
+    private inline fun deliverExportTerminal(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,
-        recording: RecordingEntity,
+        crossinline delivery: AudioFileReceiver.() -> Unit,
     ) {
-        if (token.terminalDelivered.compareAndSet(false, true)) {
-            notifyReceiver(receiver, recording)
-        }
+        if (!token.terminalDelivered.compareAndSet(false, true) || receiver == null) return
+        mainHandler.post { receiver.delivery() }
     }
 
     private fun finishExportFailure(
@@ -2378,22 +2317,18 @@ class ReverbService : Service() {
     ) {
         if (token.cancelled.get()) {
             finishExportCancellation(token, receiver)
-            return
-        }
-        if (token.terminalDelivered.compareAndSet(false, true)) {
-            notifyReceiverFailure(receiver, message, error)
+        } else {
+            deliverExportTerminal(token, receiver) { fileFailed(message, error) }
         }
     }
 
     private fun finishExportCancellation(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,
-    ) {
-        if (!token.terminalDelivered.compareAndSet(false, true)) return
+    ) = deliverExportTerminal(token, receiver) {
         when (exportCancellationTerminal(token.cancellationReportsFailure.get())) {
-            ExportCancellationTerminal.FAILED ->
-                notifyReceiverFailure(receiver, getString(R.string.save_failed))
-            ExportCancellationTerminal.CANCELLED -> notifyReceiverCancelled(receiver)
+            ExportCancellationTerminal.FAILED -> fileFailed(getString(R.string.save_failed))
+            ExportCancellationTerminal.CANCELLED -> fileCancelled()
         }
     }
 
@@ -2471,7 +2406,8 @@ class ReverbService : Service() {
                     syncOneShotFullQuickTileOnAudioThread(refreshTiles = false)
                     if (loopingBufferEnabled) {
                         val alreadyOnLooping = activeBufferSlot == BufferSlot.LOOPING
-                        val handoffAccepted = !alreadyOnLooping && switchActiveBufferOnAudioThread(BufferSlot.LOOPING)
+                        val handoffAccepted = !alreadyOnLooping &&
+                            switchResolvedCaptureBufferOnAudioThread(notifyTiles = true) { BufferSlot.LOOPING }
                         val overflow = count - writtenToOneShot
                         if (overflow > 0 && oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted)) {
                             loopingAudioChunkStore.append(array, offset + writtenToOneShot, overflow)
@@ -3479,14 +3415,7 @@ class ReverbService : Service() {
 
             while (true) {
                 if (operation.cancelRequested.get() || serviceDestroying) {
-                    finishBufferClearOperation(
-                        operation = operation,
-                        phase = bufferClearCancellationPhase(operation),
-                        totalBytes = totalBytes,
-                        remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
-                        totalChunks = totalChunks,
-                        remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
-                    )
+                    finishCancelledBufferClear(operation, totalBytes, totalChunks)
                     return
                 }
 
@@ -3508,14 +3437,7 @@ class ReverbService : Service() {
                 }
 
                 if (step == null) {
-                    finishBufferClearOperation(
-                        operation = operation,
-                        phase = bufferClearCancellationPhase(operation),
-                        totalBytes = totalBytes,
-                        remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
-                        totalChunks = totalChunks,
-                        remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
-                    )
+                    finishCancelledBufferClear(operation, totalBytes, totalChunks)
                     return
                 }
 
@@ -3681,6 +3603,35 @@ class ReverbService : Service() {
             ?.remainingChunks
             ?: fallback
 
+    private fun BufferClearOperation.status(
+        phase: BufferClearPhase,
+        totalBytes: Long,
+        remainingBytes: Long,
+        totalChunks: Int,
+        remainingChunks: Int,
+    ) = BufferClearStatus(
+        operationId = id,
+        bufferSlot = bufferSlot,
+        phase = phase,
+        totalBytes = totalBytes.coerceAtLeast(0L),
+        remainingBytes = remainingBytes.coerceAtLeast(0L),
+        totalChunks = totalChunks.coerceAtLeast(0),
+        remainingChunks = remainingChunks.coerceAtLeast(0),
+    )
+
+    private fun finishCancelledBufferClear(
+        operation: BufferClearOperation,
+        totalBytes: Long,
+        totalChunks: Int,
+    ) = finishBufferClearOperation(
+        operation = operation,
+        phase = bufferClearCancellationPhase(operation),
+        totalBytes = totalBytes,
+        remainingBytes = currentBufferClearRemainingBytes(operation, totalBytes),
+        totalChunks = totalChunks,
+        remainingChunks = currentBufferClearRemainingChunks(operation, totalChunks),
+    )
+
     private fun updateBufferClearStatus(
         operation: BufferClearOperation,
         phase: BufferClearPhase,
@@ -3691,14 +3642,8 @@ class ReverbService : Service() {
     ) {
         synchronized(bufferClearLock) {
             if (activeBufferClearOperation !== operation) return
-            bufferClearStatus = BufferClearStatus(
-                operationId = operation.id,
-                bufferSlot = operation.bufferSlot,
-                phase = phase,
-                totalBytes = totalBytes.coerceAtLeast(0L),
-                remainingBytes = remainingBytes.coerceAtLeast(0L),
-                totalChunks = totalChunks.coerceAtLeast(0),
-                remainingChunks = remainingChunks.coerceAtLeast(0),
+            bufferClearStatus = operation.status(
+                phase, totalBytes, remainingBytes, totalChunks, remainingChunks,
             )
         }
     }
@@ -3713,14 +3658,8 @@ class ReverbService : Service() {
     ) {
         val finished = synchronized(bufferClearLock) {
             if (activeBufferClearOperation !== operation) return@synchronized false
-            bufferClearStatus = BufferClearStatus(
-                operationId = operation.id,
-                bufferSlot = operation.bufferSlot,
-                phase = phase,
-                totalBytes = totalBytes.coerceAtLeast(0L),
-                remainingBytes = remainingBytes.coerceAtLeast(0L),
-                totalChunks = totalChunks.coerceAtLeast(0),
-                remainingChunks = remainingChunks.coerceAtLeast(0),
+            bufferClearStatus = operation.status(
+                phase, totalBytes, remainingBytes, totalChunks, remainingChunks,
             )
             activeBufferClearOperation = null
             true
@@ -3769,7 +3708,7 @@ class ReverbService : Service() {
         startId: Int,
     ): Int {
         if (intent?.action == ACTION_APPLY_SETTINGS) {
-            applyUpdatedPreferencesFromStartCommand()
+            queueUpdatedPreferences(startedLifetimeAlreadyOwned = true)
         }
         if (intent?.action == ACTION_SETTINGS_RUNTIME_KEEPALIVE) {
             if (!settingsRuntimeLifetime.isActive()) requestServiceStopWhenExportIdle()
@@ -4429,15 +4368,15 @@ class ReverbService : Service() {
             lease.acquireSubRange(startSeconds, endSeconds)
 
         internal fun releaseChildRangeBestEffort(child: PersistentAudioChunkStore.RangeLease?) {
-            releaseTimelineSnapshotBestEffort(
-                release = { child?.close() },
+            runCleanupReportingException(
+                cleanup = { child?.close() },
                 onFailure = onChildReleaseFailure,
             )
         }
 
         internal fun releaseBestEffort() {
-            releaseTimelineSnapshotBestEffort(
-                release = lease::close,
+            runCleanupReportingException(
+                cleanup = lease::close,
                 onFailure = onChildReleaseFailure,
             )
         }
@@ -4841,8 +4780,8 @@ internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
     callback: (T?) -> Unit,
 ) {
     if (serviceDestroying) {
-        releaseTimelineSnapshotBestEffort(
-            release = { snapshot?.close() },
+        runCleanupReportingException(
+            cleanup = { snapshot?.close() },
             onFailure = onReleaseFailure,
         )
         callback(null)
@@ -4851,8 +4790,8 @@ internal fun <T : java.io.Closeable> deliverTimelineSnapshotAtServiceBoundary(
             callback(snapshot)
         } catch (error: Throwable) {
             var releaseFailure: Exception? = null
-            releaseTimelineSnapshotBestEffort(
-                release = { snapshot?.close() },
+            runCleanupReportingException(
+                cleanup = { snapshot?.close() },
                 onFailure = { closeError ->
                     releaseFailure = closeError
                     onReleaseFailure(closeError)

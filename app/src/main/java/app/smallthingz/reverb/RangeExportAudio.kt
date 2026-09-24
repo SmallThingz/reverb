@@ -137,30 +137,32 @@ internal fun sliceShuttlePcm16Mono(
     return input.copyOfRange(startFrame * 2, endFrame * 2)
 }
 
+private fun ByteArray.readPcm16Mono(frame: Int): Int {
+    val index = frame * 2
+    return ((this[index + 1].toInt() shl 8) or (this[index].toInt() and 0xff)).toShort().toInt()
+}
+
+private fun ByteArray.writePcm16Mono(frame: Int, value: Int) {
+    val index = frame * 2
+    this[index] = (value and 0xff).toByte()
+    this[index + 1] = ((value ushr 8) and 0xff).toByte()
+}
+
 internal fun windowShuttlePcm16Mono(input: ByteArray, edgeFrames: Int): ByteArray {
     val frameCount = input.size / 2
     if (frameCount <= 0) return ByteArray(0)
     val edge = minOf(edgeFrames.coerceAtLeast(0), (frameCount + 1) / 2)
     if (edge <= 0) return input.copyOf(frameCount * 2)
     val output = input.copyOf(frameCount * 2)
-    fun read(frame: Int): Int {
-        val index = frame * 2
-        return ((output[index + 1].toInt() shl 8) or (output[index].toInt() and 0xff)).toShort().toInt()
-    }
-    fun write(frame: Int, value: Int) {
-        val index = frame * 2
-        output[index] = (value and 0xff).toByte()
-        output[index + 1] = ((value ushr 8) and 0xff).toByte()
-    }
     val rampDenominator = (edge - 1).coerceAtLeast(1).toFloat()
     for (frame in 0 until frameCount) {
         val fromStart = (frame.toFloat() / rampDenominator).coerceIn(0f, 1f)
         val fromEnd = ((frameCount - 1 - frame).toFloat() / rampDenominator).coerceIn(0f, 1f)
         val phase = minOf(fromStart, fromEnd)
         val gain = phase * phase * (3f - 2f * phase)
-        val value = (read(frame) * gain).roundToInt()
+        val value = (output.readPcm16Mono(frame) * gain).roundToInt()
             .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        write(frame, value)
+        output.writePcm16Mono(frame, value)
     }
     return output
 }
@@ -169,21 +171,12 @@ internal fun fadeOutShuttlePcm16Mono(input: ByteArray): ByteArray {
     val frameCount = input.size / 2
     if (frameCount <= 0) return ByteArray(0)
     val output = input.copyOf(frameCount * 2)
-    fun read(frame: Int): Int {
-        val index = frame * 2
-        return ((output[index + 1].toInt() shl 8) or (output[index].toInt() and 0xff)).toShort().toInt()
-    }
-    fun write(frame: Int, value: Int) {
-        val index = frame * 2
-        output[index] = (value and 0xff).toByte()
-        output[index + 1] = ((value ushr 8) and 0xff).toByte()
-    }
     for (frame in 0 until frameCount) {
         val t = if (frameCount == 1) 1f else frame.toFloat() / (frameCount - 1).toFloat()
         val fade = 1f - t * t * (3f - 2f * t)
-        val value = (read(frame) * fade).roundToInt()
+        val value = (output.readPcm16Mono(frame) * fade).roundToInt()
             .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        write(frame, value)
+        output.writePcm16Mono(frame, value)
     }
     return output
 }
@@ -202,17 +195,12 @@ internal fun transformShuttlePcm16Mono(input: ByteArray, signedRate: Float): Byt
     fun readOriented(frame: Int): Float {
         val logicalFrame = frame.coerceIn(0, inputFrames - 1)
         val sourceFrame = if (reverse) inputFrames - 1 - logicalFrame else logicalFrame
-        val index = sourceFrame * 2
-        return ((input[index + 1].toInt() shl 8) or (input[index].toInt() and 0xff))
-            .toShort()
-            .toFloat()
+        return input.readPcm16Mono(sourceFrame).toFloat()
     }
-    fun write(frame: Int, value: Float) {
-        val encoded = value.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        val index = frame * 2
-        output[index] = (encoded and 0xff).toByte()
-        output[index + 1] = ((encoded ushr 8) and 0xff).toByte()
-    }
+    fun write(frame: Int, value: Float) = output.writePcm16Mono(
+        frame,
+        value.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()),
+    )
     fun cubic(position: Double): Float {
         val base = position.toInt().coerceIn(0, inputFrames - 1)
         val t = (position - base.toDouble()).toFloat().coerceIn(0f, 1f)
@@ -300,39 +288,29 @@ internal fun crossfadeShuttlePcm16Mono(
     val mixedFrames = minOf(previousFrames, bodyFrames, requestedOverlap)
     val output = ByteArray(bodyFrames * 2)
 
-    fun read(bytes: ByteArray, frame: Int): Int {
-        val index = frame * 2
-        return ((bytes[index + 1].toInt() shl 8) or (bytes[index].toInt() and 0xff)).toShort().toInt()
-    }
-    fun write(bytes: ByteArray, frame: Int, value: Int) {
-        val index = frame * 2
-        bytes[index] = (value and 0xff).toByte()
-        bytes[index + 1] = ((value ushr 8) and 0xff).toByte()
-    }
-
     var outFrame = 0
     if (mixedFrames > 0 && previousTail != null) {
         val previousStart = previousFrames - mixedFrames
         repeat(mixedFrames) { index ->
             val t = (index + 1).toFloat() / (mixedFrames + 1).toFloat()
             val blend = t * t * (3f - 2f * t)
-            val previous = read(previousTail, previousStart + index)
-            val next = read(current, index)
+            val previous = previousTail.readPcm16Mono(previousStart + index)
+            val next = current.readPcm16Mono(index)
             val mixed = (previous * (1f - blend) + next * blend)
                 .roundToInt()
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-            write(output, outFrame++, mixed)
+            output.writePcm16Mono(outFrame++, mixed)
         }
     }
     val currentBodyStart = mixedFrames
     for (frame in currentBodyStart until bodyFrames) {
-        var value = read(current, frame)
+        var value = current.readPcm16Mono(frame)
         if (previousFrames == 0 && requestedOverlap > 0 && frame < requestedOverlap) {
             val t = (frame + 1).toFloat() / (requestedOverlap + 1).toFloat()
             val fade = t * t * (3f - 2f * t)
             value = (value * fade).roundToInt()
         }
-        write(output, outFrame++, value)
+        output.writePcm16Mono(outFrame++, value)
     }
     val tail = if (tailFrames > 0) {
         current.copyOfRange(bodyFrames * 2, currentFrames * 2)
@@ -406,17 +384,6 @@ internal class PlaybackHeadFrameCounter {
     }
 }
 
-internal inline fun closeShuttleSourceReportingFailure(
-    close: () -> Unit,
-    onFailure: (Exception) -> Unit,
-) {
-    try {
-        close()
-    } catch (error: Exception) {
-        runCatching { onFailure(error) }
-    }
-}
-
 internal fun executeIfAccepted(executor: Executor, task: Runnable): Boolean = try {
     executor.execute(task)
     true
@@ -451,27 +418,7 @@ internal fun ReverbService.TimelineSnapshot.readWaveformEnvelopeProgressive(
     return shaped
 }
 
-internal inline fun releasePreviewTrackReportingFailure(
-    release: () -> Unit,
-    onFailure: (Throwable) -> Unit,
-) {
-    try {
-        release()
-    } catch (error: Throwable) {
-        runCatching { onFailure(error) }
-    }
-}
 
-internal inline fun startPreviewReleaseFallbackReportingFailure(
-    start: () -> Unit,
-    onFailure: (Throwable) -> Unit,
-) {
-    try {
-        start()
-    } catch (error: Throwable) {
-        runCatching { onFailure(error) }
-    }
-}
 
 internal class TimelineAudioPreviewController(
     private val onTrackReleaseFailure: (Throwable) -> Unit = {},
@@ -768,8 +715,8 @@ internal class TimelineAudioPreviewController(
                 // shutdown can race the isShutdown observation. Never fall back to releasing
                 // AudioTrack on the UI caller: AudioFlinger teardown can block. A one-shot
                 // daemon keeps this rare shutdown race off-thread; duplicate release is guarded.
-                startPreviewReleaseFallbackReportingFailure(
-                    start = {
+                runCleanupReportingThrowable(
+                    cleanup = {
                         Thread(
                             { releaseTrackOnce(track) },
                             "Reverb-range-preview-release-fallback",
@@ -998,8 +945,8 @@ internal class TimelineAudioPreviewController(
                 }
                 releaseTrackOnce(track)
             }
-            closeShuttleSourceReportingFailure(
-                close = source::close,
+            runCleanupReportingException(
+                cleanup = source::close,
                 onFailure = onSourceCloseFailure,
             )
         }
@@ -1166,8 +1113,8 @@ internal class TimelineAudioPreviewController(
         runCatching { track.pause() }
         runCatching { track.flush() }
         runCatching { track.stop() }
-        releasePreviewTrackReportingFailure(
-            release = { track.release() },
+        runCleanupReportingThrowable(
+            cleanup = { track.release() },
             onFailure = { error ->
                 Log.e("ReverbRangeAudio", "AudioTrack.release failed", error)
                 onTrackReleaseFailure(error)

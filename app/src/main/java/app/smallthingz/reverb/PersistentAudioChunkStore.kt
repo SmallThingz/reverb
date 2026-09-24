@@ -1966,14 +1966,7 @@ internal class PersistentAudioChunkStore internal constructor(
             return false
         }
 
-        val droppedFrames = dropBytes / oldest.frameBytes.toLong()
-        val advancedMillis = droppedFrames * 1000L / oldest.sampleRate.coerceAtLeast(1).toLong()
-        truncateFinalizedChunkLocked(
-            record = oldest,
-            payloadBytes = oldest.payloadBytes - dropBytes,
-            sourcePayloadOffsetBytes = dropBytes,
-            replacementCreatedAtMillis = oldest.createdAtMillis + advancedMillis,
-        )
+        truncateLoopingChunkLocked(oldest, dropBytes)
         return true
     }
 
@@ -2235,17 +2228,21 @@ internal class PersistentAudioChunkStore internal constructor(
                 break
             }
 
-            val droppedFrames = dropBytes / oldest.frameBytes.toLong()
-            val advancedMillis = droppedFrames * 1000L / oldest.sampleRate.coerceAtLeast(1).toLong()
-            truncateFinalizedChunkLocked(
-                record = oldest,
-                payloadBytes = oldest.payloadBytes - dropBytes,
-                sourcePayloadOffsetBytes = dropBytes,
-                replacementCreatedAtMillis = oldest.createdAtMillis + advancedMillis,
-            )
+            truncateLoopingChunkLocked(oldest, dropBytes)
             changed = true
         }
         return changed
+    }
+
+    private fun truncateLoopingChunkLocked(record: ChunkRecord, dropBytes: Long) {
+        val droppedFrames = dropBytes / record.frameBytes.toLong()
+        val advancedMillis = droppedFrames * 1000L / record.sampleRate.coerceAtLeast(1).toLong()
+        truncateFinalizedChunkLocked(
+            record = record,
+            payloadBytes = record.payloadBytes - dropBytes,
+            sourcePayloadOffsetBytes = dropBytes,
+            replacementCreatedAtMillis = record.createdAtMillis + advancedMillis,
+        )
     }
 
     private fun loopingDropBytesLocked(record: ChunkRecord): Long = when (retentionMode) {

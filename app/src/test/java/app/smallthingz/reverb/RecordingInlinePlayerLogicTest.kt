@@ -55,7 +55,7 @@ class RecordingInlinePlayerLogicTest {
         val expected = IOException("close failed")
         var observed: Exception? = null
 
-        runInlinePlaybackCleanupReportingFailure(
+        runCleanupReportingException(
             cleanup = { throw expected },
             onFailure = { observed = it },
         )
@@ -65,7 +65,7 @@ class RecordingInlinePlayerLogicTest {
 
     @Test
     fun playbackCleanupReporterFailure_cannotEscapeCleanup() {
-        runInlinePlaybackCleanupReportingFailure(
+        runCleanupReportingException(
             cleanup = { throw IOException("close failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )

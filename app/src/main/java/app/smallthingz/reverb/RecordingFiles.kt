@@ -982,7 +982,7 @@ private fun finalizeFileOutputTarget(
     if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
         throw IOException("Output staging file changed after verification")
     }
-    val published = publishStagedFileResult(
+    val published = publishStagedFile(
         source = source,
         finalDisplayName = target.displayName,
         expectedFingerprint = expectedFingerprint,
@@ -1014,36 +1014,17 @@ private fun finalizeFileOutputTarget(
     )
 }
 
-private data class PublishedStagedFile(
+internal data class PublishedStagedFile(
     val file: File,
     val identity: String,
 )
-
-@Throws(IOException::class)
-internal fun publishStagedFile(
-    source: File,
-    finalDisplayName: String,
-    expectedFingerprint: StableOutputFingerprint? = null,
-    onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
-    onUnprotectedUnexpectedPublish: ((File) -> Unit)? = null,
-    moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
-    readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
-): File = publishStagedFileResult(
-    source = source,
-    finalDisplayName = finalDisplayName,
-    expectedFingerprint = expectedFingerprint,
-    onUnexpectedPublishedFile = onUnexpectedPublishedFile,
-    onUnprotectedUnexpectedPublish = onUnprotectedUnexpectedPublish,
-    moveFile = moveFile,
-    readFingerprint = readFingerprint,
-).file
 
 private fun moveFileWithoutOverwrite(source: File, destination: File) {
     Files.move(source.toPath(), destination.toPath())
 }
 
 @Throws(IOException::class)
-private fun publishStagedFileResult(
+internal fun publishStagedFile(
     source: File,
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
@@ -1209,6 +1190,21 @@ internal fun documentPublicationMatchesExpected(
     )
 }
 
+private fun documentSourceState(
+    context: Context,
+    sourceUri: Uri,
+    sourceUriUnchanged: Boolean,
+): RecordingAssetState = if (sourceUriUnchanged) {
+    RecordingAssetState.PRESENT
+} else {
+    queryUriAssetState(
+        context = context,
+        uri = sourceUri,
+        projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+        logId = sourceUri.toString(),
+    )
+}
+
 private data class ObservedDocumentPublication(
     val uri: Uri,
     val state: DocumentPublicationObservation,
@@ -1233,16 +1229,7 @@ private fun readStableDocumentPublicationObservation(
     val after = candidate() ?: return null
     if (before.uri != after.uri) return null
     val sourceUriUnchanged = after.uri == sourceUri
-    val oldSourceState = if (sourceUriUnchanged) {
-        RecordingAssetState.PRESENT
-    } else {
-        queryUriAssetState(
-            context = context,
-            uri = sourceUri,
-            projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            logId = sourceUri.toString(),
-        )
-    }
+    val oldSourceState = documentSourceState(context, sourceUri, sourceUriUnchanged)
     return ObservedDocumentPublication(
         uri = after.uri,
         state = DocumentPublicationObservation(
@@ -1367,16 +1354,7 @@ private fun finalizeDocumentOutputTarget(
         throw IOException("Unable to verify published document recording")
     }
     val sourceUriUnchanged = recoveredPublication?.state?.sourceUriUnchanged ?: (renamedUri == sourceUri)
-    val oldState = recoveredPublication?.state?.oldSourceState ?: if (sourceUriUnchanged) {
-        RecordingAssetState.PRESENT
-    } else {
-        queryUriAssetState(
-            context = context,
-            uri = sourceUri,
-            projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            logId = sourceUri.toString(),
-        )
-    }
+    val oldState = recoveredPublication?.state?.oldSourceState ?: documentSourceState(context, sourceUri, sourceUriUnchanged)
     if (!documentRenameTransitionIsSafe(
             sourceUriUnchanged = sourceUriUnchanged,
             oldUriStateAfterRename = oldState,
@@ -1768,33 +1746,46 @@ internal fun recordingDeletionIdentityMatches(context: Context, recording: Recor
 internal fun providerDeletionCompleted(observedState: RecordingAssetState): Boolean =
     observedState == RecordingAssetState.MISSING
 
-internal fun resolveFileIdentity(file: File): String {
-    fun readRegularAttributes(): BasicFileAttributes? = runCatching {
+private enum class PathIdentityKind { FILE, DIRECTORY }
+
+private fun resolvePathIdentity(path: File, kind: PathIdentityKind): String {
+    fun readExpectedAttributes(): BasicFileAttributes? = runCatching {
         Files.readAttributes(
-            file.toPath(),
+            path.toPath(),
             BasicFileAttributes::class.java,
             LinkOption.NOFOLLOW_LINKS,
         )
-    }.getOrNull()?.takeIf(BasicFileAttributes::isRegularFile)
+    }.getOrNull()?.takeIf { attributes ->
+        when (kind) {
+            PathIdentityKind.FILE -> attributes.isRegularFile
+            PathIdentityKind.DIRECTORY -> attributes.isDirectory
+        }
+    }
 
-    val attributes = readRegularAttributes() ?: return ""
-    val birthNanos = attributes.creationTime().let { time ->
+    fun birthNanos(attributes: BasicFileAttributes): Long = attributes.creationTime().let { time ->
         runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
     }
 
+    val attributes = readExpectedAttributes() ?: return ""
+    val initialBirthNanos = birthNanos(attributes)
     val statIdentity = runCatching {
-        val stat = Os.lstat(file.absolutePath)
-        if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_ino == 0L) return@runCatching ""
-        val confirmed = readRegularAttributes() ?: return@runCatching ""
+        val stat = Os.lstat(path.absolutePath)
+        val expectedType = when (kind) {
+            PathIdentityKind.FILE -> OsConstants.S_ISREG(stat.st_mode)
+            PathIdentityKind.DIRECTORY -> OsConstants.S_ISDIR(stat.st_mode)
+        }
+        if (!expectedType || stat.st_ino == 0L) return@runCatching ""
+
+        val confirmed = readExpectedAttributes() ?: return@runCatching ""
         val initialKey = attributes.fileKey()?.toString().orEmpty()
         val confirmedKey = confirmed.fileKey()?.toString().orEmpty()
         if (initialKey.isNotBlank() && confirmedKey.isNotBlank() && initialKey != confirmedKey) {
             return@runCatching ""
         }
-        val confirmedBirthNanos = confirmed.creationTime().let { time ->
-            runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-        }
-        if (birthNanos != 0L && confirmedBirthNanos != 0L && birthNanos != confirmedBirthNanos) {
+        val confirmedBirthNanos = birthNanos(confirmed)
+        if (initialBirthNanos != 0L && confirmedBirthNanos != 0L &&
+            initialBirthNanos != confirmedBirthNanos
+        ) {
             return@runCatching ""
         }
         buildStatFileIdentity(
@@ -1804,63 +1795,22 @@ internal fun resolveFileIdentity(file: File): String {
     if (statIdentity.isNotBlank()) return statIdentity
 
     // Android/JVM environments without a usable lstat inode fall back to NIO. Re-sample the
-    // path entry immediately before deriving that identity so a symlink swap after the first
-    // observation cannot inherit the previous regular file's key.
-    val fallbackAttributes = readRegularAttributes() ?: return ""
-    val fallbackBirthNanos = fallbackAttributes.creationTime().let { time ->
-        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-    }
-    return runCatching {
-        val key = fallbackAttributes.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
-        val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
-        "nio:$encodedKey:$fallbackBirthNanos"
-    }.getOrDefault("")
-}
-
-internal fun resolveDirectoryIdentity(directory: File): String {
-    fun readDirectoryAttributes(): BasicFileAttributes? = runCatching {
-        Files.readAttributes(
-            directory.toPath(),
-            BasicFileAttributes::class.java,
-            LinkOption.NOFOLLOW_LINKS,
-        )
-    }.getOrNull()?.takeIf(BasicFileAttributes::isDirectory)
-
-    val attributes = readDirectoryAttributes() ?: return ""
-    val birthNanos = attributes.creationTime().let { time ->
-        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-    }
-    val statIdentity = runCatching {
-        val stat = Os.lstat(directory.absolutePath)
-        if (!OsConstants.S_ISDIR(stat.st_mode) || stat.st_ino == 0L) return@runCatching ""
-        val confirmed = readDirectoryAttributes() ?: return@runCatching ""
-        val initialKey = attributes.fileKey()?.toString().orEmpty()
-        val confirmedKey = confirmed.fileKey()?.toString().orEmpty()
-        if (initialKey.isNotBlank() && confirmedKey.isNotBlank() && initialKey != confirmedKey) {
-            return@runCatching ""
-        }
-        val confirmedBirthNanos = confirmed.creationTime().let { time ->
-            runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-        }
-        if (birthNanos != 0L && confirmedBirthNanos != 0L && birthNanos != confirmedBirthNanos) {
-            return@runCatching ""
-        }
-        buildStatFileIdentity(
-            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, confirmedBirthNanos,
-        )
-    }.getOrDefault("")
-    if (statIdentity.isNotBlank()) return statIdentity
-
-    val fallback = readDirectoryAttributes() ?: return ""
-    val fallbackBirthNanos = fallback.creationTime().let { time ->
-        runCatching { time.to(TimeUnit.NANOSECONDS) }.getOrDefault(0L)
-    }
+    // entry so a path swap cannot inherit the identity from the first observation.
+    val fallback = readExpectedAttributes() ?: return ""
+    val fallbackBirthNanos = birthNanos(fallback)
     return runCatching {
         val key = fallback.fileKey()?.toString()?.takeIf { it.isNotBlank() } ?: return@runCatching ""
-        val encodedKey = Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
+        val encodedKey = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(key.toByteArray(Charsets.UTF_8))
         "nio:$encodedKey:$fallbackBirthNanos"
     }.getOrDefault("")
 }
+
+internal fun resolveFileIdentity(file: File): String =
+    resolvePathIdentity(file, PathIdentityKind.FILE)
+
+internal fun resolveDirectoryIdentity(directory: File): String =
+    resolvePathIdentity(directory, PathIdentityKind.DIRECTORY)
 
 internal fun resolveFileDescriptorIdentity(descriptor: FileDescriptor): String = runCatching {
     val stat = Os.fstat(descriptor)
@@ -2235,12 +2185,12 @@ internal fun completedCopySourcePreservationRequired(
     sourceAfterCopy: CopyDigest?,
 ): Boolean = sourceAfterCopy == null || !copyDigestMatches(copiedDigest, sourceAfterCopy)
 
-internal fun copyWithSha256(
+private fun transferWithSha256(
     input: InputStream,
-    output: OutputStream,
-    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+    output: OutputStream?,
+    bufferSize: Int,
 ): CopyDigest {
-    require(bufferSize > 0) { "Copy buffer must be positive" }
+    require(bufferSize > 0) { "Buffer must be positive" }
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(bufferSize)
     var total = 0L
@@ -2250,38 +2200,28 @@ internal fun copyWithSha256(
         if (count == 0) {
             val value = input.read()
             if (value < 0) break
-            output.write(value)
+            output?.write(value)
             digest.update(value.toByte())
             total++
             continue
         }
-        output.write(buffer, 0, count)
+        output?.write(buffer, 0, count)
         digest.update(buffer, 0, count)
         total += count.toLong()
     }
     return CopyDigest(total, digest.digest())
 }
 
-internal fun sha256(input: InputStream, bufferSize: Int = FILE_COPY_BUFFER_BYTES): CopyDigest {
-    require(bufferSize > 0) { "Digest buffer must be positive" }
-    val digest = MessageDigest.getInstance("SHA-256")
-    val buffer = ByteArray(bufferSize)
-    var total = 0L
-    while (true) {
-        val count = input.read(buffer)
-        if (count < 0) break
-        if (count == 0) {
-            val value = input.read()
-            if (value < 0) break
-            digest.update(value.toByte())
-            total++
-            continue
-        }
-        digest.update(buffer, 0, count)
-        total += count.toLong()
-    }
-    return CopyDigest(total, digest.digest())
-}
+internal fun copyWithSha256(
+    input: InputStream,
+    output: OutputStream,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest = transferWithSha256(input, output, bufferSize)
+
+internal fun sha256(
+    input: InputStream,
+    bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+): CopyDigest = transferWithSha256(input, null, bufferSize)
 
 internal fun providerReadHandoffMatchesExpected(
     expectedIdentity: String,

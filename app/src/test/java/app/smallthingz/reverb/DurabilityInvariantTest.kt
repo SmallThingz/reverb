@@ -1387,7 +1387,7 @@ class DurabilityInvariantTest {
             val existing = File(directory, "clip.wav").apply { writeBytes(existingBytes) }
             val staged = File(directory, stagingOutputName("clip.wav", "token")).apply { writeBytes(stagedBytes) }
 
-            val published = publishStagedFile(staged, "clip.wav")
+            val published = publishStagedFile(staged, "clip.wav").file
 
             assertEquals("clip (2).wav", published.name)
             assertArrayEquals(existingBytes, existing.readBytes())

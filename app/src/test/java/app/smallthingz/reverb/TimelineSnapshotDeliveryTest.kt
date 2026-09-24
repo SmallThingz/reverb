@@ -63,8 +63,8 @@ class TimelineSnapshotDeliveryTest {
         var observed: Exception? = null
         var terminalDelivered = false
 
-        releaseTimelineSnapshotBestEffort(
-            release = { throw expected },
+        runCleanupReportingException(
+            cleanup = { throw expected },
             onFailure = { observed = it },
         )
         terminalDelivered = true
@@ -77,8 +77,8 @@ class TimelineSnapshotDeliveryTest {
     fun serviceSnapshotRelease_failureReporterCannotEscapeCleanupBoundary() {
         var terminalDelivered = false
 
-        releaseTimelineSnapshotBestEffort(
-            release = { throw IOException("release failed") },
+        runCleanupReportingException(
+            cleanup = { throw IOException("release failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )
         terminalDelivered = true

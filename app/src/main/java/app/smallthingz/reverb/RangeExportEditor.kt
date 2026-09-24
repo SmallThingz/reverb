@@ -466,15 +466,6 @@ internal fun rangeFineTuneConstrainedY(
     return localRadius * tanh(rawVerticalPull / inputScale)
 }
 
-internal fun rangeFineTuneSpeedScale(verticalPull: Float): Float {
-    val y = verticalPull.coerceIn(-1f, 1f)
-    return if (y <= 0f) {
-        1f + 5f * (-y).pow(1.45f)
-    } else {
-        0.018f + 0.982f * (1f - y).pow(3.1f)
-    }
-}
-
 internal fun rangeFineTuneTimelineRate(
     horizontalPull: Float,
     verticalPull: Float = 0f,
@@ -490,7 +481,13 @@ internal fun rangeFineTuneTimelineRate(
             0.00040f * normalized +
             0.0040f * normalized.pow(3) +
             0.055f * normalized.pow(7)
-    return sign(pull) * horizontalRate * rangeFineTuneSpeedScale(verticalPull)
+    val y = verticalPull.coerceIn(-1f, 1f)
+    val speedScale = if (y <= 0f) {
+        1f + 5f * (-y).pow(1.45f)
+    } else {
+        0.018f + 0.982f * (1f - y).pow(3.1f)
+    }
+    return sign(pull) * horizontalRate * speedScale
 }
 
 internal fun rangeFineTuneDeltaSeconds(
@@ -594,9 +591,6 @@ internal class RangeExportEditorState(
 
     val selectionDurationExactSeconds: Double
         get() = rangeSelectionDurationExactSeconds(startSeconds, endSeconds)
-
-    val selectionDurationSeconds: Float
-        get() = selectionDurationExactSeconds.toFloat()
 
     fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =
         rangeSelectionDurationWheelLimitSeconds(
@@ -717,28 +711,6 @@ internal class RangeExportEditorState(
         endSeconds = update.values.endSeconds
     }
 
-    fun commitTarget(target: RangeEditTarget, requestedSeconds: Float): Boolean {
-        invalidateSelectionDurationCommit()
-        if (!requestedSeconds.isFinite() || requestedSeconds !in 0f..durationSeconds) return false
-        when (target) {
-            RangeEditTarget.START -> if (requestedSeconds >= endSeconds) return false
-            RangeEditTarget.END -> if (requestedSeconds <= startSeconds) return false
-        }
-        // A blur may be caused by selecting another bar. Committing the old field must not
-        // steal selection back from the newly touched target.
-        val selectedTarget = lastTarget
-        applyEditUpdate(
-            adjustRangeEditTarget(
-                values = currentEditValues(),
-                target = target,
-                requestedSeconds = requestedSeconds,
-                durationSeconds = durationSeconds,
-            ),
-        )
-        lastTarget = selectedTarget
-        return true
-    }
-
     fun beginBoundaryEdit(target: RangeEditTarget) {
         selectTarget(target)
         pausePreview()
@@ -746,8 +718,7 @@ internal class RangeExportEditorState(
         auditionSelectedBoundary(force = true)
     }
 
-    fun beginBoundaryScrub(target: RangeEditTarget) {
-        selectTarget(target)
+    private fun beginScrubPlaybackHandoff() {
         resumeAfterScrub = isPlaying || previewStarting
         if (isPlaying || previewStarting) {
             previewStarting = false
@@ -755,6 +726,11 @@ internal class RangeExportEditorState(
             isPlaying = false
         }
         isScrubbing = true
+    }
+
+    fun beginBoundaryScrub(target: RangeEditTarget) {
+        selectTarget(target)
+        beginScrubPlaybackHandoff()
         auditionSelectedBoundary(force = true)
     }
 
@@ -775,13 +751,7 @@ internal class RangeExportEditorState(
     fun beginFineAdjust(shuttleRate: Float) {
         if (!playbackAllowed) return
         invalidateSelectionDurationCommit()
-        resumeAfterScrub = isPlaying || previewStarting
-        if (isPlaying || previewStarting) {
-            previewStarting = false
-            previewController.stop()
-            isPlaying = false
-        }
-        isScrubbing = true
+        beginScrubPlaybackHandoff()
         fineAdjustShuttleActive = true
         snapshot?.let { readySnapshot ->
             previewController.startShuttle(

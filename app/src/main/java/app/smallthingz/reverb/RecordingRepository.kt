@@ -350,7 +350,7 @@ object RecordingRepository {
                 // still correspond to bytes already renamed into a hidden deletion claim, so
                 // preserve unowned claims visibly before its suppression record can disappear.
                 if (!preserveTornPendingDeletionClaims(context, raw, rawEntries)) continue
-                removePendingDeletionRawLocked(context, raw)
+                writePendingDeletionEntries(context, pendingDeletionEntries(context) - raw)
                 continue
             }
             if (!pendingDeletionTargetsHaveManagedFileAuthority(
@@ -533,9 +533,6 @@ object RecordingRepository {
         }
         return writePendingDeletionEntries(context, updated)
     }
-
-    private fun removePendingDeletionRawLocked(context: Context, raw: String): Boolean =
-        writePendingDeletionEntries(context, pendingDeletionEntries(context) - raw)
 
     private fun writePendingDeletionEntries(context: Context, entries: Set<String>): Boolean {
         val current = pendingDeletionEntries(context)
@@ -797,7 +794,12 @@ object RecordingRepository {
             }
 
         for ((directoryId, treeUri) in directoryUris) {
-            if (syncRecoverableDirectory(context, treeUri)) reconciledDirectoryIds += directoryId
+            if (syncObservedDirectory(context, directoryId) { known ->
+                    listOutputDirectoryRecordings(context, treeUri, known)
+                }
+            ) {
+                reconciledDirectoryIds += directoryId
+            }
         }
 
         // Pre-MediaStore builds saved into app-specific external/internal storage. Keep
@@ -876,16 +878,6 @@ object RecordingRepository {
         }
     }
 
-    private suspend fun syncRecoverableDirectory(
-        context: Context,
-        treeUri: Uri?,
-    ): Boolean {
-        val directoryId = getOutputDirectoryId(context, treeUri)
-        return syncObservedDirectory(context, directoryId) { known ->
-            listOutputDirectoryRecordings(context, treeUri, known)
-        }
-    }
-
     private suspend fun syncObservedDirectory(
         context: Context,
         directoryId: String,
@@ -919,16 +911,22 @@ object RecordingRepository {
             .forEach { recording ->
                 // Never convert a scan gap into catalog deletion. Provider visibility,
                 // removable storage, and persisted permissions can all recover later.
-                val updated = when (selectedRecordingAssetState(context, recording)) {
-                    RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
-                    RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
-                    RecordingAssetState.UNAVAILABLE -> recording
-                }
+                val updated = reconcileRecordingAssetState(context, recording, nowMillis)
                 if (updated != recording) updates += updated
             }
 
         dao.applyChanges(importedUpdates + updates, emptyList())
         return true
+    }
+
+    private fun reconcileRecordingAssetState(
+        context: Context,
+        recording: RecordingEntity,
+        nowMillis: Long,
+    ): RecordingEntity = when (selectedRecordingAssetState(context, recording)) {
+        RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
+        RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
+        RecordingAssetState.UNAVAILABLE -> recording
     }
 
     private suspend fun updateMissingStatesLocked(
@@ -941,11 +939,7 @@ object RecordingRepository {
         val updates = mutableListOf<RecordingEntity>()
         all.forEach { recording ->
             if (!recordingNeedsFallbackAssetProbe(recording.directoryId, skipDirectoryIds)) return@forEach
-            val updated = when (selectedRecordingAssetState(context, recording)) {
-                RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
-                RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
-                RecordingAssetState.UNAVAILABLE -> recording
-            }
+            val updated = reconcileRecordingAssetState(context, recording, nowMillis)
             if (updated != recording) updates += updated
         }
         dao.applyChanges(updates, emptyList())
@@ -1147,117 +1141,72 @@ internal fun pendingDeletionHasAnyMoveTargetField(intent: PendingDeletionIntent)
 
 
 internal fun decodePendingDeletionIntent(raw: String): PendingDeletionIntent? {
-    return when {
-        raw.startsWith(PENDING_DELETION_V1_PREFIX) -> decodePendingDeletionV1(raw)
-        raw.startsWith(PENDING_DELETION_V2_PREFIX) -> decodePendingDeletionV2(raw)
-        raw.startsWith(PENDING_DELETION_V3_PREFIX) -> decodePendingDeletionV3(raw)
-        raw.startsWith(PENDING_DELETION_V4_PREFIX) -> decodePendingDeletionV4(raw)
-        else -> null
+    val parts = raw.split('|')
+    val version = parts.firstOrNull() ?: return null
+    val expectedSize = when (version) {
+        "v1" -> 5
+        "v2", "v3" -> 8
+        "v4" -> 11
+        else -> return null
     }
-}
+    if (parts.size != expectedSize) return null
 
-private fun decodePendingDeletionV1(raw: String): PendingDeletionIntent? {
-    val parts = raw.split('|')
-    if (parts.size != 5 || parts[0] != "v1") return null
-    val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
-    return PendingDeletionIntent(common.first, common.second, common.third, common.fourth)
-}
+    val base = decodePendingDeletionBase(parts) ?: return null
+    if (version == "v1") return base
 
-private fun decodePendingDeletionV2(raw: String): PendingDeletionIntent? {
-    val parts = raw.split('|')
-    if (parts.size != 8 || parts[0] != "v2") return null
-    val storage = RecordingStorageType.fromLegacyName(parts[5]) ?: return null
-    return decodePendingDeletionClaim(parts, storage)
-}
-
-private fun decodePendingDeletionV3(raw: String): PendingDeletionIntent? {
-    val parts = raw.split('|')
-    if (parts.size != 8 || parts[0] != "v3") return null
-    val storage = parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
-    return decodePendingDeletionClaim(parts, storage)
-}
-
-private fun decodePendingDeletionV4(raw: String): PendingDeletionIntent? {
-    val parts = raw.split('|')
-    if (parts.size != 11 || parts[0] != "v4") return null
-    val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
-    val sourceStorage = parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
-    if (!recordingStorageIdIsValid(sourceStorage, common.first)) return null
+    val sourceStorage = decodePendingDeletionStorageType(version, parts[5]) ?: return null
+    if (!recordingStorageIdIsValid(sourceStorage, base.id)) return null
     val claimToken: String?
     val sourceIdentity: String?
     if (sourceStorage == RecordingStorageType.FILE) {
-        claimToken = parts[6].takeIf { it.isNotBlank() }?.let { value ->
-            runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
-        } ?: return null
+        claimToken = parts[6].takeIf { it.isNotBlank() }
+            ?.let { runCatching { UUID.fromString(it).toString() }.getOrNull() }
+            ?: return null
         sourceIdentity = decodePendingDeletionField(parts[7]) ?: return null
     } else {
-        if (parts[6].isNotBlank() || parts[7].isNotBlank()) return null
+        if (version != "v4" || parts[6].isNotBlank() || parts[7].isNotBlank()) return null
         claimToken = null
         sourceIdentity = null
     }
-    val targetStorage = parts[8].toIntOrNull()?.let(RecordingStorageType::fromStorageCode) ?: return null
-    val targetId = decodePendingDeletionField(parts[9]) ?: return null
-    if (!recordingStorageIdIsValid(targetStorage, targetId)) return null
-    val targetIdentity = decodePendingDeletionField(parts[10]) ?: return null
-    return PendingDeletionIntent(
-        id = common.first,
-        byteCount = common.second,
-        sha256Hex = common.third,
-        assetDeleted = common.fourth,
+
+    val withSource = base.copy(
         storageType = sourceStorage,
         claimToken = claimToken,
         fileIdentity = sourceIdentity,
+    )
+    if (version != "v4") return withSource.takeIf { sourceStorage == RecordingStorageType.FILE }
+
+    val targetStorage = RecordingStorageType.fromStorageCode(parts[8].toIntOrNull() ?: return null)
+        ?: return null
+    val targetId = decodePendingDeletionField(parts[9]) ?: return null
+    if (!recordingStorageIdIsValid(targetStorage, targetId)) return null
+    val targetIdentity = decodePendingDeletionField(parts[10]) ?: return null
+    return withSource.copy(
         moveTargetStorageType = targetStorage,
         moveTargetId = targetId,
         moveTargetIdentity = targetIdentity,
     )
 }
 
-private fun decodePendingDeletionClaim(
-    parts: List<String>,
-    storage: RecordingStorageType,
-): PendingDeletionIntent? {
-    if (storage != RecordingStorageType.FILE) return null
-    val common = decodePendingDeletionCommon(parts[1], parts[2], parts[3], parts[4]) ?: return null
-    if (!recordingStorageIdIsValid(storage, common.first)) return null
-    val token = parts[6].takeIf { it.isNotBlank() }?.let { value ->
-        runCatching { UUID.fromString(value).toString() }.getOrNull() ?: return null
-    }
-    val fileIdentity = parts[7].takeIf { it.isNotBlank() }?.let { encoded ->
-        decodePendingDeletionField(encoded) ?: return null
-    }
-    if (token == null || fileIdentity == null) return null
-    return PendingDeletionIntent(
-        common.first, common.second, common.third, common.fourth, storage, token, fileIdentity,
-    )
-}
-
-private data class DecodedPendingDeletionCommon(
-    val first: String,
-    val second: Long,
-    val third: String,
-    val fourth: Boolean,
-)
-
-private fun decodePendingDeletionCommon(
-    encodedId: String,
-    byteCountText: String,
-    shaText: String,
-    deletedText: String,
-): DecodedPendingDeletionCommon? {
-    val id = runCatching {
-        String(Base64.getUrlDecoder().decode(encodedId), StandardCharsets.UTF_8)
-    }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
-    val byteCount = byteCountText.toLongOrNull()?.takeIf { it > 0L } ?: return null
-    val sha256 = shaText.lowercase()
+private fun decodePendingDeletionBase(parts: List<String>): PendingDeletionIntent? {
+    val id = decodePendingDeletionField(parts[1]) ?: return null
+    val byteCount = parts[2].toLongOrNull()?.takeIf { it > 0L } ?: return null
+    val sha256 = parts[3].lowercase()
     if (sha256.length != 64 || sha256.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
-    val deleted = when (deletedText) {
+    val deleted = when (parts[4]) {
         "0" -> false
         "1" -> true
         else -> return null
     }
-    return DecodedPendingDeletionCommon(id, byteCount, sha256, deleted)
+    return PendingDeletionIntent(id, byteCount, sha256, deleted)
 }
+
+private fun decodePendingDeletionStorageType(version: String, value: String): RecordingStorageType? =
+    when (version) {
+        "v2" -> RecordingStorageType.fromLegacyName(value)
+        "v3", "v4" -> value.toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        else -> null
+    }
 
 private fun isEncodedPendingDeletionEntry(raw: String): Boolean =
     raw.startsWith(PENDING_DELETION_V1_PREFIX) ||
@@ -1291,11 +1240,7 @@ internal fun tornPendingDeletionFileSourceId(raw: String): String? {
     if (decodePendingDeletionIntent(raw) != null) return null
     val parts = raw.split('|')
     if (parts.size < 6) return null
-    val storageType = when (parts[0]) {
-        "v2" -> RecordingStorageType.fromLegacyName(parts[5])
-        "v3", "v4" -> parts[5].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
-        else -> null
-    }
+    val storageType = decodePendingDeletionStorageType(parts[0], parts[5])
     if (storageType != RecordingStorageType.FILE) return null
     val sourceId = decodePendingDeletionField(parts[1]) ?: return null
     val source = File(sourceId)
@@ -1434,31 +1379,23 @@ internal fun deleteClaimedFile(
 ): FileDeletionClaimResult {
     val source = File(intent.id)
     val claim = deletionClaimFile(intent) ?: return FileDeletionClaimResult.RETRY
+    fun replayExistingClaim() = when (claimedFileReplayAction(observeStoragePath(claim))) {
+        ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
+            intent = intent,
+            claim = claim,
+            moveTargetStillCurrent = moveTargetStillCurrent,
+        )
+        ClaimedFileReplayAction.NO_CLAIM,
+        ClaimedFileReplayAction.WAIT,
+        -> FileDeletionClaimResult.RETRY
+    }
     try {
         Files.move(source.toPath(), claim.toPath())
         if (!confirmFileDirectoryStateDurable(source)) return FileDeletionClaimResult.RETRY
     } catch (_: NoSuchFileException) {
-        return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
-                intent = intent,
-                claim = claim,
-                moveTargetStillCurrent = moveTargetStillCurrent,
-            )
-            ClaimedFileReplayAction.NO_CLAIM,
-            ClaimedFileReplayAction.WAIT,
-            -> FileDeletionClaimResult.RETRY
-        }
+        return replayExistingClaim()
     } catch (_: FileAlreadyExistsException) {
-        return when (claimedFileReplayAction(observeStoragePath(claim))) {
-            ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
-                intent = intent,
-                claim = claim,
-                moveTargetStillCurrent = moveTargetStillCurrent,
-            )
-            ClaimedFileReplayAction.NO_CLAIM,
-            ClaimedFileReplayAction.WAIT,
-            -> FileDeletionClaimResult.RETRY
-        }
+        return replayExistingClaim()
     } catch (error: IOException) {
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY

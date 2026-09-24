@@ -313,6 +313,19 @@ fun FilesScreen(
         syncSelectionActive()
     }
 
+    fun reconcileSelection(currentById: Map<String, RecordingEntity>) {
+        selectedIds.keys.toList().forEach { id ->
+            val previous = selectedIds[id]
+            val updated = currentById[id]
+            if (previous == null || updated == null || !sameRecordingActionTarget(previous, updated)) {
+                selectedIds.remove(id)
+            } else if (previous != updated) {
+                selectedIds[id] = updated
+            }
+        }
+        syncSelectionActive()
+    }
+
     fun reconcileTransientRecordings(
         previousById: Map<String, RecordingEntity>,
         storedById: Map<String, RecordingEntity>,
@@ -350,16 +363,7 @@ fun FilesScreen(
                 recordings = stored
                 hasLoaded = true
                 val storedById = stored.associateBy { it.id }
-                selectedIds.keys.toList().forEach { id ->
-                    val previous = selectedIds[id]
-                    val updated = storedById[id]
-                    if (previous == null || updated == null || !sameRecordingActionTarget(previous, updated)) {
-                        selectedIds.remove(id)
-                    } else if (previous != updated) {
-                        selectedIds[id] = updated
-                    }
-                }
-                syncSelectionActive()
+                reconcileSelection(storedById)
                 reconcileTransientRecordings(previousById, storedById)
                 if (deletionsCommittedInBackground[0]) {
                     // deleteInBackground owns failure reporting through the process feedback
@@ -419,16 +423,7 @@ fun FilesScreen(
             recordings = safeInitialRecordings
             hasLoaded = true
             val currentById = safeInitialRecordings.associateBy { it.id }
-            selectedIds.keys.toList().forEach { id ->
-                val previous = selectedIds[id]
-                val updated = currentById[id]
-                if (previous == null || updated == null || !sameRecordingActionTarget(previous, updated)) {
-                    selectedIds.remove(id)
-                } else if (previous != updated) {
-                    selectedIds[id] = updated
-                }
-            }
-            syncSelectionActive()
+            reconcileSelection(currentById)
             reconcileTransientRecordings(previousById, currentById)
         }
     }

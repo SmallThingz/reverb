@@ -290,7 +290,7 @@ private class PreservingRecordingDatabaseErrorHandler(
         }
         val databaseParent = databaseFile.parentFile
             ?: throw SQLiteException("Recording database path has no parent directory")
-        forceRecordingDatabaseDirectoryDurable(databaseParent)
+        DefaultRecordingDatabaseRecoveryIo.forceDirectory(databaseParent)
     }
 }
 
@@ -496,10 +496,6 @@ private fun sha256DatabaseFile(file: File): ByteArray {
         }
     }
     return digest.digest()
-}
-
-private fun forceRecordingDatabaseDirectoryDurable(directory: File) {
-    DefaultRecordingDatabaseRecoveryIo.forceDirectory(directory)
 }
 
 private fun SQLiteDatabase.upsertRecording(recording: RecordingEntity) {

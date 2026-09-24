@@ -14,8 +14,8 @@ class RangeExportEditorMathTest {
         val expected = IOException("close failed")
         var observed: Exception? = null
 
-        closeShuttleSourceReportingFailure(
-            close = { throw expected },
+        runCleanupReportingException(
+            cleanup = { throw expected },
             onFailure = { observed = it },
         )
 
@@ -24,8 +24,8 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shuttleSourceCloseReporterFailure_cannotEscapeCleanup() {
-        closeShuttleSourceReportingFailure(
-            close = { throw IOException("close failed") },
+        runCleanupReportingException(
+            cleanup = { throw IOException("close failed") },
             onFailure = { throw IllegalStateException("report failed") },
         )
     }

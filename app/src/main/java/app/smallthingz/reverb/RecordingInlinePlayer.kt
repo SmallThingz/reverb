@@ -216,17 +216,6 @@ internal fun inlineShuttleFailureShouldResume(
     lifecycleResumed: Boolean,
 ): Boolean = shuttleActive && resumeAfterScrub && lifecycleResumed
 
-internal inline fun runInlinePlaybackCleanupReportingFailure(
-    cleanup: () -> Unit,
-    onFailure: (Exception) -> Unit,
-) {
-    try {
-        cleanup()
-    } catch (error: Exception) {
-        runCatching { onFailure(error) }
-    }
-}
-
 internal inline fun handleInlinePlaybackError(
     ownsPlaybackResources: Boolean,
     shouldReportFailure: Boolean,
@@ -524,12 +513,12 @@ internal fun RecordingInlinePlayer(
         mediaPlayer = null
         player?.runCatching { stop() }
         if (player != null) {
-            runInlinePlaybackCleanupReportingFailure(
+            runCleanupReportingException(
                 cleanup = { player.release() },
                 onFailure = ::reportPlaybackCleanupFailure,
             )
         }
-        runInlinePlaybackCleanupReportingFailure(
+        runCleanupReportingException(
             cleanup = { pinnedMediaSource.getAndSet(null)?.close() },
             onFailure = ::reportPlaybackCleanupFailure,
         )
@@ -691,10 +680,7 @@ internal fun RecordingInlinePlayer(
         )
     }
 
-    fun endInlineFineSeek() {
-        if (!isScrubbing && !playbackBookkeeping.fineSeekShuttleActive) return
-        fineSeekPreviewController.stopShuttle()
-        playbackBookkeeping.fineSeekShuttleActive = false
+    fun finishInlineSeek() {
         isScrubbing = false
         val shouldResume = playbackBookkeeping.resumeAfterScrub
         playbackBookkeeping.resumeAfterScrub = false
@@ -703,6 +689,13 @@ internal fun RecordingInlinePlayer(
             if (trimMode && shouldResume) trimPlaybackStartMillis() else currentPosition,
             resume = shouldResume,
         )
+    }
+
+    fun endInlineFineSeek() {
+        if (!isScrubbing && !playbackBookkeeping.fineSeekShuttleActive) return
+        fineSeekPreviewController.stopShuttle()
+        playbackBookkeeping.fineSeekShuttleActive = false
+        finishInlineSeek()
     }
 
     fun enterTrimMode(): Boolean {
@@ -861,7 +854,7 @@ internal fun RecordingInlinePlayer(
             }
             if (playbackBookkeeping.released || mediaPlayer !== player) return@LaunchedEffect
             openedRef.compareAndSet(opened, null)
-            runInlinePlaybackCleanupReportingFailure(
+            runCleanupReportingException(
                 cleanup = { pinnedMediaSource.getAndSet(opened)?.close() },
                 onFailure = ::reportPlaybackCleanupFailure,
             )
@@ -875,7 +868,7 @@ internal fun RecordingInlinePlayer(
                 onPlaybackFailed()
             }
         } finally {
-            runInlinePlaybackCleanupReportingFailure(
+            runCleanupReportingException(
                 cleanup = { openedRef.getAndSet(null)?.close() },
                 onFailure = ::reportPlaybackCleanupFailure,
             )
@@ -1165,14 +1158,7 @@ internal fun RecordingInlinePlayer(
                             playbackBookkeeping.revokeResume()
                             throw cancelled
                         } finally {
-                            isScrubbing = false
-                            val shouldResume = playbackBookkeeping.resumeAfterScrub
-                            playbackBookkeeping.resumeAfterScrub = false
-                            if (trimMode) currentPosition = fineSeekTargetMillis()
-                            seekTo(
-                                if (trimMode && shouldResume) trimPlaybackStartMillis() else currentPosition,
-                                resume = shouldResume,
-                            )
+                            finishInlineSeek()
                         }
                     }
                 },

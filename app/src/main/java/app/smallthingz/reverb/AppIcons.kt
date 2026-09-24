@@ -18,7 +18,6 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
@@ -26,7 +25,6 @@ import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Loop
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Settings
@@ -57,8 +55,6 @@ internal object AppIcons {
     val multiSelect: ImageVector = Icons.Rounded.SelectAll
     val play: ImageVector = Icons.Rounded.PlayArrow
     val pause: ImageVector = Icons.Rounded.Pause
-    val seekBack: ImageVector = Icons.Rounded.Replay10
-    val seekForward: ImageVector = Icons.Rounded.Forward10
     val save: ImageVector = Icons.Rounded.Save
     val exportRange: ImageVector = exportRangeIcon
     val library: ImageVector = Icons.AutoMirrored.Rounded.FormatListBulleted

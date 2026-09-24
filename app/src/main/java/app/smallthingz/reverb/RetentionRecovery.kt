@@ -161,28 +161,22 @@ internal fun defaultRetentionConfiguration(): RetentionConfiguration = Retention
 internal fun readRetentionPreferenceValues(prefs: SharedPreferences): RetentionPreferenceValues =
     RetentionPreferenceValues(
         modePresent = prefs.contains(PrefKey.RETENTION_MODE),
-        modeCode = safePreferenceInt(prefs, PrefKey.RETENTION_MODE),
+        modeCode = if (prefs.contains(PrefKey.RETENTION_MODE)) {
+            prefs.safeInt(PrefKey.RETENTION_MODE, Int.MIN_VALUE).takeUnless { it == Int.MIN_VALUE }
+        } else null,
         oneShotSeconds = safePreferenceLong(prefs, PrefKey.ONE_SHOT_RETENTION_SECONDS),
         oneShotSizeBytes = safePreferenceLong(prefs, PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE),
         loopingSeconds = safePreferenceLong(prefs, PrefKey.RETENTION_SECONDS),
         loopingSizeBytes = safePreferenceLong(prefs, PrefKey.AUDIO_MEMORY_SIZE),
         digestPresent = prefs.contains(PrefKey.RETENTION_CONFIG_DIGEST),
-        digest = safePreferenceString(prefs, PrefKey.RETENTION_CONFIG_DIGEST),
+        digest = if (prefs.contains(PrefKey.RETENTION_CONFIG_DIGEST)) {
+            prefs.safeString(PrefKey.RETENTION_CONFIG_DIGEST)
+        } else null,
     )
-
-private fun safePreferenceInt(prefs: SharedPreferences, key: PrefKey): Int? {
-    if (!prefs.contains(key)) return null
-    return prefs.safeInt(key, Int.MIN_VALUE).takeUnless { it == Int.MIN_VALUE }
-}
 
 private fun safePreferenceLong(prefs: SharedPreferences, key: PrefKey): Long? {
     if (!prefs.contains(key)) return null
     return prefs.safeLong(key, Long.MIN_VALUE).takeIf { it >= 0L }
-}
-
-private fun safePreferenceString(prefs: SharedPreferences, key: PrefKey): String? {
-    if (!prefs.contains(key)) return null
-    return prefs.safeString(key)
 }
 
 internal fun retentionConfigurationFromPreferences(
@@ -241,46 +235,48 @@ internal fun retentionConfigurationFromPreferences(
     return configuration
 }
 
+private data class RetentionReadSnapshot(
+    val values: RetentionPreferenceValues,
+    val recoveryRead: RetentionRecoveryRead,
+) {
+    val recovery: RetentionConfiguration? get() = recoveryRead.configuration
+
+    fun primaryWithRecoveryFallback(): RetentionConfiguration? = retentionConfigurationFromPreferences(
+        values = values,
+        recoveryFallback = recovery,
+        allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
+    )
+}
+
+private fun retentionReadSnapshot(context: Context): RetentionReadSnapshot = RetentionReadSnapshot(
+    values = readRetentionPreferenceValues(getRecorderPreferences(context)),
+    recoveryRead = readRetentionRecovery(context),
+)
+
 internal fun retentionConfigurationForOperationalRead(context: Context): RetentionConfiguration? =
     withRetentionPersistenceLock {
-        val prefs = getRecorderPreferences(context)
-        val values = readRetentionPreferenceValues(prefs)
-        val recoveryRead = readRetentionRecovery(context)
-        val recovery = recoveryRead.configuration
-        val primary = retentionConfigurationFromPreferences(
-            values = values,
-            recoveryFallback = recovery,
-            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
-        )
+        val snapshot = retentionReadSnapshot(context)
         resolveRetentionConfiguration(
-            primary = primary,
-            recovery = recovery,
+            primary = snapshot.primaryWithRecoveryFallback(),
+            recovery = snapshot.recovery,
             historyExists = hasPersistedBufferHistoryArtifacts(context),
         )?.configuration
     }
 
 internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration =
     withRetentionPersistenceLock {
-        val prefs = getRecorderPreferences(context)
-        val values = readRetentionPreferenceValues(prefs)
-        val recoveryRead = readRetentionRecovery(context)
-        val recovery = recoveryRead.configuration
+        val snapshot = retentionReadSnapshot(context)
         val verifiedPrimary = retentionConfigurationFromPreferences(
-            values = values,
+            values = snapshot.values,
             recoveryFallback = null,
             allowLegacyWithoutDigest = false,
         )
-        val historyExists = verifiedPrimary != null && recovery != null && verifiedPrimary != recovery &&
-            hasPersistedBufferHistoryArtifacts(context)
-        preferredRetentionConfigurationForRead(verifiedPrimary, recovery, historyExists)?.let {
-            return@withRetentionPersistenceLock it
-        }
-
-        retentionConfigurationFromPreferences(
-            values = values,
-            recoveryFallback = recovery,
-            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
-        ) ?: recovery ?: defaultRetentionConfiguration()
+        val historyExists = verifiedPrimary != null && snapshot.recovery != null &&
+            verifiedPrimary != snapshot.recovery && hasPersistedBufferHistoryArtifacts(context)
+        preferredRetentionConfigurationForRead(verifiedPrimary, snapshot.recovery, historyExists)
+            ?: snapshot.primaryWithRecoveryFallback()
+            ?: snapshot.recovery
+            ?: defaultRetentionConfiguration()
     }
 
 internal fun preferredRetentionConfigurationForRead(
@@ -297,16 +293,9 @@ internal fun preferredRetentionConfigurationForRead(
 
 internal fun retentionMutationIsSafe(context: Context): Boolean =
     withRetentionPersistenceLock {
-        val prefs = getRecorderPreferences(context)
-        val values = readRetentionPreferenceValues(prefs)
-        val recoveryRead = readRetentionRecovery(context)
-        val recovery = recoveryRead.configuration
-        val primary = retentionConfigurationFromPreferences(
-            values = values,
-            recoveryFallback = recovery,
-            allowLegacyWithoutDigest = legacyRetentionPreferencesAllowed(recoveryRead.state),
-        )
-        primary != null || recovery != null || !hasPersistedBufferHistoryArtifacts(context)
+        val snapshot = retentionReadSnapshot(context)
+        snapshot.primaryWithRecoveryFallback() != null || snapshot.recovery != null ||
+            !hasPersistedBufferHistoryArtifacts(context)
     }
 
 internal fun persistedBufferHistoryRootMayContainData(root: File): Boolean {

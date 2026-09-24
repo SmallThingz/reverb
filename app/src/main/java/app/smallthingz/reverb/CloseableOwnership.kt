@@ -72,3 +72,25 @@ internal inline fun throwAfterClosePreservingPrimary(
 internal inline fun closeRejectedOwnerOrThrow(close: () -> Unit) {
     closePreservingPrimaryFailure(null, close)?.let { throw it }
 }
+
+internal inline fun runCleanupReportingException(
+    cleanup: () -> Unit,
+    onFailure: (Exception) -> Unit,
+) {
+    try {
+        cleanup()
+    } catch (error: Exception) {
+        runCatching { onFailure(error) }
+    }
+}
+
+internal inline fun runCleanupReportingThrowable(
+    cleanup: () -> Unit,
+    onFailure: (Throwable) -> Unit,
+) {
+    try {
+        cleanup()
+    } catch (error: Throwable) {
+        runCatching { onFailure(error) }
+    }
+}
