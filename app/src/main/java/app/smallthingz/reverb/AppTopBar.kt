@@ -15,6 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -34,7 +36,6 @@ internal fun AppTopBar(
 ) {
     val chrome = appChrome()
     val noiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
-    val buttonShape = RoundedCornerShape(15.dp)
     val topBarModifier = Modifier
         .fillMaxWidth()
         .background(MaterialTheme.colorScheme.surface)
@@ -46,24 +47,12 @@ internal fun AppTopBar(
         modifier = topBarModifier,
     ) {
         if (onBackClick != null) {
-            Surface(
+            TopBarAction(
+                icon = AppIcons.back,
+                contentDescription = stringResource(R.string.back),
                 onClick = onBackClick,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .size(46.dp),
-                shape = buttonShape,
-                color = chrome.field,
-                border = BorderStroke(1.dp, chrome.border),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = AppIcons.back,
-                        contentDescription = stringResource(R.string.back),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(23.dp),
-                    )
-                }
-            }
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
         }
 
         Surface(
@@ -80,43 +69,44 @@ internal fun AppTopBar(
             )
         }
 
-        Surface(
+        val incidentColor = if (hasIncidents) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant
+        TopBarAction(
+            icon = AppIcons.incidents,
+            contentDescription = stringResource(R.string.open_incidents),
             onClick = onIncidentsClick,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 56.dp)
-                .size(46.dp),
-            shape = buttonShape,
-            color = chrome.field,
-            border = BorderStroke(1.dp, if (hasIncidents) MaterialTheme.colorScheme.error.copy(alpha = 0.55f) else chrome.border),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = AppIcons.incidents,
-                    contentDescription = stringResource(R.string.open_incidents),
-                    tint = if (hasIncidents) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(23.dp),
-                )
-            }
-        }
-
-        Surface(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 56.dp),
+            tint = incidentColor,
+            borderColor = if (hasIncidents) incidentColor.copy(alpha = 0.55f) else chrome.border,
+        )
+        TopBarAction(
+            icon = AppIcons.settings,
+            contentDescription = stringResource(R.string.open_settings),
             onClick = onSettingsClick,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(46.dp),
-            shape = buttonShape,
-            color = chrome.field,
-            border = BorderStroke(1.dp, chrome.border),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = AppIcons.settings,
-                    contentDescription = stringResource(R.string.open_settings),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(23.dp),
-                )
-            }
+            modifier = Modifier.align(Alignment.CenterEnd),
+        )
+    }
+}
+
+@Composable
+private fun TopBarAction(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    borderColor: Color = appChrome().border,
+) {
+    val chrome = appChrome()
+    Surface(
+        onClick = onClick,
+        modifier = modifier.size(46.dp),
+        shape = RoundedCornerShape(15.dp),
+        color = chrome.field,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription, Modifier.size(23.dp), tint)
         }
     }
 }

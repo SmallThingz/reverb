@@ -228,9 +228,8 @@ internal inline fun <T> readByteBackedPreference(
     return fromLegacyPrefValue(legacy)
 }
 
-fun getRecorderPreferences(context: Context): SharedPreferences {
-    return context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
-}
+fun getRecorderPreferences(context: Context): SharedPreferences =
+    context.getSharedPreferences(context.packageName, Context.MODE_PRIVATE)
 
 private fun rememberedRangeExportKeys(
     bufferSlot: ReverbService.BufferSlot,
@@ -327,13 +326,11 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
     return ReverbService.BufferSlot.fromLegacyName(legacy)
 }
 
-fun isWakeLockEnabled(context: Context): Boolean {
-    return getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
-}
+fun isWakeLockEnabled(context: Context): Boolean =
+    getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
 
-fun isDebuggableBuild(context: Context): Boolean {
-    return (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-}
+fun isDebuggableBuild(context: Context): Boolean =
+    context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
 fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
@@ -385,9 +382,8 @@ internal fun getConfiguredBufferAvailability(context: Context): ConfiguredBuffer
         sampleFormat = getConfiguredPcmSampleFormat(context),
     )
 
-fun isOnboardingPending(context: Context): Boolean {
-    return !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
-}
+fun isOnboardingPending(context: Context): Boolean =
+    !getRecorderPreferences(context).safeBoolean(PrefKey.ONBOARDING_SHOWN, false)
 
 private val ONBOARDING_TRANSACTION_PREFERENCE_KEYS = listOf(
     PrefKey.ONBOARDING_SHOWN,
@@ -507,14 +503,10 @@ fun isCodecCompatibleWithFormat(
     codec: ExportCodec,
 ): Boolean = format == ExportFormat.WAV && codec == ExportCodec.PCM_16
 
-fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode {
-    return AudioSourceMode.fromStorageCode(
-        getRecorderPreferences(context).safeInt(
-            PrefKey.AUDIO_SOURCE,
-            AudioSourceMode.defaultMode().storageCode.toInt(),
-        ),
+fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode =
+    AudioSourceMode.fromStorageCode(
+        getRecorderPreferences(context).safeInt(PrefKey.AUDIO_SOURCE, AudioSourceMode.defaultMode().storageCode.toInt()),
     )
-}
 
 fun getConfiguredInputRouteMode(context: Context): InputRouteMode = readByteBackedPreference(
     prefs = getRecorderPreferences(context),
@@ -706,13 +698,9 @@ fun resolveOperationalSampleRate(
     } ?: 0
 }
 
-fun supportedInputRouteModes(context: Context): List<InputRouteMode> {
-    return buildList {
-        add(InputRouteMode.AUTO)
-        if (hasBuiltInMicrophone(context)) {
-            add(InputRouteMode.BUILTIN_MIC)
-        }
-    }
+fun supportedInputRouteModes(context: Context): List<InputRouteMode> = buildList {
+    add(InputRouteMode.AUTO)
+    if (hasBuiltInMicrophone(context)) add(InputRouteMode.BUILTIN_MIC)
 }
 
 fun standardSampleRates(): List<Int> = STANDARD_SAMPLE_RATES
@@ -797,18 +785,13 @@ fun isCodecSupported(
     codec: ExportCodec,
     sampleRate: Int,
     channelMode: ChannelMode,
-): Boolean {
-    return isCodecCompatibleWithFormat(format, codec) &&
-        isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
-}
+): Boolean = isCodecCompatibleWithFormat(format, codec) &&
+    isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
 
-fun supportedFormats(): List<ExportFormat> {
-    return SUPPORTED_EXPORT_FORMATS
-}
+fun supportedFormats(): List<ExportFormat> = SUPPORTED_EXPORT_FORMATS
 
-fun supportedCodecs(format: ExportFormat): List<ExportCodec> {
-    return if (format == ExportFormat.WAV) SUPPORTED_WAV_CODECS else emptyList()
-}
+fun supportedCodecs(format: ExportFormat): List<ExportCodec> =
+    if (format == ExportFormat.WAV) SUPPORTED_WAV_CODECS else emptyList()
 
 private fun bytesPerSecond(
     sampleRate: Int,

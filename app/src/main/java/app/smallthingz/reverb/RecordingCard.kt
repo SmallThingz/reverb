@@ -58,7 +58,6 @@ internal fun RecordingEntityCard(
         title = recording.displayName,
         subtitle = "${formatSavedRecordingDuration(context, recording.durationMillis)} \u2022 ${formatShortFileSize(recording.sizeBytes)}",
         trailingTop = formatRecordingStartTimestamp(context, recording.startedAtMillis),
-        trailingBottom = null,
         modifier = modifier,
         isSelected = isSelected,
         selectionActive = selectionActive,
@@ -80,7 +79,6 @@ internal fun SavingRecordingCard(
         title = androidx.compose.ui.res.stringResource(R.string.saving),
         subtitle = androidx.compose.ui.res.stringResource(R.string.app_name),
         trailingTop = null,
-        trailingBottom = null,
         modifier = modifier,
         showProgress = true,
         trailingContent = onCancel?.let { cancel ->
@@ -102,7 +100,6 @@ private fun RecordingSummaryCard(
     title: String,
     subtitle: String,
     trailingTop: String?,
-    trailingBottom: String?,
     modifier: Modifier,
     isSelected: Boolean = false,
     selectionActive: Boolean = false,
@@ -237,25 +234,13 @@ private fun RecordingSummaryCard(
                 if (trailingContent != null) {
                     Spacer(Modifier.width(8.dp))
                     trailingContent()
-                } else if (trailingTop != null || trailingBottom != null) {
+                } else if (trailingTop != null) {
                     Spacer(Modifier.width(12.dp))
-                    Column(horizontalAlignment = Alignment.End) {
-                        if (trailingTop != null) {
-                            Text(
-                                text = trailingTop,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = chrome.ink,
-                            )
-                        }
-                        if (trailingBottom != null) {
-                            Text(
-                                text = trailingBottom,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = chrome.muted,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                    }
+                    Text(
+                        text = trailingTop,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = chrome.ink,
+                    )
                 }
             }
             }
