@@ -10,7 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,9 +26,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,14 +50,12 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -75,8 +69,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -180,6 +172,8 @@ private const val RANGE_TIMELINE_ACTIVE_LINE_WIDTH_DP = 1.4f
 private const val RANGE_TIMELINE_BOUNDARY_GRIP_WIDTH_DP = 8f
 private const val RANGE_TIMELINE_BOUNDARY_GRIP_HEIGHT_DP = 28f
 private const val RANGE_TIMELINE_CURSOR_DOT_DP = 6f
+private const val RANGE_TIMELINE_TIME_LABEL_WIDTH_DP = 84f
+private const val RANGE_TIMELINE_TIME_LABEL_HEIGHT_DP = 28f
 
 internal data class RangeEditValues(
     val startSeconds: Float,
@@ -635,6 +629,7 @@ internal class RangeExportEditorState(
         get() = selectionDurationInteraction.active
 
     private var playbackAllowed = true
+    private var previewStarting = false
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
     private var lastAuditionAtMillis = 0L
@@ -841,8 +836,9 @@ internal class RangeExportEditorState(
     fun beginBoundaryScrub(target: RangeEditTarget) {
         invalidateTextEditing()
         selectTarget(target)
-        resumeAfterScrub = isPlaying
-        if (isPlaying) {
+        resumeAfterScrub = isPlaying || previewStarting
+        if (isPlaying || previewStarting) {
+            previewStarting = false
             previewController.stop()
             isPlaying = false
         }
@@ -868,8 +864,9 @@ internal class RangeExportEditorState(
         if (!playbackAllowed) return
         invalidateSelectionDurationCommit()
         invalidateTextEditing()
-        resumeAfterScrub = isPlaying
-        if (isPlaying) {
+        resumeAfterScrub = isPlaying || previewStarting
+        if (isPlaying || previewStarting) {
+            previewStarting = false
             previewController.stop()
             isPlaying = false
         }
@@ -916,10 +913,11 @@ internal class RangeExportEditorState(
 
     fun togglePreview() {
         invalidateTextEditing()
-        if (isPlaying) pausePreview() else startPreview()
+        if (isPlaying || previewStarting) pausePreview() else startPreview()
     }
 
     fun pausePreview() {
+        previewStarting = false
         resumeAfterScrub = false
         isScrubbing = false
         if (fineAdjustShuttleActive) {
@@ -946,21 +944,30 @@ internal class RangeExportEditorState(
         if (!playbackAllowed) return
         val readySnapshot = snapshot ?: return
         if (durationSeconds <= 0f) return
-        previewError = null
-        isPlaying = true
-        isScrubbing = false
         val window = boundaryCursorPreviewWindow(
             startSeconds = startSeconds,
             endSeconds = endSeconds,
             endBoundaryActive = lastTarget == RangeEditTarget.END,
         )
-        previewController.play(
+        previewError = null
+        previewStarting = false
+        isPlaying = false
+        isScrubbing = false
+        previewStarting = previewController.play(
             snapshot = readySnapshot,
             fromSeconds = window.startSeconds.toDouble(),
             untilSeconds = window.endSeconds.toDouble(),
             onProgress = {},
-            onFinished = { isPlaying = false },
+            onStarted = {
+                previewStarting = false
+                isPlaying = true
+            },
+            onFinished = {
+                previewStarting = false
+                isPlaying = false
+            },
             onError = { error ->
+                previewStarting = false
                 isPlaying = false
                 previewError = error.message
             },
@@ -1266,7 +1273,7 @@ private fun RangeExportTimeline(
         val timelineTopPx = with(density) { timelineTop.toPx() }
         val timelineHeightPx = with(density) { timelineHeight.toPx() }
         val hitWidthPx = with(density) { hitWidth.toPx() }
-        val bubbleWidthPx = with(density) { 100.dp.toPx() }
+        val bubbleWidthPx = with(density) { RANGE_TIMELINE_TIME_LABEL_WIDTH_DP.dp.toPx() }
 
         fun xFor(seconds: Float): Float =
             insetPx + timelineWidthPx * (seconds / state.durationSeconds).coerceIn(0f, 1f)
@@ -1393,7 +1400,7 @@ private fun RangeExportTimeline(
             visualAlpha = 1f,
         )
 
-        TimelineTimeInput(
+        TimelineTimeLabel(
             target = RangeEditTarget.START,
             active = state.lastTarget == RangeEditTarget.START,
             editorState = state,
@@ -1404,9 +1411,8 @@ private fun RangeExportTimeline(
                     with(density) { 3.dp.roundToPx() },
                 )
             },
-            onFocus = { state.beginBoundaryEdit(RangeEditTarget.START) },
         )
-        TimelineTimeInput(
+        TimelineTimeLabel(
             target = RangeEditTarget.END,
             active = state.lastTarget == RangeEditTarget.END,
             editorState = state,
@@ -1417,7 +1423,6 @@ private fun RangeExportTimeline(
                     with(density) { 3.dp.roundToPx() },
                 )
             },
-            onFocus = { state.beginBoundaryEdit(RangeEditTarget.END) },
         )
         Text(
             text = formatRangeTimeInput(0.0),
@@ -1577,135 +1582,41 @@ private fun RangeTimelineBar(
 }
 
 @Composable
-private fun TimelineTimeInput(
+private fun TimelineTimeLabel(
     target: RangeEditTarget,
     active: Boolean,
     editorState: RangeExportEditorState,
     visualAlpha: Float,
-    onFocus: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val focused by interactionSource.collectIsFocusedAsState()
-    val focusManager = LocalFocusManager.current
-    var text by remember(editorState, target) {
-        mutableStateOf(
-            formatRangeTimeInput(
-                Snapshot.withoutReadObservation { editorState.targetSeconds(target) }.toDouble(),
-            ),
-        )
-    }
-    var wasFocused by remember { mutableStateOf(false) }
-    val editGeneration = editorState.textEditGeneration
-    var focusGeneration by remember { mutableLongStateOf(editGeneration) }
-    var invalid by remember { mutableStateOf(false) }
-
-    LaunchedEffect(editorState, target, focused, focusGeneration) {
-        snapshotFlow { editorState.targetSeconds(target) }.collect { valueSeconds ->
-            val formatted = formatRangeTimeInput(valueSeconds.toDouble())
-            if (focused && editorState.textEditGeneration == focusGeneration) {
-                // Programmatic motion owns the target once its underlying position changes.
-                editorState.invalidateTextEditing()
-                if (text != formatted) text = formatted
-                focusManager.clearFocus(force = true)
-            } else if (!focused && text != formatted) {
-                text = formatted
-            }
-        }
-    }
-    LaunchedEffect(editGeneration) {
-        if (editGeneration != focusGeneration) {
-            text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble())
-            if (focused) focusManager.clearFocus(force = true)
-        }
-    }
-    LaunchedEffect(invalid) {
-        if (invalid) {
-            delay(650L)
-            invalid = false
-        }
-    }
-
     val colors = MaterialTheme.colorScheme
-    val background = when {
-        invalid -> colors.errorContainer
-        active || focused -> colors.primaryContainer
-        else -> colors.surfaceContainerHighest
-    }
-    val foreground = when {
-        invalid -> colors.onErrorContainer
-        active || focused -> colors.onPrimaryContainer
-        else -> colors.onSurfaceVariant
-    }
-
     Surface(
         modifier = modifier
-            .zIndex(if (active) 30f else if (focused) 20f else 0f)
-            .width(100.dp)
-            .height(34.dp)
+            .zIndex(if (active) 30f else 0f)
+            .width(RANGE_TIMELINE_TIME_LABEL_WIDTH_DP.dp)
+            .height(RANGE_TIMELINE_TIME_LABEL_HEIGHT_DP.dp)
             .graphicsLayer { alpha = visualAlpha.coerceIn(0f, 1f) },
-        shape = RoundedCornerShape(13.dp),
-        color = background,
-        shadowElevation = if (active || focused) 3.dp else 1.dp,
+        shape = RoundedCornerShape(10.dp),
+        color = if (active) colors.primaryContainer else colors.surfaceContainerHighest,
+        shadowElevation = if (active) 1.dp else 0.dp,
     ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            BasicTextField(
-                value = text,
-                onValueChange = { value ->
-                    text = value
-                    editorState.updateTextDraft(target, value)
-                },
-                enabled = visualAlpha >= 0.95f,
-                singleLine = true,
-                interactionSource = interactionSource,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Ascii,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (editorState.commitActiveTextEditing()) {
-                            focusManager.clearFocus(force = true)
-                        } else {
-                            invalid = true
-                        }
-                    },
-                ),
-                textStyle = MaterialTheme.typography.labelLarge.copy(
-                    color = foreground,
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble()),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = if (active) colors.onPrimaryContainer else colors.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
                     platformStyle = PlatformTextStyle(includeFontPadding = false),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 ),
-                cursorBrush = SolidColor(colors.primary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 7.dp)
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused && !wasFocused) {
-                            if (editorState.beginTextEditing(target, text)) {
-                                wasFocused = true
-                                focusGeneration = editorState.textEditGeneration
-                                onFocus()
-                            } else {
-                                // Another field still owns an invalid draft. Never overwrite it
-                                // merely because focus briefly moved to this field.
-                                focusManager.clearFocus(force = true)
-                            }
-                        } else if (!focusState.isFocused && wasFocused) {
-                            wasFocused = false
-                            if (focusGeneration != editorState.textEditGeneration) {
-                                text = formatRangeTimeInput(editorState.targetSeconds(target).toDouble())
-                            } else if (!editorState.commitTextEditingOnBlur(target)) {
-                                // Preserve the invalid draft under its original owner so tapping
-                                // the other field cannot silently discard the user's text.
-                                invalid = true
-                            }
-                        }
-                    },
+                maxLines = 1,
             )
         }
     }

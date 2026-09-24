@@ -581,19 +581,17 @@ internal class TimelineAudioPreviewController(
         fromSeconds: Double,
         untilSeconds: Double = snapshot.durationSeconds,
         onProgress: (Double) -> Unit,
+        onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: (Throwable) -> Unit,
-    ) {
-        if (closed) return
+    ): Boolean {
+        if (closed) return false
         cancelCurrent()
         val token = generation.incrementAndGet()
         val start = fromSeconds.coerceIn(0.0, snapshot.durationSeconds)
         val end = untilSeconds.coerceIn(start, snapshot.durationSeconds)
-        if (end <= start) {
-            postIfCurrent(token, onFinished)
-            return
-        }
-        enqueueLatest {
+        if (end <= start) return false
+        return enqueueLatest {
             stream(
                 token = token,
                 snapshot = snapshot,
@@ -602,6 +600,7 @@ internal class TimelineAudioPreviewController(
                 volume = 1f,
                 reportProgress = true,
                 onProgress = onProgress,
+                onStarted = onStarted,
                 onFinished = onFinished,
                 onError = onError,
             )
@@ -625,6 +624,7 @@ internal class TimelineAudioPreviewController(
                 volume = 0.72f,
                 reportProgress = false,
                 onProgress = {},
+                onStarted = {},
                 onFinished = {},
                 onError = {},
             )
@@ -739,11 +739,11 @@ internal class TimelineAudioPreviewController(
         releaseExecutor.shutdown()
     }
 
-    private fun enqueueLatest(block: () -> Unit) {
+    private fun enqueueLatest(block: () -> Unit): Boolean {
         executor.queue.clear()
         // A late gesture can race disposal after observing closed=false. Executor rejection is
         // therefore a normal lifecycle boundary, not an exception that should escape to UI.
-        executeIfAccepted(executor, Runnable(block))
+        return executeIfAccepted(executor, Runnable(block))
     }
 
     private fun cancelCurrent() {
@@ -1008,11 +1008,13 @@ internal class TimelineAudioPreviewController(
         volume: Float,
         reportProgress: Boolean,
         onProgress: (Double) -> Unit,
+        onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: (Throwable) -> Unit,
     ) {
         var child: PersistentAudioChunkStore.RangeLease? = null
         var track: AudioTrack? = null
+        var startedCallbackSent = false
         try {
             checkCurrent(token)
             child = snapshot.acquireRange(startSeconds, endSeconds)
@@ -1040,6 +1042,10 @@ internal class TimelineAudioPreviewController(
                     val written = track.write(array, position, requested, AudioTrack.WRITE_BLOCKING)
                     if (written <= 0) throw IOException("Audio preview write failed: $written")
                     position += written
+                    if (!startedCallbackSent) {
+                        startedCallbackSent = true
+                        postIfCurrent(token, onStarted)
+                    }
                     if (reportProgress) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastProgressAt >= PREVIEW_PROGRESS_INTERVAL_MILLIS) {
