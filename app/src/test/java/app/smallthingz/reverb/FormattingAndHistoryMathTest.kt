@@ -2303,7 +2303,6 @@ class FormattingAndHistoryMathTest {
 
     @Test
     fun wavCodecFormatMatrix_hasPcmOnly() {
-        assertTrue(ExportFormat.WAV in supportedFormats())
         assertTrue(isCodecCompatibleWithFormat(ExportFormat.WAV, ExportCodec.PCM_16))
     }
 
@@ -2331,8 +2330,6 @@ class FormattingAndHistoryMathTest {
         assertTrue(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 8_000, 1))
         assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 0, 1))
         assertFalse(isExportConfigurationSupported(ExportFormat.WAV, ExportCodec.PCM_16, 44_100, 3))
-        assertEquals(listOf(ExportFormat.WAV), supportedFormats())
-        assertEquals(listOf(ExportCodec.PCM_16), supportedCodecs(ExportFormat.WAV))
     }
 
     @Test

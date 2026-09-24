@@ -1164,8 +1164,6 @@ class ReverbService : Service() {
         var selectedSourceMode = configured.sourceMode
         var selectedChannelMode = configured.channelMode
         var selectedRouteMode = configured.routeMode
-        var selectedFormat = configured.format
-        var selectedCodec = configured.codec
         val selectedSampleFormat = configured.sampleFormat
 
         val requestedRate = configured.sampleRate
@@ -1173,8 +1171,6 @@ class ReverbService : Service() {
             preferredSourceMode = selectedSourceMode,
             preferredChannelMode = selectedChannelMode,
             preferredRouteMode = selectedRouteMode,
-            preferredFormat = selectedFormat,
-            preferredCodec = selectedCodec,
             preferredRate = requestedRate,
             preferredSampleFormat = selectedSampleFormat,
         )
@@ -1183,8 +1179,6 @@ class ReverbService : Service() {
             selectedSourceMode = resolvedConfig.sourceMode
             selectedChannelMode = resolvedConfig.channelMode
             selectedRouteMode = resolvedConfig.routeMode
-            selectedFormat = resolvedConfig.format
-            selectedCodec = resolvedConfig.codec
         }
 
         sampleRate = resolvedConfig?.sampleRate ?: 48_000
@@ -1193,8 +1187,8 @@ class ReverbService : Service() {
         sourceMode = selectedSourceMode
         channelMode = selectedChannelMode
         audioSource = selectedSourceMode.sourceValue
-        outputFormat = selectedFormat
-        outputCodec = selectedCodec
+        outputFormat = ExportFormat.WAV
+        outputCodec = ExportCodec.PCM_16
         inputRouteMode = selectedRouteMode
         publishConfigurationSnapshot()
         refreshCachedBufferSizing()
@@ -1225,61 +1219,42 @@ class ReverbService : Service() {
         preferredSourceMode: AudioSourceMode,
         preferredChannelMode: ChannelMode,
         preferredRouteMode: InputRouteMode,
-        preferredFormat: ExportFormat,
-        preferredCodec: ExportCodec,
         preferredRate: Int,
         preferredSampleFormat: PcmSampleFormat,
     ): OperationalConfig? {
-        val formatCandidates = buildList {
-            add(preferredFormat); val formats = supportedFormats()
-            for (f in formats) if (f != preferredFormat) add(f)
-        }
-        val routeCandidates = buildList {
-            add(preferredRouteMode); val modes = supportedInputRouteModes(this@ReverbService)
-            for (m in modes) if (m != preferredRouteMode) add(m)
-        }
-        val sourceCandidates = buildList {
-            add(preferredSourceMode); val modes = AudioSourceMode.availableModes()
-            for (m in modes) if (m != preferredSourceMode) add(m)
-        }
-        val channelCandidates = buildList {
-            add(preferredChannelMode)
-            for (m in ChannelMode.entries) if (m != preferredChannelMode) add(m)
-        }
-        val sampleFormatCandidates = buildList {
-            add(preferredSampleFormat)
-            for (m in PcmSampleFormat.entries) if (m != preferredSampleFormat) add(m)
-        }
+        val routeCandidates = listOf(preferredRouteMode) +
+            supportedInputRouteModes(this).filter { it != preferredRouteMode }
+        val sourceCandidates = listOf(preferredSourceMode) +
+            AudioSourceMode.availableModes().filter { it != preferredSourceMode }
+        val channelCandidates = listOf(preferredChannelMode) +
+            ChannelMode.entries.filter { it != preferredChannelMode }
+        val sampleFormatCandidates = listOf(preferredSampleFormat) +
+            PcmSampleFormat.entries.filter { it != preferredSampleFormat }
 
-        formatCandidates.forEach { format ->
-            val codecCandidates = listOf(preferredCodec) + supportedCodecs(format).filter { it != preferredCodec }
-            codecCandidates.forEach { codec ->
-                routeCandidates.forEach { routeMode ->
-                    sourceCandidates.forEach { sourceMode ->
-                        channelCandidates.forEach { channelMode ->
-                            sampleFormatCandidates.forEach { sampleFormat ->
-                                val sampleRate = resolveOperationalSampleRate(
-                                    this,
-                                    preferredRate,
-                                    sourceMode,
-                                    routeMode,
-                                    format,
-                                    codec,
-                                    channelMode,
-                                    sampleFormat,
-                                )
-                                if (sampleRate > 0 && isCodecSupported(format, codec, sampleRate, channelMode)) {
-                                    return OperationalConfig(
-                                        sourceMode = sourceMode,
-                                        channelMode = channelMode,
-                                        routeMode = routeMode,
-                                        format = format,
-                                        codec = codec,
-                                        sampleFormat = sampleFormat,
-                                        sampleRate = sampleRate,
-                                    )
-                                }
-                            }
+        routeCandidates.forEach { routeMode ->
+            sourceCandidates.forEach { sourceMode ->
+                channelCandidates.forEach { channelMode ->
+                    sampleFormatCandidates.forEach { sampleFormat ->
+                        val sampleRate = resolveOperationalSampleRate(
+                            this,
+                            preferredRate,
+                            sourceMode,
+                            routeMode,
+                            ExportFormat.WAV,
+                            ExportCodec.PCM_16,
+                            channelMode,
+                            sampleFormat,
+                        )
+                        if (sampleRate > 0) {
+                            return OperationalConfig(
+                                sourceMode = sourceMode,
+                                channelMode = channelMode,
+                                routeMode = routeMode,
+                                format = ExportFormat.WAV,
+                                codec = ExportCodec.PCM_16,
+                                sampleFormat = sampleFormat,
+                                sampleRate = sampleRate,
+                            )
                         }
                     }
                 }

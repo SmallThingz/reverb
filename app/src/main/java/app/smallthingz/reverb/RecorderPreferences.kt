@@ -26,8 +26,6 @@ private const val WAV_RIFF_SIZE_EXCLUDED_PREFIX_BYTES = 8L
 
 private val STANDARD_SAMPLE_RATES =
     listOf(96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350)
-private val SUPPORTED_EXPORT_FORMATS = listOf(ExportFormat.WAV)
-private val SUPPORTED_WAV_CODECS = listOf(ExportCodec.PCM_16)
 private val inputConfigCache = ConcurrentHashMap<InputConfigKey, Boolean>()
 
 private data class InputConfigKey(
@@ -781,12 +779,6 @@ fun isCodecSupported(
     channelMode: ChannelMode,
 ): Boolean = isCodecCompatibleWithFormat(format, codec) &&
     isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
-
-fun supportedFormats(): List<ExportFormat> = SUPPORTED_EXPORT_FORMATS
-
-fun supportedCodecs(format: ExportFormat): List<ExportCodec> =
-    if (format == ExportFormat.WAV) SUPPORTED_WAV_CODECS else emptyList()
-
 private fun bytesPerSecond(
     sampleRate: Int,
     channelCount: Int,
