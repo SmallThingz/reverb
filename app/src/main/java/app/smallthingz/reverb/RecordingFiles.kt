@@ -993,6 +993,13 @@ private fun finalizeFileOutputTarget(
                 digest = digest,
             )
         },
+        onUnprotectedUnexpectedPublish = { unexpected ->
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                context,
+                "Unprotected ambiguous recording publication",
+                IllegalStateException("Unable to durably hide unexpected published file ${unexpected.name}"),
+            )
+        },
     )
     val destination = published.file
     if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
@@ -1018,6 +1025,7 @@ internal fun publishStagedFile(
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
+    onUnprotectedUnexpectedPublish: ((File) -> Unit)? = null,
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): File = publishStagedFileResult(
@@ -1025,6 +1033,7 @@ internal fun publishStagedFile(
     finalDisplayName = finalDisplayName,
     expectedFingerprint = expectedFingerprint,
     onUnexpectedPublishedFile = onUnexpectedPublishedFile,
+    onUnprotectedUnexpectedPublish = onUnprotectedUnexpectedPublish,
     moveFile = moveFile,
     readFingerprint = readFingerprint,
 ).file
@@ -1039,6 +1048,7 @@ private fun publishStagedFileResult(
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint? = null,
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
+    onUnprotectedUnexpectedPublish: ((File) -> Unit)? = null,
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): PublishedStagedFile {
@@ -1071,6 +1081,7 @@ private fun publishStagedFileResult(
                             TAG,
                             "Unexpected published file could not be durably suppressed or hidden: $destination",
                         )
+                        onUnprotectedUnexpectedPublish?.invoke(destination)
                     }
                     throw IOException("Published file was not the verified staging object")
                 }
@@ -1091,6 +1102,7 @@ private fun publishStagedFileResult(
                     finalDisplayName = finalDisplayName,
                     expectedFingerprint = expectedFingerprint,
                     onUnexpectedPublishedFile = onUnexpectedPublishedFile,
+                    onUnprotectedUnexpectedPublish = onUnprotectedUnexpectedPublish,
                     readFingerprint = readFingerprint,
                 )
             }
@@ -1105,6 +1117,7 @@ private fun protectAmbiguousPublishedFile(
     finalDisplayName: String,
     expectedFingerprint: StableOutputFingerprint,
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)?,
+    onUnprotectedUnexpectedPublish: ((File) -> Unit)?,
     readFingerprint: (File) -> StableOutputFingerprint?,
 ) {
     val expectedIdentity = expectedFingerprint.fileKey?.takeIf { it.isNotBlank() } ?: return
@@ -1124,6 +1137,7 @@ private fun protectAmbiguousPublishedFile(
     )
     if (!suppressed && !hiddenStateDurable) {
         Log.e(TAG, "Ambiguous published file could not be durably suppressed or hidden: $destination")
+        onUnprotectedUnexpectedPublish?.invoke(destination)
     }
 }
 
@@ -3539,6 +3553,11 @@ private fun renameFileRecording(
                 )
                 if (!protected) {
                     Log.e(TAG, "Unexpected rename target could not be durably suppressed or restored: $target")
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                        context,
+                        "Unprotected recording rename target",
+                        IllegalStateException("Unable to durably protect unexpected rename target ${target.name}"),
+                    )
                 }
                 throw IllegalStateException("Recording changed on disk during rename")
             }
@@ -3556,6 +3575,11 @@ private fun renameFileRecording(
                 )
                 if (!protected) {
                     Log.e(TAG, "Content-changed rename target could not be durably restored: $target")
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                        context,
+                        "Recording changed during rename recovery",
+                        IllegalStateException("Unable to durably restore content-changed rename target ${target.name}"),
+                    )
                 }
                 throw IllegalStateException("Recording content changed during rename")
             }

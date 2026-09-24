@@ -398,11 +398,99 @@ class RecordingIncidentStoreTest {
     @Test
     fun incidentKindUsesStableByteIdentity() {
         assertTrue(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
+        assertTrue(RecordingIncidentKind.UNEXPECTED_ERROR.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
         assertTrue(
             RecordingIncidentKind.fromStorageCode(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode) ==
                 RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
         )
+        assertTrue(
+            RecordingIncidentKind.fromStorageCode(RecordingIncidentKind.UNEXPECTED_ERROR.storageCode) ==
+                RecordingIncidentKind.UNEXPECTED_ERROR,
+        )
         assertTrue(RecordingIncidentKind.fromStorageCode(0x7f) == null)
+    }
+
+    @Test
+    fun unexpectedErrorIncident_isNotCaptureRecoveryAndHasErrorSummary() {
+        val incident = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            resumedAtMillis = 0L,
+            kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+            pid = 42,
+            description = "Range preview: java.lang.IllegalStateException: broken",
+        )
+
+        assertFalse(incident.recoveryPending)
+        val summary = formatIncidentSummary(
+            incident = incident,
+            clockFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.US),
+            zone = java.time.ZoneId.of("UTC"),
+        )
+        assertEquals("Unexpected error at 00:00:10", summary)
+        val prepared = prepareIncidentHistory(
+            listOf(incident),
+            java.util.Locale.US,
+            java.time.ZoneId.of("UTC"),
+        )
+        assertTrue(prepared.rows.single().cause.contains("App error"))
+        assertEquals(incident.description, prepared.rows.single().description)
+    }
+
+    @Test
+    fun genericProcessExitRecovery_recordsOnlyCrashLikeUnexpectedReasons() {
+        assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_CRASH, 0))
+        assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_CRASH_NATIVE, 0))
+        assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_ANR, 0))
+        assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_INITIALIZATION_FAILURE, 0))
+        assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_SIGNALED, 11))
+        assertFalse(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_SIGNALED, 15))
+        assertFalse(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_LOW_MEMORY, 0))
+        assertFalse(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_USER_REQUESTED, 0))
+        assertFalse(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_USER_STOPPED, 0))
+        assertFalse(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_PACKAGE_UPDATED, 0))
+    }
+
+    @Test
+    fun genericProcessExitRecovery_doesNotDuplicateAlreadyRecordedUncaughtException() {
+        val uncaught = RecordingIncident(
+            occurredAtMillis = 10_000L,
+            kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+            pid = 42,
+            description = "Uncaught exception on main: java.lang.IllegalStateException: boom",
+        )
+        val caughtButRecovered = RecordingIncident(
+            occurredAtMillis = 10_500L,
+            kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+            pid = 42,
+            description = "Audio visualization analysis: java.lang.IllegalStateException: bad frame",
+        )
+
+        assertTrue(unexpectedProcessExitAlreadyRecorded(listOf(uncaught), 42, 10_250L))
+        assertFalse(unexpectedProcessExitAlreadyRecorded(listOf(caughtButRecovered), 42, 10_250L))
+        assertFalse(unexpectedProcessExitAlreadyRecorded(listOf(uncaught), 43, 10_250L))
+        assertFalse(unexpectedProcessExitAlreadyRecorded(listOf(uncaught), 42, 30_000L))
+    }
+
+    @Test
+    fun unexpectedErrorDescription_capturesSourceTypeMessageLocationAndBoundsLength() {
+        val root = IOException("disk exploded")
+        val error = IllegalStateException("preview cleanup failed", root).apply {
+            stackTrace = arrayOf(
+                StackTraceElement("app.smallthingz.reverb.RangeExportAudio", "releaseTrack", "RangeExportAudio.kt", 1168),
+            )
+        }
+
+        val description = unexpectedErrorIncidentDescription(
+            source = "Range preview cleanup",
+            error = error,
+            maxChars = 160,
+        )
+
+        assertTrue(description.startsWith("Range preview cleanup: java.lang.IllegalStateException"))
+        assertTrue(description.contains("preview cleanup failed"))
+        assertTrue(description.contains("RangeExportAudio.releaseTrack:1168"))
+        assertTrue(description.contains("cause java.io.IOException: disk exploded"))
+        assertTrue(description.length <= 160)
     }
 
     @Test

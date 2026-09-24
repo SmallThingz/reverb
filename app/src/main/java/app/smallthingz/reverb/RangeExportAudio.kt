@@ -666,6 +666,11 @@ internal class TimelineAudioPreviewController(
             onFailureAfterStart = onFailureAfterStart,
             onSourceCloseFailure = onSourceCloseFailure ?: { error ->
                 Log.e("ReverbRangeAudio", "Saved recording shuttle source close failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    appContext,
+                    "Saved recording shuttle source cleanup",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     appContext.getString(R.string.recording_read_cleanup_failed),
                     FeedbackTone.ERROR,

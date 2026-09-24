@@ -46,6 +46,11 @@
 - Quick Settings live TileService listeners use an explicitly registered/unregistered strong identity registry. Do not
   use `WeakHashMap` for this live listener set: GC may clear weak keys during iteration and Android has produced a
   main-thread `NoSuchElementException` from that race.
+- Incidents include app-wide unexpected errors even when the process survives. Uncaught exceptions, invariant/corruption
+  failures, and native/resource cleanup failures that should not occur must be recorded through
+  `RecordingIncidentStore.recordUnexpectedError*`. Do not create incidents for modeled outcomes such as cancellation,
+  permission denial, validation rejection, normal provider/file unavailability, lifecycle teardown rejection, or other
+  failures the current operation explicitly expects and reports as a normal result.
 - The Incidents button sits immediately left of Settings and uses a warning/error glyph. A durably armed,
   actually-running capture session may be suppressed only by an explicit known-capture-stop transition; a persisted
   disabled-listening preference is not proof that the already-armed session stopped. Persistence/audio failures that

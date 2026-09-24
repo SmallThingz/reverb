@@ -124,13 +124,17 @@ internal fun snapshotCaptureIntentPreferences(
 internal fun restoreCaptureIntentPreferences(
     prefs: SharedPreferences,
     snapshot: CaptureIntentPreferenceSnapshot,
+    onException: (Throwable) -> Unit = {},
 ): Boolean {
     val editor = prefs.edit()
         .restoreDurablePreferenceValue(PrefKey.AUDIO_MEMORY_ENABLED, snapshot.enabled)
         .restoreDurablePreferenceValue(PrefKey.CAPTURE_BUFFER_SLOT, snapshot.bufferSlot)
     return commitRecorderPreferenceMutation(
         commit = editor::commit,
-        onException = { error -> Log.e("ReverbService", "Recorder intent rollback commit threw", error) },
+        onException = { error ->
+            Log.e("ReverbService", "Recorder intent rollback commit threw", error)
+            onException(error)
+        },
     )
 }
 
@@ -346,12 +350,23 @@ class ReverbService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        loopingAudioChunkStore = PersistentAudioChunkStore(this)
+        val unexpectedBufferRecovery: (String) -> Unit = { detail ->
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                this,
+                "Persistent audio buffer recovery",
+                IllegalStateException(detail),
+            )
+        }
+        loopingAudioChunkStore = PersistentAudioChunkStore(
+            this,
+            onUnexpectedRecovery = unexpectedBufferRecovery,
+        )
         oneShotAudioChunkStore = PersistentAudioChunkStore(
             this,
             cacheFolderName = ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
             legacyCacheFolderName = null,
             overwriteOldest = false,
+            onUnexpectedRecovery = unexpectedBufferRecovery,
         )
         createNotificationChannel()
         powerManager = getSystemService(PowerManager::class.java)
@@ -678,7 +693,14 @@ class ReverbService : Service() {
                     commit = {
                         prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, bufferSlot.storageCode.toInt()).commit()
                     },
-                    onException = { error -> Log.e(TAG, "Capture destination commit threw", error) },
+                    onException = { error ->
+                        Log.e(TAG, "Capture destination commit threw", error)
+                        RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                            this,
+                            "Capture destination preference commit",
+                            error,
+                        )
+                    },
                 )
             ) {
                 val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
@@ -776,7 +798,17 @@ class ReverbService : Service() {
         snapshot: CaptureIntentPreferenceSnapshot,
         authorityWasValid: Boolean,
     ): Boolean {
-        val rollbackPersisted = restoreCaptureIntentPreferences(prefs, snapshot)
+        val rollbackPersisted = restoreCaptureIntentPreferences(
+            prefs = prefs,
+            snapshot = snapshot,
+            onException = { error ->
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    this,
+                    "Recorder intent rollback commit",
+                    error,
+                )
+            },
+        )
         durableCaptureIntentAuthorityValid = captureIntentAuthorityAfterRollback(
             authorityWasValid = authorityWasValid,
             rollbackPersisted = rollbackPersisted,
@@ -830,7 +862,14 @@ class ReverbService : Service() {
                 }
                 if (!commitRecorderPreferenceMutation(
                         commit = editor::commit,
-                        onException = { error -> Log.e(TAG, "Recorder intent commit threw", error) },
+                        onException = { error ->
+                            Log.e(TAG, "Recorder intent commit threw", error)
+                            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                                this,
+                                "Recorder intent preference commit",
+                                error,
+                            )
+                        },
                     )
                 ) {
                     val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
@@ -1010,7 +1049,14 @@ class ReverbService : Service() {
                     commit = {
                         prefs.edit().putInt(PrefKey.CAPTURE_BUFFER_SLOT, resolved.storageCode.toInt()).commit()
                     },
-                    onException = { error -> Log.e(TAG, "Capture handoff commit threw", error) },
+                    onException = { error ->
+                        Log.e(TAG, "Capture handoff commit threw", error)
+                        RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                            this,
+                            "Capture handoff preference commit",
+                            error,
+                        )
+                    },
                 )
             ) {
                 val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
@@ -1467,6 +1513,11 @@ class ReverbService : Service() {
         runCatching { record.release() }
             .onFailure { error ->
                 Log.e(TAG, "AudioRecord.release failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    this,
+                    "AudioRecord terminal release",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     getString(R.string.audio_input_release_failed),
                     FeedbackTone.ERROR,
@@ -1584,6 +1635,11 @@ class ReverbService : Service() {
                             lease = lease,
                             onChildReleaseFailure = { error ->
                                 reportPersistentStoreFailure("release timeline range", error)
+                                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                                    this,
+                                    "Timeline child range terminal close",
+                                    error,
+                                )
                             },
                         )
                     }
@@ -1606,6 +1662,11 @@ class ReverbService : Service() {
     ) {
         val onReleaseFailure: (Exception) -> Unit = { error ->
             reportPersistentStoreFailure("release timeline snapshot", error)
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                this,
+                "Timeline snapshot terminal close",
+                error,
+            )
         }
         val posted = mainHandler.post {
             deliverTimelineSnapshotAtServiceBoundary(
@@ -2474,7 +2535,14 @@ class ReverbService : Service() {
             val previousPreferences = snapshotCaptureIntentPreferences(prefs)
             val committed = commitRecorderPreferenceMutation(
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
-                onException = { error -> Log.e(TAG, "Automatic Stop commit threw", error) },
+                onException = { error ->
+                    Log.e(TAG, "Automatic Stop commit threw", error)
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                        this,
+                        "Automatic Stop preference commit",
+                        error,
+                    )
+                },
             )
             if (!committed) {
                 // commit() already changed this process' in-memory preferences. Restore the
@@ -2792,12 +2860,24 @@ class ReverbService : Service() {
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
                 onException = { commitError ->
                     Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                        this,
+                        "Fatal recorder-stop preference commit",
+                        commitError,
+                    )
                 },
             )
             if (!committed) {
                 val rollbackPersisted = restoreCaptureIntentPreferences(
                     prefs = prefs,
                     snapshot = previousPreferences,
+                    onException = { rollbackError ->
+                        RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                            this,
+                            "Fatal recorder intent rollback commit",
+                            rollbackError,
+                        )
+                    },
                 )
                 if (!rollbackPersisted) {
                     Log.e(TAG, "Unable to restore recorder intent after failed fatal stop")
@@ -3171,6 +3251,11 @@ class ReverbService : Service() {
         } catch (error: Exception) {
             visualizationFaulted = true
             Log.w(TAG, "Audio visualization disabled until the UI reconnects", error)
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                this,
+                "Audio visualization analysis",
+                error,
+            )
             return
         }
         if (visualizationCallbacks.current() !== callback) return
@@ -3906,6 +3991,13 @@ class ReverbService : Service() {
 
     private fun reportPersistentStoreFailure(operation: String, error: Throwable) {
         Log.e(TAG, "Persistent audio store $operation failed", error)
+        if (error !is IOException && error !is SecurityException) {
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                this,
+                "Persistent audio store $operation",
+                error,
+            )
+        }
         reportError(userFacingError(getString(R.string.recorder_state_persist_failed), error))
     }
 
@@ -4293,6 +4385,11 @@ class ReverbService : Service() {
             release = { it.release() },
             onFailure = { error ->
                 Log.e(TAG, "WakeLock acquisition failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    this,
+                    "WakeLock acquisition",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     getString(R.string.wake_lock_acquire_failed),
                     FeedbackTone.ERROR,
@@ -4312,6 +4409,11 @@ class ReverbService : Service() {
             release = { lock.release() },
             onFailure = { error ->
                 Log.e(TAG, "WakeLock.release failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    this,
+                    "WakeLock terminal release",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     getString(R.string.wake_lock_release_failed),
                     FeedbackTone.ERROR,

@@ -1018,7 +1018,12 @@ internal fun RangeExportHomeContent(
         RangeExportEditorState(
             initialDurationSeconds = initialDurationSeconds,
             rememberedRangeExport = rememberedRangeExport,
-            onPreviewReleaseFailure = {
+            onPreviewReleaseFailure = { error ->
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    appContext,
+                    "Range preview resource cleanup",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     appContext.getString(R.string.audio_preview_release_failed),
                     FeedbackTone.ERROR,

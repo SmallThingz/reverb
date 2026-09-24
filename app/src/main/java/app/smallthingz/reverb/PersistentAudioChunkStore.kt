@@ -168,16 +168,19 @@ internal class PersistentAudioChunkStore internal constructor(
     private val overwriteOldest: Boolean,
     private val directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
     private val atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
+    private val onUnexpectedRecovery: (String) -> Unit = {},
 ) : Closeable {
     constructor(
         context: Context,
         cacheFolderName: String = BUFFER_CACHE_FOLDER_NAME,
         legacyCacheFolderName: String? = LEGACY_BUFFER_CACHE_FOLDER_NAME,
         overwriteOldest: Boolean = true,
+        onUnexpectedRecovery: (String) -> Unit = {},
     ) : this(
         rootDirectory = File(context.noBackupFilesDir, cacheFolderName),
         legacyDirectory = legacyCacheFolderName?.let { File(context.noBackupFilesDir, it) },
         overwriteOldest = overwriteOldest,
+        onUnexpectedRecovery = onUnexpectedRecovery,
     )
 
     internal constructor(
@@ -191,6 +194,7 @@ internal class PersistentAudioChunkStore internal constructor(
         overwriteOldest = overwriteOldest,
         directorySync = directorySync,
         atomicChunkReplace = atomicChunkReplace,
+        onUnexpectedRecovery = {},
     )
 
     private val chunksDirectory = File(rootDirectory, BUFFER_CHUNKS_FOLDER_NAME)
@@ -1467,6 +1471,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             if (record == null) {
                 preserveUnrecognizedChunkLocked(file, "corrupt")
+                onUnexpectedRecovery("Recovered malformed audio chunk ${file.name}")
                 continue
             }
             if (retirementTombstones.containsKey(id)) {
@@ -1483,6 +1488,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 // the user explicitly cleared. Legitimate id reuse clears stale markers before
                 // creating the replacement chunk.
                 preserveUnrecognizedChunkLocked(file, "retired-ambiguous")
+                onUnexpectedRecovery("Recovered retirement-ambiguous audio chunk ${file.name}")
                 if (deleteRetirementTombstoneLocked(id)) retirementTombstones.remove(id)
                 continue
             }

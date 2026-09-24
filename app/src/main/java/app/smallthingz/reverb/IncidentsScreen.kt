@@ -106,6 +106,20 @@ internal fun formatIncidentStopSummary(
     return "Stopped at $stoppedAt for $duration"
 }
 
+internal fun formatIncidentSummary(
+    incident: RecordingIncident,
+    clockFormatter: DateTimeFormatter = incidentClockFormatter(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): String = when (incident.kind) {
+    RecordingIncidentKind.UNEXPECTED_SHUTDOWN -> formatIncidentStopSummary(incident, clockFormatter, zone)
+    RecordingIncidentKind.UNEXPECTED_ERROR -> {
+        val occurredAt = clockFormatter.format(
+            Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone),
+        )
+        "Unexpected error at $occurredAt"
+    }
+}
+
 private fun formatIncidentMemory(kb: Long): String {
     if (kb < 0L) return ""
     if (kb < 1024L) return "$kb KiB"
@@ -139,6 +153,7 @@ private fun signalLabel(signal: Int): String = when (signal) {
 }
 
 private fun incidentCauseLine(incident: RecordingIncident): String = buildList {
+    if (incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR) add("App error")
     if (incident.exitReason != 0) add(recordingExitReasonLabel(incident.exitReason))
     if (incident.exitStatus != Int.MIN_VALUE) {
         add(if (incident.exitReason == ApplicationExitInfo.REASON_SIGNALED) signalLabel(incident.exitStatus) else "status ${incident.exitStatus}")
@@ -192,7 +207,7 @@ internal fun prepareIncidentHistory(
             incident = incident,
             key = "${incident.kind.storageCode}:${incident.occurredAtMillis}",
             date = dateFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone)),
-            stopSummary = formatIncidentStopSummary(incident, clockFormatter, zone),
+            stopSummary = formatIncidentSummary(incident, clockFormatter, zone),
             cause = incidentCauseLine(incident),
             runtime = incidentRuntimeLine(incident),
             age = incidentAgeLine(incident),

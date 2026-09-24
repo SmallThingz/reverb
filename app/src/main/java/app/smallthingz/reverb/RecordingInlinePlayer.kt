@@ -419,6 +419,11 @@ internal fun RecordingInlinePlayer(
         TimelineAudioPreviewController(
             onTrackReleaseFailure = { error ->
                 Log.e(INLINE_PLAYER_TAG, "Saved recording preview AudioTrack.release failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    appContext,
+                    "Saved recording preview AudioTrack cleanup",
+                    error,
+                )
                 AppFeedbackCenter.post(
                     appContext.getString(R.string.audio_preview_release_failed),
                     FeedbackTone.ERROR,
@@ -496,6 +501,11 @@ internal fun RecordingInlinePlayer(
 
     fun reportPlaybackCleanupFailure(error: Exception) {
         Log.e(INLINE_PLAYER_TAG, "Saved recording playback cleanup failed", error)
+        RecordingIncidentStore.recordUnexpectedErrorInBackground(
+            appContext,
+            "Saved recording playback cleanup",
+            error,
+        )
         AppFeedbackCenter.post(
             appContext.getString(R.string.recording_read_cleanup_failed),
             FeedbackTone.ERROR,

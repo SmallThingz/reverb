@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.util.AtomicFile
+import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,7 @@ internal inline fun <T> readIncidentPayloadExact(
 
 internal enum class RecordingIncidentKind(val storageCode: Byte) {
     UNEXPECTED_SHUTDOWN(1),
+    UNEXPECTED_ERROR(2),
     ;
 
     companion object {
@@ -71,7 +73,8 @@ internal data class RecordingIncident(
     // This sentinel uses the existing signed history field and survives format-compatible reads.
     val deleted: Boolean get() = acknowledgedAtMillis == Long.MIN_VALUE
     val acknowledged: Boolean get() = acknowledgedAtMillis > 0L
-    val recoveryPending: Boolean get() = resumedAtMillis == 0L
+    val recoveryPending: Boolean
+        get() = kind == RecordingIncidentKind.UNEXPECTED_SHUTDOWN && resumedAtMillis == 0L
 }
 
 internal fun toggleRecordingIncidentAcknowledgement(
@@ -180,6 +183,43 @@ internal fun mergeRecordingIncidentEvidence(
     )
 }
 
+private data class AppProcessMarker(
+    val pid: Int,
+    val processStartedAtMillis: Long,
+)
+
+internal fun unexpectedAppExitShouldCreateIncident(reason: Int, status: Int): Boolean = when (reason) {
+    ApplicationExitInfo.REASON_CRASH,
+    ApplicationExitInfo.REASON_CRASH_NATIVE,
+    ApplicationExitInfo.REASON_ANR,
+    ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+    EXIT_REASON_ANOMALY,
+    -> true
+    ApplicationExitInfo.REASON_SIGNALED -> status in setOf(4, 6, 7, 8, 11) // SIGILL/ABRT/BUS/FPE/SEGV
+    else -> false
+}
+
+internal fun unexpectedProcessExitAlreadyRecorded(
+    incidents: List<RecordingIncident>,
+    pid: Int,
+    exitTimestampMillis: Long,
+    toleranceMillis: Long = 10_000L,
+): Boolean {
+    val tolerance = toleranceMillis.coerceAtLeast(0L)
+    val lowerBound = (exitTimestampMillis - tolerance).coerceAtLeast(0L)
+    val upperBound = if (Long.MAX_VALUE - exitTimestampMillis < tolerance) {
+        Long.MAX_VALUE
+    } else {
+        exitTimestampMillis + tolerance
+    }
+    return incidents.any { incident ->
+        incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR &&
+            incident.pid == pid &&
+            incident.description?.startsWith("Uncaught exception on ") == true &&
+            incident.occurredAtMillis in lowerBound..upperBound
+    }
+}
+
 private data class ActiveRecordingSessionMarker(
     val armed: Boolean,
     val pid: Int,
@@ -263,6 +303,45 @@ internal fun processLocalIncidentMarkerMatches(
     markerArmedAtMillis <= stopOccurredAtMillis
 
 
+internal fun unexpectedErrorIncidentDescription(
+    source: String,
+    error: Throwable,
+    maxChars: Int = 384,
+): String {
+    require(maxChars > 0)
+    val normalizedSource = source.trim().ifBlank { "Unexpected app error" }
+    val type = error::class.java.name
+    val message = error.message?.trim().orEmpty()
+    val frame = error.stackTrace.firstOrNull { it.className.startsWith("app.smallthingz.reverb") }
+        ?: error.stackTrace.firstOrNull()
+    val location = frame?.let { stack ->
+        buildString {
+            append(stack.className.substringAfterLast('.'))
+            append('.')
+            append(stack.methodName)
+            if (stack.lineNumber > 0) append(':').append(stack.lineNumber)
+        }
+    }.orEmpty()
+    val root = generateSequence(error.cause) { it.cause }.lastOrNull()
+        ?.takeIf { it !== error }
+    val rootDetail = root?.let { cause ->
+        val causeMessage = cause.message?.trim().orEmpty()
+        buildString {
+            append("; cause ")
+            append(cause::class.java.name)
+            if (causeMessage.isNotEmpty()) append(": ").append(causeMessage)
+        }
+    }.orEmpty()
+    return buildString {
+        append(normalizedSource)
+        append(": ")
+        append(type)
+        if (message.isNotEmpty()) append(": ").append(message)
+        if (location.isNotEmpty()) append(" @ ").append(location)
+        append(rootDetail)
+    }.take(maxChars)
+}
+
 internal fun completeRecordingIncidentDowntimes(
     incidents: List<RecordingIncident>,
     resumedAtMillis: Long,
@@ -284,13 +363,16 @@ internal fun completeRecordingIncidentDowntimes(
 
 internal object RecordingIncidentStore {
     private const val SESSION_MAGIC = 0x52495331 // RIS1
+    private const val PROCESS_MAGIC = 0x52495032 // RIP2
     private const val HISTORY_MAGIC = 0x52494831 // RIH1
     private const val SESSION_FORMAT_VERSION = 2
+    private const val PROCESS_FORMAT_VERSION = 1
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val HISTORY_FORMAT_VERSION = 2
     private const val MAX_INCIDENTS = 128
     private const val MAX_DESCRIPTION_CHARS = 384
     private const val SESSION_FILE_NAME = "recording-session.bin"
+    private const val PROCESS_FILE_NAME = "app-process.bin"
     private const val PENDING_SESSION_FILE_NAME = "recording-incident-pending.bin"
     private const val HISTORY_FILE_NAME = "recording-incidents.bin"
     private const val PENDING_MAGIC = 0x52495031 // RIP1
@@ -301,6 +383,87 @@ internal object RecordingIncidentStore {
     private val historyMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pendingServiceStopIncidentRetries = mutableListOf<PendingServiceStopIncidentRetry>()
     private val pendingCaptureInterruptionRetries = mutableListOf<PendingCaptureInterruptionRetry>()
+    private var lastUnexpectedErrorAtMillis = 0L
+
+    fun recordUnexpectedErrorInBackground(context: Context, source: String, error: Throwable) {
+        val appContext = context.applicationContext
+        val description = unexpectedErrorIncidentDescription(source, error, MAX_DESCRIPTION_CHARS)
+        historyMutationScope.launch {
+            try {
+                recordUnexpectedErrorDescription(appContext, description)
+            } catch (recordingFailure: Throwable) {
+                // Never recurse through the incident system when incident persistence itself fails.
+                Log.e("RecordingIncidentStore", "Unable to persist unexpected-error incident", recordingFailure)
+            }
+        }
+    }
+
+    fun recordUnexpectedError(context: Context, source: String, error: Throwable) {
+        recordUnexpectedErrorDescription(
+            context = context.applicationContext,
+            description = unexpectedErrorIncidentDescription(source, error, MAX_DESCRIPTION_CHARS),
+        )
+    }
+
+    @Synchronized
+    private fun recordUnexpectedErrorDescription(context: Context, description: String) {
+        val now = System.currentTimeMillis().coerceAtLeast(1L)
+        val occurredAtMillis = if (lastUnexpectedErrorAtMillis >= now && lastUnexpectedErrorAtMillis < Long.MAX_VALUE) {
+            lastUnexpectedErrorAtMillis + 1L
+        } else {
+            now
+        }
+        lastUnexpectedErrorAtMillis = occurredAtMillis
+        appendIncident(
+            context.applicationContext,
+            RecordingIncident(
+                occurredAtMillis = occurredAtMillis,
+                kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+                pid = Process.myPid(),
+                processStartedAtMillis = currentProcessStartedAtWallClockMillis(),
+                description = description,
+            ),
+        )
+    }
+
+    @Synchronized
+    fun recoverUnexpectedProcessExitAndMarkCurrent(context: Context) {
+        val appContext = context.applicationContext
+        val currentMarker = AppProcessMarker(
+            pid = Process.myPid(),
+            processStartedAtMillis = currentProcessStartedAtWallClockMillis(),
+        )
+        val file = processFile(appContext)
+        val previous = readProcessMarker(file)
+        if (previous != null && previous != currentMarker && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            historicalUnexpectedAppExit(appContext, previous)?.let { exit ->
+                val existing = readHistory(historyFile(appContext))
+                if (!unexpectedProcessExitAlreadyRecorded(existing, previous.pid, exit.timestamp)) {
+                    val description = exit.description
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.take(MAX_DESCRIPTION_CHARS)
+                        ?: "Previous app process ended unexpectedly"
+                    appendIncident(
+                        appContext,
+                        RecordingIncident(
+                            occurredAtMillis = exit.timestamp.coerceAtLeast(previous.processStartedAtMillis),
+                            kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+                            exitReason = exit.reason,
+                            exitStatus = exit.status,
+                            pid = exit.pid,
+                            importance = exit.importance,
+                            pssKb = exit.pss,
+                            rssKb = exit.rss,
+                            processStartedAtMillis = previous.processStartedAtMillis,
+                            description = description,
+                        ),
+                    )
+                }
+            }
+        }
+        writeProcessMarker(file, currentMarker)
+    }
 
     @Synchronized
     fun recoverPriorSessionIfNeeded(context: Context) {
@@ -857,6 +1020,25 @@ internal object RecordingIncidentStore {
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun historicalUnexpectedAppExit(
+        context: Context,
+        marker: AppProcessMarker,
+    ): ApplicationExitInfo? {
+        if (marker.pid <= 0 || marker.processStartedAtMillis <= 0L) return null
+        val manager = context.getSystemService(ActivityManager::class.java) ?: return null
+        val currentStartedAtMillis = currentProcessStartedAtWallClockMillis()
+        return manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
+            .asSequence()
+            .filter { info ->
+                info.pid == marker.pid &&
+                    info.timestamp >= marker.processStartedAtMillis &&
+                    (currentStartedAtMillis <= 0L || info.timestamp <= currentStartedAtMillis) &&
+                    unexpectedAppExitShouldCreateIncident(info.reason, info.status)
+            }
+            .minByOrNull(ApplicationExitInfo::getTimestamp)
+    }
+
     private fun historicalExit(
         context: Context,
         marker: ActiveRecordingSessionMarker,
@@ -998,6 +1180,7 @@ internal object RecordingIncidentStore {
     }.getOrDefault(0L)
 
     private fun sessionFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, SESSION_FILE_NAME))
+    private fun processFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME))
     private fun pendingSessionFile(context: Context) =
         AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
@@ -1022,6 +1205,26 @@ internal object RecordingIncidentStore {
         }
         if (!confirmFileDirectoryStateDurable(file.baseFile)) {
             throw IOException("Unable to persist incident-state removal: ${file.baseFile.absolutePath}")
+        }
+    }
+
+    private fun readProcessMarker(file: AtomicFile): AppProcessMarker? =
+        readAtomic(file, "app process marker") { input ->
+            requireFileHeader(input, PROCESS_MAGIC, PROCESS_FORMAT_VERSION, "app process marker")
+            val pid = input.readInt()
+            val processStartedAtMillis = input.readLong()
+            if (pid <= 0 || processStartedAtMillis <= 0L) {
+                throw IOException("Invalid app process marker")
+            }
+            AppProcessMarker(pid = pid, processStartedAtMillis = processStartedAtMillis)
+        }
+
+    private fun writeProcessMarker(file: AtomicFile, marker: AppProcessMarker) {
+        writeAtomic(file) { output ->
+            output.writeInt(PROCESS_MAGIC)
+            output.writeByte(PROCESS_FORMAT_VERSION)
+            output.writeInt(marker.pid)
+            output.writeLong(marker.processStartedAtMillis)
         }
     }
 

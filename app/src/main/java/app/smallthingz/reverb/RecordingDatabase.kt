@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.database.sqlite.SQLiteException
 import android.database.Cursor
 import android.database.DatabaseErrorHandler
@@ -250,6 +251,11 @@ private class PreservingRecordingDatabaseErrorHandler(
     private val databaseName: String,
 ) : DatabaseErrorHandler {
     override fun onCorruption(dbObj: SQLiteDatabase) {
+        RecordingIncidentStore.recordUnexpectedErrorInBackground(
+            context,
+            "Recording catalog corruption",
+            SQLiteDatabaseCorruptException("Recording catalog corruption detected"),
+        )
         val databaseFile = context.getDatabasePath(databaseName)
         val recoveryRoot = File(context.noBackupFilesDir, "recording-database-recovery")
         val closed = runCatching {
