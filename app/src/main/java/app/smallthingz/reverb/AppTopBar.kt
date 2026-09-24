@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,9 +33,12 @@ internal fun AppTopBar(
     barHeight: Dp = AppTopBarContentHeight,
 ) {
     val chrome = appChrome()
+    val noiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
     val buttonShape = RoundedCornerShape(15.dp)
     val topBarModifier = Modifier
         .fillMaxWidth()
+        .background(MaterialTheme.colorScheme.surface)
+        .appNoise(noiseBrush)
         .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
         .height(barHeight)
         .padding(horizontal = 14.dp)

@@ -287,6 +287,7 @@ fun SettingsScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val chrome = appChrome()
+    val topBarNoiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
 
     var originalSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
     var currentSnapshot by remember { mutableStateOf(SettingsSnapshot()) }
@@ -1152,6 +1153,9 @@ fun SettingsScreen(
         containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surface)
+                    .appNoise(topBarNoiseBrush),
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = Color.Transparent,

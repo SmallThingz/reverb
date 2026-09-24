@@ -264,6 +264,7 @@ fun FilesScreen(
     val density = LocalDensity.current
     val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
     val chrome = appChrome()
+    val topBarNoiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
     val activeMutationRecordingIds by recordingMutations.activeIds.collectAsState()
 
     var recordings by remember {
@@ -743,6 +744,7 @@ fun FilesScreen(
                         Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .appNoise(topBarNoiseBrush)
                             .height(AppTopBarContentHeight)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,

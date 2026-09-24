@@ -5,6 +5,7 @@ import android.app.ApplicationExitInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -208,6 +209,7 @@ internal fun IncidentsScreen(
     openProgress: () -> Float = { 1f },
 ) {
     val noiseBrush = rememberAppNoiseBrush()
+    val topBarNoiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
     Surface(
         modifier = modifier.graphicsLayer {
             val progress = openProgress().coerceIn(0f, 1f)
@@ -218,7 +220,13 @@ internal fun IncidentsScreen(
     ) {
         Column(Modifier.fillMaxSize().appNoise(noiseBrush)) {
             Row(
-                modifier = Modifier.fillMaxWidth().statusBarsPadding().height(AppTopBarContentHeight).padding(horizontal = 14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .appNoise(topBarNoiseBrush)
+                    .statusBarsPadding()
+                    .height(AppTopBarContentHeight)
+                    .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack, modifier = Modifier.size(46.dp)) {

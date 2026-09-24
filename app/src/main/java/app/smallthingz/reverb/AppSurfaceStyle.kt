@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -28,26 +29,30 @@ internal data class AppChrome(
     val border: Color,
 )
 
-private object AppNoiseTile {
-    @Volatile
-    private var cachedBrush: Brush? = null
+internal const val APP_NOISE_SEED_BACKGROUND = 0
+internal const val APP_NOISE_SEED_TOP_BAR = 0x5A17
 
-    fun brush(resources: android.content.res.Resources): Brush {
-        cachedBrush?.let { return it }
-        return synchronized(this) {
-            cachedBrush ?: run {
-                val image = checkNotNull(
-                    BitmapFactory.decodeResource(resources, R.drawable.settings_noise_tile),
-                ).asImageBitmap()
-                val shader = ImageShader(
-                    image = image,
-                    tileModeX = TileMode.Repeated,
-                    tileModeY = TileMode.Repeated,
-                )
-                object : ShaderBrush() {
-                    override fun createShader(size: Size): Shader = shader
-                }.also { cachedBrush = it }
+private object AppNoiseTile {
+    private val cachedBrushes = mutableMapOf<Int, Brush>()
+
+    fun brush(resources: android.content.res.Resources, seed: Int): Brush = synchronized(this) {
+        cachedBrushes[seed] ?: run {
+            val image = checkNotNull(
+                BitmapFactory.decodeResource(resources, R.drawable.settings_noise_tile),
+            ).asImageBitmap()
+            val shader = ImageShader(
+                image = image,
+                tileModeX = TileMode.Repeated,
+                tileModeY = TileMode.Repeated,
+            )
+            if (seed != APP_NOISE_SEED_BACKGROUND) {
+                val x = Math.floorMod(seed * 37, image.width).toFloat()
+                val y = Math.floorMod(seed * 61, image.height).toFloat()
+                shader.setLocalMatrix(Matrix().apply { setTranslate(x, y) })
             }
+            object : ShaderBrush() {
+                override fun createShader(size: Size): Shader = shader
+            }.also { cachedBrushes[seed] = it }
         }
     }
 }
@@ -65,9 +70,9 @@ internal fun appChrome(): AppChrome {
 }
 
 @Composable
-internal fun rememberAppNoiseBrush(): Brush {
+internal fun rememberAppNoiseBrush(seed: Int = APP_NOISE_SEED_BACKGROUND): Brush {
     val resources = LocalResources.current
-    return remember(resources) { AppNoiseTile.brush(resources) }
+    return remember(resources, seed) { AppNoiseTile.brush(resources, seed) }
 }
 
 internal fun Modifier.appNoise(brush: Brush): Modifier = drawBehind {
