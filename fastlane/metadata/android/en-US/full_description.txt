@@ -1,19 +1,26 @@
-Reverb keeps a rolling audio buffer on your Android device so you can save
-something that has just happened. Audio that you do not save is automatically
-discarded as the buffer rolls forward.
+Reverb lets you capture audio, keep a rolling history and save the parts you need.
 
-<b>Features</b>
+<b>Capture</b>
 <ul>
-<li>Disk-backed rolling buffer that survives app restarts</li>
-<li>Streamed WAV export without loading the full recording into memory</li>
-<li>Built-in playback, rename, delete, and move tools</li>
-<li>Configurable retention time and storage limits</li>
-<li>Hardware-aware audio format, sample rate, source, route, and channel options</li>
-<li>No ads, trackers, accounts, or network access</li>
+<li>Independent One-shot and Looping buffers</li>
+<li>Disk-backed audio history that restores across app restarts</li>
+<li>Configurable retention limits by time or size</li>
+<li>Hardware-aware audio format, sample rate, source, route and channel options</li>
 </ul>
 
-<b>Battery use</b>
+<b>Save and listen</b>
+<ul>
+<li>Select a range on the waveform and export it as WAV</li>
+<li>Listen while fine-tuning your selection</li>
+<li>Play saved recordings directly in the Library</li>
+<li>Trim into a new recording while preserving the original</li>
+<li>Rename, move and delete saved recordings</li>
+</ul>
 
+<b>Privacy</b>
+No ads, trackers or accounts. Reverb does not request network permission.
+
+<b>Battery use</b>
 Continuous microphone capture consumes power even though Reverb reduces work
-when its capture screen is not visible. Battery impact varies by device and is
-similar to continuous audio playback.
+when its capture screen is not visible. Battery use varies by device and
+recording settings.

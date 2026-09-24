@@ -21,6 +21,17 @@ Forked from `Echo`, now reworked and shipped as `Reverb`.
 - In-app player, rename, delete, and move flows
 - Hardware-aware sample format, rate, source, route, and channel selection
 
+## Screenshots
+
+<p>
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1-capture.png" width="230" alt="Capture screen with One-shot and Looping buffers" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2-library.png" width="230" alt="Library with saved recordings and inline waveform playback" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3-trim.png" width="230" alt="Non-destructive trimming with waveform selection controls" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4-settings.png" width="230" alt="Retention limits and audio settings" />
+</p>
+
+*Screenshots use sample recordings.*
+
 ## 📦 App
 
 - Package: `app.smallthingz.reverb`

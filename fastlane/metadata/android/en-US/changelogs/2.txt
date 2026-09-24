@@ -1,0 +1,4 @@
+Preserves recordings, buffer data and legacy settings when upgrading from 0.1.0.
+Fixes MediaStore exports and migration, and improves recording interruption history.
+Refines inline playback, trim seeking, predictive Back and buffer selection.
+Restores the Library Back button and hardens Quick Settings, service handoffs and storage recovery.
