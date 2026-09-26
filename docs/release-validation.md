@@ -38,14 +38,24 @@ This is one physical API 36 device, not an exhaustive Android/OEM/provider or li
 
 The original 20 September release APK was unsigned. Its locally signed release smoke-test copy used the debug key and was not a production distribution artifact. Nothing was published or pushed during that validation.
 
-## Production signing and screenshots: 24 September 2026
+## Production signing and screenshots: 24 September 2026; corrected 26 September 2026
 
-- Built version 0.1.1 (version code 2) from source commit `3df76aedea5d9a580486017978e56a727ccf3419` using the Gradle wrapper and the cached JDK 21 toolchain.
+- The final version 0.1.1 (version code 2) release APK was rebuilt from the exact `v0.1.1` tag,
+  commit `efa120c0d2dc148168187c85bce3c300a701a13f`, using the Gradle wrapper and the cached JDK 21
+  toolchain. The originally uploaded APK had been built from earlier commit
+  `3df76aedea5d9a580486017978e56a727ccf3419`; although later tag changes were documentation/store
+  metadata only, AGP embeds the Git revision in `META-INF/version-control-info.textproto`, so F-Droid's
+  reproducible-build comparison correctly rejected that artifact.
 - Used `~/.gradle/release.env` and `~/.gradle/release.keystore`, passing signing credentials as process-local Gradle property environment variables. Signing material remains outside the repository.
 - `:app:assembleRelease :app:testDebugUnitTest :app:lintRelease --offline --console=plain` succeeded. All 693 unit tests passed with no skips; release lint reported zero errors and 20 warnings.
 - The R8-minified release APK is signed with APK Signature Scheme v2. `apksigner verify` and 16 KiB page-aware `zipalign` verification passed. The APK certificate SHA-256 exactly matches the supplied keystore certificate: `3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe`.
-- APK SHA-256: `a92fc744640702a328ddf3712badc70652f49ff167a1f5145edc0f77d9d4a408`. The release package is `app.smallthingz.reverb`, targets API 37, requires API 28+, is not debuggable and has no network permission.
+- Corrected APK SHA-256: `1d9d21c7f45316074b8dddec9500f657a9afa48e1c57adb2fa4299d9784f06e7`.
+  The release package is `app.smallthingz.reverb`, targets API 37, requires API 28+, is not debuggable and
+  has no network permission.
 - Store screenshots are unedited 1080 x 2400 captures from the physical Xiaomi M2101K7BG on API 36. A separate debug installation, `app.smallthingz.reverb.screenshots`, used the same source commit with an application ID override. It contained synthetic sample WAV recordings and a silent sample capture buffer. The screenshots show the actual Capture, Library, Trim and Settings screens; they are not evidence that the production-signed APK was installed on the device.
 - The screenshot gallery lives in `fastlane/metadata/android/en-US/images/phoneScreenshots/` and is reused by the README. [F-Droid descriptions do not support embedded images](https://f-droid.org/en/docs/All_About_Descriptions_Graphics_and_Screenshots/); its gallery supplies them alongside the text.
 
-This signing check proves that the APK matches the supplied key. It does not establish whether that key matches a previously distributed APK or an F-Droid-signed installation. No remote release was published.
+The corrected APK and checksum are published on the existing GitHub `v0.1.1` release. A fresh download
+verifies with APK Signature Scheme v2, certificate SHA-256
+`3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe`, and embedded revision
+`efa120c0d2dc148168187c85bce3c300a701a13f`.

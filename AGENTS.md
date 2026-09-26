@@ -963,3 +963,6 @@
   fine-seek and boundary gestures must not execute normal-release playback or audition; range preview admission requires
   a visible resumed host, including delayed gesture cleanup. Inline trim Save stops preview before accepting the
   transaction.
+- F-Droid `Binaries:` releases are reproducible-build contracts: publish the developer-signed APK only from the exact
+  commit named by its version tag, and verify the APK's `META-INF/version-control-info.textproto` revision matches that
+  tag before upload. Documentation-only commits made after a build still change AGP's embedded VCS metadata.
