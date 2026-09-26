@@ -49,7 +49,7 @@ The original 20 September release APK was unsigned. Its locally signed release s
 - Used `~/.gradle/release.env` and `~/.gradle/release.keystore`, passing signing credentials as process-local Gradle property environment variables. Signing material remains outside the repository.
 - `:app:assembleRelease :app:testDebugUnitTest :app:lintRelease --offline --console=plain` succeeded. All 693 unit tests passed with no skips; release lint reported zero errors and 20 warnings.
 - The R8-minified release APK is signed with APK Signature Scheme v2. `apksigner verify` and 16 KiB page-aware `zipalign` verification passed. The APK certificate SHA-256 exactly matches the supplied keystore certificate: `3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe`.
-- Corrected APK SHA-256: `1d9d21c7f45316074b8dddec9500f657a9afa48e1c57adb2fa4299d9784f06e7`.
+- Final corrected APK SHA-256: `92cf5b1ef277d4af0e4c8db58d9b01f6521ecb02006f38403e2afffff33e1ffe`.
   The release package is `app.smallthingz.reverb`, targets API 37, requires API 28+, is not debuggable and
   has no network permission.
 - Store screenshots are unedited 1080 x 2400 captures from the physical Xiaomi M2101K7BG on API 36. A separate debug installation, `app.smallthingz.reverb.screenshots`, used the same source commit with an application ID override. It contained synthetic sample WAV recordings and a silent sample capture buffer. The screenshots show the actual Capture, Library, Trim and Settings screens; they are not evidence that the production-signed APK was installed on the device.
@@ -58,4 +58,7 @@ The original 20 September release APK was unsigned. Its locally signed release s
 The corrected APK and checksum are published on the existing GitHub `v0.1.1` release. A fresh download
 verifies with APK Signature Scheme v2, certificate SHA-256
 `3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe`, and embedded revision
-`efa120c0d2dc148168187c85bce3c300a701a13f`.
+`efa120c0d2dc148168187c85bce3c300a701a13f`. F-Droid's first retry then exposed a separate
+policy failure: AGP had added the `0x504B4453` dependency-metadata APK signing block. The final artifact
+removes only that extra signing-block entry while preserving the v2 signature. Copying its signature onto the
+unsigned APK produced by F-Droid job 16753289709 yields a byte-identical APK with the same SHA-256 above.

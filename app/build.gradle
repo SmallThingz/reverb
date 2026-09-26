@@ -63,6 +63,11 @@ android {
     compileSdk = 37
     buildToolsVersion = '37.0.0'
 
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig{
         applicationId "app.smallthingz.reverb"
         minSdk = 28

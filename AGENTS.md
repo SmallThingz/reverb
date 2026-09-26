@@ -966,3 +966,5 @@
 - F-Droid `Binaries:` releases are reproducible-build contracts: publish the developer-signed APK only from the exact
   commit named by its version tag, and verify the APK's `META-INF/version-control-info.textproto` revision matches that
   tag before upload. Documentation-only commits made after a build still change AGP's embedded VCS metadata.
+- Keep AGP dependency metadata disabled for release APKs. F-Droid rejects the `0x504B4453` "Dependency metadata"
+  APK signing block even when the source build itself is reproducible.
