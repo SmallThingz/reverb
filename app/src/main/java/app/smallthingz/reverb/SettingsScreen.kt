@@ -873,6 +873,11 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
         if (treeUri == null) return@rememberLauncherForActivityResult
+        val canonicalTree = canonicalDocumentTreeId(treeUri.toString())?.let(Uri::parse)
+        if (canonicalTree == null) {
+            AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
+            return@rememberLauncherForActivityResult
+        }
         val permissionTaken = runCatching {
             context.contentResolver.takePersistableUriPermission(
                 treeUri,
@@ -883,8 +888,8 @@ fun SettingsScreen(
             AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
-        selectedExportTreeUri = treeUri
-        exportPathText = describeOutputDirectory(context, treeUri)
+        selectedExportTreeUri = canonicalTree
+        exportPathText = describeOutputDirectory(context, canonicalTree)
         currentSnapshot = currentSettingsSnapshot()
         pushUndoState()
         refreshMoveRecordingsAvailability()

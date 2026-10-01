@@ -25,6 +25,12 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         ERROR_AFTER_RENAME,
         UNAVAILABLE_AFTER_RENAME,
         DUPLICATE_LISTING_AFTER_RENAME,
+        UNKNOWN_SIZE,
+        UNKNOWN_MODIFIED,
+        ZERO_MODIFIED,
+        METADATA_APPEARS_AFTER_WRITE,
+        UNKNOWN_SIZE_NONEMPTY,
+        UNKNOWN_METADATA_PIPE,
     }
 
     private data class Entry(var file: File, val mimeType: String)
@@ -37,6 +43,11 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         private set
     var oldIdQueries = 0
         private set
+    var readOpenCalls = 0
+        private set
+    var writeOpenCalls = 0
+        private set
+    private var substitutedRead = -1
 
     override fun onCreate(): Boolean {
         root = File(requireNotNull(context).filesDir, "reliability-documents")
@@ -52,6 +63,34 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         renamed = false
         deleteCalls = 0
         oldIdQueries = 0
+        readOpenCalls = 0
+        writeOpenCalls = 0
+        substitutedRead = -1
+    }
+
+    @Synchronized
+    fun substituteReadAfter(reads: Int) {
+        require(reads > 0)
+        substitutedRead = readOpenCalls + reads
+    }
+
+    @Synchronized
+    fun replaceDocumentWithSameBytes(documentId: String) {
+        val entry = requireNotNull(entries[documentId])
+        val replacement = File(root, ".replacement-${java.util.UUID.randomUUID()}")
+        entry.file.copyTo(replacement)
+        check(entry.file.renameTo(File(root, ".prior-${java.util.UUID.randomUUID()}")))
+        check(replacement.renameTo(entry.file))
+    }
+
+    @Synchronized
+    fun restoreExistingDocument(documentId: String) {
+        check(documentId.startsWith("$ROOT_ID/"))
+        val name = documentId.removePrefix("$ROOT_ID/")
+        check(File(name).name == name)
+        val file = File(root, name)
+        check(file.isFile)
+        entries[documentId] = Entry(file, "audio/wav")
     }
 
     @Synchronized
@@ -123,6 +162,7 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         require(File(displayName).name == displayName)
         val file = File(root, displayName)
         check(file.createNewFile())
+        if (mode == Mode.UNKNOWN_SIZE_NONEMPTY) file.writeText("Existing nonempty fixture bytes")
         val id = "$ROOT_ID/$displayName"
         entries[id] = Entry(file, mimeType)
         return id
@@ -172,6 +212,19 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     @Synchronized
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         val entry = entries[documentId] ?: throw FileNotFoundException(documentId)
+        if (mode == "r") {
+            readOpenCalls++
+            if (this.mode == Mode.UNKNOWN_METADATA_PIPE) {
+                val pipe = ParcelFileDescriptor.createPipe()
+                pipe[1].close()
+                return pipe[0]
+            }
+            if (readOpenCalls == substitutedRead) {
+                val substitute = File(root, ".substitute-${java.util.UUID.randomUUID()}")
+                entry.file.copyTo(substitute)
+                return ParcelFileDescriptor.open(substitute, ParcelFileDescriptor.MODE_READ_ONLY)
+            }
+        } else writeOpenCalls++
         return ParcelFileDescriptor.open(entry.file, ParcelFileDescriptor.parseMode(mode))
     }
 
@@ -184,8 +237,15 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
                 Document.COLUMN_DOCUMENT_ID -> id
                 Document.COLUMN_DISPLAY_NAME -> file.name
                 Document.COLUMN_MIME_TYPE -> mime
-                Document.COLUMN_SIZE -> file.length()
-                Document.COLUMN_LAST_MODIFIED -> file.lastModified().coerceAtLeast(1L)
+                Document.COLUMN_SIZE -> if (
+                    mode == Mode.UNKNOWN_SIZE || mode == Mode.UNKNOWN_SIZE_NONEMPTY ||
+                    mode == Mode.UNKNOWN_METADATA_PIPE || (mode == Mode.METADATA_APPEARS_AFTER_WRITE && file.length() == 0L)
+                ) null else file.length()
+                Document.COLUMN_LAST_MODIFIED -> when (mode) {
+                    Mode.UNKNOWN_MODIFIED, Mode.UNKNOWN_METADATA_PIPE -> null
+                    Mode.ZERO_MODIFIED -> 0L
+                    else -> file.lastModified().coerceAtLeast(1L)
+                }
                 Document.COLUMN_FLAGS -> if (mime == Document.MIME_TYPE_DIR) {
                     Document.FLAG_DIR_SUPPORTS_CREATE
                 } else {

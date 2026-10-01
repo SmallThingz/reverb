@@ -448,7 +448,12 @@
   race.
 - SAF document identity metadata is sampled from one strict provider query row. Never compose destructive provider
   identity from separate size/modified-time calls that can straddle a replacement and synthesize a revision that never
-  existed. Missing size/revision metadata is non-authoritative.
+  existed. Missing size/revision metadata alone is non-authoritative, but a stable regular-file descriptor may provide
+  URI/device/inode/nanosecond-ctime/size proof instead. Bind every actual payload descriptor to that native proof before
+  reading/writing and after verification; native identity must remain selectable after provider metadata becomes known,
+  including journal replay after process death. Known-row discovery must prefer that still-verifiable native identity so
+  optional metadata hydration does not invalidate unchanged playback/waveform state; actual replacements still need a new
+  validated row. Pipes or unprovable descriptors remain non-authoritative.
 - MediaStore identity likewise requires a known size plus a real generation or modified-time revision from the same
   query row; nullable metadata is uncertainty, not zero-valued identity.
 - Durable capture intent/destination changes use synchronous persistence; startup decodes those authority fields
@@ -633,6 +638,16 @@
   exact revision; writes, replacements, digest verification, and descriptor checks must retain their existing guards.
 - Audio read failure handling must retain the read's accepted command generation even when failed recovery has already
   released AudioRecord and cleared its mutable generation. Genuine newer commands still supersede the old failure.
+- Directory-object identity must survive its own child creates/copies/renames; ctime is a file revision, not immutable
+  directory identity. Native directory durability barriers pin a no-follow descriptor and verify device/inode/path
+  continuity; database-preservation source bytes and membership still require their independent frozen proofs.
+- External document-tree URI spelling is normalized at picker/configuration/export/list boundaries. Durable journal
+  identities remain strictly canonical; normalization must preserve authority and decoded tree ID and reject malformed
+  UTF-8, queries, fragments, child-document scopes, and embedded NUL rather than silently redirecting authority.
+- Recorder state delivery snapshots settings and counters together on the audio thread. A newer capture command or export
+  acceptance/terminal before main-thread delivery requires resampling; storage-read failure reports unavailable rather
+  than inventing healthy empty buffers. Queued Quick Settings renders read the current memory snapshot at delivery,
+  never the older snapshot captured when the render was posted.
 - Use the opt-in isolated reliability build and its real-provider/process-death fixtures in scripts/README-reliability.md
   for export/capture regressions. Never install those fixtures over the normal Reverb package or use real recordings.
 - Provider rename transport/row-count failure is state-uncertain, not automatic failure: recover success only when the

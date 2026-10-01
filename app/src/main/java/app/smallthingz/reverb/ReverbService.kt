@@ -3013,9 +3013,18 @@ class ReverbService : Service() {
                 val listening = isLogicalListeningState(state, isListeningEnabled())
                 val exporting = hasActiveExport()
                 val activeBuffer = activeBufferSlot
+                val sampledOneShotEnabled = oneShotBufferEnabled
+                val sampledLoopingEnabled = loopingBufferEnabled
+                val sampledRetentionMode = configuredRetentionMode
                 mainHandler.post {
                     if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
                         deliverUnavailableState(callback)
+                        return@post
+                    }
+                    if (commandGeneration != listeningCommandGeneration.get() || exporting != hasActiveExport()) {
+                        // Start/Stop and export acceptance/terminal can win while this snapshot
+                        // is queued on main. Resample instead of replaying stale control state.
+                        getState(callback)
                         return@post
                     }
                     callback.state(
@@ -3026,36 +3035,16 @@ class ReverbService : Service() {
                         oneShotBytes,
                         loopingSeconds,
                         loopingBytes,
-                        oneShotBufferEnabled,
+                        sampledOneShotEnabled,
                         oneShotFull,
-                        loopingBufferEnabled,
-                        configuredRetentionMode,
+                        sampledLoopingEnabled,
+                        sampledRetentionMode,
                         exporting,
                     )
                 }
             } catch (error: Exception) {
                 reportPersistentStoreFailure("read recorder state", error)
-                val listening = isLogicalListeningState(state, isListeningEnabled())
-                mainHandler.post {
-                    if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
-                        deliverUnavailableState(callback)
-                        return@post
-                    }
-                    callback.state(
-                        commandGeneration,
-                        listening,
-                        activeBufferSlot,
-                        0f,
-                        0L,
-                        0f,
-                        0L,
-                        oneShotBufferEnabled,
-                        false,
-                        loopingBufferEnabled,
-                        configuredRetentionMode,
-                        hasActiveExport(),
-                    )
-                }
+                postUnavailableState(callback)
             }
         }) {
             postUnavailableState(callback)

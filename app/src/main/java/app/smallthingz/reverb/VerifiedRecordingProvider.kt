@@ -68,7 +68,7 @@ internal fun buildVerifiedProviderUri(
     }
     val source = request.sourceId.toUri()
     require(source.scheme == "content") { "Provider recording must use a content URI" }
-    val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source)
+    val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source, request.expectedIdentity)
     check(request.expectedIdentity.isNotBlank() &&
         providerRecordingIdentityMatches(request.expectedIdentity, currentIdentity)
     ) { "Recording changed in provider: ${request.sourceId}" }
@@ -110,7 +110,7 @@ class VerifiedRecordingProvider : ContentProvider() {
         val source = request.sourceId.toUri()
         if (source.scheme != "content") throw FileNotFoundException("Invalid recording source")
 
-        val before = resolveProviderRecordingIdentity(context, request.storageType, source)
+        val before = resolveProviderRecordingIdentity(context, request.storageType, source, request.expectedIdentity)
         if (!providerRecordingIdentityMatches(request.expectedIdentity, before)) {
             throw FileNotFoundException("Recording changed before it was opened")
         }
@@ -120,9 +120,10 @@ class VerifiedRecordingProvider : ContentProvider() {
             throw FileNotFoundException("Unable to open recording: ${error.message.orEmpty()}")
         } ?: throw FileNotFoundException("Unable to open recording")
 
-        val after = resolveProviderRecordingIdentity(context, request.storageType, source)
+        val after = resolveProviderRecordingIdentity(context, request.storageType, source, request.expectedIdentity)
         if (!providerRecordingIdentityMatches(request.expectedIdentity, after) ||
-            !providerRecordingIdentityMatches(before, after)
+            !providerRecordingIdentityMatches(before, after) ||
+            !providerDescriptorMatchesIdentity(request.expectedIdentity, descriptor.fileDescriptor)
         ) {
             throwAfterClosePreservingPrimary(
                 FileNotFoundException("Recording changed while it was opened"),
@@ -138,7 +139,7 @@ class VerifiedRecordingProvider : ContentProvider() {
         val context = context ?: return null
         val source = request.sourceId.toUri()
         if (source.scheme != "content") return null
-        val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source)
+        val currentIdentity = resolveProviderRecordingIdentity(context, request.storageType, source, request.expectedIdentity)
         return verifiedProviderMimeType(request, currentIdentity)
     }
 
@@ -167,7 +168,7 @@ class VerifiedRecordingProvider : ContentProvider() {
         val context = context ?: return false
         val source = request.sourceId.toUri()
         if (source.scheme != "content") return false
-        val current = resolveProviderRecordingIdentity(context, request.storageType, source)
+        val current = resolveProviderRecordingIdentity(context, request.storageType, source, request.expectedIdentity)
         return providerRecordingIdentityMatches(request.expectedIdentity, current)
     }
 

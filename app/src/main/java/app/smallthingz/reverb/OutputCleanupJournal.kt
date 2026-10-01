@@ -474,10 +474,14 @@ internal fun verifiedExportStagingFingerprint(
     id: String,
 ): StableOutputFingerprint? {
     val rawEntries = synchronized(verifiedExportStagingLock) { verifiedExportStagingEntriesLocked(context) }
-    val fingerprint = readStableOutputFingerprint(context, storageType, id) ?: return null
-    return fingerprint.takeIf {
-        verifiedExportStagingHasFingerprint(rawEntries, storageType, id, fingerprint)
+    val preferences = rawEntries.mapNotNull { raw ->
+        decodeVerifiedExportStagingRecord(raw)?.takeIf { it.storageType == storageType && it.id == id }
+    }.distinctBy { it.providerIdentity?.let(::parseDocumentNativeIdentity) != null }
+    for (record in preferences) {
+        val fingerprint = readStableOutputFingerprint(context, storageType, id, record.providerIdentity) ?: continue
+        if (verifiedExportStagingHasFingerprint(rawEntries, storageType, id, fingerprint)) return fingerprint
     }
+    return null
 }
 
 internal fun verifiedExportStagingHasFingerprint(
@@ -536,7 +540,8 @@ internal fun suppressAndDeleteOutputTarget(
         OutputCleanupAssetState.PRESENT -> Unit
     }
 
-    val current = readStableOutputFingerprint(context, target.storageType, id) ?: return false
+    val current = readStableOutputFingerprint(context, target.storageType, id, expectedFingerprint.providerIdentity)
+        ?: return false
     if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) return false
 
     if (exactEntry == null) {
@@ -628,7 +633,8 @@ internal fun retryPendingOutputCleanup(context: Context) {
             OutputCleanupAssetState.UNAVAILABLE -> continue
             OutputCleanupAssetState.PRESENT -> Unit
         }
-        val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id) ?: continue
+        val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id, record.providerIdentity)
+            ?: continue
         when (classifyPendingOutputCleanup(
             record,
             fingerprint.digest.byteCount,
@@ -741,6 +747,7 @@ internal fun readStableOutputFingerprint(
     context: Context,
     storageType: RecordingStorageType,
     id: String,
+    preferredIdentity: String? = null,
 ): StableOutputFingerprint? = runCatching {
     when (storageType) {
         RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id))
@@ -748,7 +755,7 @@ internal fun readStableOutputFingerprint(
         RecordingStorageType.MEDIASTORE,
         -> {
             val uri = id.toUri()
-            val before = resolveProviderRecordingIdentity(context, storageType, uri)
+            val before = resolveProviderRecordingIdentity(context, storageType, uri, preferredIdentity)
                 .takeIf { it.isNotBlank() } ?: return@runCatching null
             val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
                 ?: return@runCatching null
@@ -756,11 +763,15 @@ internal fun readStableOutputFingerprint(
                 ParcelFileDescriptor.AutoCloseInputStream(opened)
             }
             input.use { source ->
-                val afterOpen = resolveProviderRecordingIdentity(context, storageType, uri)
-                if (!providerRecordingIdentityMatches(before, afterOpen)) return@use null
+                val afterOpen = resolveProviderRecordingIdentity(context, storageType, uri, before)
+                if (!providerRecordingIdentityMatches(before, afterOpen) ||
+                    !providerDescriptorMatchesIdentity(before, source.fd)
+                ) return@use null
                 val digest = sha256(source)
-                val afterRead = resolveProviderRecordingIdentity(context, storageType, uri)
-                if (!providerReadRemainsStable(before, afterOpen, afterRead)) return@use null
+                val afterRead = resolveProviderRecordingIdentity(context, storageType, uri, before)
+                if (!providerReadRemainsStable(before, afterOpen, afterRead) ||
+                    !providerDescriptorMatchesIdentity(before, source.fd)
+                ) return@use null
                 StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
             }
         }
@@ -869,7 +880,8 @@ private fun pendingProviderOutputCleanupStillMatches(
     record: PendingOutputCleanupRecord,
 ): Boolean {
     if (record.storageType == RecordingStorageType.FILE || record.providerIdentity.isNullOrBlank()) return false
-    val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id) ?: return false
+    val fingerprint = readStableOutputFingerprint(context, record.storageType, record.id, record.providerIdentity)
+        ?: return false
     return pendingOutputCleanupMatches(
         record,
         fingerprint.digest.byteCount,

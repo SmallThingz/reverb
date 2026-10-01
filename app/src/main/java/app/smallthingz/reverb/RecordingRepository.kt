@@ -1562,6 +1562,7 @@ internal fun recordingCatalogPostconditionObservation(
             context = context,
             storageType = recording.storageType,
             uri = Uri.parse(recording.id),
+            preferredIdentity = recording.fileIdentity,
         )
         RecordingCatalogPostconditionObservation(
             identityMatches = observed != null &&

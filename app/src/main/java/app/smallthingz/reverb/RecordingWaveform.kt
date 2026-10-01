@@ -192,7 +192,9 @@ internal class RecordingPcm16MonoReader internal constructor(
                         throw IOException("Recording identity is unavailable in provider")
                     }
                     val uri = recording.id.toUri()
-                    val beforeOpenIdentity = resolveProviderRecordingIdentity(context, recording.storageType, uri)
+                    val beforeOpenIdentity = resolveProviderRecordingIdentity(
+                        context, recording.storageType, uri, recording.fileIdentity,
+                    )
                     if (!providerRecordingIdentityMatches(recording.fileIdentity, beforeOpenIdentity)) {
                         throw IOException("Recording changed in provider")
                     }
@@ -202,20 +204,27 @@ internal class RecordingPcm16MonoReader internal constructor(
                         ParcelFileDescriptor.AutoCloseInputStream(opened)
                     }
                     try {
+                        val validateRead = {
+                            recordingContentIdentityMatches(context, recording) &&
+                                providerDescriptorMatchesIdentity(recording.fileIdentity, input.fd)
+                        }
+                        if (!providerDescriptorMatchesIdentity(recording.fileIdentity, input.fd)) {
+                            throw IOException("Recording descriptor changed in provider while opening")
+                        }
                         val layout = consumeProviderReadAfterVerifiedHandoff(
                             expectedIdentity = recording.fileIdentity,
                             beforeOpenIdentity = beforeOpenIdentity,
                             afterOpenIdentity = {
-                                resolveProviderRecordingIdentity(context, recording.storageType, uri)
+                                resolveProviderRecordingIdentity(context, recording.storageType, uri, recording.fileIdentity)
                             },
                             consume = { readWavPcmLayout(input.channel) },
                         )
-                        if (!recordingContentIdentityMatches(context, recording)) {
+                        if (!validateRead()) {
                             throw IOException("Recording changed in provider while opening")
                         }
                         RecordingPcm16MonoReader(
                             channel = input.channel,
-                            validateRead = { recordingContentIdentityMatches(context, recording) },
+                            validateRead = validateRead,
                             closeAction = input::close,
                             layout = layout,
                         )
@@ -351,7 +360,10 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
             ParcelFileDescriptor.AutoCloseInputStream(opened)
         }
         input.use { source ->
-            val sourceStillCurrent = { recordingContentIdentityMatches(context, recording) }
+            val sourceStillCurrent = {
+                recordingContentIdentityMatches(context, recording) &&
+                    providerDescriptorMatchesIdentity(recording.fileIdentity, source.fd)
+            }
             if (!sourceStillCurrent()) {
                 throw IOException("Recording changed in provider while opening")
             }

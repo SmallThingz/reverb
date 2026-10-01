@@ -193,6 +193,11 @@ internal fun oneShotFullPreferenceRollbackCorrection(
 ): Boolean? =
     latestRuntimeValue?.takeIf { currentRuntimeGeneration != rollbackGeneration }
 
+internal fun recordingTileRefreshTask(
+    currentSnapshot: () -> RecordingTileSnapshot,
+    render: (RecordingTileSnapshot) -> Unit,
+): Runnable = Runnable { render(currentSnapshot()) }
+
 internal object RecordingQuickTileStateCache {
     private val stateLock = Any()
     private val oneShotFullPreferenceLock = Any()
@@ -591,13 +596,15 @@ internal object RecordingQuickTiles {
                 pendingHandoff = null
             }
         }
-        val refreshConnected = Runnable {
+        val refreshConnected = recordingTileRefreshTask(RecordingQuickTileStateCache::readNonBlocking) { current ->
+            // A queued render may outlive a Stop, handoff, or Service teardown. The memory
+            // cache owns the latest state; never replay the snapshot captured before posting.
             val services = synchronized(listeningServices) { listeningServices.keys.toList() }
             // Deactivate the old recording tile before activating the new one. This prevents
             // a frame where SystemUI can render both buffers ACTIVE during a handoff.
             services
-                .sortedBy { service -> service.refreshPriority(snapshot) }
-                .forEach { service -> service.refreshFromSnapshot(snapshot) }
+                .sortedBy { service -> service.refreshPriority(current) }
+                .forEach { service -> service.refreshFromSnapshot(current) }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) refreshConnected.run()
         else mainHandler.post(refreshConnected)

@@ -21,6 +21,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,6 +31,7 @@ import java.io.OutputStream
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.channels.FileChannel
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
@@ -187,6 +189,34 @@ internal fun documentTreeIdIsValid(id: String): Boolean {
     return tree.documentId == null
 }
 
+/** Normalize external URI spelling once; durable journals still require the canonical form. */
+internal fun canonicalDocumentTreeId(id: String): String? = runCatching {
+    val uri = URI(id)
+    if (uri.scheme != "content" || uri.authority.isNullOrBlank() ||
+        uri.rawAuthority != uri.authority || uri.rawQuery != null || uri.rawFragment != null
+    ) return@runCatching null
+    val segments = uri.rawPath.orEmpty().split('/')
+    if (segments.size != 3 || segments[0].isNotEmpty() || segments[1] != "tree") return@runCatching null
+    val raw = segments[2]
+    val bytes = ByteArrayOutputStream(raw.length)
+    var offset = 0
+    while (offset < raw.length) {
+        if (raw[offset] == '%') {
+            bytes.write(raw.substring(offset + 1, offset + 3).toInt(16))
+            offset += 3
+        } else {
+            val end = raw.indexOf('%', offset).takeIf { it >= 0 } ?: raw.length
+            bytes.write(raw.substring(offset, end).toByteArray(StandardCharsets.UTF_8))
+            offset = end
+        }
+    }
+    // Reject malformed UTF-8 instead of silently retargeting it to a replacement glyph.
+    val decoded = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
+    if (decoded.isBlank() || decoded.any { it == '\u0000' }) return@runCatching null
+    val normalized = "content://${uri.authority}/tree/${androidUriEncodeComponent(decoded)}"
+    normalized.takeIf(::documentTreeIdIsValid)
+}.getOrNull()
+
 internal fun documentRecordingIdIsValid(id: String): Boolean =
     parseDocumentStorageScope(id)?.documentId != null
 
@@ -291,15 +321,13 @@ private fun configuredExportTreePreferenceRaw(context: Context): String? {
 
 fun getConfiguredExportTreeUri(context: Context): Uri? {
     val raw = configuredExportTreePreferenceRaw(context) ?: return null
-    if (!configuredExportTreePreferenceIsUsable(raw)) {
-        throw IllegalStateException("Unreadable durable export tree authority")
-    }
-    return raw.toUri()
+    return canonicalDocumentTreeId(raw)?.toUri()
+        ?: throw IllegalStateException("Unreadable durable export tree authority")
 }
 
 internal fun getConfiguredExportTreeUriForSettings(context: Context): Uri? {
     val raw = getRecorderPreferences(context).safeString(PrefKey.EXPORT_DIRECTORY_URI) ?: return null
-    return raw.takeIf(::documentTreeIdIsValid)?.toUri()
+    return canonicalDocumentTreeId(raw)?.toUri()
 }
 
 internal inline fun commitConfiguredExportTreeUriChange(
@@ -315,7 +343,7 @@ fun setConfiguredExportTreeUri(
     context: Context,
     treeUri: Uri?,
 ): Boolean {
-    val updatedValue = treeUri?.toString()
+    val updatedValue = treeUri?.let { canonicalDocumentTreeId(it.toString()) ?: return false }
     if (!configuredExportTreePreferenceIsUsable(updatedValue)) return false
     val preferences = getRecorderPreferences(context)
     val previousValue = preferences.snapshotDurablePreferenceValue(PrefKey.EXPORT_DIRECTORY_URI)
@@ -344,9 +372,9 @@ fun getOutputDirectoryId(
     treeUri: Uri?,
 ): String {
     if (treeUri != null) {
-        val id = treeUri.toString()
-        require(documentTreeIdIsValid(id)) { "Output directory is not a canonical document tree" }
-        return id
+        return requireNotNull(canonicalDocumentTreeId(treeUri.toString())) {
+            "Output directory is not a valid document tree"
+        }
     }
     return if (usesMediaStoreDefaultStorage()) {
         MEDIA_STORE_DIRECTORY_ID
@@ -735,10 +763,11 @@ internal fun createOutputTargetInDirectory(
     startedAtMillis: Long,
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
-    if (targetTreeUri != null && !documentTreeIdIsValid(targetTreeUri.toString())) {
-        throw IOException("Output destination is not a canonical document tree")
+    val canonicalTree = targetTreeUri?.let {
+        canonicalDocumentTreeId(it.toString())?.toUri()
+            ?: throw IOException("Output destination is not a valid document tree")
     }
-    return if (targetTreeUri == null) {
+    return if (canonicalTree == null) {
         if (usesMediaStoreDefaultStorage()) {
             createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
         } else {
@@ -750,7 +779,7 @@ internal fun createOutputTargetInDirectory(
         }
     } else {
         createDocumentOutputTarget(
-            context, targetTreeUri, requestedDisplayName, mimeType, startedAtMillis, stagingKind,
+            context, canonicalTree, requestedDisplayName, mimeType, startedAtMillis, stagingKind,
         )
     }
 }
@@ -778,6 +807,9 @@ fun openWritableParcelFileDescriptor(
             throw IOException("Output staging descriptor is no longer empty: ${target.id}")
         }
         requireWritableStagingTargetStillEmpty(context, target)
+        if (!providerDescriptorMatchesIdentity(target.stagingIdentity, descriptor.fileDescriptor)) {
+            throw IOException("Output descriptor does not match its created provider object: ${target.id}")
+        }
         if (target.storageType == RecordingStorageType.FILE &&
             !stagingFileDescriptorMatchesCreation(
                 expectedIdentity = target.stagingIdentity,
@@ -843,7 +875,7 @@ private fun requireCurrentOutputFingerprint(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
 ) {
-    val current = readStableOutputFingerprint(context, target.storageType, target.id)
+    val current = readStableOutputFingerprint(context, target.storageType, target.id, expectedFingerprint.providerIdentity)
         ?: throw IOException("Unable to bind output staging to a stable object")
     if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) {
         throw IOException("Output staging changed after verification")
@@ -1242,6 +1274,7 @@ private fun readStableDocumentPublicationObservation(
     treeUri: Uri,
     sourceUri: Uri,
     finalDisplayName: String,
+    preferredIdentity: String? = null,
 ): ObservedDocumentPublication? {
     fun candidate(): DocumentTreeEntry? = queryDocumentTreeEntries(context, treeUri)
         .filter { entry -> entry.isFile && entry.name == finalDisplayName }
@@ -1252,6 +1285,7 @@ private fun readStableDocumentPublicationObservation(
         context,
         RecordingStorageType.DOCUMENT,
         before.uri.toString(),
+        preferredIdentity,
     ) ?: return null
     val after = candidate() ?: return null
     if (before.uri != after.uri) return null
@@ -1340,7 +1374,7 @@ private fun finalizeDocumentOutputTarget(
     val renamedUri = treeScopedDirectRenamedUri ?: run {
         val failure = requireNotNull(renameFailure)
         val observed = runCatching {
-            readStableDocumentPublicationObservation(context, treeUri, sourceUri, finalName)
+            readStableDocumentPublicationObservation(context, treeUri, sourceUri, finalName, expectedFingerprint.providerIdentity)
         }.onFailure { error ->
             Log.w(TAG, "Unable to resolve ambiguous document publication $sourceUri", error)
         }.getOrNull()
@@ -1365,7 +1399,9 @@ private fun finalizeDocumentOutputTarget(
         requireNotNull(observed).uri
     }
     val published = recoveredPublication?.state?.fingerprint
-        ?: readStableOutputFingerprint(context, RecordingStorageType.DOCUMENT, renamedUri.toString())
+        ?: readStableOutputFingerprint(
+            context, RecordingStorageType.DOCUMENT, renamedUri.toString(), expectedFingerprint.providerIdentity,
+        )
     if (published == null) {
         // renameDocument() already returned a publication URI. If later provider reads lose
         // identity/content proof, keep that visible candidate out of Library without deriving
@@ -1409,7 +1445,7 @@ private fun finalizeDocumentOutputTarget(
     val publishedIdentity = published.providerIdentity
         ?.takeIf { it.isNotBlank() }
         ?: throw IOException("Published document recording has no stable identity")
-    val metadata = resolveProviderCatalogObservation(context, RecordingStorageType.DOCUMENT, renamedUri)
+    val metadata = resolveProviderCatalogObservation(context, RecordingStorageType.DOCUMENT, renamedUri, publishedIdentity)
     if (!documentPublishedNameIsVerified(publishedIdentity, metadata)) {
         // A provider can return success without doing the rename. Never report a hidden
         // staging entry as saved, and never synthesize a name when its query failed. A benign
@@ -1563,33 +1599,12 @@ internal fun resolveProviderCatalogObservation(
     context: Context,
     storageType: RecordingStorageType,
     uri: Uri,
+    preferredIdentity: String? = null,
 ): ProviderCatalogObservation? = when (storageType) {
     RecordingStorageType.FILE -> null
-    RecordingStorageType.DOCUMENT -> runCatching {
-        context.contentResolver.query(
-            uri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_SIZE,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-            ),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst() || cursor.isNull(0)) return@use null
-            ProviderCatalogObservation(
-                displayName = cursor.getString(0),
-                identity = documentProviderIdentityFromMetadata(
-                    id = uri.toString(),
-                    sizeKnown = !cursor.isNull(1),
-                    sizeBytes = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
-                    modifiedKnown = !cursor.isNull(2),
-                    modifiedMillis = if (cursor.isNull(2)) 0L else cursor.getLong(2).coerceAtLeast(0L),
-                ),
-            )
-        }
-    }.getOrNull()
+    RecordingStorageType.DOCUMENT -> readDocumentCatalogObservation(
+        context, uri, preferNative = preferredIdentity?.let(::parseDocumentNativeIdentity) != null,
+    )
     RecordingStorageType.MEDIASTORE -> runCatching {
         val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         val projection = if (useGeneration) {
@@ -1647,32 +1662,12 @@ internal fun resolveProviderRecordingIdentity(
     context: Context,
     storageType: RecordingStorageType,
     uri: Uri,
+    preferredIdentity: String? = null,
 ): String = when (storageType) {
     RecordingStorageType.FILE -> ""
-    RecordingStorageType.DOCUMENT -> runCatching {
-        // Length and revision must come from one provider row observation. Separate DocumentFile
-        // calls can straddle a replacement and synthesize an identity tuple that never belonged
-        // to one object, which is unsafe when this identity later authorizes rename/delete/copy.
-        context.contentResolver.query(
-            uri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_SIZE,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-            ),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use ""
-            documentProviderIdentityFromMetadata(
-                id = uri.toString(),
-                sizeKnown = !cursor.isNull(0),
-                sizeBytes = if (cursor.isNull(0)) 0L else cursor.getLong(0).coerceAtLeast(0L),
-                modifiedKnown = !cursor.isNull(1),
-                modifiedMillis = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
-            )
-        } ?: ""
-    }.getOrDefault("")
+    RecordingStorageType.DOCUMENT -> readDocumentCatalogObservation(
+        context, uri, preferNative = preferredIdentity?.let(::parseDocumentNativeIdentity) != null,
+    )?.identity.orEmpty()
     RecordingStorageType.MEDIASTORE -> runCatching {
         val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         val projection = if (useGeneration) {
@@ -1734,12 +1729,21 @@ private fun parseProviderRecordingIdentity(value: String): ProviderRecordingIden
 }
 
 internal fun providerRecordingIdentityMatches(stored: String, current: String): Boolean {
+    val storedNative = parseDocumentNativeIdentity(stored)
+    val currentNative = parseDocumentNativeIdentity(current)
+    if (storedNative != null || currentNative != null) return storedNative != null && storedNative == currentNative
     val storedIdentity = parseProviderRecordingIdentity(stored) ?: return false
     val currentIdentity = parseProviderRecordingIdentity(current) ?: return false
     return storedIdentity == currentIdentity
 }
 
 internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): Boolean {
+    val beforeNative = before?.let(::parseDocumentNativeIdentity)
+    val afterNative = after?.let(::parseDocumentNativeIdentity)
+    if (beforeNative != null || afterNative != null) {
+        return beforeNative != null && afterNative != null && beforeNative.id == afterNative.id &&
+            beforeNative.device == afterNative.device && beforeNative.inode == afterNative.inode
+    }
     val beforeIdentity = before?.let(::parseProviderRecordingIdentity) ?: return false
     val afterIdentity = after?.let(::parseProviderRecordingIdentity) ?: return false
     return beforeIdentity.storageType == afterIdentity.storageType &&
@@ -1752,15 +1756,14 @@ private fun providerRecordingIdentityStorageId(identity: ProviderRecordingIdenti
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
 internal fun documentProviderIdentitiesShareTree(before: String, after: String): Boolean {
-    val beforeIdentity = parseProviderRecordingIdentity(before) ?: return false
-    val afterIdentity = parseProviderRecordingIdentity(after) ?: return false
-    if (beforeIdentity.storageType != RecordingStorageType.DOCUMENT ||
-        afterIdentity.storageType != RecordingStorageType.DOCUMENT
-    ) {
-        return false
+    fun documentId(value: String): String? {
+        parseDocumentNativeIdentity(value)?.let { return it.id }
+        val identity = parseProviderRecordingIdentity(value) ?: return null
+        if (identity.storageType != RecordingStorageType.DOCUMENT) return null
+        return providerRecordingIdentityStorageId(identity)
     }
-    val beforeId = providerRecordingIdentityStorageId(beforeIdentity) ?: return false
-    val afterId = providerRecordingIdentityStorageId(afterIdentity) ?: return false
+    val beforeId = documentId(before) ?: return false
+    val afterId = documentId(after) ?: return false
     val beforeScope = parseDocumentStorageScope(beforeId) ?: return false
     val afterScope = parseDocumentStorageScope(afterId) ?: return false
     return beforeScope.documentId != null && afterScope.documentId != null &&
@@ -1774,7 +1777,7 @@ internal fun recordingContentIdentityMatches(context: Context, recording: Record
         RecordingStorageType.MEDIASTORE,
         -> {
             if (recording.fileIdentity.isBlank()) return true
-            val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
+            val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri(), recording.fileIdentity)
             providerRecordingIdentityMatches(recording.fileIdentity, current)
         }
     }
@@ -1829,11 +1832,15 @@ private fun resolvePathIdentity(path: File, kind: PathIdentityKind): String {
         val confirmedStat = Os.lstat(path.absolutePath)
         if (stat.st_dev != confirmedStat.st_dev || stat.st_ino != confirmedStat.st_ino ||
             stat.st_mode != confirmedStat.st_mode ||
-            stat.st_ctim.tv_sec != confirmedStat.st_ctim.tv_sec ||
-            stat.st_ctim.tv_nsec != confirmedStat.st_ctim.tv_nsec
+            (kind == PathIdentityKind.FILE &&
+                (stat.st_ctim.tv_sec != confirmedStat.st_ctim.tv_sec ||
+                    stat.st_ctim.tv_nsec != confirmedStat.st_ctim.tv_nsec))
         ) {
             return@runCatching ""
         }
+        // Directory contents change during our own creates/copies/renames. Their ctime is
+        // not directory-object identity; file revision checks must remain stricter.
+        if (kind == PathIdentityKind.DIRECTORY) return@runCatching "dirstat:${stat.st_dev}:${stat.st_ino}"
         // Android's BasicFileAttributes.creationTime() is permitted to return mtime.
         // It therefore cannot certify immutable birth across our own writes or directory
         // changes. lstat exposes no birth timestamp: represent it as unknown, while keeping
@@ -2024,7 +2031,7 @@ internal fun selectedRecordingAssetState(
         RecordingStorageType.FILE -> resolveFileIdentity(File(recording.id))
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
-        -> resolveProviderRecordingIdentity(context, storageType, recording.id.toUri())
+        -> resolveProviderRecordingIdentity(context, storageType, recording.id.toUri(), recording.fileIdentity)
     }
     return selectedRecordingAssetState(
         rawState = rawState,
@@ -2162,6 +2169,7 @@ fun copyRecordingToDirectory(
             context,
             resolvedTarget.storageType,
             resolvedTarget.id,
+            resolvedTarget.stagingIdentity,
         ) ?: throw IOException("Unable to bind copied recording to a stable output object")
         if (!stagingFingerprintMatchesCreatedObject(resolvedTarget, targetFingerprint)) {
             throw IOException("Copied recording no longer matches the created staging object")
@@ -2340,15 +2348,17 @@ private fun openVerifiedProviderInputStream(
 ): InputStream? {
     val expectedIdentity = recording.fileIdentity.takeIf { it.isNotBlank() } ?: return null
     val uri = recording.id.toUri()
-    val before = resolveProviderRecordingIdentity(context, recording.storageType, uri)
+    val before = resolveProviderRecordingIdentity(context, recording.storageType, uri, expectedIdentity)
     if (!providerRecordingIdentityMatches(expectedIdentity, before)) return null
 
     val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
     val input = openChildOrCloseOwner(descriptor) { opened ->
         ParcelFileDescriptor.AutoCloseInputStream(opened)
     }
-    val after = resolveProviderRecordingIdentity(context, recording.storageType, uri)
-    if (!providerReadHandoffMatchesExpected(expectedIdentity, before, after)) {
+    val after = resolveProviderRecordingIdentity(context, recording.storageType, uri, expectedIdentity)
+    if (!providerReadHandoffMatchesExpected(expectedIdentity, before, after) ||
+        !providerDescriptorMatchesIdentity(expectedIdentity, input.fd)
+    ) {
         closeRejectedOwnerOrThrow { input.close() }
         return null
     }
@@ -2525,7 +2535,7 @@ internal fun verifyWavOutputTargetAndDigest(
         RecordingStorageType.MEDIASTORE,
         -> {
             val uri = requireNotNull(target.uri)
-            val before = resolveProviderRecordingIdentity(context, target.storageType, uri)
+            val before = resolveProviderRecordingIdentity(context, target.storageType, uri, target.stagingIdentity)
                 .takeIf { it.isNotBlank() }
                 ?: throw IOException("Unable to identify exported provider object")
             val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
@@ -2534,8 +2544,10 @@ internal fun verifyWavOutputTargetAndDigest(
                 ParcelFileDescriptor.AutoCloseInputStream(opened)
             }
             input.use { source ->
-                val afterOpen = resolveProviderRecordingIdentity(context, target.storageType, uri)
-                if (!providerRecordingIdentityMatches(before, afterOpen)) {
+                val afterOpen = resolveProviderRecordingIdentity(context, target.storageType, uri, before)
+                if (!providerRecordingIdentityMatches(before, afterOpen) ||
+                    !providerDescriptorMatchesIdentity(before, source.fd)
+                ) {
                     throw IOException("Exported provider object changed while opening verification")
                 }
                 val digest = verifyWavOutputStreamAndDigest(
@@ -2546,8 +2558,10 @@ internal fun verifyWavOutputTargetAndDigest(
                     payloadBytes = payloadBytes,
                     expectedPayloadSha256 = expectedPayloadSha256,
                 )
-                val afterRead = resolveProviderRecordingIdentity(context, target.storageType, uri)
-                if (!providerReadRemainsStable(before, afterOpen, afterRead)) {
+                val afterRead = resolveProviderRecordingIdentity(context, target.storageType, uri, before)
+                if (!providerReadRemainsStable(before, afterOpen, afterRead) ||
+                    !providerDescriptorMatchesIdentity(before, source.fd)
+                ) {
                     throw IOException("Exported provider object changed while verifying")
                 }
                 StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
@@ -2565,11 +2579,12 @@ internal fun listOutputDirectoryRecordings(
     treeUri: Uri?,
     knownRecordings: Map<String, RecordingEntity> = emptyMap(),
 ): List<RecordingEntity> {
-    if (treeUri != null && !documentTreeIdIsValid(treeUri.toString())) {
-        throw IOException("Output destination is not a canonical document tree")
+    val canonicalTree = treeUri?.let {
+        canonicalDocumentTreeId(it.toString())?.toUri()
+            ?: throw IOException("Output destination is not a valid document tree")
     }
     val suppressedIds = pendingOutputCleanupIds(context)
-    if (treeUri == null) {
+    if (canonicalTree == null) {
         return if (usesMediaStoreDefaultStorage()) {
             listMediaStoreRecordings(context, knownRecordings, suppressedIds)
         } else {
@@ -2581,7 +2596,7 @@ internal fun listOutputDirectoryRecordings(
             )
         }
     }
-    return listDocumentTreeRecordings(context, treeUri, knownRecordings, suppressedIds)
+    return listDocumentTreeRecordings(context, canonicalTree, knownRecordings, suppressedIds)
 }
 
 internal fun listLegacyAppStorageRecordings(
@@ -2965,10 +2980,11 @@ private fun scanProviderRecording(
         ParcelFileDescriptor.AutoCloseInputStream(opened)
     }
     return input.use { source ->
-        val afterOpenIdentity = resolveProviderRecordingIdentity(context, storageType, uri)
+        val afterOpenIdentity = resolveProviderRecordingIdentity(context, storageType, uri, beforeIdentity)
         if (
-            beforeIdentity.isNotBlank() &&
-            !providerRecordingIdentityMatches(beforeIdentity, afterOpenIdentity)
+            (beforeIdentity.isNotBlank() &&
+                !providerRecordingIdentityMatches(beforeIdentity, afterOpenIdentity)) ||
+            !providerDescriptorMatchesIdentity(afterOpenIdentity, source.fd)
         ) {
             throw IOException("Recording changed while opening scan descriptor $uri")
         }
@@ -2982,12 +2998,12 @@ private fun scanProviderRecording(
         } else {
             RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
         }
-        val afterReadIdentity = resolveProviderRecordingIdentity(context, storageType, uri)
+        val afterReadIdentity = resolveProviderRecordingIdentity(context, storageType, uri, afterOpenIdentity)
         if (!scannedProviderRecordingIdentityRemainsCurrent(
                 beforeOpenIdentity = beforeIdentity,
                 afterOpenIdentity = afterOpenIdentity,
                 afterReadIdentity = afterReadIdentity,
-            )
+            ) || !providerDescriptorMatchesIdentity(afterReadIdentity, source.fd)
         ) {
             throw IOException("Recording changed while scanning $uri")
         }
@@ -3018,14 +3034,21 @@ private fun listDocumentTreeRecordings(
             val name = file.name ?: return@mapNotNull null
             val size = file.sizeBytes
             val modifiedMillis = file.modifiedMillis
-            val identity = listedProviderRecordingIdentity(
+            val existing = knownRecordings[uri.toString()]
+            // Optional metadata becoming available is not a content change. Keep a known
+            // native identity when it still verifies, so refresh does not invalidate playback
+            // and waveform state just because the provider filled in size or modification time.
+            val nativeIdentity = existing?.fileIdentity
+                ?.takeIf { parseDocumentNativeIdentity(it) != null }
+                ?.let { resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, uri, it) }
+                ?.takeIf { it.isNotBlank() }
+            val identity = nativeIdentity ?: listedProviderRecordingIdentity(
                 storageType = RecordingStorageType.DOCUMENT,
                 id = uri.toString(),
                 sizeKnown = file.sizeKnown,
                 sizeBytes = size,
                 revisionToken = modifiedMillis,
-            )
-            val existing = knownRecordings[uri.toString()]
+            ).ifBlank { resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, uri) }
             if (
                 identity.isNotBlank() && existing != null && existing.durationMillis > 0L &&
                 existing.displayName == name && (size == 0L || existing.sizeBytes == size) &&
@@ -3052,7 +3075,7 @@ private fun listDocumentTreeRecordings(
                     mimeType = file.mimeType ?: guessMimeType(name),
                     startedAtMillis = resolveRecordingStartTimeMillis(name, modifiedMillis),
                     durationMillis = scan.strictDurationMillis,
-                    sizeBytes = size,
+                    sizeBytes = parseDocumentNativeIdentity(identity)?.sizeBytes ?: size,
                     codecSummary = media.codecSummary,
                     storageType = RecordingStorageType.DOCUMENT,
                     directoryId = treeUri.toString(),
@@ -3398,8 +3421,26 @@ internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Bool
 private fun forceRecordingDirectoryDurable(directory: File) {
     val beforeIdentity = resolveDirectoryIdentity(directory).takeIf { it.isNotBlank() }
         ?: throw IOException("Recording directory is not a trustworthy directory: ${directory.absolutePath}")
-    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
-        channel.force(true)
+    if (beforeIdentity.startsWith("dirstat:")) {
+        val descriptor = Os.open(
+            directory.path,
+            OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
+            0,
+        )
+        withOwnedResource(descriptor, release = { Os.close(it) }) { opened ->
+            val stat = Os.fstat(opened)
+            if (!OsConstants.S_ISDIR(stat.st_mode) || beforeIdentity != "dirstat:${stat.st_dev}:${stat.st_ino}") {
+                throw IOException("Recording directory changed before durability barrier")
+            }
+            Os.fsync(opened)
+            if (!fileIdentityMatches(beforeIdentity, resolveDirectoryIdentity(directory))) {
+                throw IOException("Recording directory replaced during durability barrier")
+            }
+        }
+    } else {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            channel.force(true)
+        }
     }
     val afterIdentity = resolveDirectoryIdentity(directory)
     if (!fileIdentityMatches(beforeIdentity, afterIdentity)) {
@@ -3930,6 +3971,7 @@ private fun renameDocumentRecording(
                     treeUri = recording.directoryId.toUri(),
                     sourceUri = sourceUri,
                     finalDisplayName = uniqueName,
+                    preferredIdentity = recording.fileIdentity,
                 )
             }.onFailure { error ->
                 Log.w(TAG, "Unable to resolve ambiguous document rename $sourceUri", error)
@@ -3962,7 +4004,9 @@ private fun renameDocumentRecording(
             }
             return@runCatching null
         }
-        val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.DOCUMENT, renamedUri)
+        val renamedIdentity = resolveProviderRecordingIdentity(
+            context, RecordingStorageType.DOCUMENT, renamedUri, recording.fileIdentity,
+        )
         val renamedDisplayName = DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
         val renamed = recording.copy(
             id = renamedUri.toString(),
@@ -4078,10 +4122,14 @@ private fun queryCreatedDocumentOutput(
     val entry = queryDocumentTreeEntries(context, treeUri)
         .singleOrNull { candidate -> candidate.uri == documentUri }
         ?: return null
+    val descriptorSize = if (!entry.sizeKnown) {
+        readDocumentCatalogObservation(context, documentUri)?.identity
+            ?.let(::parseDocumentNativeIdentity)?.sizeBytes
+    } else null
     return NewlyCreatedOutputObservation(
         displayName = entry.name,
-        sizeBytes = entry.sizeBytes,
-        sizeKnown = entry.sizeKnown,
+        sizeBytes = descriptorSize ?: entry.sizeBytes,
+        sizeKnown = entry.sizeKnown || descriptorSize != null,
         isFile = entry.isFile,
         pending = null,
         directoryMatches = true,
@@ -4130,6 +4178,7 @@ private fun requireWritableStagingTargetStillEmpty(
                 context,
                 target.storageType,
                 requireNotNull(target.uri),
+                target.stagingIdentity,
             )
             if (!sameProviderObjectAcrossMutation(target.stagingIdentity, current)) {
                 throw IOException("Output staging provider identity changed before write: ${target.id}")
