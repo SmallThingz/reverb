@@ -1,55 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="512"
-    android:viewportHeight="512">
-    <group android:translateX="16.5">
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M183.686,358 L212.357,154 L278.357,154 C328.357,154 357.859,186 351.676,230 C345.492,274 306.995,306 256.995,306 L190.995,306"
-        android:strokeAlpha="0.16"
-        android:strokeColor="@color/launcher_accent"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M252.995,306 L337.686,358"
-        android:strokeAlpha="0.16"
-        android:strokeColor="@color/launcher_accent"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M155.686,358 L184.357,154 L250.357,154 C300.357,154 329.859,186 323.676,230 C317.492,274 278.995,306 228.995,306 L162.995,306"
-        android:strokeAlpha="0.34"
-        android:strokeColor="@color/launcher_accent"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M224.995,306 L309.686,358"
-        android:strokeAlpha="0.34"
-        android:strokeColor="@color/launcher_accent"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M127.686,358 L156.357,154 L222.357,154 C272.357,154 301.859,186 295.676,230 C289.492,274 250.995,306 200.995,306 L134.995,306"
-        android:strokeColor="@color/launcher_main"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M196.995,306 L281.686,358"
-        android:strokeColor="@color/launcher_main"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="26" />
+<!-- Generated from app/src/main/icon.svg; run scripts/generate_brand_assets.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="512" android:viewportHeight="512">
+    <group android:name="mark_root" android:translateX="44.5" android:translateY="0">
+        <group android:name="far_echo" android:translateX="56">
+            <path android:name="far_body" android:pathData="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_accent" android:strokeAlpha="0.16" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+            <path android:name="far_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_accent" android:strokeAlpha="0.16" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+        </group>
+        <group android:name="near_echo" android:translateX="28">
+            <path android:name="near_body" android:pathData="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_accent" android:strokeAlpha="0.34" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+            <path android:name="near_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_accent" android:strokeAlpha="0.34" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+        </group>
+        <group android:name="main_r" android:translateX="0">
+            <path android:name="main_body" android:pathData="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+            <path android:name="main_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+        </group>
     </group>
 </vector>

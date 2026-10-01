@@ -26,6 +26,16 @@ class ReliabilityInstrumentation : Instrumentation() {
             check(targetContext.packageName.endsWith(".reliability")) {
                 "Reliability tests must never run against a user's Reverb installation"
             }
+            if (requestedTest == null || requestedTest == "brand_geometry") {
+                executed++
+                try {
+                    verifyBrandGeometry(targetContext)
+                    report.append("PASS brand_geometry\n")
+                } catch (error: Throwable) {
+                    failures++
+                    report.append("FAIL brand_geometry\n").append(Log.getStackTraceString(error)).append('\n')
+                }
+            }
             if (requestedTest == "ui_seed_large_history") {
                 executed++
                 prepareLargeHistoryUi(targetContext)

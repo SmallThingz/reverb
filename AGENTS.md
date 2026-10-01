@@ -112,11 +112,11 @@
   the marker armed for the rest of the live process. Checked/unchecked incident taps transfer their durable history
   mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
   toggle, and storage failure is queued through process feedback.
-- The launcher icon is the canonical Reverb brand artwork. In-app Reverb marks render `ic_launcher_foreground` directly
-  on `launcher_background`, so geometry and Android 12+ Material You colors cannot drift. `app/src/main/icon.svg` and
-  the Fastlane icon are static circular repository/store mirrors of that same launcher geometry using the baseline
-  launcher colors, matching Reverb’s launcher presentation on the reference device; Android 13+ keeps the monochrome
-  themed-icon mask.
+- `app/src/main/icon.svg` is the single Reverb brand geometry source. `scripts/generate_brand_assets.py` derives the
+  foreground, monochrome, splash and Fastlane assets; run it with `--check` after changes. Center the primary R optically,
+  not the full bounding box including faint echoes. In-app marks share `ic_launcher_foreground` on `launcher_background`;
+  never apply local logo offsets. Material You palettes remain dynamic. The splash's main R stays at that same center
+  throughout the echo reveal, and its final geometry matches the launcher exactly.
 - Startup uses the native/AndroidX splash only: Android 12+ declares the platform starting-window splash attributes
   directly, and the centered R uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot
   consume all visible motion. No keep-on-screen condition, exit listener, timer, delay, or animation completion may

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from app/src/main/icon.svg; run scripts/generate_brand_assets.py. -->
 <resources>
     <color name="launcher_background">#0D1324</color>
     <color name="launcher_accent">#2DD4BF</color>
