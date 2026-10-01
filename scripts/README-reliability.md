@@ -120,6 +120,19 @@ separately from subsequent cached loads. The retired-history case separates time
 restore the empty live timeline from background full-checksum cleanup. Both phases
 must finish; moving cleanup later is not a reduction in its total work.
 
+`process_cpu_ms` includes startup reader workers and other app threads; `cpu_ms`
+measures only the calling thread. Do not report reduced caller CPU as reduced total
+work after parallelization. `-e test cold_history_profile` samples only the calling
+thread on an already-seeded fixture for attribution, not benchmark timing.
+`parallel_history_recovery` checks the batched native path with corruption, a
+symlink, truncation, a retired chunk and an ACTIVE checkpoint plus uncheckpointed
+tail. All recovery and deletion still run serially after readers have finished.
+
+`tile_hydration_convergence` runs the real persisted-state worker through repeated
+identical observations, a genuine duration change and live capture authority. Only
+the genuine change may republish: a refresh that hydrates identical data must not
+request another SystemUI refresh and create a perpetual background loop.
+
 `-e test saved_file_performance` writes and verifies a 64 MiB WAV, then measures
 publication, structural discovery and repeated exact-revision byte proofs. `/proc`
 read counters measure bytes requested, not physical flash traffic. Compare identical

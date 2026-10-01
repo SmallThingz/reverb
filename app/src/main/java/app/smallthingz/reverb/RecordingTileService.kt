@@ -358,8 +358,11 @@ internal object RecordingQuickTileStateCache {
                         currentGeneration = stateGeneration,
                         expectedSnapshot = expectedSnapshot,
                         currentSnapshot = cachedSnapshot,
-                    )
+                    ) || cachedSnapshot == persisted
                 ) {
+                    // SystemUI can start listening again after requestListeningState().
+                    // Republishing identical persisted state would request another refresh,
+                    // which hydrates again forever even with no recorder or visible tiles.
                     false
                 } else {
                     cachedSnapshot = persisted

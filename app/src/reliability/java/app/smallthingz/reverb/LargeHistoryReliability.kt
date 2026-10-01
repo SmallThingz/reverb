@@ -20,12 +20,14 @@ internal fun measureLargeHistory(context: Context, report: StringBuilder) {
         val beforeIo = processReadBytes()
         val start = SystemClock.elapsedRealtimeNanos()
         val cpu = android.os.Debug.threadCpuTimeNanos()
+        val processCpu = android.os.Process.getElapsedCpuTime()
         val store = PersistentAudioChunkStore(root)
         store.configure(RetentionMode.SIZE, Long.MAX_VALUE, 48_000, 1, PcmSampleFormat.PCM_16,
             deferRetentionCleanup = true)
         val snapshot = store.peekSnapshot()!!
         val loaded = SystemClock.elapsedRealtimeNanos()
         val cpuElapsed = android.os.Debug.threadCpuTimeNanos() - cpu
+        val processCpuElapsed = android.os.Process.getElapsedCpuTime() - processCpu
         check(snapshot.chunkCount == count && snapshot.filledBytes == count.toLong() * payloadBytes)
         val rangeStart = SystemClock.elapsedRealtimeNanos()
         val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
@@ -34,6 +36,7 @@ internal fun measureLargeHistory(context: Context, report: StringBuilder) {
         val rangeClosed = SystemClock.elapsedRealtimeNanos()
         report.append("MEASURE history iteration=$iteration chunks=$count logical_bytes=${snapshot.filledBytes}")
             .append(" load_ms=${(loaded-start)/1_000_000.0} cpu_ms=${cpuElapsed/1_000_000.0}")
+            .append(" process_cpu_ms=$processCpuElapsed")
             .append(" range_ms=${(rangeReady-rangeStart)/1_000_000.0} release_ms=${(rangeClosed-rangeReady)/1_000_000.0}")
             .append(" read_bytes=${processReadBytes()-beforeIo}\n")
         store.close()
@@ -108,9 +111,9 @@ private fun measureRetiredStartup(context: Context, report: StringBuilder) {
     }
 }
 
-private fun fixtureCreatedAt(id: Int): Long = 1_790_000_000_000L + id * 11_000L
+internal fun fixtureCreatedAt(id: Int): Long = 1_790_000_000_000L + id * 11_000L
 
-private fun fixtureChunkHeader(id: Int, payloadBytes: Int, payloadCrc: Int): ByteArray {
+internal fun fixtureChunkHeader(id: Int, payloadBytes: Int, payloadCrc: Int): ByteArray {
     val bytes = ByteArray(128)
     val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
     b.putInt(0, 0x52564348); b.putInt(4, 2); b.putInt(8, id); b.putInt(12, 128)

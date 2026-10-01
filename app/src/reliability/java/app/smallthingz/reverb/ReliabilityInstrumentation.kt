@@ -40,6 +40,11 @@ class ReliabilityInstrumentation : Instrumentation() {
                 measureLargeHistory(targetContext, report)
                 report.append("PASS large_history_performance\n")
             }
+            if (requestedTest == "cold_history_profile") {
+                executed++
+                profileColdHistory(targetContext, report)
+                report.append("PASS cold_history_profile\n")
+            }
             if (requestedTest == "saved_file_performance") {
                 executed++
                 measureSavedFilePerformance(targetContext, report)
@@ -161,6 +166,26 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 .append(Log.getStackTraceString(error)).append('\n')
                         }
                     }
+                }
+            }
+            if (requestedTest == null || requestedTest == "tile_hydration_convergence") {
+                executed++
+                try {
+                    verifyTileHydrationConverges(targetContext)
+                    report.append("PASS tile_hydration_convergence\n")
+                } catch (error: Throwable) {
+                    failures++
+                    report.append("FAIL tile_hydration_convergence\n").append(Log.getStackTraceString(error)).append('\n')
+                }
+            }
+            if (requestedTest == null || requestedTest == "parallel_history_recovery") {
+                executed++
+                try {
+                    verifyParallelHistoryRecovery(targetContext)
+                    report.append("PASS parallel_history_recovery\n")
+                } catch (error: Throwable) {
+                    failures++
+                    report.append("FAIL parallel_history_recovery\n").append(Log.getStackTraceString(error)).append('\n')
                 }
             }
             if (requestedTest == null || requestedTest == "header_cache_safety") {

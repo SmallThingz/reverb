@@ -306,7 +306,9 @@ internal class PersistentAudioChunkStore internal constructor(
                 configuredChannelCount != normalizedChannelCount ||
                 configuredSampleFormat != sampleFormat
 
+        var finalizedForConfiguration = false
         if (formatChanged || normalizedRetention == 0L) {
+            finalizedForConfiguration = activeRecord != null
             finalizeActiveLocked()
         }
 
@@ -319,6 +321,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
         if (overwriteOldest && activeRecord != null && retentionExceededLocked()) {
             finalizeActiveLocked()
+            finalizedForConfiguration = true
         }
         val cleaned = when {
             normalizedRetention == 0L -> {
@@ -335,7 +338,9 @@ internal class PersistentAudioChunkStore internal constructor(
             overwriteOldest -> cleanupRetentionLocked(exactBoundary = true)
             else -> truncateOneShotRetentionLocked()
         }
-        if (cleaned || formatChanged || normalizedRetention == 0L) {
+        // The index stores chunk geometry, not capture settings. Loading already checkpointed
+        // recovery; changing an idle format or leaving a buffer Off does not change that index.
+        if (cleaned || finalizedForConfiguration) {
             writeIndexLocked()
         }
     }
@@ -1531,6 +1536,32 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
+    private data class StartupChunkRead(val file: File, val id: UInt?, val header: ChunkHeaderSnapshot?)
+
+    private fun readStartupChunk(file: File): StartupChunkRead? {
+        val native = if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                Os.lstat(file.path)
+            } catch (error: android.system.ErrnoException) {
+                if (error.errno == OsConstants.ENOENT) return null
+                throw IOException("Unable to inspect chunk path: ${file.name}", error)
+            }
+        } else null
+        if (native != null) {
+            if (!OsConstants.S_ISREG(native.st_mode)) return null
+        } else {
+            val observation = observeStoragePath(file)
+            when (observation.state) {
+                StoragePathState.MISSING -> return null
+                StoragePathState.UNAVAILABLE -> throw IOException("Unable to inspect chunk path: ${file.name}")
+                StoragePathState.PRESENT -> if (!observation.isRegularFile) return null
+            }
+        }
+        val id = file.name.toUIntOrNull()?.takeIf { file.name == it.toString() }
+        return StartupChunkRead(file, id, if (id == null) null else
+            readChunkHeaderSnapshot(file, allowCached = true, observedStat = native))
+    }
+
     private fun scanChunkFilesLocked(
         retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
     ): MutableMap<UInt, ChunkRecord> {
@@ -1538,23 +1569,22 @@ internal class PersistentAudioChunkStore internal constructor(
         val recoveredRetirements = ArrayList<UInt>(RECOVERY_RETIREMENT_BATCH)
         val files = chunksDirectory.listFiles()
             ?: throw IOException("Unable to list chunks directory: ${chunksDirectory.absolutePath}")
-        for (file in files) {
-            val observation = observeStoragePath(file)
-            when (observation.state) {
-                StoragePathState.MISSING -> continue
-                StoragePathState.UNAVAILABLE -> throw IOException(
-                    "Unable to inspect chunk path: ${file.absolutePath}",
-                )
-                StoragePathState.PRESENT -> if (!observation.isRegularFile) continue
-            }
-            val id = file.name.toUIntOrNull()
-            if (id == null || file.name != id.toString()) {
-                if (recoverRetiredDeletionClaimLocked(file, retirementTombstones)) continue
+        val parallelism = if (files.size >= 512) minOf(4, Runtime.getRuntime().availableProcessors()) else 1
+        forEachOrderedStartupRead(files, parallelism, read = ::readStartupChunk) { startup ->
+            if (startup == null) return@forEachOrderedStartupRead
+            val file = startup.file
+            val id = startup.id
+            if (id == null) {
+                if (recoverRetiredDeletionClaimLocked(file, retirementTombstones)) return@forEachOrderedStartupRead
                 preserveUnrecognizedChunkLocked(file, "unrecognized")
-                continue
+                return@forEachOrderedStartupRead
             }
             val record = try {
-                readChunkRecord(file, id)
+                if (startup.header == null) null else {
+                    // Only immutable finalized geometry is prefetched. ACTIVE crash recovery
+                    // reopens on this thread before validating or modifying its payload.
+                    readChunkRecord(file, id, startup.header.takeIf { it.header.state == ChunkState.FINALIZED })
+                }
             } catch (error: IOException) {
                 // A transient filesystem/provider failure is not evidence of corruption.
                 // Abort recovery rather than deleting or forgetting audio we could not read.
@@ -1563,7 +1593,7 @@ internal class PersistentAudioChunkStore internal constructor(
             if (record == null) {
                 preserveUnrecognizedChunkLocked(file, "corrupt")
                 onUnexpectedRecovery("Recovered malformed audio chunk ${file.name}")
-                continue
+                return@forEachOrderedStartupRead
             }
             if (retirementTombstones.containsKey(id)) {
                 val retiredIdentity = retirementTombstones[id]
@@ -1575,7 +1605,7 @@ internal class PersistentAudioChunkStore internal constructor(
                     if (deferredRetentionCleanup) {
                         record.pendingDelete = true
                         retiredById[id] = record
-                        continue
+                        return@forEachOrderedStartupRead
                     }
                     val beforeIdentity = resolveFileIdentity(file)
                     if (beforeIdentity.isBlank()) throw IOException("Unable to identify recovered retirement")
@@ -1592,7 +1622,7 @@ internal class PersistentAudioChunkStore internal constructor(
                         finishRecoveredRetirementsLocked(recoveredRetirements, retirementTombstones)
                         recoveredRetirements.clear()
                     }
-                    continue
+                    return@forEachOrderedStartupRead
                 }
                 // A numeric tombstone is durable evidence that this id was retired. If its
                 // payload is malformed or no longer matches the chunk, recovery is ambiguous:
@@ -1602,7 +1632,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 preserveUnrecognizedChunkLocked(file, "retired-ambiguous")
                 onUnexpectedRecovery("Recovered retirement-ambiguous audio chunk ${file.name}")
                 if (deleteRetirementTombstoneLocked(id)) retirementTombstones.remove(id)
-                continue
+                return@forEachOrderedStartupRead
             }
             if (result.put(id, record) != null) {
                 throw IOException("Duplicate chunk id on disk: $id")
@@ -1857,8 +1887,12 @@ internal class PersistentAudioChunkStore internal constructor(
         return List(sorted.size) { offset -> sorted[(startIndex + offset) % sorted.size] }
     }
 
-    private fun readChunkRecord(file: File, filenameId: UInt): ChunkRecord? {
-        val diskHeader = readChunkHeaderSnapshot(file, allowCached = true) ?: return null
+    private fun readChunkRecord(
+        file: File,
+        filenameId: UInt,
+        prefetchedFinalizedHeader: ChunkHeaderSnapshot? = null,
+    ): ChunkRecord? {
+        val diskHeader = prefetchedFinalizedHeader ?: readChunkHeaderSnapshot(file, allowCached = true) ?: return null
         val header = diskHeader.header
         if (header.id != filenameId) return null
         if (header.sampleRate <= 0 || header.channelCount !in 1..MAX_CHANNEL_COUNT) return null
@@ -2954,6 +2988,9 @@ internal class PersistentAudioChunkStore internal constructor(
         constructor(stat: StructStat) : this(
             stat.st_dev, stat.st_ino, stat.st_size, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec,
         )
+
+        fun matches(stat: StructStat): Boolean = device == stat.st_dev && inode == stat.st_ino &&
+            size == stat.st_size && changedSeconds == stat.st_ctim.tv_sec && changedNanos == stat.st_ctim.tv_nsec
     }
 
     private data class CachedChunkHeader(val stamp: ChunkHeaderStamp, val snapshot: ChunkHeaderSnapshot)
@@ -2962,11 +2999,14 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun readChunkHeader(file: File): ParsedHeader? =
         readChunkHeaderSnapshot(file, allowCached = false)?.header
 
-    private fun readChunkHeaderSnapshot(file: File, allowCached: Boolean): ChunkHeaderSnapshot? {
-        val bytes = ByteArray(CHUNK_HEADER_BYTES)
+    private fun readChunkHeaderSnapshot(
+        file: File,
+        allowCached: Boolean,
+        observedStat: StructStat? = null,
+    ): ChunkHeaderSnapshot? {
         if (Build.VERSION.SDK_INT >= 28) {
             try {
-                val before = Os.lstat(file.path)
+                val before = observedStat ?: Os.lstat(file.path)
                 if (!OsConstants.S_ISREG(before.st_mode) || before.st_size < CHUNK_HEADER_BYTES) return null
                 val stamp = ChunkHeaderStamp(before)
                 val key = file.absolutePath
@@ -2974,17 +3014,17 @@ internal class PersistentAudioChunkStore internal constructor(
                     val cached = synchronized(chunkHeaderCache) { chunkHeaderCache[key] }
                     if (cached?.stamp == stamp) return cached.snapshot
                 }
+                val bytes = ByteArray(CHUNK_HEADER_BYTES)
                 val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
                 val snapshot = withOwnedResource(descriptor, release = { Os.close(it) }) { opened ->
-                    if (ChunkHeaderStamp(Os.fstat(opened)) != stamp) throw IOException("Chunk replaced before header read")
+                    if (!stamp.matches(Os.fstat(opened))) throw IOException("Chunk replaced before header read")
                     var offset = 0
                     while (offset < bytes.size) {
                         val count = Os.read(opened, bytes, offset, bytes.size - offset)
                         if (count <= 0) throw IOException("Truncated chunk header")
                         offset += count
                     }
-                    if (ChunkHeaderStamp(Os.fstat(opened)) != stamp ||
-                        ChunkHeaderStamp(Os.lstat(file.path)) != stamp
+                    if (!stamp.matches(Os.fstat(opened)) || !stamp.matches(Os.lstat(file.path))
                     ) throw IOException("Chunk changed during header read")
                     parseChunkHeader(bytes)?.let { ChunkHeaderSnapshot(it, stamp.size) }
                 }
@@ -3004,6 +3044,7 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         // JVM tests and non-Android tooling: sample geometry through the descriptor already
         // used for the header rather than opening the path for separate length queries.
+        val bytes = ByteArray(CHUNK_HEADER_BYTES)
         return RandomAccessFile(file, "r").use { access ->
             val length = access.length()
             if (length < bytes.size) return@use null

@@ -54,6 +54,9 @@
 - Quick Settings live TileService listeners use an explicitly registered/unregistered strong identity registry. Do not
   use `WeakHashMap` for this live listener set: GC may clear weak keys during iteration and Android has produced a
   main-thread `NoSuchElementException` from that race.
+- Persisted Quick Settings hydration publishes and requests SystemUI refresh only when the snapshot actually changed.
+  An unchanged hydration must not advance its generation and trigger another listening/hydration/refresh cycle; genuine
+  changes still publish, and live recorder authority still wins over stopped-state reads.
 - Incidents include app-wide unexpected errors even when the process survives. Uncaught exceptions, invariant/corruption
   failures, and native/resource cleanup failures that should not occur must be recorded through
   `RecordingIncidentStore.recordUnexpectedError*`. Do not create incidents for modeled outcomes such as cancellation,
@@ -288,6 +291,11 @@
   installed user's history merely to obtain a benchmark. Version 0.1.2 preparation does not authorize a tag or release.
 - Startup chunk-header caching is process-local, bounded, FINALIZED-only and keyed by exact native device/inode/size/ctime.
   Destructive checks bypass that cache. Full payload checksums remain mandatory before export and retirement.
+- Large startup scans prefetch headers in bounded batches with at most four readers, sharing one initial no-follow stat.
+  Drain every reader before ordered recovery, errors or teardown; only finalized geometry may be prefetched. ACTIVE
+  recovery reopens on the store owner, and destructive paths retain fresh header, payload and identity checks.
+- Idle configuration changes do not rewrite the chunk index: it stores chunk geometry, not recorder settings. Recovery
+  still checkpoints once, while active finalization and actual retention changes checkpoint their changed timeline.
 - Retired range leases release bookkeeping before scheduling the existing one-unit maintenance worker; they must not
   hash/delete an entire leased history while holding the capture-store monitor. Close failures remain observable.
 - Service restart restores its live timeline before draining already-retired chunks. Deferred claims keep their exact
