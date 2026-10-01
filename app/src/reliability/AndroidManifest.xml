@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation
+        android:name="app.smallthingz.reverb.ReliabilityInstrumentation"
+        android:targetPackage="${applicationId}"
+        android:functionalTest="true" />
+    <application>
+        <provider
+            android:name="app.smallthingz.reverb.ReliabilityDocumentsProvider"
+            android:authorities="${applicationId}.reliability.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+    </application>
+</manifest>

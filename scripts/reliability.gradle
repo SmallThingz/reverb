@@ -1,0 +1,14 @@
+// Opt-in, isolated on-device reliability tests. Never replaces the user's Reverb install.
+allprojects {
+    plugins.withId('com.android.application') {
+        android {
+            buildTypes {
+                reliability {
+                    initWith debug
+                    applicationIdSuffix '.reliability'
+                    matchingFallbacks = ['debug']
+                }
+            }
+        }
+    }
+}

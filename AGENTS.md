@@ -1,3 +1,8 @@
+# Repository operations
+
+- The upstream issue tracker is read-only. Read reports for reproduction, but do not create, edit, comment on, close,
+  reopen, or relabel issues. Do not add automatic issue-closing directives to commits for this reliability work.
+
 # Reverb UI invariants
 
 - Buffer switching is one stationary capture surface, never a pager or sliding screen transition.
@@ -618,6 +623,18 @@
   observed authoritatively.
 - Document-provider rename rebinds only after byte-for-byte content continuity is reverified. A same-URI rename must
   also retain the same provider object identity; a URI-changing rename must additionally positively retire the old URI.
+- Invalidated old SAF document IDs may throw or produce a null cursor after a legitimate rename. Confirm retirement
+  using a complete original-tree listing that omits the source and includes the verified published file; never globally
+  reinterpret provider/permission errors as missing. Loading, errored, or duplicate-ID listings cannot prove absence.
+- SAF export success requires an observed non-staging final name bound to the verified published identity. A provider
+  may choose a benign final-name suffix, but a no-op rename or failed name query must never become synthetic success.
+- Android NIO creationTime may be a mutable mtime fallback, not object birth. Native stat identities must use unknown
+  birth and a twice-observed device/inode/nanosecond-ctime revision. Legacy birth-field migration may match only that
+  exact revision; writes, replacements, digest verification, and descriptor checks must retain their existing guards.
+- Audio read failure handling must retain the read's accepted command generation even when failed recovery has already
+  released AudioRecord and cleared its mutable generation. Genuine newer commands still supersede the old failure.
+- Use the opt-in isolated reliability build and its real-provider/process-death fixtures in scripts/README-reliability.md
+  for export/capture regressions. Never install those fixtures over the normal Reverb package or use real recordings.
 - Provider rename transport/row-count failure is state-uncertain, not automatic failure: recover success only when the
   exact selected bytes/object are positively re-observed under the requested name; a positively unchanged MediaStore
   object is a definite no-op, while copy-like/identity-uncertain document results remain failed and any discovered extra

@@ -1192,17 +1192,44 @@ internal fun documentPublicationMatchesExpected(
 
 private fun documentSourceState(
     context: Context,
+    treeUri: Uri,
     sourceUri: Uri,
-    sourceUriUnchanged: Boolean,
-): RecordingAssetState = if (sourceUriUnchanged) {
-    RecordingAssetState.PRESENT
-} else {
-    queryUriAssetState(
+    publishedUri: Uri,
+): RecordingAssetState {
+    if (sourceUri == publishedUri) return RecordingAssetState.PRESENT
+    val direct = queryUriAssetState(
         context = context,
         uri = sourceUri,
         projection = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
         logId = sourceUri.toString(),
     )
+    if (direct != RecordingAssetState.UNAVAILABLE) return direct
+
+    // A legitimate rename can invalidate the old document ID. Path-backed providers then
+    // throw FileNotFoundException (and ContentResolver may return null), not an empty cursor.
+    // Do not turn arbitrary query/permission failure into absence. Prove the handoff using a
+    // complete listing of the original tree which still contains the verified published URI.
+    return runCatching {
+        if (!documentRecordingBelongsToTree(sourceUri.toString(), treeUri.toString()) ||
+            !documentRecordingBelongsToTree(publishedUri.toString(), treeUri.toString())
+        ) return@runCatching RecordingAssetState.UNAVAILABLE
+        val entries = queryDocumentTreeEntries(context, treeUri)
+        documentRetirementStateFromCompleteListing(
+            sourceListed = entries.any { it.uri == sourceUri },
+            publishedFileListed = entries.any { it.uri == publishedUri && it.isFile },
+        )
+    }.onFailure { error ->
+        Log.w(TAG, "Unable to confirm retired document in its original tree $sourceUri", error)
+    }.getOrDefault(RecordingAssetState.UNAVAILABLE)
+}
+
+internal fun documentRetirementStateFromCompleteListing(
+    sourceListed: Boolean,
+    publishedFileListed: Boolean,
+): RecordingAssetState = when {
+    sourceListed -> RecordingAssetState.PRESENT
+    publishedFileListed -> RecordingAssetState.MISSING
+    else -> RecordingAssetState.UNAVAILABLE
 }
 
 private data class ObservedDocumentPublication(
@@ -1229,7 +1256,7 @@ private fun readStableDocumentPublicationObservation(
     val after = candidate() ?: return null
     if (before.uri != after.uri) return null
     val sourceUriUnchanged = after.uri == sourceUri
-    val oldSourceState = documentSourceState(context, sourceUri, sourceUriUnchanged)
+    val oldSourceState = documentSourceState(context, treeUri, sourceUri, after.uri)
     return ObservedDocumentPublication(
         uri = after.uri,
         state = DocumentPublicationObservation(
@@ -1354,7 +1381,8 @@ private fun finalizeDocumentOutputTarget(
         throw IOException("Unable to verify published document recording")
     }
     val sourceUriUnchanged = recoveredPublication?.state?.sourceUriUnchanged ?: (renamedUri == sourceUri)
-    val oldState = recoveredPublication?.state?.oldSourceState ?: documentSourceState(context, sourceUri, sourceUriUnchanged)
+    val oldState = recoveredPublication?.state?.oldSourceState
+        ?: documentSourceState(context, treeUri, sourceUri, renamedUri)
     if (!documentRenameTransitionIsSafe(
             sourceUriUnchanged = sourceUriUnchanged,
             oldUriStateAfterRename = oldState,
@@ -1381,9 +1409,19 @@ private fun finalizeDocumentOutputTarget(
     val publishedIdentity = published.providerIdentity
         ?.takeIf { it.isNotBlank() }
         ?: throw IOException("Published document recording has no stable identity")
-    val actualName = recoveredPublication?.state?.displayName
-        ?: DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
-        ?: finalName
+    val metadata = resolveProviderCatalogObservation(context, RecordingStorageType.DOCUMENT, renamedUri)
+    if (!documentPublishedNameIsVerified(publishedIdentity, metadata)) {
+        // A provider can return success without doing the rename. Never report a hidden
+        // staging entry as saved, and never synthesize a name when its query failed. A benign
+        // provider-selected final name is allowed, but it must belong to these verified bytes.
+        if (metadata == null || !isStagingOutputName(metadata.displayName)) {
+            suppressUnsafeDocumentPublication(
+                context, target, sourceUri, renamedUri, expectedFingerprint, published.digest,
+            )
+        }
+        throw IOException("Output provider did not publish a verified final recording name")
+    }
+    val actualName = requireNotNull(metadata).displayName
     return target.copy(
         id = renamedUri.toString(),
         displayName = actualName,
@@ -1392,6 +1430,13 @@ private fun finalizeDocumentOutputTarget(
         publishedIdentity = publishedIdentity,
     )
 }
+
+internal fun documentPublishedNameIsVerified(
+    publishedIdentity: String,
+    metadata: ProviderCatalogObservation?,
+): Boolean = metadata != null && metadata.displayName.isNotBlank() &&
+    !isStagingOutputName(metadata.displayName) &&
+    providerRecordingIdentityMatches(publishedIdentity, metadata.identity)
 
 private fun documentSupportsRename(context: Context, uri: Uri): Boolean = runCatching {
     context.contentResolver.query(
@@ -1767,7 +1812,6 @@ private fun resolvePathIdentity(path: File, kind: PathIdentityKind): String {
     }
 
     val attributes = readExpectedAttributes() ?: return ""
-    val initialBirthNanos = birthNanos(attributes)
     val statIdentity = runCatching {
         val stat = Os.lstat(path.absolutePath)
         val expectedType = when (kind) {
@@ -1782,14 +1826,20 @@ private fun resolvePathIdentity(path: File, kind: PathIdentityKind): String {
         if (initialKey.isNotBlank() && confirmedKey.isNotBlank() && initialKey != confirmedKey) {
             return@runCatching ""
         }
-        val confirmedBirthNanos = birthNanos(confirmed)
-        if (initialBirthNanos != 0L && confirmedBirthNanos != 0L &&
-            initialBirthNanos != confirmedBirthNanos
+        val confirmedStat = Os.lstat(path.absolutePath)
+        if (stat.st_dev != confirmedStat.st_dev || stat.st_ino != confirmedStat.st_ino ||
+            stat.st_mode != confirmedStat.st_mode ||
+            stat.st_ctim.tv_sec != confirmedStat.st_ctim.tv_sec ||
+            stat.st_ctim.tv_nsec != confirmedStat.st_ctim.tv_nsec
         ) {
             return@runCatching ""
         }
+        // Android's BasicFileAttributes.creationTime() is permitted to return mtime.
+        // It therefore cannot certify immutable birth across our own writes or directory
+        // changes. lstat exposes no birth timestamp: represent it as unknown, while keeping
+        // device/inode and the complete ctime revision authoritative and re-observed above.
         buildStatFileIdentity(
-            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, confirmedBirthNanos,
+            stat.st_dev, stat.st_ino, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec, 0L,
         )
     }.getOrDefault("")
     if (statIdentity.isNotBlank()) return statIdentity
@@ -1833,8 +1883,19 @@ private fun buildStatFileIdentity(
     birthNanos: Long,
 ): String = "stat:$dev:$ino:$ctimeSeconds:$ctimeNanos:$birthNanos"
 
-internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String): Boolean =
-    storedIdentity.isNotBlank() && currentIdentity.isNotBlank() && storedIdentity == currentIdentity
+internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String): Boolean {
+    if (storedIdentity.isBlank() || currentIdentity.isBlank()) return false
+    if (storedIdentity == currentIdentity) return true
+    val stored = storedIdentity.split(':')
+    val current = currentIdentity.split(':')
+    // Older Android identities included the optional NIO creation-time fallback. Accept
+    // migration to unknown birth only for the exact same device/inode/ctime revision;
+    // never make an old deletion/recovery claim valid after any actual file mutation.
+    return stored.size == 6 && current.size == 6 && stored[0] == "stat" && current[0] == "stat" &&
+        stored.take(5) == current.take(5) &&
+        stored[5].toLongOrNull() != null && current[5].toLongOrNull() != null &&
+        (stored[5] == "0" || current[5] == "0")
+}
 
 internal fun sameFileObjectAcrossRename(before: String, after: String): Boolean {
     if (before.isBlank() || after.isBlank()) return false
@@ -2613,6 +2674,12 @@ private data class DocumentTreeEntry(
     val isFile: Boolean,
 )
 
+internal fun requireCompleteDocumentListing(loading: Boolean, error: String?) {
+    if (loading || error != null) {
+        throw IOException("Document provider returned an incomplete listing")
+    }
+}
+
 private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<DocumentTreeEntry> {
     val treeDocumentId = try {
         DocumentsContract.getTreeDocumentId(treeUri)
@@ -2630,15 +2697,23 @@ private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<Docum
     val cursor = context.contentResolver.query(childrenUri, projection, null, null, null)
         ?: throw IOException("Document tree query returned no cursor: $treeUri")
     return cursor.use { rows ->
+        requireCompleteDocumentListing(
+            rows.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+            rows.extras.getString(DocumentsContract.EXTRA_ERROR),
+        )
         val idIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
         val nameIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
         val mimeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
         val sizeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
         val modifiedIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-        buildList {
+        val seenIds = HashSet<String>()
+        val entries = buildList {
             while (rows.moveToNext()) {
                 val documentId = rows.getString(idIndex)
                     ?: throw IOException("Document tree row has no document id: $treeUri")
+                if (documentId.isBlank() || !seenIds.add(documentId)) {
+                    throw IOException("Document tree contains an invalid or duplicate document id: $treeUri")
+                }
                 val mimeType = if (rows.isNull(mimeIndex)) null else rows.getString(mimeIndex)
                 add(
                     DocumentTreeEntry(
@@ -2653,6 +2728,11 @@ private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<Docum
                 )
             }
         }
+        requireCompleteDocumentListing(
+            rows.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+            rows.extras.getString(DocumentsContract.EXTRA_ERROR),
+        )
+        entries
     }
 }
 
@@ -3202,6 +3282,10 @@ private fun queryUriAssetState(
     logId: String,
 ): RecordingAssetState = try {
     context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        requireCompleteDocumentListing(
+            cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+            cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
+        )
         if (cursor.moveToFirst()) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
     } ?: RecordingAssetState.UNAVAILABLE
 } catch (error: Exception) {
@@ -3886,8 +3970,7 @@ private fun renameDocumentRecording(
             fileIdentity = renamedIdentity,
         )
         val sourceUriUnchanged = renamedUri == sourceUri
-        val oldState = if (sourceUriUnchanged) RecordingAssetState.PRESENT
-        else recordingAssetState(context, recording)
+        val oldState = documentSourceState(context, recording.directoryId.toUri(), sourceUri, renamedUri)
         // Rename is metadata, not a content mutation. Verify the selected bytes again even when
         // the provider keeps the same URI; document ID continuity alone cannot prove that a
         // buggy/provider-side rename did not rewrite or truncate the recording.

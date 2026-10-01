@@ -2752,7 +2752,10 @@ class ReverbService : Service() {
             failListeningOnAudioThread(
                 getString(R.string.audio_input_init_failed),
                 error,
-                audioRecordGeneration,
+                // Restart failure may already have released AudioRecord and cleared its
+                // generation. The failed read still belongs to the epoch sampled above;
+                // passing the cleared owner here would silently reject its terminal error.
+                generation,
             )
         }
     }
