@@ -875,7 +875,10 @@ private fun requireCurrentOutputFingerprint(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
 ) {
-    val current = readStableOutputFingerprint(context, target.storageType, target.id, expectedFingerprint.providerIdentity)
+    val current = readStableOutputFingerprint(
+        context, target.storageType, target.id, expectedFingerprint.providerIdentity,
+        reuseVerifiedProviderRevision = true,
+    )
         ?: throw IOException("Unable to bind output staging to a stable object")
     if (!stableOutputFingerprintMatches(target.storageType, expectedFingerprint, current)) {
         throw IOException("Output staging changed after verification")
@@ -1009,7 +1012,7 @@ private fun finalizeFileOutputTarget(
     expectedFingerprint: StableOutputFingerprint,
 ): RecordingOutputTarget {
     val source = requireNotNull(target.file)
-    val current = readStableFileOutputFingerprint(source)
+    val current = readCurrentVerifiedFileFingerprint(source)
         ?: throw IOException("Unable to bind output staging to a stable file")
     if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
         throw IOException("Output staging file changed after verification")
@@ -2462,8 +2465,18 @@ internal fun sha256StableRecording(
     context: Context,
     recording: RecordingEntity,
 ): CopyDigest? {
+    if (recording.storageType == RecordingStorageType.FILE) {
+        VerifiedFileDigestCache.current(File(recording.id))?.let { verified ->
+            if (fileIdentityMatches(recording.fileIdentity, verified.fileKey.orEmpty())) return verified.digest
+        }
+    }
     val digest = openRecordingInputStream(context, recording)?.use(::sha256) ?: return null
-    return digest.takeIf { recordingContentIdentityMatches(context, recording) }
+    if (!recordingContentIdentityMatches(context, recording)) return null
+    if (recording.storageType == RecordingStorageType.FILE) {
+        VerifiedFileDigestCache.remember(File(recording.id),
+            StableOutputFingerprint(digest, fileKey = recording.fileIdentity, providerIdentity = null))
+    }
+    return digest
 }
 
 internal fun recordingsHaveSameContent(
@@ -2547,6 +2560,7 @@ internal fun verifyWavOutputTargetAndDigest(
     payloadBytes: Long,
     expectedPayloadSha256: ByteArray,
 ): StableOutputFingerprint {
+    var providerRevision: ProviderPayloadRevision? = null
     val fingerprint = when (target.storageType) {
         RecordingStorageType.FILE -> {
             val file = requireNotNull(target.file)
@@ -2593,6 +2607,7 @@ internal fun verifyWavOutputTargetAndDigest(
                 ) {
                     throw IOException("Exported provider object changed while opening verification")
                 }
+                val nativeBefore = nativeProviderPayloadRevision(source.fd)
                 val digest = verifyWavOutputStreamAndDigest(
                     input = source,
                     expectedFileBytes = expectedFileBytes,
@@ -2607,12 +2622,24 @@ internal fun verifyWavOutputTargetAndDigest(
                 ) {
                     throw IOException("Exported provider object changed while verifying")
                 }
+                val nativeAfter = nativeProviderPayloadRevision(source.fd)
+                if (nativeBefore != null && nativeBefore != nativeAfter) {
+                    throw IOException("Exported provider descriptor changed while verifying")
+                }
+                providerRevision = nativeBefore
                 StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
             }
         }
     }
     if (!stagingFingerprintMatchesCreatedObject(target, fingerprint)) {
         throw IOException("Verified output no longer matches the created staging object")
+    }
+    if (target.storageType == RecordingStorageType.FILE) {
+        VerifiedFileDigestCache.remember(requireNotNull(target.file), fingerprint)
+    } else {
+        // Full content verification and the owned descriptor's close have succeeded.
+        // Only pre-publication rechecks may reuse this exact native revision.
+        VerifiedProviderDigestCache.remember(target.storageType, target.id, fingerprint, providerRevision)
     }
     return fingerprint
 }
@@ -2928,20 +2955,8 @@ private fun listFileDirectoryRecordings(
                             throw IOException("Recording path changed before descriptor scan: $file")
                         }
                         val descriptorSize = input.channel.size()
-                        val strictDuration = if (descriptorSize > 0L) {
-                            structurallyCompleteRecordingDurationMillis(file.name, input)
-                        } else {
-                            0L
-                        }
-                        val media = if (strictDuration > 0L) {
-                            inspectRecordingMedia(
-                                descriptor = input.fd,
-                                displayName = file.name,
-                                fallbackDurationMillis = strictDuration,
-                            )
-                        } else {
-                            RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
-                        }
+                        val media = inspectSeekableWavStructure(context, input.channel)
+                        val strictDuration = media.durationMillis
                         val startedAtMillis = resolveRecordingStartTimeMillis(
                             displayName = file.name,
                             fallbackMillis = resolveFileDescriptorModifiedTimeMillis(input.fd),
@@ -3031,8 +3046,12 @@ private fun scanProviderRecording(
         ) {
             throw IOException("Recording changed while opening scan descriptor $uri")
         }
-        val strictDuration = structurallyCompleteRecordingDurationMillis(displayName, source)
-        val media = if (strictDuration > 0L) {
+        val seekableMetadata = if (descriptor.statSize >= 0L) {
+            inspectSeekableWavStructure(context, source.channel)
+        } else null
+        val strictDuration = seekableMetadata?.durationMillis
+            ?: structurallyCompleteRecordingDurationMillis(displayName, source)
+        val media = seekableMetadata ?: if (strictDuration > 0L) {
             inspectRecordingMedia(
                 descriptor = source.fd,
                 displayName = displayName,
@@ -3466,7 +3485,7 @@ internal fun shouldRecoverStagingOutput(
 internal fun canRecoverPendingMedia(sizeBytes: Long, durationMillis: Long): Boolean =
     sizeBytes > 0L && durationMillis > 0L
 
-private fun forceRecordingDirectoryDurable(directory: File) {
+internal fun forceRecordingDirectoryDurable(directory: File) {
     val beforeIdentity = resolveDirectoryIdentity(directory).takeIf { it.isNotBlank() }
         ?: throw IOException("Recording directory is not a trustworthy directory: ${directory.absolutePath}")
     if (beforeIdentity.startsWith("dirstat:")) {
@@ -4432,6 +4451,24 @@ internal fun structurallyCompleteRecordingDurationMillis(
 ): Long = when (displayName.substringAfterLast('.', "").lowercase()) {
     ExportFormat.WAV.extension -> readRecoverableStagingWavDurationMillis(input)
     else -> 0L
+}
+
+/** Catalog discovery needs complete container geometry, not a second digest of all PCM.
+ * Actual I/O failures still escape; only positively malformed readable structure is skipped.
+ * Export/recovery verification retains the separate full-byte hash below.
+ */
+private fun inspectSeekableWavStructure(
+    context: Context,
+    channel: FileChannel,
+): RecordingMediaMetadata = try {
+    val layout = readWavPcmLayout(channel)
+    RecordingMediaMetadata(
+        durationMillis = layout.frameCount * 1000L / layout.sampleRate,
+        codecSummary = buildCodecSummary(context, ExportFormat.WAV, layout.sampleRate,
+            layout.channelCount, layout.sampleFormat),
+    )
+} catch (_: InvalidWavStructureException) {
+    RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
 }
 
 internal data class RecoverableStagingWav(

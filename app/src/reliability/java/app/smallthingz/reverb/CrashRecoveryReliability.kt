@@ -33,6 +33,7 @@ internal fun prepareDurableCaptureForProcessDeath(context: Context): Int {
         output.fd.sync()
     }
     prepareNativeExportBeforeProcessDeath(context)
+    prepareAbandonedRangeForProcessDeath(context)
     RecordingIncidentStore.recordCaptureStarted(context)
     // Intentionally no store.close(): the next instrumentation process must perform recovery.
     return pid
@@ -62,6 +63,7 @@ internal fun verifyDurableCaptureAfterProcessDeath(context: Context) {
         .filter { it.kind == RecordingIncidentKind.UNEXPECTED_SHUTDOWN && it.pid == previousPid }
     check(incidents.size == 1) { "Armed process death did not produce exactly one interruption incident: $incidents" }
     verifyNativeExportAfterProcessDeath(context)
+    verifyAbandonedRangeAfterProcessDeath(context)
 }
 
 private fun nativeExportTree(context: Context): Uri = DocumentsContract.buildTreeDocumentUri(

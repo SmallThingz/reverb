@@ -382,17 +382,20 @@ internal fun <T> withRecordingWavChannel(
     result
 }
 
+internal class InvalidWavStructureException(message: String) : IOException(message)
+
 internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
+    val fileSize = channel.size()
+    if (fileSize < 44L) throw InvalidWavStructureException("WAV header is incomplete")
     val riff = ByteArray(12)
     requireReadAt(channel, 0L, riff, riff.size)
     if (!riff.asciiEquals(0, "RIFF") || !riff.asciiEquals(8, "WAVE")) {
-        throw IOException("Recording is not a RIFF/WAVE file")
+        throw InvalidWavStructureException("Recording is not a RIFF/WAVE file")
     }
 
-    val fileSize = channel.size()
     val containerBytes = littleEndianUInt(riff, 4) + 8L
     if (containerBytes < 44L || containerBytes != fileSize) {
-        throw IOException("WAV RIFF size does not match the file")
+        throw InvalidWavStructureException("WAV RIFF size does not match the file")
     }
 
     var sampleRate = 0
@@ -409,24 +412,24 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
 
     while (cursor < containerBytes) {
         if (containerBytes - cursor < header.size.toLong()) {
-            throw IOException("Truncated WAV chunk header")
+            throw InvalidWavStructureException("Truncated WAV chunk header")
         }
         requireReadAt(channel, cursor, header, header.size)
         val chunkSize = littleEndianUInt(header, 4)
         val paddedChunkSize = chunkSize + (chunkSize and 1L)
         val payloadOffset = cursor + header.size.toLong()
         if (paddedChunkSize > containerBytes - payloadOffset) {
-            throw IOException("Truncated WAV chunk")
+            throw InvalidWavStructureException("Truncated WAV chunk")
         }
         when {
             header.asciiEquals(0, "fmt ") -> {
-                if (sawFormat || chunkSize < 16L) throw IOException("Invalid WAV fmt chunk")
+                if (sawFormat || chunkSize < 16L) throw InvalidWavStructureException("Invalid WAV fmt chunk")
                 val fmt = ByteArray(16)
                 requireReadAt(channel, payloadOffset, fmt, fmt.size)
                 val formatTag = littleEndianUShort(fmt, 0)
                 channelCount = littleEndianUShort(fmt, 2)
                 val sampleRateLong = littleEndianUInt(fmt, 4)
-                if (sampleRateLong !in 1L..Int.MAX_VALUE.toLong()) throw IOException("Invalid WAV sample rate")
+                if (sampleRateLong !in 1L..Int.MAX_VALUE.toLong()) throw InvalidWavStructureException("Invalid WAV sample rate")
                 sampleRate = sampleRateLong.toInt()
                 byteRate = littleEndianUInt(fmt, 8)
                 blockAlign = littleEndianUShort(fmt, 12)
@@ -435,12 +438,12 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
                     formatTag == 1 && bitsPerSample == 8 -> PcmSampleFormat.PCM_8
                     formatTag == 1 && bitsPerSample == 16 -> PcmSampleFormat.PCM_16
                     formatTag == 3 && bitsPerSample == 32 -> PcmSampleFormat.PCM_FLOAT
-                    else -> throw IOException("Unsupported WAV PCM format")
+                    else -> throw InvalidWavStructureException("Unsupported WAV PCM format")
                 }
                 sawFormat = true
             }
             header.asciiEquals(0, "data") -> {
-                if (sawData) throw IOException("Duplicate WAV data chunk")
+                if (sawData) throw InvalidWavStructureException("Duplicate WAV data chunk")
                 dataOffset = payloadOffset
                 dataBytes = chunkSize
                 sawData = true
@@ -449,16 +452,16 @@ internal fun readWavPcmLayout(channel: FileChannel): WavPcmLayout {
         cursor = payloadOffset + paddedChunkSize
     }
 
-    if (cursor != containerBytes) throw IOException("WAV container did not end at RIFF boundary")
-    val format = sampleFormat ?: throw IOException("WAV fmt chunk missing")
-    if (!sawFormat || !sawData || channelCount !in 1..2) throw IOException("Invalid WAV format")
+    if (cursor != containerBytes) throw InvalidWavStructureException("WAV container did not end at RIFF boundary")
+    val format = sampleFormat ?: throw InvalidWavStructureException("WAV fmt chunk missing")
+    if (!sawFormat || !sawData || channelCount !in 1..2) throw InvalidWavStructureException("Invalid WAV format")
     val expectedFrameBytes = channelCount * format.bytesPerSample
     val expectedByteRate = sampleRate.toLong() * expectedFrameBytes.toLong()
-    if (blockAlign != expectedFrameBytes) throw IOException("Unsupported WAV block alignment")
-    if (byteRate != expectedByteRate) throw IOException("Unsupported WAV byte rate")
-    if (dataOffset < 0L || dataBytes < expectedFrameBytes.toLong()) throw IOException("WAV data chunk missing")
+    if (blockAlign != expectedFrameBytes) throw InvalidWavStructureException("Unsupported WAV block alignment")
+    if (byteRate != expectedByteRate) throw InvalidWavStructureException("Unsupported WAV byte rate")
+    if (dataOffset < 0L || dataBytes < expectedFrameBytes.toLong()) throw InvalidWavStructureException("WAV data chunk missing")
     if (dataBytes % expectedFrameBytes.toLong() != 0L) {
-        throw IOException("WAV data chunk is not frame aligned")
+        throw InvalidWavStructureException("WAV data chunk is not frame aligned")
     }
     return WavPcmLayout(sampleRate, channelCount, format, dataOffset, dataBytes)
 }

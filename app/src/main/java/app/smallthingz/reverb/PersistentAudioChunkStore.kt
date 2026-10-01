@@ -1,6 +1,10 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.os.Build
+import android.system.Os
+import android.system.OsConstants
+import android.system.StructStat
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
@@ -13,6 +17,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.ArrayDeque
+import java.util.Base64
 import java.util.UUID
 import java.util.zip.CRC32
 import kotlin.math.ceil
@@ -124,11 +129,7 @@ internal fun oneShotRetainedChunkBytesForTime(
     return keepFrames * frameBytes.toLong()
 }
 
-private fun forceAudioStoreDirectoryDurable(directory: File) {
-    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
-        channel.force(true)
-    }
-}
+private fun forceAudioStoreDirectoryDurable(directory: File) = forceRecordingDirectoryDurable(directory)
 
 internal enum class AtomicChunkReplacementState { ORIGINAL, REPLACEMENT, UNCERTAIN }
 
@@ -169,6 +170,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private val directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
     private val atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
     private val onUnexpectedRecovery: (String) -> Unit = {},
+    private val onMaintenanceNeeded: () -> Unit = {},
 ) : Closeable {
     constructor(
         context: Context,
@@ -176,11 +178,13 @@ internal class PersistentAudioChunkStore internal constructor(
         legacyCacheFolderName: String? = LEGACY_BUFFER_CACHE_FOLDER_NAME,
         overwriteOldest: Boolean = true,
         onUnexpectedRecovery: (String) -> Unit = {},
+        onMaintenanceNeeded: () -> Unit = {},
     ) : this(
         rootDirectory = File(context.noBackupFilesDir, cacheFolderName),
         legacyDirectory = legacyCacheFolderName?.let { File(context.noBackupFilesDir, it) },
         overwriteOldest = overwriteOldest,
         onUnexpectedRecovery = onUnexpectedRecovery,
+        onMaintenanceNeeded = onMaintenanceNeeded,
     )
 
     internal constructor(
@@ -188,6 +192,7 @@ internal class PersistentAudioChunkStore internal constructor(
         overwriteOldest: Boolean = true,
         directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
         atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
+        onMaintenanceNeeded: () -> Unit = {},
     ) : this(
         rootDirectory,
         legacyDirectory = null,
@@ -195,6 +200,7 @@ internal class PersistentAudioChunkStore internal constructor(
         directorySync = directorySync,
         atomicChunkReplace = atomicChunkReplace,
         onUnexpectedRecovery = {},
+        onMaintenanceNeeded = onMaintenanceNeeded,
     )
 
     private val chunksDirectory = File(rootDirectory, BUFFER_CHUNKS_FOLDER_NAME)
@@ -276,6 +282,10 @@ internal class PersistentAudioChunkStore internal constructor(
         sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
         deferRetentionCleanup: Boolean = false,
     ) {
+        // The service's background-maintenance policy also applies to restart recovery.
+        // Reconstruct the live timeline first; do not synchronously hash/unlink every old
+        // range lease before the first recorder state can be delivered.
+        if (!loaded) deferredRetentionCleanup = deferRetentionCleanup
         ensureLoadedLocked()
 
         val validFormat = requestedSampleRate > 0 && requestedChannelCount in 1..MAX_CHANNEL_COUNT
@@ -729,6 +739,12 @@ internal class PersistentAudioChunkStore internal constructor(
     @Synchronized
     fun performRetentionMaintenanceStep(): RetentionMaintenanceStep {
         ensureLoadedLocked()
+        if (deferredRetentionCleanup) {
+            retiredById.values.firstOrNull { it.refCount == 0 }?.let { record ->
+                val progressed = tryDeleteRetiredRecordLocked(record)
+                return RetentionMaintenanceStep(progressed, retentionMaintenanceNeededLocked(), !progressed)
+            }
+        }
         if (!retentionMaintenanceNeededLocked()) {
             pendingOneShotRetentionTruncation = false
             pendingLoopingRetentionTruncation = false
@@ -740,7 +756,7 @@ internal class PersistentAudioChunkStore internal constructor(
         } else {
             truncateOneShotRetentionStepLocked()
         }
-        val needsMore = retentionValue > 0L && retentionExceededLocked()
+        val needsMore = retentionMaintenanceNeededLocked()
         if (needsMore) {
             markRetentionMaintenancePendingLocked()
         } else {
@@ -815,7 +831,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 recordFailure(error)
             }
             try {
-                retryRetiredDeletesLocked()
+                retryRetiredDeletesLocked(force = true)
             } catch (error: Exception) {
                 recordFailure(error)
             }
@@ -1053,6 +1069,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
         @Synchronized
         override fun close() {
+            var needsMaintenance = false
             synchronized(store) {
                 if (closedLease) return
                 closedLease = true
@@ -1065,8 +1082,12 @@ internal class PersistentAudioChunkStore internal constructor(
                         if (previous == null) failure = error else previous.addSuppressed(error)
                     }
                 }
+                needsMaintenance = !store.closed && store.retentionMaintenanceNeededLocked()
                 failure?.let { throw it }
             }
+            // Lease release must not serialize a whole history's disk work while holding
+            // the capture-store lock. The existing service maintenance owner drains it.
+            if (needsMaintenance) store.onMaintenanceNeeded()
         }
     }
 
@@ -1120,13 +1141,22 @@ internal class PersistentAudioChunkStore internal constructor(
         val sampleRate: Int,
         val channelCount: Int,
         val sampleFormat: PcmSampleFormat,
+        val payloadBytes: Long? = null,
+        val sampleFrames: Long? = null,
+        val payloadChecksum: Int? = null,
+        val headerGeneration: Long? = null,
+        val fileIdentity: String? = null,
     ) {
         fun matches(record: ChunkRecord): Boolean =
             id == record.id &&
                 createdAtMillis == record.createdAtMillis &&
                 sampleRate == record.sampleRate &&
                 channelCount == record.channelCount &&
-                sampleFormat == record.sampleFormat
+                sampleFormat == record.sampleFormat &&
+                (payloadBytes == null || payloadBytes == record.payloadBytes) &&
+                (sampleFrames == null || sampleFrames == record.sampleFrames) &&
+                (payloadChecksum == null || payloadChecksum == record.payloadChecksum) &&
+                (headerGeneration == null || headerGeneration == record.headerGeneration)
     }
 
     private data class LoadedIndex(
@@ -1184,20 +1214,13 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         if (loaded) return
 
-        val rootExisted = rootDirectory.exists()
-        if (!rootExisted && !rootDirectory.mkdirs() && !rootDirectory.exists()) {
-            throw IllegalStateException("Unable to create chunk storage: ${rootDirectory.absolutePath}")
-        }
-        if (!rootExisted) {
+        val rootCreated = ensureDirectoryEntryNoFollow(rootDirectory)
+        if (rootCreated) {
             val parent = rootDirectory.parentFile
                 ?: throw IOException("Chunk storage root has no parent: ${rootDirectory.absolutePath}")
             forceDirectoryDurable(parent)
         }
-        val chunksExisted = chunksDirectory.exists()
-        if (!chunksExisted && !chunksDirectory.mkdirs() && !chunksDirectory.exists()) {
-            throw IllegalStateException("Unable to create chunks directory: ${chunksDirectory.absolutePath}")
-        }
-        if (!chunksExisted) forceDirectoryDurable(rootDirectory)
+        if (ensureDirectoryEntryNoFollow(chunksDirectory)) forceDirectoryDurable(rootDirectory)
 
         // Never delete an older buffer format automatically. Even if this version cannot
         // decode it, those bytes may be the only surviving copy after a downgrade/upgrade.
@@ -1223,6 +1246,17 @@ internal class PersistentAudioChunkStore internal constructor(
             restoreWithoutIndexLocked(scanned.values.toList())
         }
 
+        // Deferred recovery still owns these IDs even though they are not live audio.
+        // A lost/stale index must not restart allocation on an abandoned lease's ID and
+        // block fresh capture until cleanup finishes. Preserve the modulo sequence while
+        // advancing only past the recovered, journal-owned retirement tail.
+        var furthestRetired = -1L
+        for (id in retiredById.keys) {
+            val distance = unsignedDistance(nextChunkId, id)
+            if (distance < UINT32_HALF_RANGE && distance > furthestRetired) furthestRetired = distance
+        }
+        if (furthestRetired >= 0L) nextChunkId += (furthestRetired + 1L).toUInt()
+
         lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
             newest.createdAtMillis + (newest.durationSeconds * 1000.0).toLong()
         } ?: 0L
@@ -1239,14 +1273,22 @@ internal class PersistentAudioChunkStore internal constructor(
         ensureRetiredDirectoryDurableLocked()
         val target = retirementTombstoneFile(record.id)
         val temp = File(retiredDirectory, "${record.id}.tmp")
-        val payload = buildString {
-            append("v2|")
+        val identity = resolveFileIdentity(record.file).takeIf { it.isNotBlank() }
+            ?: throw IOException("Unable to bind retirement to its chunk object")
+        val body = buildString {
+            append("v3|")
             append(record.id).append('|')
             append(record.createdAtMillis).append('|')
             append(record.sampleRate).append('|')
             append(record.channelCount).append('|')
-            append(record.sampleFormat.storageCode.toInt())
-        }.toByteArray(Charsets.UTF_8)
+            append(record.sampleFormat.storageCode.toInt()).append('|')
+            append(record.payloadBytes).append('|').append(record.sampleFrames).append('|')
+            append(record.payloadChecksum).append('|').append(record.headerGeneration).append('|')
+            append(Base64.getUrlEncoder().withoutPadding().encodeToString(identity.toByteArray(Charsets.UTF_8)))
+        }
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+        val payload = "$body|${CRC32().apply { update(bodyBytes) }.value}".toByteArray(Charsets.UTF_8)
+        if (payload.size > MAX_RETIREMENT_TOMBSTONE_BYTES) throw IOException("Retirement identity exceeds wire bound")
         FileOutputStream(temp).use { output ->
             output.write(payload)
             output.fd.sync()
@@ -1265,7 +1307,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun readRetirementTombstonesLocked(): MutableMap<UInt, RetiredChunkIdentity?> {
         val result = LinkedHashMap<UInt, RetiredChunkIdentity?>()
-        when (storagePathState(retiredDirectory)) {
+        when (storageDirectoryState(retiredDirectory)) {
             StoragePathState.MISSING -> return result
             StoragePathState.UNAVAILABLE -> throw IOException(
                 "Unable to inspect retired chunk directory: ${retiredDirectory.absolutePath}",
@@ -1325,21 +1367,38 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun parseRetirementTombstone(raw: String): RetiredChunkIdentity? {
         val parts = raw.trim().split('|')
-        if (parts.size != 6) return null
+        val v3 = parts.firstOrNull() == "v3"
+        if (parts.size != if (v3) 12 else 6) return null
         val id = parts[1].toUIntOrNull() ?: return null
         val createdAtMillis = parts[2].toLongOrNull() ?: return null
         val sampleRate = parts[3].toIntOrNull()?.takeIf { it > 0 } ?: return null
         val channelCount = parts[4].toIntOrNull()?.takeIf { it in 1..MAX_CHANNEL_COUNT } ?: return null
         val sampleFormat = retirementSampleFormatFromWire(parts[0], parts[5]) ?: return null
+        if (v3) {
+            val body = raw.trim().substringBeforeLast('|').toByteArray(Charsets.UTF_8)
+            if (parts[11].toLongOrNull() != CRC32().apply { update(body) }.value) return null
+            val payloadBytes = parts[6].toLongOrNull()?.takeIf { it in 0L..CHUNK_PAYLOAD_BYTES.toLong() } ?: return null
+            val frames = parts[7].toLongOrNull()?.takeIf { it >= 0L } ?: return null
+            val frameBytes = channelCount * sampleFormat.bytesPerSample
+            if (payloadBytes % frameBytes != 0L || frames != payloadBytes / frameBytes) return null
+            val checksum = parts[8].toIntOrNull() ?: return null
+            val generation = parts[9].toLongOrNull()?.takeIf { it > 0L } ?: return null
+            val identity = runCatching { String(Base64.getUrlDecoder().decode(parts[10]), Charsets.UTF_8) }
+                .getOrNull()?.takeIf { sameFileObjectAcrossRename(it, it) } ?: return null
+            return RetiredChunkIdentity(id, createdAtMillis, sampleRate, channelCount, sampleFormat,
+                payloadBytes, frames, checksum, generation, identity)
+        }
         return RetiredChunkIdentity(id, createdAtMillis, sampleRate, channelCount, sampleFormat)
     }
 
     private fun cleanupAbsentRetirementTombstonesLocked(
         retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
     ) {
-        val iterator = retirementTombstones.keys.iterator()
-        while (iterator.hasNext()) {
-            val id = iterator.next()
+        val absent = ArrayList<UInt>(RECOVERY_RETIREMENT_BATCH)
+        for (id in retirementTombstones.keys.toList()) {
+            // A recovered claim still owns its retirement marker until maintenance has
+            // verified and removed/preserved that exact claim, even though the numeric path is gone.
+            if (id in retiredDeletionClaims) continue
             val chunk = File(chunksDirectory, id.toString())
             when (storagePathState(chunk)) {
                 StoragePathState.PRESENT -> Unit
@@ -1349,10 +1408,36 @@ internal class PersistentAudioChunkStore internal constructor(
                 StoragePathState.MISSING -> {
                     // Make the positively observed absence durable before forgetting why that
                     // chunk must remain absent. Unavailable storage is never deletion evidence.
-                    forceDirectoryDurable(chunksDirectory)
-                    if (deleteRetirementTombstoneLocked(id)) iterator.remove()
+                    absent += id
+                    if (absent.size >= RECOVERY_RETIREMENT_BATCH) {
+                        finishRecoveredRetirementsLocked(absent, retirementTombstones)
+                        absent.clear()
+                    }
                 }
             }
+        }
+        finishRecoveredRetirementsLocked(absent, retirementTombstones)
+    }
+
+    private fun finishRecoveredRetirementsLocked(
+        ids: List<UInt>,
+        tombstones: MutableMap<UInt, RetiredChunkIdentity?>,
+    ) {
+        if (ids.isEmpty()) return
+        // One barrier covers every preceding unlink in this bounded batch. Never remove a
+        // tombstone before this succeeds: power loss can then recover either old path/claim.
+        forceDirectoryDurable(chunksDirectory)
+        val removed = ArrayList<UInt>(ids.size)
+        for (id in ids) {
+            if (storagePathState(File(chunksDirectory, id.toString())) != StoragePathState.MISSING) continue
+            Files.deleteIfExists(retirementTombstoneFile(id).toPath())
+            retirementTombstoneRemovalDurabilityPending += id
+            removed += id
+        }
+        if (removed.isNotEmpty()) forceDirectoryDurable(retiredDirectory)
+        for (id in removed) {
+            retirementTombstoneRemovalDurabilityPending.remove(id)
+            tombstones.remove(id)
         }
     }
 
@@ -1385,14 +1470,18 @@ internal class PersistentAudioChunkStore internal constructor(
         val expectedIdentity: String,
     )
 
-    private fun claimChunkPathForDeletionLocked(file: File, reason: String): ClaimedChunkPath? {
+    private fun claimChunkPathForDeletionLocked(
+        file: File,
+        reason: String,
+        syncDirectory: Boolean = true,
+    ): ClaimedChunkPath? {
         val claim = File(chunksDirectory, ".reverb-$reason-${UUID.randomUUID()}.pending")
         var moved = false
         try {
             Files.move(file.toPath(), claim.toPath(), StandardCopyOption.ATOMIC_MOVE)
             moved = true
             val durabilityFailure = try {
-                forceDirectoryDurable(chunksDirectory)
+                if (syncDirectory) forceDirectoryDurable(chunksDirectory)
                 null
             } catch (error: Exception) {
                 IOException(
@@ -1446,6 +1535,7 @@ internal class PersistentAudioChunkStore internal constructor(
         retirementTombstones: MutableMap<UInt, RetiredChunkIdentity?>,
     ): MutableMap<UInt, ChunkRecord> {
         val result = LinkedHashMap<UInt, ChunkRecord>()
+        val recoveredRetirements = ArrayList<UInt>(RECOVERY_RETIREMENT_BATCH)
         val files = chunksDirectory.listFiles()
             ?: throw IOException("Unable to list chunks directory: ${chunksDirectory.absolutePath}")
         for (file in files) {
@@ -1459,6 +1549,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             val id = file.name.toUIntOrNull()
             if (id == null || file.name != id.toString()) {
+                if (recoverRetiredDeletionClaimLocked(file, retirementTombstones)) continue
                 preserveUnrecognizedChunkLocked(file, "unrecognized")
                 continue
             }
@@ -1476,9 +1567,30 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             if (retirementTombstones.containsKey(id)) {
                 val retiredIdentity = retirementTombstones[id]
-                if (retiredIdentity?.matches(record) == true) {
-                    if (deleteChunkFileDurablyLocked(file) && deleteRetirementTombstoneLocked(id)) {
-                        retirementTombstones.remove(id)
+                if (retiredIdentity?.matches(record) == true &&
+                    (retiredIdentity.fileIdentity == null || sameFileObjectAcrossRename(
+                        retiredIdentity.fileIdentity, resolveFileIdentity(file),
+                    ))
+                ) {
+                    if (deferredRetentionCleanup) {
+                        record.pendingDelete = true
+                        retiredById[id] = record
+                        continue
+                    }
+                    val beforeIdentity = resolveFileIdentity(file)
+                    if (beforeIdentity.isBlank()) throw IOException("Unable to identify recovered retirement")
+                    val claimed = claimChunkPathForDeletionLocked(file, "retired-delete", syncDirectory = false)
+                        ?: throw IOException("Unable to claim recovered retirement")
+                    val claimedIdentity = verifiedRetiredChunkIdentityLocked(record, claimed.file)
+                    if (claimedIdentity != null && sameFileObjectAcrossRename(beforeIdentity, claimedIdentity)) {
+                        Files.delete(claimed.file.toPath())
+                    } else if (!moveClaimedChunkToPreservedLocked(claimed.file, file.name, "retired-recovery-changed")) {
+                        throw IOException("Unable to preserve changed recovered retirement")
+                    }
+                    recoveredRetirements += id
+                    if (recoveredRetirements.size >= RECOVERY_RETIREMENT_BATCH) {
+                        finishRecoveredRetirementsLocked(recoveredRetirements, retirementTombstones)
+                        recoveredRetirements.clear()
                     }
                     continue
                 }
@@ -1496,10 +1608,82 @@ internal class PersistentAudioChunkStore internal constructor(
                 throw IOException("Duplicate chunk id on disk: $id")
             }
         }
+        finishRecoveredRetirementsLocked(recoveredRetirements, retirementTombstones)
         return result
     }
 
+    private fun recoverRetiredDeletionClaimLocked(
+        file: File,
+        tombstones: MutableMap<UInt, RetiredChunkIdentity?>,
+    ): Boolean {
+        val prefix = ".reverb-retired-delete-"
+        if (!file.name.startsWith(prefix) || !file.name.endsWith(".pending")) return false
+        val token = file.name.removePrefix(prefix).removeSuffix(".pending")
+        if (runCatching { UUID.fromString(token).toString() }.getOrNull() != token) return false
+        val header = readChunkHeader(file)?.takeIf { it.state == ChunkState.FINALIZED } ?: return false
+        val retirement = tombstones[header.id] ?: return false
+        val identity = retirement.fileIdentity ?: return false // Legacy markers have no claim-object authority.
+        if (storagePathState(File(chunksDirectory, header.id.toString())) != StoragePathState.MISSING) return false
+        val record = readChunkRecord(file, header.id) ?: return false
+        if (!retirement.matches(record)) return false
+        if (deferredRetentionCleanup) {
+            if (!sameFileObjectAcrossRename(identity, resolveFileIdentity(file))) return false
+            val retired = record.copy(file = File(chunksDirectory, record.id.toString()), pendingDelete = true)
+            retiredById[record.id] = retired
+            retiredDeletionClaims[record.id] = PendingRetiredDeletionClaim(file, identity)
+            // Full header/payload verification is still mandatory in the one-unit worker.
+            // Keep the journal now, and never let this claim enter the live timeline.
+            return true
+        }
+        val verifiedIdentity = verifiedRetiredChunkIdentityLocked(record) ?: return false
+        if (!sameFileObjectAcrossRename(identity, verifiedIdentity)) return false
+        // The durable v3 marker, complete PCM checksum and original object jointly own this
+        // old process's hidden claim. Never authorize cleanup from its age or name alone.
+        if (!finishRetiredDeletionClaimLocked(record, PendingRetiredDeletionClaim(file, verifiedIdentity))) {
+            throw IOException("Unable to complete recovered retired-chunk claim")
+        }
+        tombstones.remove(record.id)
+        return true
+    }
+
     private fun preserveUnrecognizedChunkLocked(file: File, reason: String) {
+        // Both directories are beneath the private store. A same-filesystem rename preserves
+        // the exact bytes without copying/hashing gigabytes of uncertain history on startup.
+        // Cross-filesystem or positively unchanged failures retain the verified-copy fallback.
+        ensureQuarantineDirectoryDurableLocked()
+        val originalIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() }
+            ?: throw IOException("Unable to identify audio for preservation")
+        FileInputStream(file).use { input ->
+            if (Build.VERSION.SDK_INT >= 28 &&
+                !fileDescriptorIdentityMatches(originalIdentity, resolveFileDescriptorIdentity(input.fd))
+            ) throw IOException("Audio changed while opening preservation source")
+            input.fd.sync()
+        }
+        if (!fileIdentityMatches(originalIdentity, resolveFileIdentity(file))) {
+            throw IOException("Audio changed before preservation move")
+        }
+        val movedTarget = File(quarantineDirectory, "${file.name}.$reason-${UUID.randomUUID()}")
+        var moveFailure: Exception? = null
+        try {
+            Files.move(file.toPath(), movedTarget.toPath())
+        } catch (error: Exception) {
+            moveFailure = error
+        }
+        if (sameFileObjectAcrossRename(originalIdentity, resolveFileIdentity(movedTarget)) &&
+            storagePathState(file) == StoragePathState.MISSING
+        ) {
+            forceDirectoryDurable(quarantineDirectory)
+            forceDirectoryDurable(chunksDirectory)
+            if (!sameFileObjectAcrossRename(originalIdentity, resolveFileIdentity(movedTarget))) {
+                throw IOException("Preserved audio identity changed at directory commit")
+            }
+            return
+        }
+        if (storagePathState(movedTarget) != StoragePathState.MISSING ||
+            !fileIdentityMatches(originalIdentity, resolveFileIdentity(file))
+        ) {
+            throw IOException("Audio preservation move is uncertain; all artifacts retained", moveFailure)
+        }
         val target = reserveQuarantinePathLocked(file, reason)
         val sourceAuthority = try {
             copyPreservedChunkAndVerifyLocked(file, target)
@@ -1674,14 +1858,15 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun readChunkRecord(file: File, filenameId: UInt): ChunkRecord? {
-        val header = readChunkHeader(file) ?: return null
+        val diskHeader = readChunkHeaderSnapshot(file, allowCached = true) ?: return null
+        val header = diskHeader.header
         if (header.id != filenameId) return null
         if (header.sampleRate <= 0 || header.channelCount !in 1..MAX_CHANNEL_COUNT) return null
         val frameBytesLong = header.channelCount.toLong() * header.sampleFormat.bytesPerSample.toLong()
         if (frameBytesLong <= 0L || frameBytesLong > Int.MAX_VALUE.toLong()) return null
         val frameBytes = frameBytesLong.toInt()
 
-        val actualPayload = (Files.size(file.toPath()) - header.payloadOffsetBytes).coerceAtLeast(0L)
+        val actualPayload = (diskHeader.length - header.payloadOffsetBytes).coerceAtLeast(0L)
         if (actualPayload > CHUNK_PAYLOAD_BYTES.toLong()) return null
         val alignedActualPayload = actualPayload - actualPayload % frameBytes.toLong()
         if (alignedActualPayload <= 0L) {
@@ -1925,7 +2110,8 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun retentionMaintenanceNeededLocked(): Boolean =
-        deferredRetentionCleanup && retentionValue > 0L && retentionExceededLocked()
+        deferredRetentionCleanup && ((retentionValue > 0L && retentionExceededLocked()) ||
+            retiredById.values.any { it.refCount == 0 })
 
     private fun markRetentionMaintenancePendingLocked() {
         val needed = retentionValue > 0L && retentionExceededLocked()
@@ -2297,12 +2483,23 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun removeFirstChunkAndRetireLocked(): ChunkRecord {
         val record = chunks.first()
-        val durabilityFailure = persistRetirementTombstoneLocked(record)
-        val closeFailure = if (record === activeRecord) {
+        // A leased ACTIVE chunk must not later be mistaken for changed/uncertain audio.
+        // Seal its exact payload before durable retirement, without invalidating the lease.
+        val sealFailure = if (record === activeRecord && record.payloadBytes > 0L) {
+            try { finalizeActiveLocked(); null } catch (error: Exception) { error }
+        } else null
+        val durabilityFailure = try {
+            persistRetirementTombstoneLocked(record)
+        } catch (error: Exception) {
+            sealFailure?.let(error::addSuppressed)
+            throw error
+        }
+        val rawCloseFailure = if (record === activeRecord) {
             closeActiveAccessLocked().also { clearActiveRecordStateLocked() }
         } else {
             null
         }
+        val closeFailure = sealFailure?.also { first -> rawCloseFailure?.let(first::addSuppressed) } ?: rawCloseFailure
         val removed = removeFirstChunkLocked()
         check(removed === record) { "Unexpected chunk retirement ordering" }
         retirePreparedRecordLocked(record, tombstoneDurable = durabilityFailure == null)
@@ -2370,7 +2567,7 @@ internal class PersistentAudioChunkStore internal constructor(
         check(record.refCount > 0) { "Chunk refCount underflow for ${record.id}" }
         record.refCount--
         if (terminalStorageFailure != null) return
-        if (record.refCount == 0 && record.pendingDelete) {
+        if (record.refCount == 0 && record.pendingDelete && (!deferredRetentionCleanup || closed)) {
             tryDeleteRetiredRecordLocked(record)
         }
         if (!closed && record.refCount == 0) {
@@ -2578,7 +2775,8 @@ internal class PersistentAudioChunkStore internal constructor(
         return markerDeletedDurably
     }
 
-    private fun retryRetiredDeletesLocked() {
+    private fun retryRetiredDeletesLocked(force: Boolean = false) {
+        if (deferredRetentionCleanup && !force) return
         val retry = retiredById.values.filter { it.refCount == 0 }
         for (record in retry) {
             tryDeleteRetiredRecordLocked(record)
@@ -2744,12 +2942,77 @@ internal class PersistentAudioChunkStore internal constructor(
         writeIntLE(bytes, offset + 36, 0)
     }
 
-    private fun readChunkHeader(file: File): ParsedHeader? {
-        if (Files.size(file.toPath()) < CHUNK_HEADER_BYTES) return null
+    private data class ChunkHeaderSnapshot(val header: ParsedHeader, val length: Long)
+
+    private data class ChunkHeaderStamp(
+        val device: Long,
+        val inode: Long,
+        val size: Long,
+        val changedSeconds: Long,
+        val changedNanos: Long,
+    ) {
+        constructor(stat: StructStat) : this(
+            stat.st_dev, stat.st_ino, stat.st_size, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec,
+        )
+    }
+
+    private data class CachedChunkHeader(val stamp: ChunkHeaderStamp, val snapshot: ChunkHeaderSnapshot)
+
+    // Destructive verification deliberately bypasses the startup cache.
+    private fun readChunkHeader(file: File): ParsedHeader? =
+        readChunkHeaderSnapshot(file, allowCached = false)?.header
+
+    private fun readChunkHeaderSnapshot(file: File, allowCached: Boolean): ChunkHeaderSnapshot? {
         val bytes = ByteArray(CHUNK_HEADER_BYTES)
-        RandomAccessFile(file, "r").use { access ->
-            access.readFully(bytes)
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                val before = Os.lstat(file.path)
+                if (!OsConstants.S_ISREG(before.st_mode) || before.st_size < CHUNK_HEADER_BYTES) return null
+                val stamp = ChunkHeaderStamp(before)
+                val key = file.absolutePath
+                if (allowCached) {
+                    val cached = synchronized(chunkHeaderCache) { chunkHeaderCache[key] }
+                    if (cached?.stamp == stamp) return cached.snapshot
+                }
+                val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+                val snapshot = withOwnedResource(descriptor, release = { Os.close(it) }) { opened ->
+                    if (ChunkHeaderStamp(Os.fstat(opened)) != stamp) throw IOException("Chunk replaced before header read")
+                    var offset = 0
+                    while (offset < bytes.size) {
+                        val count = Os.read(opened, bytes, offset, bytes.size - offset)
+                        if (count <= 0) throw IOException("Truncated chunk header")
+                        offset += count
+                    }
+                    if (ChunkHeaderStamp(Os.fstat(opened)) != stamp ||
+                        ChunkHeaderStamp(Os.lstat(file.path)) != stamp
+                    ) throw IOException("Chunk changed during header read")
+                    parseChunkHeader(bytes)?.let { ChunkHeaderSnapshot(it, stamp.size) }
+                }
+                if (allowCached && snapshot?.header?.state == ChunkState.FINALIZED) {
+                    synchronized(chunkHeaderCache) {
+                        chunkHeaderCache[key] = CachedChunkHeader(stamp, snapshot)
+                        if (chunkHeaderCache.size > MAX_CACHED_CHUNK_HEADERS) {
+                            val oldest = chunkHeaderCache.entries.iterator()
+                            oldest.next(); oldest.remove()
+                        }
+                    }
+                }
+                return snapshot
+            } catch (error: android.system.ErrnoException) {
+                throw IOException("Unable to inspect chunk header: ${file.name}", error)
+            }
         }
+        // JVM tests and non-Android tooling: sample geometry through the descriptor already
+        // used for the header rather than opening the path for separate length queries.
+        return RandomAccessFile(file, "r").use { access ->
+            val length = access.length()
+            if (length < bytes.size) return@use null
+            access.readFully(bytes)
+            parseChunkHeader(bytes)?.let { ChunkHeaderSnapshot(it, length) }
+        }
+    }
+
+    private fun parseChunkHeader(bytes: ByteArray): ParsedHeader? {
         if (readIntLE(bytes, 0) != CHUNK_MAGIC || readIntLE(bytes, 4) != CHUNK_VERSION) return null
         if (readIntLE(bytes, 12) != CHUNK_HEADER_BYTES) return null
         if (readIntLE(bytes, 40) != crc32(bytes, 0, CHUNK_IMMUTABLE_CRC_OFFSET)) return null
@@ -2984,19 +3247,11 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun ensureRetiredDirectoryDurableLocked() {
-        val existed = retiredDirectory.exists()
-        if (!existed && !retiredDirectory.mkdirs() && !retiredDirectory.exists()) {
-            throw IOException("Unable to create retired chunk directory: ${retiredDirectory.absolutePath}")
-        }
-        if (!existed) forceDirectoryDurable(rootDirectory)
+        if (ensureDirectoryEntryNoFollow(retiredDirectory)) forceDirectoryDurable(rootDirectory)
     }
 
     private fun ensureQuarantineDirectoryDurableLocked() {
-        val existed = quarantineDirectory.exists()
-        if (!existed && !quarantineDirectory.mkdirs() && !quarantineDirectory.exists()) {
-            throw IOException("Unable to create preserved chunk directory: ${quarantineDirectory.absolutePath}")
-        }
-        if (!existed) forceDirectoryDurable(rootDirectory)
+        if (ensureDirectoryEntryNoFollow(quarantineDirectory)) forceDirectoryDurable(rootDirectory)
     }
 
     private fun forceDirectoryDurable(directory: File) {
@@ -3010,6 +3265,9 @@ internal class PersistentAudioChunkStore internal constructor(
     )
 
     private companion object {
+        const val RECOVERY_RETIREMENT_BATCH = 64
+        const val MAX_CACHED_CHUNK_HEADERS = 32_768
+        val chunkHeaderCache = LinkedHashMap<String, CachedChunkHeader>(256, 0.75f, true)
         const val CHUNK_MAGIC = 0x52564348 // RVCH
         const val CHUNK_VERSION = 2
         const val CHUNK_HEADER_BYTES = 128
@@ -3081,7 +3339,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
 internal fun retirementSampleFormatFromWire(version: String, value: String): PcmSampleFormat? = when (version) {
     "v1" -> PcmSampleFormat.entries.firstOrNull { it.name == value }
-    "v2" -> value.toIntOrNull()?.let(PcmSampleFormat::fromStorageCode)
+    "v2", "v3" -> value.toIntOrNull()?.let(PcmSampleFormat::fromStorageCode)
     else -> null
 }
 

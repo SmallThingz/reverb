@@ -747,6 +747,7 @@ internal fun readStableOutputFingerprint(
     storageType: RecordingStorageType,
     id: String,
     preferredIdentity: String? = null,
+    reuseVerifiedProviderRevision: Boolean = false,
 ): StableOutputFingerprint? = runCatching {
     when (storageType) {
         RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id))
@@ -761,18 +762,29 @@ internal fun readStableOutputFingerprint(
             val input = openChildOrCloseOwner(descriptor) { opened ->
                 ParcelFileDescriptor.AutoCloseInputStream(opened)
             }
-            input.use { source ->
+            var reusableRevision: ProviderPayloadRevision? = null
+            val fingerprint = input.use { source ->
                 val afterOpen = resolveProviderRecordingIdentity(context, storageType, uri, before)
                 if (!providerRecordingIdentityMatches(before, afterOpen) ||
                     !providerDescriptorMatchesIdentity(before, source.fd)
                 ) return@use null
-                val digest = sha256(source)
+                val nativeBefore = nativeProviderPayloadRevision(source.fd)
+                val cached = if (reuseVerifiedProviderRevision) {
+                    VerifiedProviderDigestCache.read(storageType, id, before, nativeBefore)
+                } else null
+                val digest = cached ?: sha256(source)
                 val afterRead = resolveProviderRecordingIdentity(context, storageType, uri, before)
                 if (!providerReadRemainsStable(before, afterOpen, afterRead) ||
                     !providerDescriptorMatchesIdentity(before, source.fd)
                 ) return@use null
+                val nativeAfter = nativeProviderPayloadRevision(source.fd)
+                if (nativeBefore != null && nativeBefore != nativeAfter) return@use null
+                reusableRevision = nativeBefore
                 StableOutputFingerprint(digest, fileKey = null, providerIdentity = before)
             }
+            // The descriptor must also close successfully before the proof can be reused.
+            if (fingerprint != null) VerifiedProviderDigestCache.remember(storageType, id, fingerprint, reusableRevision)
+            fingerprint
         }
     }
 }.getOrNull()
@@ -798,7 +810,9 @@ internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprin
         if (!fileIdentityMatches(beforeIdentity, afterIdentity) ||
             !fileDescriptorIdentityMatches(afterIdentity, closedIdentity)
         ) return@runCatching null
-        StableOutputFingerprint(digest, fileKey = beforeIdentity, providerIdentity = null)
+        StableOutputFingerprint(digest, fileKey = beforeIdentity, providerIdentity = null).also {
+            VerifiedFileDigestCache.remember(file, it)
+        }
     }
 }.getOrNull()
 

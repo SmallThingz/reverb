@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,6 +65,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -1067,8 +1070,11 @@ internal fun RangeExportHomeContent(
         }
 
         RangeExportControls(
-            modifier = Modifier.graphicsLayer { alpha = chromeAlpha() },
+            // Preparation can take noticeable time on a multi-day history. Keep its Close
+            // action visible instead of leaving an invisible but clickable control bar.
+            modifier = Modifier.graphicsLayer { alpha = if (snapshot == null) 1f else chromeAlpha() },
             state = state,
+            loading = snapshot == null,
             canExport = rangeExportSelectionWithinLimit(
                 state.selectionDurationExactSeconds,
                 maxExportDurationSeconds,
@@ -1892,13 +1898,14 @@ internal fun SpringFineSeekControl(
 private fun RangeExportControls(
     modifier: Modifier = Modifier,
     state: RangeExportEditorState,
+    loading: Boolean,
     canExport: Boolean,
     selectedBuffer: ReverbService.BufferSlot,
     onCancel: () -> Unit,
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
-    val exportEnabled = state.snapshotReady && canExport
+    val exportEnabled = !loading && state.snapshotReady && canExport
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     Surface(
@@ -1972,12 +1979,20 @@ private fun RangeExportControls(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        imageVector = AppIcons.save,
-                        contentDescription = null,
-                        tint = exportContentColor,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    if (loading) {
+                        val label = stringResource(R.string.preparing_audio_selection)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp).semantics { contentDescription = label },
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = AppIcons.save,
+                            contentDescription = null,
+                            tint = exportContentColor,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     Text(
                         text = stringResource(R.string.export),
                         style = MaterialTheme.typography.labelLarge,

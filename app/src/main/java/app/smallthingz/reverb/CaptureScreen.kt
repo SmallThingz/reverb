@@ -49,6 +49,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -70,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -1183,6 +1185,7 @@ fun CaptureScreen(
             isSaving = isSaving,
             service = service,
             serviceStateHydrated = serviceStateHydrated,
+            isPreparingRange = isPreparingRange,
             oneShotBlobController = oneShotBlobController,
             loopingBlobController = loopingBlobController,
             oneShotBlobActivity = latestBlobActivity[0],
@@ -1410,6 +1413,7 @@ private fun MainCaptureContent(
     isSaving: Boolean,
     service: ReverbService?,
     serviceStateHydrated: Boolean,
+    isPreparingRange: Boolean,
     oneShotBlobController: AudioBlobController,
     loopingBlobController: AudioBlobController,
     oneShotBlobActivity: Float,
@@ -1565,7 +1569,7 @@ private fun MainCaptureContent(
         activeBuffer = activeBuffer,
     )
     val displayedRecording = displayedUiState == CaptureBufferUiState.RECORDING
-    val serviceReady = captureServiceInteractionReady(service != null, serviceStateHydrated)
+    val serviceReady = captureServiceInteractionReady(service != null, serviceStateHydrated) && !isPreparingRange
     val hasHistory = displayedMetrics.seconds > 0f
 
     val requestBufferNavigation: (ReverbService.BufferSlot) -> Unit = { target ->
@@ -1670,6 +1674,15 @@ private fun MainCaptureContent(
                 interactionEnabled = serviceReady,
                 onBlobBoundsInRoot = { bounds -> homeBlobBoundsInRoot[0] = bounds },
             )
+            if (visualizerVisible && (!serviceStateHydrated || isPreparingRange)) {
+                val label = stringResource(if (isPreparingRange) R.string.preparing_audio_selection
+                    else R.string.loading_audio_history)
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)
+                        .size(24.dp).semantics { contentDescription = label },
+                    strokeWidth = 2.dp,
+                )
+            }
         }
 
         CaptureControlCluster(

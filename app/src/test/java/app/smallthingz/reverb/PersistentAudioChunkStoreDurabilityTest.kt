@@ -22,7 +22,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         assertEquals(PcmSampleFormat.PCM_16, retirementSampleFormatFromWire("v1", "PCM_16"))
         assertEquals(PcmSampleFormat.PCM_16, retirementSampleFormatFromWire("v2", "2"))
         assertEquals(null, retirementSampleFormatFromWire("v2", "PCM_16"))
-        assertEquals(null, retirementSampleFormatFromWire("v3", "2"))
+        assertEquals(PcmSampleFormat.PCM_16, retirementSampleFormatFromWire("v3", "2"))
+        assertEquals(null, retirementSampleFormatFromWire("v4", "2"))
     }
     @Test
 
@@ -1120,8 +1121,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         crashed.clear()
         assertFalse(crashed.hasData())
         val retirementMarker = File(root, "retired/0").readText()
-        assertTrue(retirementMarker.startsWith("v2|0|"))
-        assertTrue(retirementMarker.endsWith("|${PcmSampleFormat.PCM_16.storageCode.toInt()}"))
+        assertTrue(retirementMarker.startsWith("v3|0|"))
+        assertEquals(PcmSampleFormat.PCM_16.storageCode.toInt().toString(), retirementMarker.split('|')[5])
         assertArrayEquals(expected, readLease(lease))
         val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         assertTrue(chunk.isFile)
@@ -1211,7 +1212,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
 
         assertArrayEquals(sentinelBytes, sentinel.readBytes())
-        assertTrue(File(preserved, "0.retired-ambiguous.1").isFile)
+        val recovered = preserved.listFiles().orEmpty().single { it != sentinel && ".retired-ambiguous" in it.name }
+        assertArrayEquals(expected, recovered.readBytes().takeLast(expected.size).toByteArray())
     }
 
     @Test
@@ -1390,7 +1392,7 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
-    fun preservation_neverDeletesSourceReplacedAfterVerifiedCopy() = withStoreRoot { root ->
+    fun preservation_neverDeletesSourceReplacedAtPreservationCommit() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val firstReplacement = ByteArray(257) { index -> ((index * 31 + 5) and 0xff).toByte() }
         val lateReplacement = ByteArray(263) { index -> ((index * 37 + 9) and 0xff).toByte() }
@@ -1424,12 +1426,12 @@ class PersistentAudioChunkStoreDurabilityTest {
         lease.close()
 
         assertTrue(replacementInjected)
-        assertFalse(requireNotNull(chunk).exists())
         assertFalse(marker.exists())
         val preserved = File(root, "preserved").listFiles().orEmpty()
         val firstPreserved = preserved.single { ".retired-changed" in it.name }
         assertArrayEquals(firstReplacement, firstPreserved.readBytes())
         assertTrue(
+            (requireNotNull(chunk).isFile && requireNotNull(chunk).readBytes().contentEquals(lateReplacement)) ||
             preserved.any { file ->
                 ".preserve-race-" in file.name && file.readBytes().contentEquals(lateReplacement)
             },

@@ -3,6 +3,8 @@
     tools:ignore="MissingTranslation">
     <string name="app_name" translatable="false">Reverb</string>
     <string name="recording_saved">Saved</string>
+    <string name="loading_audio_history">Loading audio history</string>
+    <string name="preparing_audio_selection">Preparing audio selection</string>
     <string name="error_during_writing_history_into">Error writing audio history: </string>
     <string name="cant_create_file_generic">Couldn\'t create file.</string>
     <string name="clear_buffer">Clear</string>

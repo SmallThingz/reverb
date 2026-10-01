@@ -2,6 +2,9 @@
 
 - The upstream issue tracker is read-only. Read reports for reproduction, but do not create, edit, comment on, close,
   reopen, or relabel issues. Do not add automatic issue-closing directives to commits for this reliability work.
+- Provider digest reuse is limited to the redundant pre-publication recheck, keyed by exact URI, provider identity and
+  a current regular-file descriptor's device/inode/size/nanosecond-ctime. Initial verification, final publication and
+  destructive cleanup still read the whole payload. Missing native proof means re-read, not rejected normal output.
 
 # Reverb UI invariants
 
@@ -280,6 +283,28 @@
   deleting uncertain data.
 
 # Reverb durability invariants
+
+- Large-history qualification uses the isolated QA package and synthetic files; never stop, replace, clear, or migrate the
+  installed user's history merely to obtain a benchmark. Version 0.1.2 preparation does not authorize a tag or release.
+- Startup chunk-header caching is process-local, bounded, FINALIZED-only and keyed by exact native device/inode/size/ctime.
+  Destructive checks bypass that cache. Full payload checksums remain mandatory before export and retirement.
+- Retired range leases release bookkeeping before scheduling the existing one-unit maintenance worker; they must not
+  hash/delete an entire leased history while holding the capture-store monitor. Close failures remain observable.
+- Service restart restores its live timeline before draining already-retired chunks. Deferred claims keep their exact
+  retirement markers until the worker has checked the complete payload and object identity; a missing numeric path
+  alone must not discard the marker for a still-owned hidden claim. Restored allocation advances past pending retired
+  IDs before accepting fresh capture, including when both indexes were lost; cleanup must not gate new recording.
+- While range preparation is pending, keep the real Close action visible and the Save action unavailable with an
+  accessible progress indicator. Closing preparation invalidates late snapshot delivery and releases all leases.
+- New v3 retirement markers bind checksum-protected geometry and the original file object. Crash-left deletion claims
+  may be removed only with that authority, matching content/header and a missing numeric counterpart. Legacy, malformed,
+  replaced and unowned claims are preserved, never deleted by filename or age. Recovery batches fsync chunk unlinks
+  before removing their markers, then fsync the marker directory before retiring ownership.
+- Quarantine preservation prefers same-directory-tree rename of the exact synced object, not a payload copy. Verify
+  postconditions even after rename errors and retain every uncertain object; parent/root paths remain no-follow.
+- Seekable saved-WAV discovery validates all RIFF/chunk boundaries and EOF without streaming PCM or invoking a native
+  metadata retriever. Malformed structure and real I/O failure remain different outcomes. Output/recovery digest checks
+  still consume all bytes; a process-local FILE digest may be reused only for the exact revalidated descriptor revision.
 
 - Trimming a saved recording is non-destructive: write and verify a new output before cataloging it; never mutate or
   replace the source recording as part of trim.

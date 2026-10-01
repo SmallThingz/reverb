@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import android.os.Build
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
@@ -19,7 +23,23 @@ internal data class StoragePathObservation(
     val isRegularFile: Boolean = false,
 )
 
-internal fun observeStoragePath(file: File): StoragePathObservation = try {
+internal fun observeStoragePath(file: File): StoragePathObservation {
+    if (Build.VERSION.SDK_INT >= 28) {
+        return try {
+            val stat = Os.lstat(file.path)
+            StoragePathObservation(StoragePathState.PRESENT, OsConstants.S_ISREG(stat.st_mode))
+        } catch (error: ErrnoException) {
+            StoragePathObservation(if (error.errno == OsConstants.ENOENT) {
+                StoragePathState.MISSING
+            } else StoragePathState.UNAVAILABLE)
+        } catch (_: SecurityException) {
+            StoragePathObservation(StoragePathState.UNAVAILABLE)
+        }
+    }
+    return observeStoragePathNio(file)
+}
+
+private fun observeStoragePathNio(file: File): StoragePathObservation = try {
     val attributes = Files.readAttributes(
         file.toPath(),
         BasicFileAttributes::class.java,
@@ -39,7 +59,22 @@ internal fun observeStoragePath(file: File): StoragePathObservation = try {
 
 internal fun storagePathState(file: File): StoragePathState = observeStoragePath(file).state
 
-internal fun storageDirectoryState(directory: File): StoragePathState = try {
+internal fun storageDirectoryState(directory: File): StoragePathState {
+    if (Build.VERSION.SDK_INT >= 28) {
+        return try {
+            if (OsConstants.S_ISDIR(Os.lstat(directory.path).st_mode)) StoragePathState.PRESENT
+            else StoragePathState.UNAVAILABLE
+        } catch (error: ErrnoException) {
+            if (error.errno == OsConstants.ENOENT) StoragePathState.MISSING
+            else StoragePathState.UNAVAILABLE
+        } catch (_: SecurityException) {
+            StoragePathState.UNAVAILABLE
+        }
+    }
+    return storageDirectoryStateNio(directory)
+}
+
+private fun storageDirectoryStateNio(directory: File): StoragePathState = try {
     val attributes = Files.readAttributes(
         directory.toPath(),
         BasicFileAttributes::class.java,

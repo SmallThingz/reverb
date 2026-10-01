@@ -111,3 +111,42 @@ adb -s "$ANDROID_SERIAL" uninstall app.smallthingz.reverb.reliability
 ```
 
 The suite does not call or mutate the upstream issue tracker.
+
+## Large-history performance and preparation UX
+
+`-e test large_history_performance` uses 16,384 sparse one-MiB chunks (16 GiB logical
+PCM, about 49.7 hours at 48 kHz mono/16-bit). Report the first process-local load
+separately from subsequent cached loads. The retired-history case separates time to
+restore the empty live timeline from background full-checksum cleanup. Both phases
+must finish; moving cleanup later is not a reduction in its total work.
+
+`-e test saved_file_performance` writes and verifies a 64 MiB WAV, then measures
+publication, structural discovery and repeated exact-revision byte proofs. `/proc`
+read counters measure bytes requested, not physical flash traffic. Compare identical
+fixtures on the same device and retain complete result logs and source/APK hashes.
+
+For actual UI testing, install a fresh throwaway QA package, then run
+`-e test ui_seed_large_history` followed by `-e test ui_range_loading`. The seeder
+refuses any existing default history rather than clearing it. The UI test launches
+the actual Compose screen, delays the audio queue, closes pending range preparation,
+and checks that the late snapshot releases every lease. It saves `history-home.png`,
+`range-preparing.png`, and `range-cancelled.png` in the QA package's `files` directory.
+These screenshots require visual review; a successful instrumentation exit is not
+visual approval. Never use the normal populated Reverb package for this procedure.
+Grant `RECORD_AUDIO` and `POST_NOTIFICATIONS` to the throwaway package before the UI
+run, so system permission dialogs do not obscure the tested surface. The test never
+starts microphone capture. An enabled child icon alone is not action readiness:
+wait for the actual clickable parent and select the populated Looping buffer.
+
+Crash recovery additionally verifies that a v3-journaled retired range claim is
+cleaned while newer PCM and an unrelated unowned file survive exactly. Unverified
+partial exports and legacy/ambiguous claims remain preserved: neither their age nor
+temporary-looking filename authorizes deleting potentially unique user audio.
+
+`-e test provider_fingerprint_performance` checks three production pre-publication
+proofs for a 64 MiB SAF document and a real MediaStore row. The MediaStore row stays
+pending and is never published into the Library; cleanup targets only its exact
+verified synthetic identity. This case also asserts that the default fingerprint
+path still reads the complete payload for final/destructive verification. Repeated
+pre-publication proof reuse requires the same native descriptor revision, not just
+provider metadata. Run the identical fixture on baseline and candidate builds.

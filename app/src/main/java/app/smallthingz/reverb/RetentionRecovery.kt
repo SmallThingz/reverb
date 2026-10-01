@@ -9,6 +9,7 @@ import android.system.OsConstants
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.InputStream
+import java.nio.file.Files
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -256,10 +257,12 @@ private fun retentionReadSnapshot(context: Context): RetentionReadSnapshot = Ret
 internal fun retentionConfigurationForOperationalRead(context: Context): RetentionConfiguration? =
     withRetentionPersistenceLock {
         val snapshot = retentionReadSnapshot(context)
+        val primary = snapshot.primaryWithRecoveryFallback()
         resolveRetentionConfiguration(
-            primary = snapshot.primaryWithRecoveryFallback(),
+            primary = primary,
             recovery = snapshot.recovery,
-            historyExists = hasPersistedBufferHistoryArtifacts(context),
+            historyExists = retentionResolutionNeedsHistoryProbe(primary, snapshot.recovery) &&
+                hasPersistedBufferHistoryArtifacts(context),
         )?.configuration
     }
 
@@ -303,9 +306,14 @@ internal fun persistedBufferHistoryRootMayContainData(root: File): Boolean {
     return when (storageDirectoryState(chunks)) {
         StoragePathState.MISSING -> false
         StoragePathState.UNAVAILABLE -> true
-        StoragePathState.PRESENT -> chunks.listFiles()
-            ?.any { child -> storagePathMayContainData(storagePathState(child)) }
-            ?: true
+        StoragePathState.PRESENT -> try {
+            // An existence probe must not allocate an array for a multi-day history.
+            Files.newDirectoryStream(chunks.toPath()).use { entries ->
+                entries.any { child -> storagePathMayContainData(storagePathState(child.toFile())) }
+            }
+        } catch (_: Exception) {
+            true // An unreadable directory is possible history, never an empty buffer.
+        }
     }
 }
 
@@ -316,6 +324,12 @@ internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
     )
     return roots.any(::persistedBufferHistoryRootMayContainData)
 }
+
+internal fun retentionResolutionNeedsHistoryProbe(
+    primary: RetentionConfiguration?,
+    recovery: RetentionConfiguration?,
+): Boolean = (primary == null && recovery == null) ||
+    (primary != null && recovery != null && primary != recovery)
 
 internal fun resolveRetentionConfiguration(
     primary: RetentionConfiguration?,

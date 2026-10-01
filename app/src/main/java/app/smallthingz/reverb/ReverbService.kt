@@ -349,6 +349,7 @@ class ReverbService : Service() {
         loopingAudioChunkStore = PersistentAudioChunkStore(
             this,
             onUnexpectedRecovery = unexpectedBufferRecovery,
+            onMaintenanceNeeded = { mainHandler.post { scheduleRetentionMaintenanceIfNeeded() } },
         )
         oneShotAudioChunkStore = PersistentAudioChunkStore(
             this,
@@ -356,6 +357,7 @@ class ReverbService : Service() {
             legacyCacheFolderName = null,
             overwriteOldest = false,
             onUnexpectedRecovery = unexpectedBufferRecovery,
+            onMaintenanceNeeded = { mainHandler.post { scheduleRetentionMaintenanceIfNeeded() } },
         )
         createNotificationChannel()
         powerManager = getSystemService(PowerManager::class.java)

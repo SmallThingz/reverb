@@ -26,6 +26,30 @@ class ReliabilityInstrumentation : Instrumentation() {
             check(targetContext.packageName.endsWith(".reliability")) {
                 "Reliability tests must never run against a user's Reverb installation"
             }
+            if (requestedTest == "ui_seed_large_history") {
+                executed++
+                prepareLargeHistoryUi(targetContext)
+                report.append("PASS ui_seed_large_history\n")
+            }
+            if (requestedTest == "ui_range_loading") {
+                executed++
+                verifyLargeHistoryRangeUi(this, report)
+            }
+            if (requestedTest == "large_history_performance") {
+                executed++
+                measureLargeHistory(targetContext, report)
+                report.append("PASS large_history_performance\n")
+            }
+            if (requestedTest == "saved_file_performance") {
+                executed++
+                measureSavedFilePerformance(targetContext, report)
+                report.append("PASS saved_file_performance\n")
+            }
+            if (requestedTest == "provider_fingerprint_performance") {
+                executed++
+                measureProviderFingerprintPerformance(targetContext, report)
+                report.append("PASS provider_fingerprint_performance\n")
+            }
             if (requestedTest == "crash_prepare") {
                 val pid = prepareDurableCaptureForProcessDeath(targetContext)
                 sendStatus(0, Bundle().apply { putString("stream", "PREPARED durable PCM; terminating isolated QA pid=$pid\n") })
@@ -137,6 +161,16 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 .append(Log.getStackTraceString(error)).append('\n')
                         }
                     }
+                }
+            }
+            if (requestedTest == null || requestedTest == "header_cache_safety") {
+                executed++
+                try {
+                    verifyChunkHeaderCacheOwnership(targetContext)
+                    report.append("PASS header_cache_safety\n")
+                } catch (error: Throwable) {
+                    failures++
+                    report.append("FAIL header_cache_safety\n").append(Log.getStackTraceString(error)).append('\n')
                 }
             }
             if (requestedTest == null || requestedTest == "capture_restart_failure") {
