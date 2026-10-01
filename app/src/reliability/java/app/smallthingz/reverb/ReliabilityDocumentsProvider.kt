@@ -31,6 +31,13 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         METADATA_APPEARS_AFTER_WRITE,
         UNKNOWN_SIZE_NONEMPTY,
         UNKNOWN_METADATA_PIPE,
+        DELETE_NOOP,
+        DELETE_THEN_THROW,
+        DELETE_LOADING,
+        DELETE_ERROR,
+        DELETE_LISTING_UNAVAILABLE,
+        DELETE_NOT_LISTED,
+        WRITE_TIMEOUT,
     }
 
     private data class Entry(var file: File, val mimeType: String)
@@ -48,6 +55,7 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     var writeOpenCalls = 0
         private set
     private var substitutedRead = -1
+    var afterNextListing: (() -> Unit)? = null
 
     override fun onCreate(): Boolean {
         root = File(requireNotNull(context).filesDir, "reliability-documents")
@@ -66,6 +74,7 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         readOpenCalls = 0
         writeOpenCalls = 0
         substitutedRead = -1
+        afterNextListing = null
     }
 
     @Synchronized
@@ -118,6 +127,12 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     @Synchronized
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val cursor = MatrixCursor(projection ?: COLUMNS)
+        if (documentId != ROOT_ID && deleteCalls > 0 &&
+            (mode == Mode.DELETE_LOADING || mode == Mode.DELETE_ERROR)
+        ) {
+            cursor.extras = deletionQueryExtras()
+            return cursor
+        }
         if (documentId == ROOT_ID) {
             cursor.addEntry(ROOT_ID, root, Document.MIME_TYPE_DIR)
         } else {
@@ -138,6 +153,13 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         sortOrder: String?,
     ): Cursor {
         check(parentDocumentId == ROOT_ID)
+        if (deleteCalls > 0 && mode == Mode.DELETE_LISTING_UNAVAILABLE) {
+            throw IllegalStateException("Fixture directory unavailable after deletion")
+        }
+        if (deleteCalls > 0 && (mode == Mode.DELETE_LOADING || mode == Mode.DELETE_ERROR)) {
+            return MatrixCursor(projection ?: COLUMNS).apply { extras = deletionQueryExtras() }
+        }
+        if (mode == Mode.DELETE_NOT_LISTED) return MatrixCursor(projection ?: COLUMNS)
         if (renamed && mode == Mode.UNAVAILABLE_AFTER_RENAME) {
             throw IllegalStateException("Fixture provider temporarily unavailable")
         }
@@ -153,6 +175,9 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
             if (renamed && mode == Mode.ERROR_AFTER_RENAME) {
                 extras = Bundle().apply { putString(DocumentsContract.EXTRA_ERROR, "Incomplete fixture listing") }
             }
+            val callback = afterNextListing
+            afterNextListing = null
+            callback?.invoke()
         }
     }
 
@@ -205,8 +230,12 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     override fun deleteDocument(documentId: String) {
         deleteCalls++
         val entry = entries[documentId] ?: throw FileNotFoundException(documentId)
+        if (mode == Mode.DELETE_NOOP || mode == Mode.DELETE_LOADING || mode == Mode.DELETE_ERROR) return
         check(entry.file.delete())
         entries.remove(documentId)
+        if (mode == Mode.DELETE_THEN_THROW) {
+            throw IllegalStateException("Fixture transport failure after committed deletion")
+        }
     }
 
     @Synchronized
@@ -224,8 +253,16 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
                 entry.file.copyTo(substitute)
                 return ParcelFileDescriptor.open(substitute, ParcelFileDescriptor.MODE_READ_ONLY)
             }
-        } else writeOpenCalls++
+        } else {
+            writeOpenCalls++
+            if (this.mode == Mode.WRITE_TIMEOUT) throw java.net.SocketTimeoutException("Fixture writable-open timeout")
+        }
         return ParcelFileDescriptor.open(entry.file, ParcelFileDescriptor.parseMode(mode))
+    }
+
+    private fun deletionQueryExtras(): Bundle = Bundle().apply {
+        if (mode == Mode.DELETE_LOADING) putBoolean(DocumentsContract.EXTRA_LOADING, true)
+        if (mode == Mode.DELETE_ERROR) putString(DocumentsContract.EXTRA_ERROR, "Fixture incomplete deletion query")
     }
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =

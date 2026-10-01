@@ -978,7 +978,11 @@ object RecordingRepository {
                         return if (!targetCurrent) VerifiedMoveCommitResult.TARGET_CHANGED
                         else VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED
                     }
-                    if (!deleteVerifiedRecordingAsset(context, source)) return failedCleanupResult()
+                    if (!deleteVerifiedRecordingAsset(context, source) {
+                            pendingDeletionMatchesCurrentAsset(context, source, intent) &&
+                                pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
+                        }
+                    ) return failedCleanupResult()
                     // Physical deletion is never replayed for provider assets. The phase marker
                     // lets restart cleanup retire metadata immediately when it can be persisted.
                     putPendingDeletionLocked(context, intent.copy(assetDeleted = true))

@@ -2093,10 +2093,9 @@ class ReverbService : Service() {
                             recording
                         }
                         deliverExportTerminal(exportToken, receiver) { fileReady(cataloguedRecording) }
-                    } catch (cancelled: InterruptedIOException) {
-                        Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}")
-                        finishExportCancellation(exportToken, receiver)
                     } catch (e: Exception) {
+                        // InterruptedIOException also covers real provider timeouts. Only the
+                        // export token, not an exception's type, proves cancellation was requested.
                         if (exportToken.cancelled.get()) {
                             Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
                             finishExportCancellation(exportToken, receiver)

@@ -597,6 +597,13 @@
   missing. Positive absence after an authorized delete attempt is terminal even when the provider call returned false or
   threw after committing; a success return followed by unavailable/present state keeps the deletion journal for later
   reconciliation.
+- A live SAF deletion may confirm an invalidated document ID through complete before/after direct-parent membership,
+  with the original parent still positively available. This is attempt-local evidence, not generic journal replay or
+  proof about arbitrary nested documents. Revalidate source and move-target authority after any directory inspection and
+  immediately before deletion. Loading/error cursors never prove absence, including in output-cleanup queries.
+- An InterruptedIOException, including a provider timeout, is a failed export unless its exact export token records
+  accepted cancellation. Preserve the original error, release busy ownership, and permit a fresh export after recovery;
+  explicit user cancellation remains neutral.
 - SAF create/publish/rename collision checks use direct child-document queries that propagate provider failure; AndroidX
   `DocumentFile.findFile/listFiles` empty-on-error behavior is never authoritative evidence that a name is free.
 - A provider-returned output URI is not writable authority by itself. MediaStore insertion initializes SIZE=0 for the

@@ -2044,6 +2044,7 @@ internal fun selectedRecordingAssetState(
 internal fun deleteVerifiedRecordingAsset(
     context: Context,
     recording: RecordingEntity,
+    sourceRetirementStillAllowed: () -> Boolean = { true },
 ): Boolean {
     // Callers must have content-fingerprinted this exact provider asset immediately before
     // reaching this function. A concrete provider identity, when available, must still match.
@@ -2062,18 +2063,12 @@ internal fun deleteVerifiedRecordingAsset(
         }
 
         RecordingStorageType.DOCUMENT -> {
-            val deleteFailure = runCatching {
-                val document = DocumentFile.fromSingleUri(context, recording.id.toUri())
-                    ?: throw IOException("Unable to resolve recording for deletion")
-                document.delete()
-            }.exceptionOrNull()
-            val observedState = recordingAssetState(context, recording)
-            deleteFailure?.let {
-                Log.w(TAG, "Document delete result was uncertain; observed $observedState for ${recording.id}", it)
+            deleteVerifiedDocumentAndConfirm(context, recording.id) {
+                recordingDeletionIdentityMatches(context, recording) && sourceRetirementStillAllowed()
             }
-            providerDeletionCompleted(observedState)
         }
         RecordingStorageType.MEDIASTORE -> {
+            if (!sourceRetirementStillAllowed()) return false
             val deleteFailure = runCatching {
                 context.contentResolver.delete(recording.id.toUri(), null, null)
             }.exceptionOrNull()
@@ -2084,6 +2079,54 @@ internal fun deleteVerifiedRecordingAsset(
             providerDeletionCompleted(observedState)
         }
     }
+}
+
+internal fun deleteVerifiedDocumentAndConfirm(
+    context: Context,
+    id: String,
+    beforeDelete: () -> Boolean,
+): Boolean {
+    val scope = parseDocumentStorageScope(id)?.takeIf { it.documentId != null } ?: return false
+    val uri = id.toUri()
+    val tree = "content://${scope.authority}/tree/${scope.treeId}".toUri()
+    // Membership is evidence for this attempt only. An arbitrary descendant missing from the
+    // root listing, or an old journal after process loss, does not prove physical absence.
+    val wasDirectChild = runCatching {
+        queryDocumentTreeEntries(context, tree).any { it.uri == uri && it.isFile }
+    }.getOrDefault(false)
+    // Directory inspection can do slow provider I/O. Recheck source and any move destination
+    // after it, at the destructive boundary, rather than retaining an earlier authorization.
+    if (!beforeDelete()) return false
+    runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
+        .onFailure { Log.w(TAG, "Document deletion result is uncertain for $id", it) }
+    val direct = queryUriAssetState(
+        context, uri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), id,
+    )
+    if (direct != RecordingAssetState.UNAVAILABLE) return providerDeletionCompleted(direct)
+    if (!wasDirectChild) return false
+    return runCatching {
+        val rootUri = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val rootPresent = context.contentResolver.query(
+            rootUri,
+            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_MIME_TYPE),
+            null, null, null,
+        )?.use { cursor ->
+            requireCompleteDocumentListing(
+                cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+                cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
+            )
+            val present = cursor.moveToFirst() && cursor.getString(0) == DocumentsContract.getTreeDocumentId(tree) &&
+                cursor.getString(1) == DocumentsContract.Document.MIME_TYPE_DIR && !cursor.moveToNext()
+            requireCompleteDocumentListing(
+                cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+                cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
+            )
+            present
+        } == true
+        // Path-backed providers invalidate deleted IDs by throwing/returning null. A complete
+        // listing of the still-available original parent supplies the missing postcondition.
+        rootPresent && queryDocumentTreeEntries(context, tree).none { it.uri == uri }
+    }.getOrDefault(false)
 }
 
 fun renameRecordingAsset(
@@ -3298,7 +3341,7 @@ private fun listMediaStoreRecordings(
 }
 
 
-private fun queryUriAssetState(
+internal fun queryUriAssetState(
     context: Context,
     uri: Uri,
     projection: Array<String>,
@@ -3309,7 +3352,12 @@ private fun queryUriAssetState(
             cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
             cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
         )
-        if (cursor.moveToFirst()) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
+        val present = cursor.moveToFirst()
+        requireCompleteDocumentListing(
+            cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
+            cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
+        )
+        if (present) RecordingAssetState.PRESENT else RecordingAssetState.MISSING
     } ?: RecordingAssetState.UNAVAILABLE
 } catch (error: Exception) {
     Log.w(TAG, "Unable to inspect recording $logId", error)

@@ -6,7 +6,6 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.net.toUri
-import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileInputStream
 import java.nio.charset.StandardCharsets
@@ -833,18 +832,10 @@ private fun queryOutputCleanupAssetState(
     context: Context,
     id: String,
     projection: Array<String>,
-): OutputCleanupAssetState = try {
-    context.contentResolver.query(
-        id.toUri(),
-        projection,
-        null,
-        null,
-        null,
-    )?.use { cursor ->
-        if (cursor.moveToFirst()) OutputCleanupAssetState.PRESENT else OutputCleanupAssetState.MISSING
-    } ?: OutputCleanupAssetState.UNAVAILABLE
-} catch (_: Exception) {
-    OutputCleanupAssetState.UNAVAILABLE
+): OutputCleanupAssetState = when (queryUriAssetState(context, id.toUri(), projection, id)) {
+    RecordingAssetState.PRESENT -> OutputCleanupAssetState.PRESENT
+    RecordingAssetState.MISSING -> OutputCleanupAssetState.MISSING
+    RecordingAssetState.UNAVAILABLE -> OutputCleanupAssetState.UNAVAILABLE
 }
 
 private fun deletePendingOutputAsset(
@@ -853,15 +844,9 @@ private fun deletePendingOutputAsset(
 ): Boolean = when (record.storageType) {
     RecordingStorageType.FILE -> deletePendingFileOutput(record)
     RecordingStorageType.DOCUMENT -> {
-        if (!pendingProviderOutputCleanupStillMatches(context, record)) return false
-        val document = DocumentFile.fromSingleUri(context, record.id.toUri()) ?: return false
-        providerDeleteAttemptCompleted(
-            delete = { document.delete(); Unit },
-            observeState = { outputCleanupAssetState(context, record.storageType, record.id) },
-            onDeleteFailure = { error ->
-                Log.w("OutputCleanupJournal", "Document cleanup delete result was uncertain for ${record.id}", error)
-            },
-        )
+        deleteVerifiedDocumentAndConfirm(context, record.id) {
+            pendingProviderOutputCleanupStillMatches(context, record)
+        }
     }
     RecordingStorageType.MEDIASTORE -> {
         if (!pendingProviderOutputCleanupStillMatches(context, record)) return false

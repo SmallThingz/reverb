@@ -32,6 +32,7 @@ selected with `-e test rename_new_id_missing_old_uri`, `-e test capture_restart_
 or `-e test wav_format_matrix` before the component name. Use
 `-e test compatibility_sweep` for the provider-metadata, directory, and delayed
 state-delivery regressions.
+Use `-e test provider_terminal_sweep` for deletion, cleanup and export-timeout checks.
 
 ## Real process-death recovery
 
@@ -84,6 +85,13 @@ queues: settings cannot be mixed across snapshots, older commands cannot replay,
 and export acceptance/completion cannot have its busy state overwritten by a
 queued callback. JVM tests additionally check that queued Quick Settings render
 tasks sample current state when executed rather than when posted.
+
+Terminal tests cover completed document deletions whose old IDs now throw, transport
+failure after deletion, and cleanup queries that are temporarily loading or errored.
+Unresolved output journals must survive until authoritative recovery. Move authority
+and source replacements are tested during directory inspection. A provider write-open
+timeout must report failure, preserve source PCM, clear busy ownership and allow a
+byte-exact retry; explicit user cancellation must still deliver its neutral result.
 
 The JVM sweep in `RecordingReliabilitySweepTest` checks 2,304 deterministic,
 model-based operations over looping and one-shot stores: capture, size changes,
