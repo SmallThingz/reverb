@@ -71,6 +71,21 @@ def verify_block_policy(ids: set[int]) -> None:
     require(not ids - ALLOWED_BLOCKS, f"Unapproved APK signing blocks: {ids - ALLOWED_BLOCKS}")
 
 
+
+def verify_signer_output(signature: str) -> None:
+    counts = re.findall(r'^Number of signers:\s*(\d+)\s*$', signature, re.MULTILINE)
+    require(counts == ['1'], f"Expected exactly one APK signer: {counts}")
+    # Build Tools 37 changed "Signer #1" to the scheme-specific "V2 Signer:".
+    certs = re.findall(
+        r'^(?:Signer #\d+|V\d+(?:\.\d+)? Signer):? certificate SHA-256 digest: ([0-9a-fA-F]{64})\s*$',
+        signature, re.MULTILINE,
+    )
+    require(bool(certs) and {cert.lower() for cert in certs} == {SIGNER},
+            f"Unexpected signing certificate: {certs}")
+    require('Verified using v2 scheme (APK Signature Scheme v2): true' in signature,
+            "APK v2 signature verification failed")
+
+
 def run(args: list[str], root: Path) -> str:
     result = subprocess.run(args, cwd=root, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, check=False)
@@ -96,10 +111,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     ids = signing_block_ids(apk)
     verify_block_policy(ids)
     signature = run([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs', str(apk)], root)
-    certs = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)', signature)
-    require(certs == [SIGNER], f"Unexpected signing certificate: {certs}")
-    require('Verified using v2 scheme (APK Signature Scheme v2): true' in signature,
-            "APK v2 signature verification failed")
+    verify_signer_output(signature)
     run([str(tools / 'zipalign'), '-c', '-P', '16', '4', str(apk)], root)
     badging = run([str(tools / 'aapt2'), 'dump', 'badging', str(apk)], root)
     info = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'",

@@ -2,7 +2,7 @@
 import sys
 sys.dont_write_bytecode = True
 import unittest
-from verify_release import verify_revision, verify_block_policy
+from verify_release import SIGNER, verify_revision, verify_block_policy, verify_signer_output
 
 
 class ReleaseVerificationTests(unittest.TestCase):
@@ -34,6 +34,28 @@ class ReleaseVerificationTests(unittest.TestCase):
         for ids in (set(), {0x7109871A, 0x12345678}):
             with self.subTest(ids=ids), self.assertRaises(ValueError):
                 verify_block_policy(ids)
+
+
+class SignerOutputTests(unittest.TestCase):
+    def output(self, label, digest=SIGNER, count=1):
+        return (f'Number of signers: {count}\n'
+                'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+                f'{label} certificate SHA-256 digest: {digest}\n')
+
+    def test_build_tools_37(self):
+        verify_signer_output(self.output('V2 Signer:'))
+
+    def test_legacy_output(self):
+        verify_signer_output(self.output('Signer #1'))
+
+    def test_missing_certificate(self):
+        with self.assertRaises(ValueError):
+            verify_signer_output('Number of signers: 1\n')
+
+    def test_wrong_or_multiple_signers(self):
+        for text in (self.output('V2 Signer:', '0' * 64), self.output('V2 Signer:', count=2)):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                verify_signer_output(text)
 
 
 if __name__ == '__main__':
