@@ -1,0 +1,5 @@
+Prerelease 0.1.2-rc1.
+Faster large-history startup and recording discovery.
+Fixed idle Quick Settings refresh loops.
+Improved export, provider, and interrupted-recording reliability.
+Refined playback, navigation, and launcher/splash branding.

@@ -37,7 +37,7 @@ def releaseSigningReady =
         releaseKeyAlias &&
         releaseKeyPassword
 def appVersionCode = 3
-def appVersionName = "0.1.2"
+def appVersionName = "0.1.2-rc1"
 
 if (releaseSigningReady) {
     def releaseTag = "v${appVersionName}"

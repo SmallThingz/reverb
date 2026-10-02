@@ -1040,3 +1040,7 @@
   tag before upload. Documentation-only commits made after a build still change AGP's embedded VCS metadata.
 - Keep AGP dependency metadata disabled for release APKs. F-Droid rejects the `0x504B4453` "Dependency metadata"
   APK signing block even when the source build itself is reproducible.
+
+- Before publishing APKs, follow `scripts/README-release.md` and run the actual-artifact gate in
+  `scripts/verify_release.py`. Keep validation results in ignored release artifacts, not post-build source commits.
+- Public prerelease 0.1.2-rc1 reserves version code 3; later public APKs, including stable 0.1.2, need a higher code.
