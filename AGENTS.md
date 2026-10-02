@@ -1044,3 +1044,5 @@
 - Before publishing APKs, follow `scripts/README-release.md` and run the actual-artifact gate in
   `scripts/verify_release.py`. Keep validation results in ignored release artifacts, not post-build source commits.
 - Public prerelease 0.1.2-rc1 reserves version code 3; later public APKs, including stable 0.1.2, need a higher code.
+- F-Droid must discover public release candidates too. Keep literal Android version declarations and verify the
+  current central tag checker selects the exact release; do not silently exclude RCs from distribution.

@@ -2,7 +2,7 @@
 import sys
 sys.dont_write_bytecode = True
 import unittest
-from verify_release import SIGNER, verify_revision, verify_block_policy, verify_signer_output
+from verify_release import SIGNER, verify_revision, verify_block_policy, verify_signer_output, verify_source_version
 
 
 class ReleaseVerificationTests(unittest.TestCase):
@@ -56,6 +56,28 @@ class SignerOutputTests(unittest.TestCase):
         for text in (self.output('V2 Signer:', '0' * 64), self.output('V2 Signer:', count=2)):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 verify_signer_output(text)
+
+
+
+class SourceVersionTests(unittest.TestCase):
+    source = '    versionCode 3\n    versionName "0.1.2-rc1"\n'
+
+    def test_literal_prerelease_is_readable(self):
+        verify_source_version(self.source, '0.1.2-rc1', '3')
+
+    def test_symbolic_versions_are_rejected(self):
+        for source in (
+            self.source.replace('versionCode 3', 'versionCode appVersionCode'),
+            self.source.replace('"0.1.2-rc1"', 'appVersionName'),
+        ):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                verify_source_version(source, '0.1.2-rc1', '3')
+
+    def test_duplicate_or_mismatched_versions_are_rejected(self):
+        for source in (self.source + self.source, self.source.replace('3', '4'),
+                       self.source.replace('0.1.2-rc1', '0.1.2')):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                verify_source_version(source, '0.1.2-rc1', '3')
 
 
 if __name__ == '__main__':

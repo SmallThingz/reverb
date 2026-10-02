@@ -36,27 +36,6 @@ def releaseSigningReady =
         releaseStorePassword &&
         releaseKeyAlias &&
         releaseKeyPassword
-def appVersionCode = 3
-def appVersionName = "0.1.2-rc1"
-
-if (releaseSigningReady) {
-    def releaseTag = "v${appVersionName}"
-    def headCommit = providers.exec {
-        commandLine 'git', 'rev-parse', 'HEAD'
-    }.standardOutput.asText.get().trim()
-    def tagCommit = providers.exec {
-        commandLine 'git', 'rev-parse', "${releaseTag}^{commit}"
-    }.standardOutput.asText.get().trim()
-    def dirtyTree = providers.exec {
-        commandLine 'git', 'status', '--porcelain', '--untracked-files=all'
-    }.standardOutput.asText.get().trim()
-
-    if (headCommit != tagCommit || !dirtyTree.isEmpty()) {
-        throw new GradleException(
-            "Refusing to sign ${appVersionName}: release builds require a clean HEAD exactly at ${releaseTag}"
-        )
-    }
-}
 
 android {
     namespace = 'app.smallthingz.reverb'
@@ -72,8 +51,8 @@ android {
         applicationId "app.smallthingz.reverb"
         minSdk = 28
         targetSdk = 37
-        versionCode appVersionCode
-        versionName appVersionName
+        versionCode 3
+        versionName "0.1.2-rc1"
     }
 
     signingConfigs {
@@ -127,6 +106,26 @@ android {
         }
     }
 
+}
+
+if (releaseSigningReady) {
+    def releaseVersionName = android.defaultConfig.versionName
+    def releaseTag = "v${releaseVersionName}"
+    def headCommit = providers.exec {
+        commandLine 'git', 'rev-parse', 'HEAD'
+    }.standardOutput.asText.get().trim()
+    def tagCommit = providers.exec {
+        commandLine 'git', 'rev-parse', "${releaseTag}^{commit}"
+    }.standardOutput.asText.get().trim()
+    def dirtyTree = providers.exec {
+        commandLine 'git', 'status', '--porcelain', '--untracked-files=all'
+    }.standardOutput.asText.get().trim()
+
+    if (headCommit != tagCommit || !dirtyTree.isEmpty()) {
+        throw new GradleException(
+            "Refusing to sign ${releaseVersionName}: release builds require a clean HEAD exactly at ${releaseTag}"
+        )
+    }
 }
 
 dependencies {

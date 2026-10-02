@@ -37,16 +37,18 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 `0.1.2-rc1` uses Android version code 3. Every later public APK, including final
 `0.1.2`, must use a higher code; do not reuse code 3 for the stable release.
 
-GitHub's prerelease flag is not an F-Droid exclusion mechanism. The current
-fdroiddata metadata uses unfiltered `Tags`, without `UpdateCheckData`. The existing
-symbolic `versionCode appVersionCode` declaration is not readable by its current
-static Gradle parser; retain it for this prerelease and verify that the checker
-still selects 0.1.1 (2), rather than claiming the GitHub flag provides protection.
-Do not add a literal prerelease versionCode that the scanner can auto-promote.
+This release candidate is intended for F-Droid pickup as well as GitHub. Keep
+`versionCode` and `versionName` as literals in `android.defaultConfig`: the current
+F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard reads
+that same Android configuration instead of maintaining a second version constant.
 
-Before a stable release, coordinate an fdroiddata stable-only tag filter such as
-`Tags ^v[0-9]+\.[0-9]+\.[0-9]+$` and an explicit version-data extraction rule (or
-restore a scanner-readable stable version declaration). Changes to this repository's
-`.fdroid.yml` alone do not update the centrally maintained fdroiddata metadata.
-A local independent rebuild is useful preflight evidence, not an F-Droid buildserver
-acceptance claim.
+Verify the current upstream `check_tags` and Gradle parser against the exact release
+tag and the current central fdroiddata metadata. They must select `0.1.2-rc1` (3),
+and its `Binaries` URL must resolve to `reverb-0.1.2-rc1.apk` on the matching tag.
+Central metadata currently uses unfiltered `Tags` and `AutoUpdateMode: Version`, so
+it will select this RC as the newest version; GitHub's prerelease label does not
+create a separate F-Droid beta channel. Keep GitHub's latest stable release intact.
+
+Changes to this repository's `.fdroid.yml` alone do not update central fdroiddata.
+Local checker and independent rebuild success are preflight evidence, not proof
+that the F-Droid server has completed its later build and publication cycle.

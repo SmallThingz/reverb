@@ -93,6 +93,15 @@ def run(args: list[str], root: Path) -> str:
     return result.stdout
 
 
+
+def verify_source_version(source: str, name: str, code: str) -> None:
+    """Keep the version literal and unambiguous for F-Droid's static Gradle parser."""
+    codes = re.findall(r'^\s*versionCode\s+(\d+)\s*$', source, re.MULTILINE)
+    names = re.findall(r'^\s*versionName\s+"([^"\n]+)"\s*$', source, re.MULTILINE)
+    require(codes == [code], "APK version code differs from literal F-Droid-readable source")
+    require(names == [name], "APK version name differs from literal F-Droid-readable source")
+
+
 def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     root = Path(__file__).resolve().parent.parent
     require(re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag) is not None,
@@ -121,8 +130,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     require(package == PACKAGE, f"Unexpected package: {package}")
     require(name == tag[1:], f"APK version {name} does not match {tag}")
     source = (root / 'app/build.gradle').read_text()
-    expected_code = re.search(r'^def appVersionCode = (\d+)$', source, re.MULTILINE)
-    require(expected_code is not None and code == expected_code.group(1), "APK version code differs from source")
+    verify_source_version(source, name, code)
     require('application-debuggable' not in badging, "Release APK is debuggable")
     require('android.permission.INTERNET' not in badging, "Unexpected network permission")
     require(run(['git', 'rev-parse', 'HEAD'], root).strip() == commit, "HEAD changed during verification")
