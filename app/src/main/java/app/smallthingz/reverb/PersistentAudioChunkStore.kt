@@ -2420,7 +2420,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             truncateFinalizedChunkLocked(newest, keepBytes)
         } else {
-            removeChunkAndRetireLocked(newest)
+            removeNewestChunkAndRetireLocked(newest)
         }
         lastWriteAtMillis = chunks.lastOrNull()?.let { currentNewest ->
             currentNewest.createdAtMillis + (currentNewest.durationSeconds * 1000.0).toLong()
@@ -2485,7 +2485,7 @@ internal class PersistentAudioChunkStore internal constructor(
         // marker pointing through the removed tail of the cutoff chunk.
         val firstRetiredIndex = cutoffIndex + if (partialRecord != null) 1 else 0
         for (index in current.lastIndex downTo firstRetiredIndex) {
-            removeChunkAndRetireLocked(current[index])
+            removeNewestChunkAndRetireLocked(current[index])
         }
         if (partialRecord != null) {
             truncateFinalizedChunkLocked(partialRecord, partialPayloadBytes)
@@ -2770,8 +2770,10 @@ internal class PersistentAudioChunkStore internal constructor(
         return record
     }
 
-    private fun removeChunkAndRetireLocked(record: ChunkRecord): Boolean {
-        if (record !in chunks) return false
+    private fun removeNewestChunkAndRetireLocked(record: ChunkRecord): Boolean {
+        // Both retention callers retire the newest suffix. Do not search the whole timeline
+        // twice for each tail chunk while holding the capture-store monitor.
+        if (chunks.peekLast() !== record) return false
         requireFinalizedChunkPayloadIntegrityLocked(record)
         val durabilityFailure = persistRetirementTombstoneLocked(record)
         val closeFailure = if (record === activeRecord) {
@@ -2779,7 +2781,7 @@ internal class PersistentAudioChunkStore internal constructor(
         } else {
             null
         }
-        if (!removeChunkLocked(record)) {
+        if (!removeNewestChunkLocked(record)) {
             if (!deleteRetirementTombstoneLocked(record.id)) {
                 val rollbackFailure = IOException("Unable to roll back retirement marker for chunk ${record.id}")
                 closeFailure?.let(rollbackFailure::addSuppressed)
@@ -3077,6 +3079,13 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun removeChunkLocked(record: ChunkRecord): Boolean {
         if (!chunks.remove(record)) return false
+        removeChunkTotalsLocked(record)
+        return true
+    }
+
+    private fun removeNewestChunkLocked(record: ChunkRecord): Boolean {
+        if (chunks.peekLast() !== record) return false
+        chunks.removeLast()
         removeChunkTotalsLocked(record)
         return true
     }

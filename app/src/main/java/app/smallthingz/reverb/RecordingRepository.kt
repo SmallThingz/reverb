@@ -207,22 +207,16 @@ object RecordingRepository {
                 val pendingIds = pendingDeletionIds(context)
                 val nowMillis = System.currentTimeMillis()
                 val updates = mutableListOf<RecordingEntity>()
-                var movable = false
-                dao.listAll().forEach { recording ->
-                    if (!isRecordingEligibleForMove(recording.id, pendingIds)) return@forEach
-                    if (recordingMutations.isActive(recording.id)) return@forEach
-                    if (recording.directoryId == targetDirectoryId) return@forEach
-                    val updated = when (selectedRecordingAssetState(context, recording)) {
-                        RecordingAssetState.PRESENT -> {
-                            val present = markRecordingPresent(recording, nowMillis)
-                            if (!movable && recordingDestructiveIdentityMatches(context, present)) movable = true
-                            present
-                        }
-                        RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
-                        RecordingAssetState.UNAVAILABLE -> recording
-                    }
-                    if (updated != recording) updates += updated
-                }
+                val movable = scanForMovableRecording(
+                    recordings = dao.listAll(),
+                    targetDirectoryId = targetDirectoryId,
+                    pendingDeletionIds = pendingIds,
+                    nowMillis = nowMillis,
+                    mutationIsActive = recordingMutations::isActive,
+                    assetState = { selectedRecordingAssetState(context, it) },
+                    destructiveIdentityMatches = { recordingDestructiveIdentityMatches(context, it) },
+                    collectUpdate = { updates += it },
+                )
                 dao.applyChanges(updates, emptyList())
                 movable
             }
@@ -1001,11 +995,10 @@ object RecordingRepository {
         skipDirectoryIds: Set<String> = emptySet(),
     ) {
         val dao = dao(context)
-        val all = dao.listAll()
+        val unreconciled = dao.listOutsideDirectories(skipDirectoryIds)
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
-        all.forEach { recording ->
-            if (!recordingNeedsFallbackAssetProbe(recording.directoryId, skipDirectoryIds)) return@forEach
+        unreconciled.forEach { recording ->
             val updated = reconcileRecordingAssetState(context, recording, nowMillis)
             if (updated != recording) updates += updated
         }
@@ -1086,6 +1079,37 @@ object RecordingRepository {
         val hasFailures: Boolean
             get() = failed > 0 || cleanupFailed > 0
     }
+}
+
+internal fun scanForMovableRecording(
+    recordings: List<RecordingEntity>,
+    targetDirectoryId: String,
+    pendingDeletionIds: Set<String>,
+    nowMillis: Long,
+    mutationIsActive: (String) -> Boolean,
+    assetState: (RecordingEntity) -> RecordingAssetState,
+    destructiveIdentityMatches: (RecordingEntity) -> Boolean,
+    collectUpdate: (RecordingEntity) -> Unit,
+): Boolean {
+    for (recording in recordings) {
+        if (!isRecordingEligibleForMove(recording.id, pendingDeletionIds)) continue
+        if (mutationIsActive(recording.id)) continue
+        if (recording.directoryId == targetDirectoryId) continue
+        var movable = false
+        val updated = when (assetState(recording)) {
+            RecordingAssetState.PRESENT -> {
+                val present = markRecordingPresent(recording, nowMillis)
+                movable = destructiveIdentityMatches(present)
+                present
+            }
+            RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
+            RecordingAssetState.UNAVAILABLE -> recording
+        }
+        if (updated != recording) collectUpdate(updated)
+        // This is only availability; full reconciliation and actual Move retain their own checks.
+        if (movable) return true
+    }
+    return false
 }
 
 internal fun recordingNeedsFallbackAssetProbe(

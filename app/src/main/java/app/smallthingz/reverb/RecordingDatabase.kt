@@ -45,6 +45,8 @@ data class RecordingEntity(
 interface RecordingDao {
     suspend fun listAll(): List<RecordingEntity>
 
+    suspend fun listOutsideDirectories(directoryIds: Set<String>): List<RecordingEntity>
+
     suspend fun findById(id: String): RecordingEntity?
 
     suspend fun listByDirectory(directoryId: String): List<RecordingEntity>
@@ -116,6 +118,24 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
                 recordingCatalogProjection(),
                 null,
                 null,
+                null,
+                null,
+                recordingCatalogOrderBy(),
+            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
+        }
+
+        override suspend fun listOutsideDirectories(directoryIds: Set<String>): List<RecordingEntity> {
+            if (directoryIds.isEmpty()) return listAll()
+            // Keep old-platform SQLite bind limits from turning an unusually large grant set
+            // into an unavailable catalog. The fallback retains every unhandled directory.
+            if (directoryIds.size > MAX_RECORDING_CATALOG_DIRECTORY_QUERY_ARGS) {
+                return listAll().filter { recordingNeedsFallbackAssetProbe(it.directoryId, directoryIds) }
+            }
+            return readableDatabase.query(
+                TABLE_RECORDINGS,
+                recordingCatalogProjection(),
+                recordingCatalogOutsideDirectoriesSelection(directoryIds.size),
+                directoryIds.toTypedArray(),
                 null,
                 null,
                 recordingCatalogOrderBy(),
@@ -660,6 +680,14 @@ internal fun resolveRecordingCatalogStorageType(
         encoded == legacy -> encoded
         else -> null
     }
+}
+
+internal const val MAX_RECORDING_CATALOG_DIRECTORY_QUERY_ARGS = 900
+
+internal fun recordingCatalogOutsideDirectoriesSelection(directoryCount: Int): String {
+    require(directoryCount in 1..MAX_RECORDING_CATALOG_DIRECTORY_QUERY_ARGS)
+    return RecordingDatabase.COLUMN_DIRECTORY_ID + " NOT IN (" +
+        List(directoryCount) { "?" }.joinToString(", ") + ")"
 }
 
 internal const val MAX_RECORDING_CATALOG_INITIAL_CAPACITY = 1_024
