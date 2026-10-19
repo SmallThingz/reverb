@@ -489,15 +489,17 @@ private fun QuickTileInlineEditor(
                 else -> {
                     val maximum = quickTileRepresentableSeconds(capacity.maximumSeconds)
                     NotificationDurationWheel(target.seconds, maximum, { seconds ->
-                        if (enabled && !target.busy && capacityLoad.ready(admission()) != null) {
+                        val revision = admission()
+                        if (enabled && !target.busy && revision != null && capacityLoad.ready(revision) != null) {
                             target.editRevision++
                             target.seconds = quickTileRepresentableSeconds(seconds.coerceIn(1, maximum))
                             shortened = null
                             message = null
-                        }
+                            NotificationDurationCommit(target.seconds, target.wheelOwner(revision))
+                        } else null
                     }, enabled = enabled && capacityReady, editRevision = target.wheelOwner(editRevision), readEditRevision = {
                         admission()?.takeIf { attached && !target.busy && capacityLoad.ready(it)?.maximumSeconds?.let(::quickTileRepresentableSeconds) == maximum }?.let(target::wheelOwner)
-                    })
+                    }, stepDuration = ::quickTileStepSeconds)
                     if (target.seconds > maximum) TileStatus(stringResource(R.string.tiles_ui_reduce_duration, formatDurationInput(target.seconds)))
                 }
             }

@@ -8,6 +8,116 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotificationDurationBindingTest {
+    // These fixtures have a stable parent owner; integration cases below advance it on acceptance.
+    private fun NotificationDurationBinding.commitInput(seconds: Int, owner: Long?): Int? =
+        commitInput(seconds, owner) { NotificationDurationCommit(it, requireNotNull(owner)) }
+
+    private fun NotificationDurationBinding.finishInteraction(owner: Long?): Int? =
+        finishInteraction(owner) { NotificationDurationCommit(it, requireNotNull(owner)) }
+
+    @Test fun acceptedKeyboardInputsAdvanceTheirOwnOwnerBeforeRecomposition() {
+        val binding = NotificationDurationBinding()
+        var parentSeconds = 30
+        var parentOwner = 7L
+        val apply: (Int) -> NotificationDurationCommit? = { seconds ->
+            parentSeconds = seconds
+            NotificationDurationCommit(seconds, ++parentOwner)
+        }
+        binding.update(parentSeconds, 300, enabled = true, owner = parentOwner)
+
+        repeat(2) {
+            val next = notificationDurationStepSeconds(binding.seconds, 300, true)
+            assertEquals(31 + it, binding.commitInput(next, parentOwner, apply))
+        }
+        assertEquals(32, parentSeconds)
+        assertEquals(32, binding.seconds)
+        assertNull(binding.commitInput(90, 7L, apply))
+
+        // The resulting Compose update must not invalidate a fresh gesture begun after the edit.
+        binding.beginInteraction(parentOwner)
+        binding.select(45)
+        binding.update(parentSeconds, 300, enabled = true, owner = parentOwner)
+        assertEquals(45, binding.finishInteraction(parentOwner, apply))
+        assertEquals(46, binding.commitInput(46, parentOwner, apply))
+    }
+
+    @Test fun unrelatedEditAfterOwnCommitStillRejectsFreshInputUntilRendered() {
+        val binding = NotificationDurationBinding()
+        var parentSeconds = 30
+        var parentOwner = 7L
+        var applied = 0
+        val apply: (Int) -> NotificationDurationCommit? = { seconds ->
+            applied++
+            parentSeconds = seconds
+            NotificationDurationCommit(seconds, ++parentOwner)
+        }
+        binding.update(parentSeconds, 300, enabled = true, owner = parentOwner)
+        assertEquals(31, binding.commitInput(31, parentOwner, apply))
+        parentSeconds = 60
+        parentOwner++ // An unrelated Settings edit or Undo owns this new baseline.
+        assertNull(binding.commitInput(32, parentOwner, apply))
+        assertEquals(1, applied)
+        assertEquals(60, parentSeconds)
+        binding.update(parentSeconds, 300, enabled = true, owner = parentOwner)
+        assertEquals(61, binding.commitInput(61, parentOwner, apply))
+    }
+
+    @Test fun canonicalTileDurationAndOwnRevisionStaySynchronizedWithoutRecomposition() {
+        val binding = NotificationDurationBinding()
+        val target = QuickSettingsTileEditorTarget(null)
+        target.seconds = 999
+        fun owner() = target.wheelOwner(7L)
+        val apply: (Int) -> NotificationDurationCommit? = { seconds ->
+            target.seconds = quickTileRepresentableSeconds(seconds)
+            target.editRevision++
+            NotificationDurationCommit(target.seconds, owner())
+        }
+        binding.update(target.seconds, 86_400, enabled = true, owner = owner())
+
+        // Touch/SET_PROGRESS keeps its existing floor normalization, including the unit gap.
+        binding.beginInteraction(owner())
+        binding.select(1_001)
+        assertEquals(999, binding.finishInteraction(owner(), apply))
+        assertEquals(target.seconds, binding.seconds)
+        for (expected in listOf(1_020, 1_080)) {
+            val next = quickTileStepSeconds(binding.seconds, 86_400, true)
+            assertEquals(expected, binding.commitInput(next, owner(), apply))
+            assertEquals(expected, target.seconds)
+        }
+        for (expected in listOf(1_020, 999)) {
+            val previous = quickTileStepSeconds(binding.seconds, 86_400, false)
+            assertEquals(expected, binding.commitInput(previous, owner(), apply))
+            assertEquals(expected, target.seconds)
+        }
+    }
+
+    @Test fun rejectedParentCommitDoesNotAdvanceTheBinding() {
+        val binding = NotificationDurationBinding()
+        binding.update(30, 300, enabled = true, owner = 7L)
+        assertNull(binding.commitInput(31, 7L) { null })
+        assertEquals(30, binding.seconds)
+        assertEquals(31, binding.commitInput(31, 7L))
+    }
+
+    @Test fun reentrantExternalUpdateCannotBeReplacedByAnOwnCommitReceipt() {
+        val binding = NotificationDurationBinding()
+        binding.update(30, 300, enabled = true, owner = 7L)
+        assertNull(binding.commitInput(31, 7L) {
+            binding.update(70, 300, enabled = true, owner = 99L)
+            NotificationDurationCommit(it, 8L)
+        })
+        assertEquals(70, binding.seconds)
+        assertEquals(71, binding.commitInput(71, 99L))
+    }
+
+    @Test fun notificationKeyboardAndAccessibilityStepsRemainOneSecond() {
+        assertEquals(1_000, notificationDurationStepSeconds(999, 86_400, true))
+        assertEquals(59_941, notificationDurationStepSeconds(59_940, 86_400, true))
+        assertEquals(999, notificationDurationStepSeconds(1_000, 86_400, false))
+        assertEquals(1, notificationDurationStepSeconds(1, 86_400, false))
+        assertEquals(31, notificationDurationStepSeconds(31, 31, true))
+    }
+
     @Test fun focusReturnAcceptsInputWithoutAnotherRender() {
         val binding = NotificationDurationBinding()
         binding.update(30, 300, enabled = true, owner = 7L)

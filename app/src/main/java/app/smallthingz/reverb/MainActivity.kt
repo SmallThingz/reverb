@@ -732,7 +732,7 @@ private fun OnboardingPermissionCard(
                 enabled = canRequest && !allowed,
             ) {
                 Text(
-                    if (allowed || !canRequest) {
+                    if (allowed) {
                         stringResource(R.string.onboarding_allowed)
                     } else {
                         stringResource(R.string.allow)

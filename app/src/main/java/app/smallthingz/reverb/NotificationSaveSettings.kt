@@ -73,7 +73,10 @@ internal fun NotificationSaveSettings(
             NotificationDurationWheel(
                 seconds = seconds,
                 maxSeconds = maxSeconds,
-                onSecondsChange = onSecondsChange,
+                onSecondsChange = { accepted ->
+                    onSecondsChange(accepted)
+                    readEditRevision()?.let { NotificationDurationCommit(accepted, it) }
+                },
                 enabled = interactionReady,
                 editRevision = editRevision,
                 readEditRevision = readEditRevision,
@@ -88,11 +91,12 @@ internal fun NotificationSaveSettings(
 internal fun NotificationDurationWheel(
     seconds: Int,
     maxSeconds: Int,
-    onSecondsChange: (Int) -> Unit,
+    onSecondsChange: (Int) -> NotificationDurationCommit?,
     enabled: Boolean,
     editRevision: Long,
     readEditRevision: () -> Long?,
     modifier: Modifier = Modifier,
+    stepDuration: (Int, Int, Boolean) -> Int = ::notificationDurationStepSeconds,
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_duration)
@@ -106,11 +110,12 @@ internal fun NotificationDurationWheel(
             // Draft identity survives a temporary focus loss; admission is checked live below.
             binding.update(seconds, maximum, enabled, editRevision)
             fun commitInput(value: Int): Boolean {
-                val accepted = binding.commitInput(value, currentOwner()) ?: return false
-                currentChange(accepted)
+                val accepted = binding.commitInput(value, currentOwner(), currentChange) ?: return false
                 view.setDurationSeconds(accepted.toDouble())
                 return true
             }
+            fun stepInput(forward: Boolean): Boolean =
+                commitInput(stepDuration(binding.seconds, maximum, forward))
             view.isEnabled = enabled
             view.setAccessibilityLabel(label)
             view.setPalette(
@@ -122,8 +127,7 @@ internal fun NotificationDurationWheel(
             view.onInteractionStart = { binding.beginInteraction(currentOwner()) }
             view.onDurationChanged = binding::select
             view.onInteractionEnd = {
-                val accepted = binding.finishInteraction(currentOwner())
-                if (accepted != null) currentChange(accepted)
+                binding.finishInteraction(currentOwner(), currentChange)
                 view.setDurationSeconds(binding.seconds.toDouble())
             }
             view.setMaximumDurationSeconds(maximum.toDouble())
@@ -133,9 +137,9 @@ internal fun NotificationDurationWheel(
             view.setOnKeyListener { _, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN) false else when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_RIGHT ->
-                        commitInput(binding.seconds + 1)
+                        stepInput(true)
                     KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT ->
-                        commitInput(binding.seconds - 1)
+                        stepInput(false)
                     else -> false
                 }
             }
@@ -165,8 +169,8 @@ internal fun NotificationDurationWheel(
                             ) ?: Float.NaN
                             value.isFinite() && commitInput(value.roundToInt())
                         }
-                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> commitInput(binding.seconds + 1)
-                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> commitInput(binding.seconds - 1)
+                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> stepInput(true)
+                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> stepInput(false)
                         else -> super.performAccessibilityAction(host, action, arguments)
                     }
             }
@@ -182,6 +186,13 @@ internal fun NotificationDurationWheel(
         modifier = modifier.fillMaxWidth().height(160.dp),
     )
 }
+
+/** The parent acknowledges only this synchronous edit, including any canonicalized duration. */
+internal data class NotificationDurationCommit(val seconds: Int, val owner: Long)
+
+internal fun notificationDurationStepSeconds(seconds: Int, maximum: Int, forward: Boolean): Int =
+    (seconds.coerceIn(1, 86_400) + if (forward) 1 else -1)
+        .coerceIn(1, maximum.coerceIn(1, 86_400))
 
 /** A pending native settle cannot overwrite a newer Settings edit, rollback, or save. */
 internal class NotificationDurationBinding {
@@ -219,18 +230,18 @@ internal class NotificationDurationBinding {
         if (interactionRevision != null) pendingSeconds = seconds
     }
 
-    fun finishInteraction(owner: Long?): Int? {
+    fun finishInteraction(owner: Long?, apply: (Int) -> NotificationDurationCommit?): Int? {
         val accepted = pendingSeconds?.takeIf {
             enabled && owner != null && owner == renderedOwner &&
                 owner == ownerRevision && interactionRevision == revision
         }
         cancelInteraction()
-        return accepted?.let(::commit)
+        return accepted?.let { commit(it, requireNotNull(owner), apply) }
     }
 
-    fun commitInput(seconds: Int, owner: Long?): Int? =
+    fun commitInput(seconds: Int, owner: Long?, apply: (Int) -> NotificationDurationCommit?): Int? =
         if (enabled && owner != null && owner == renderedOwner && interactionRevision == null) {
-            commit(seconds)
+            commit(seconds, owner, apply)
         } else null
 
     fun release() {
@@ -239,8 +250,16 @@ internal class NotificationDurationBinding {
         cancelInteraction()
     }
 
-    private fun commit(value: Int): Int {
-        seconds = value.coerceIn(1, maximum)
+    private fun commit(value: Int, owner: Long, apply: (Int) -> NotificationDurationCommit?): Int? {
+        val acceptedRevision = revision
+        val accepted = apply(value.coerceIn(1, maximum)) ?: return null
+        // Only an accepted callback can advance our rendered owner without a new Compose frame.
+        // A reentrant outside update still owns the binding and must not be overwritten here.
+        if (!enabled || revision != acceptedRevision || renderedOwner != owner ||
+            accepted.seconds !in 1..maximum
+        ) return null
+        seconds = accepted.seconds
+        renderedOwner = accepted.owner
         revision++
         return seconds
     }
