@@ -2894,7 +2894,8 @@ open class ReverbService : Service() {
     ) {
         silenceSampleRequest?.let { request ->
             if (request.running()) try {
-                if (request.remainingTimeoutMillis() == 0L) request.fail(getString(R.string.silence_sample_failed))
+                if (request.remainingTimeoutMillis() == 0L) request.failSamplingTimeout(
+                    getString(R.string.silence_sample_failed))
                 else request.acceptCaptured(bytes, offset, count, sampleRate, channelMode.channelCount, pcmSampleFormat,
                         captureStartedAtNanos, readEndedAtNanos)
             } catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
@@ -2944,7 +2945,7 @@ open class ReverbService : Service() {
             override fun run() {
                 if (!request.running()) return
                 val remaining = request.remainingTimeoutMillis()
-                if (remaining == 0L) request.fail(getString(R.string.silence_sample_failed))
+                if (remaining == 0L) request.failSamplingTimeout(getString(R.string.silence_sample_failed))
                 else mainHandler.postDelayed(this, remaining)
             }
         }
@@ -3014,7 +3015,8 @@ open class ReverbService : Service() {
             while (request.running() && !serviceDestroying && generation == listeningCommandGeneration.get()) {
                 request.processPendingControl()
                 if (!request.running()) break
-                if (request.remainingTimeoutMillis() == 0L) throw IOException(getString(R.string.silence_sample_failed))
+                if (request.remainingTimeoutMillis() == 0L) throw IOException(
+                    request.timeoutFailureMessage(getString(R.string.silence_sample_failed)))
                 buffer.clear()
                 val read = record.read(buffer, bytes.size, AudioRecord.READ_NON_BLOCKING)
                 val readEndedAtNanos = System.nanoTime()

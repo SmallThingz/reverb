@@ -273,7 +273,7 @@ class SilenceCalibrationTest {
     }
 
     @Test(timeout = 5_000)
-    fun pointerTapWithUnavailableCaptureClockDoesNotRetainTheHeldDeadline() = runBlocking {
+    fun pointerTapWithoutCaptureClockKeepsTimedDeadlineAndReportsTimingUnavailable() = runBlocking {
         val request = SilenceSampleRequest(held = true,
             startedAtNanos = System.nanoTime() - 11_950_000_000L)
         val bytes = pcm(16_000, 1, PcmSampleFormat.PCM_16, 0.02)
@@ -289,9 +289,34 @@ class SilenceCalibrationTest {
         assertEquals(0, request.state.value.sampleRate)
         request.useTimedSample()
         withTimeout(1_000L) { job.join() }
-        assertTrue(failure is SilenceCalibrationTimedOut)
+        assertTrue(failure is IOException)
+        assertEquals(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE, failure?.message)
         assertEquals(1, sampler.closes)
         assertFalse(request.state.value.complete)
+    }
+
+    @Test(timeout = 5_000)
+    fun heldMissingClockAndReadFailureRemainDistinctThroughSamplerCleanup() = runBlocking {
+        val bytes = pcm(8_000, 1, PcmSampleFormat.PCM_16, 0.02)
+        for (readFailure in listOf(false, true)) {
+            val request = SilenceSampleRequest(held = true)
+            val sampler = FakeSampler(request) {
+                it.acceptCaptured(bytes, 0, bytes.size, 8_000, 1, PcmSampleFormat.PCM_16,
+                    captureStartedAtNanos = null, readEndedAtNanos = System.nanoTime())
+                if (readFailure) it.fail("microphone read failed") else it.finishHold()
+            }
+            var failure: Throwable? = null
+            try {
+                calibrateSilence({ sampler }, {})
+                fail("Missing capture timing cannot produce a calibration draft")
+            } catch (error: IOException) { failure = error }
+            assertFalse(failure is SilenceCalibrationTooShort)
+            assertEquals(if (readFailure) "microphone read failed" else SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE,
+                failure?.message)
+            assertEquals(1, sampler.starts)
+            assertEquals(1, sampler.closes)
+            assertTrue(request.cancelled.get())
+        }
     }
 
     @Test(timeout = 5_000)

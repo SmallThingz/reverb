@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 internal const val SILENCE_SAMPLE_TIMED_MILLIS = 4_000L
 internal const val SILENCE_SAMPLE_EDGE_MILLIS = 500L
 internal const val SILENCE_SAMPLE_MINIMUM_HELD_INTERIOR_MILLIS = 500L
+internal const val SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE = "Microphone timing is unavailable. Try again."
 
 internal data class SilenceSampleState(
     val progress: Float = 0f,
@@ -34,6 +35,8 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
     val cancelled = AtomicBoolean(false)
     private val controlLock = Any()
     private var audioAdmitted = false
+    private var unclockedPcmObserved = false
+    private var clockedPcmObserved = false
     private val control = AtomicReference<Control>(if (held) Control.Held else Control.Timed)
     private val mutableDeadline = MutableStateFlow(startedAtNanos + (if (held) 60_000L else 10_000L) * 1_000_000L)
     val deadlineNanos: StateFlow<Long> = mutableDeadline.asStateFlow()
@@ -65,6 +68,22 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
 
     fun remainingTimeoutMillis(nowNanos: Long = System.nanoTime()): Long =
         silenceSampleRemainingMillis(deadlineNanos.value, nowNanos)
+
+    /** Observed PCM without capture-clock proof is different from no PCM or a short hold. */
+    fun captureTimingUnavailable(): Boolean = synchronized(controlLock) {
+        unclockedPcmObserved && !clockedPcmObserved && !audioAdmitted
+    }
+
+    fun timeoutFailureMessage(fallback: String): String = mutableState.value.error ?:
+        if (captureTimingUnavailable()) SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE else fallback
+
+    fun failSamplingTimeout(fallback: String) = synchronized(controlLock) {
+        val message = timeoutFailureMessage(fallback)
+        mutableState.update {
+            if (it.complete || it.cancelled || it.error != null || cancelled.get()) it
+            else it.copy(error = message)
+        }
+    }
 
     /** Capture the boundary here, before any delayed audio-handler callback. */
     fun finishHold(atNanos: Long = System.nanoTime()) {
@@ -113,13 +132,19 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
         require(rate > 0 && channels > 0)
         val frameBytes = Math.multiplyExact(channels, format.bytesPerSample)
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count && count % frameBytes == 0)
-        if (captureStartedAtNanos == null || captureStartedAtNanos > readEndedAtNanos) {
+        val usableTiming = captureStartedAtNanos != null && captureStartedAtNanos <= readEndedAtNanos
+        if (count > 0) synchronized(controlLock) {
+            if (!running()) return
+            if (usableTiming) clockedPcmObserved = true else unclockedPcmObserved = true
+        }
+        if (!usableTiming) {
             processPendingControl()
             return
         }
+        val captureStart = requireNotNull(captureStartedAtNanos)
         val readFrames = count / frameBytes
-        val beforePress = if (captureStartedAtNanos < startedAtNanos) {
-            val delta = startedAtNanos - captureStartedAtNanos
+        val beforePress = if (captureStart < startedAtNanos) {
+            val delta = startedAtNanos - captureStart
             val duration = (readFrames * 1_000_000_000L + rate - 1L) / rate
             if (delta >= duration) readFrames else ((delta * rate + 999_999_999L) / 1_000_000_000L).toInt()
         } else 0
@@ -255,8 +280,10 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
     }
 
     private fun publishTooShort() {
+        val timingUnavailable = captureTimingUnavailable()
         mutableState.update {
             if (it.cancelled || it.complete || it.error != null || cancelled.get()) it
+            else if (timingUnavailable) it.copy(complete = false, error = SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE)
             else it.copy(complete = false, error = "Hold a little longer, then release.", tooShort = true)
         }
     }

@@ -53,6 +53,12 @@ internal suspend fun calibrateSilence(
         // while binding is pending. The small outer allowance covers terminal delivery/cleanup.
         val fixedDeadline = samplingTimeoutMillis?.let { System.nanoTime() + it * 1_000_000L }
         val request = sampler.request
+        fun timeoutOrTerminal(): SilenceSampleState {
+            val terminal = request.state.value
+            if (terminal.complete || terminal.cancelled || terminal.error != null) return terminal
+            if (request.captureTimingUnavailable()) throw IOException(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE)
+            throw SilenceCalibrationTimedOut()
+        }
         var result: SilenceSampleState
         while (true) {
             val snapshot = request.state.value
@@ -64,13 +70,20 @@ internal suspend fun calibrateSilence(
             val observedDeadline = request.deadlineNanos.value
             val remaining = silenceSampleRemainingMillis(
                 fixedDeadline ?: (observedDeadline + 2_000_000_000L), System.nanoTime())
-            if (remaining == 0L) throw SilenceCalibrationTimedOut()
+            if (remaining == 0L) {
+                result = timeoutOrTerminal()
+                break
+            }
             val event = withTimeoutOrNull(remaining) {
                 combine(request.state.onEach(onProgress), request.deadlineNanos) { sample, deadline -> sample to deadline }
                     .first { (sample, deadline) ->
                         sample.complete || sample.cancelled || sample.error != null || deadline != observedDeadline
                     }
-            } ?: throw SilenceCalibrationTimedOut()
+            }
+            if (event == null) {
+                result = timeoutOrTerminal()
+                break
+            }
             if (event.first.complete || event.first.cancelled || event.first.error != null) {
                 result = event.first
                 break

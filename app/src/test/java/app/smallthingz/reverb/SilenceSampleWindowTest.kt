@@ -291,6 +291,83 @@ class SilenceSampleWindowTest {
     }
 
     @Test
+    fun heldPcmWithoutUsableTimingReportsTimingInsteadOfShortHold() {
+        val rate = 8_000
+        val bytes = pcm(rate, rate * 4)
+        for (timestamp in listOf<Long?>(null, 10_000_000_000L)) {
+            val request = SilenceSampleRequest(held = true, startedAtNanos = 5_000_000_000L)
+            request.acceptCaptured(bytes, 0, bytes.size, rate, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = timestamp, readEndedAtNanos = 9_000_000_000L)
+            request.finishHold(atNanos = 9_000_000_000L)
+            assertEquals(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE, request.state.value.error)
+            assertFalse(request.state.value.tooShort)
+            assertFalse(request.state.value.complete)
+            assertEquals(0, request.state.value.sampleRate)
+        }
+    }
+
+    @Test
+    fun zeroPcmAndClockedShortSamplesDoNotClaimMissingTimingCapability() {
+        val rate = 8_000
+        val empty = SilenceSampleRequest(held = true, startedAtNanos = 5_000_000_000L)
+        empty.acceptCaptured(ByteArray(0), 0, 0, rate, 1, PcmSampleFormat.PCM_16,
+            captureStartedAtNanos = null, readEndedAtNanos = 9_000_000_000L)
+        empty.finishHold(atNanos = 9_000_000_000L)
+        assertTrue(empty.state.value.tooShort)
+        assertFalse(empty.captureTimingUnavailable())
+
+        for (captureStart in listOf(3_000_000_000L, 5_000_000_000L)) {
+            val request = SilenceSampleRequest(held = true, startedAtNanos = 5_000_000_000L)
+            val bytes = pcm(rate, rate)
+            request.acceptCaptured(bytes, 0, bytes.size, rate, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = null, readEndedAtNanos = 6_000_000_000L)
+            request.acceptCaptured(bytes, 0, bytes.size, rate, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = captureStart, readEndedAtNanos = 6_000_000_000L)
+            request.finishHold(atNanos = 6_000_000_000L)
+            request.processPendingControl()
+            assertTrue(request.state.value.tooShort)
+            assertFalse(request.captureTimingUnavailable())
+        }
+    }
+
+    @Test
+    fun samplingTimeoutClassifiesOnlyUnclockedPcmAndPreservesPriorTerminalOutcomes() {
+        val bytes = pcm(8_000, 8_000)
+        fun unclocked() = SilenceSampleRequest(startedAtNanos = 5_000_000_000L).also {
+            it.acceptCaptured(bytes, 0, bytes.size, 8_000, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = null, readEndedAtNanos = 6_000_000_000L)
+        }
+        val timed = unclocked()
+        timed.failSamplingTimeout("deadline")
+        assertEquals(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE, timed.state.value.error)
+        assertFalse(timed.state.value.complete)
+
+        val empty = SilenceSampleRequest()
+        empty.failSamplingTimeout("deadline")
+        assertEquals("deadline", empty.state.value.error)
+
+        val failedRead = unclocked()
+        failedRead.fail("microphone read failed")
+        val failure = failedRead.state.value
+        failedRead.failSamplingTimeout("deadline")
+        assertEquals(failure, failedRead.state.value)
+
+        val cancelled = unclocked()
+        cancelled.cancel()
+        val cancellation = cancelled.state.value
+        cancelled.failSamplingTimeout("deadline")
+        assertEquals(cancellation, cancelled.state.value)
+        assertNull(cancelled.state.value.error)
+
+        val completed = SilenceSampleRequest()
+        feed(completed, pcm(8_000, 8_000 * 4), 8_000)
+        val success = completed.state.value
+        assertTrue(success.complete)
+        completed.failSamplingTimeout("deadline")
+        assertEquals(success, completed.state.value)
+    }
+
+    @Test
     fun tapConversionChangesTheAlreadyObservedAbsoluteDeadlineAndWakesItsOwner() {
         val press = 1_000_000_000L
         val held = SilenceSampleRequest(held = true, startedAtNanos = press)
