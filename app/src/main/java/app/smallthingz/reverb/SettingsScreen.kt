@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
@@ -1506,6 +1509,7 @@ fun SettingsScreen(
                         if (showSampleFormat || showSampleRate) {
                             Row(
                                 modifier = Modifier.fillMaxWidth()
+                                    .height(IntrinsicSize.Min)
                                     .settingsAudioDivider(top = showChannels),
                             ) {
                                 if (showSampleFormat) {
@@ -1524,7 +1528,7 @@ fun SettingsScreen(
                                             )
                                             finishSettingsEdit()
                                         },
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.weight(1f).fillMaxHeight(),
                                     )
                                 }
                                 if (showSampleRate) {
@@ -1539,6 +1543,7 @@ fun SettingsScreen(
                                             finishSettingsEdit()
                                         },
                                         modifier = Modifier.weight(1f)
+                                            .fillMaxHeight()
                                             .settingsAudioDivider(start = showSampleFormat),
                                     )
                                 }
@@ -1546,9 +1551,11 @@ fun SettingsScreen(
                         }
                         if (showSource || showRoute) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().settingsAudioDivider(
-                                    top = showChannels || showSampleFormat || showSampleRate,
-                                ),
+                                modifier = Modifier.fillMaxWidth()
+                                    .height(IntrinsicSize.Min)
+                                    .settingsAudioDivider(
+                                        top = showChannels || showSampleFormat || showSampleRate,
+                                    ),
                             ) {
                                 if (showSource) {
                                     SettingsDropdown(
@@ -1562,7 +1569,7 @@ fun SettingsScreen(
                                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
                                             finishSettingsEdit()
                                         },
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.weight(1f).fillMaxHeight(),
                                     )
                                 }
                                 if (showRoute) {
@@ -1582,6 +1589,7 @@ fun SettingsScreen(
                                             finishSettingsEdit()
                                         },
                                         modifier = Modifier.weight(1f)
+                                            .fillMaxHeight()
                                             .settingsAudioDivider(start = showSource),
                                     )
                                 }
@@ -2190,7 +2198,7 @@ private fun <T> SettingsDropdown(
         label = "settings-choice-background",
     )
 
-    Box(modifier = modifier) {
+    Box(modifier = modifier, propagateMinConstraints = true) {
         Surface(
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
@@ -2200,7 +2208,7 @@ private fun <T> SettingsDropdown(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .heightIn(min = 72.dp)
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
