@@ -266,6 +266,8 @@ open class ReverbService : Service() {
     )
 
     private val listeningCommandGeneration = AtomicLong()
+    // Accepted explicit intent retires queued foreground work without changing healthy PCM.
+    private val foregroundAdmissionGeneration = AtomicLong()
     // Command versions also advance for harmless destination changes. This separate epoch
     // advances only when capture continuity breaks, so an in-flight read can survive a buffer
     // handoff without surviving Stop -> Start or failure boundaries.
@@ -293,6 +295,8 @@ open class ReverbService : Service() {
 
     @Volatile
     private var foregroundStartBlocked = false
+    // Guarded by listeningIntentLock. A focus-return retry is bounded to this capture intent.
+    private val foregroundCaptureRetryGate = ForegroundCaptureRetryGate()
 
     @Volatile
     private var activeExportToken: ExportCancellationToken? = null
@@ -376,6 +380,8 @@ open class ReverbService : Service() {
     private var powerManager: PowerManager? = null
 
     private val pendingError = AtomicReference<String?>(null)
+    // State polling and its recovery marker are confined to the audio handler.
+    private val recorderStateReadErrorGate = RecorderStateReadErrorGate()
 
     override fun onCreate() {
         super.onCreate()
@@ -601,11 +607,12 @@ open class ReverbService : Service() {
                         foregroundStartBlocked = foregroundStartBlocked,
                         foregroundServiceTimedOut = foregroundServiceTimedOut,
                         persistenceFailureBlocked = persistenceFailureBlocked,
+                        foregroundStartRetryAvailable = foregroundCaptureRetryGate.retryAvailable,
                     )
                 ) {
+                    foregroundCaptureRetryGate.retryAccepted()
                     foregroundStartBlocked = false
                     foregroundServiceTimedOut = false
-                    persistenceFailureBlocked = false
                     listeningCommandGeneration.get()
                 } else {
                     null
@@ -1116,7 +1123,11 @@ open class ReverbService : Service() {
                     }
                 }
             }
-            if (acceptedGeneration != null) captureControlFence.recordAcceptedControl(expectedControl)
+            if (acceptedGeneration != null) {
+                foregroundAdmissionGeneration.incrementAndGet()
+                foregroundCaptureRetryGate.resetForExplicitIntent()
+                captureControlFence.recordAcceptedControl(expectedControl)
+            }
             acceptedGeneration
         }
         if (generation == null) {
@@ -1440,39 +1451,51 @@ open class ReverbService : Service() {
         ) return
         state = STATE_LISTENING
         updateWakeLockState()
+        val attempt = newForegroundCaptureAttempt(generation)
         try {
             requireServiceStarted {
                 ContextCompat.startForegroundService(this, Intent(this, javaClass))
             }
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to start recorder foreground service", error)
-            pauseListeningAfterForegroundStartFailure(generation, error)
+            pauseListeningAfterForegroundStartFailure(attempt, error)
             return
         }
     }
 
+    private fun newForegroundCaptureAttempt(generation: Long) = ForegroundCaptureAttempt(
+        commandGeneration = generation,
+        admissionGeneration = foregroundAdmissionGeneration.get(),
+        foregroundAtAttempt = appUiForeground,
+    )
+
     private fun pauseListeningAfterForegroundStartFailure(
-        generation: Long,
+        attempt: ForegroundCaptureAttempt,
         error: RuntimeException,
     ) {
-        synchronized(listeningIntentLock) {
-            if (serviceDestroying || generation != listeningCommandGeneration.get()) return
-            // Android 14+ can reject microphone-FGS promotion while the app is in the
-            // background even though the user's durable capture intent is still valid.
-            // Preserve that intent and retry only after a fresh service instance or an
-            // explicit user start; otherwise a transient platform restriction silently
-            // turns recording off forever.
+        val pausedGeneration = synchronized(listeningIntentLock) {
+            if (serviceDestroying || !attempt.isCurrent(
+                    listeningCommandGeneration.get(), foregroundAdmissionGeneration.get(),
+                )
+            ) return
+            // Background microphone-FGS rejection can recover on genuine UI foregrounding.
+            // A failed eligible attempt must not be retried by its own error sheet losing
+            // and restoring focus. Keep the attempt snapshot even if delivery was delayed.
+            foregroundCaptureRetryGate.startFailed(attempt.foregroundAtAttempt)
             foregroundStartBlocked = true
-            listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
+            listeningCommandGeneration.incrementAndGet()
         }
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Capture stopped after foreground service start restriction",
         )
         audioHandler.post {
-            if (serviceDestroying) return@post
+            if (serviceDestroying || pausedGeneration != listeningCommandGeneration.get() ||
+                attempt.admissionGeneration != foregroundAdmissionGeneration.get() ||
+                state == STATE_LISTENING
+            ) return@post
             audioHandler.removeCallbacks(audioReader)
             try {
                 sealActiveChunks()
@@ -1489,10 +1512,12 @@ open class ReverbService : Service() {
         requestServiceStopWhenExportIdle()
     }
 
-    private fun startCaptureAfterForegroundAdmissionOnAudioThread(generation: Long) {
+    private fun startCaptureAfterForegroundAdmissionOnAudioThread(attempt: ForegroundCaptureAttempt) {
         check(audioHandler.looper == Looper.myLooper())
         synchronized(listeningIntentLock) {
-            if (serviceDestroying || generation != listeningCommandGeneration.get() ||
+            if (serviceDestroying || !attempt.isCurrent(
+                    listeningCommandGeneration.get(), foregroundAdmissionGeneration.get(),
+                ) ||
                 !durableListeningIntentEnabled || foregroundStartBlocked || persistenceFailureBlocked
             ) return
             // A delayed platform start observes intent on main, but cannot overtake a durable
@@ -1500,7 +1525,7 @@ open class ReverbService : Service() {
             state = STATE_LISTENING
             updateWakeLockState()
         }
-        startAudioInputOnAudioThread(generation)
+        startAudioInputOnAudioThread(attempt.commandGeneration)
     }
 
     private fun startAudioInputOnAudioThread(
@@ -3734,6 +3759,7 @@ open class ReverbService : Service() {
                 val sampledOneShotEnabled = oneShotBufferEnabled
                 val sampledLoopingEnabled = loopingBufferEnabled
                 val sampledRetentionMode = configuredRetentionMode
+                recorderStateReadErrorGate.readSucceeded()
                 mainHandler.post {
                     if (!serviceRuntimeReadMayExecute(serviceDestroying)) {
                         deliverUnavailableState(callback)
@@ -3761,7 +3787,9 @@ open class ReverbService : Service() {
                     )
                 }
             } catch (error: Exception) {
-                reportPersistentStoreFailure("read recorder state", error)
+                if (recorderStateReadErrorGate.shouldReportFailure(error)) {
+                    reportPersistentStoreFailure("read recorder state", error)
+                }
                 postUnavailableState(callback)
             }
         }) {
@@ -4572,6 +4600,7 @@ open class ReverbService : Service() {
             return START_NOT_STICKY
         }
         if (listeningEnabled) {
+            val attempt = newForegroundCaptureAttempt(generation)
             try {
                 val exporting = hasActiveExport()
                 promoteForeground(
@@ -4580,10 +4609,12 @@ open class ReverbService : Service() {
                 )
             } catch (error: RuntimeException) {
                 Log.e(TAG, "Unable to enter microphone foreground state", error)
-                audioHandler.post { pauseListeningAfterForegroundStartFailure(generation, error) }
+                audioHandler.post {
+                    pauseListeningAfterForegroundStartFailure(attempt, error)
+                }
                 return START_NOT_STICKY
             }
-            if (!audioHandler.post { startCaptureAfterForegroundAdmissionOnAudioThread(generation) }) {
+            if (!audioHandler.post { startCaptureAfterForegroundAdmissionOnAudioThread(attempt) }) {
                 requestServiceStopWhenExportIdle()
                 return START_NOT_STICKY
             }
@@ -5560,6 +5591,37 @@ internal fun shouldEnsureRuntimeCaptureAfterInitialization(
         persistenceFailureBlocked = persistenceFailureBlocked,
     )
 
+internal data class ForegroundCaptureAttempt(
+    val commandGeneration: Long,
+    val admissionGeneration: Long,
+    val foregroundAtAttempt: Boolean,
+) {
+    fun isCurrent(currentCommandGeneration: Long, currentAdmissionGeneration: Long): Boolean =
+        commandGeneration == currentCommandGeneration && admissionGeneration == currentAdmissionGeneration
+}
+
+/** One automatic eligibility retry per capture intent; explicit Start/Stop begins a new intent. */
+internal class ForegroundCaptureRetryGate {
+    var retryAvailable = false
+        private set
+    private var foregroundAttemptSpent = false
+
+    fun startFailed(foregroundAtAttempt: Boolean) {
+        foregroundAttemptSpent = foregroundAttemptSpent || foregroundAtAttempt
+        retryAvailable = !foregroundAttemptSpent
+    }
+
+    fun retryAccepted() {
+        foregroundAttemptSpent = true
+        retryAvailable = false
+    }
+
+    fun resetForExplicitIntent() {
+        foregroundAttemptSpent = false
+        retryAvailable = false
+    }
+}
+
 internal fun shouldRetrySuspendedListeningWithForegroundUi(
     listeningIntentEnabled: Boolean,
     serviceDestroying: Boolean,
@@ -5567,8 +5629,13 @@ internal fun shouldRetrySuspendedListeningWithForegroundUi(
     foregroundStartBlocked: Boolean,
     foregroundServiceTimedOut: Boolean,
     persistenceFailureBlocked: Boolean,
+    foregroundStartRetryAvailable: Boolean,
 ): Boolean = listeningIntentEnabled && !serviceDestroying && appUiForeground &&
-    (foregroundStartBlocked || foregroundServiceTimedOut || persistenceFailureBlocked)
+    // Dismissing our error sheet restores window focus. That is eligibility evidence for a
+    // microphone-FGS retry, not evidence that failed storage is healthy. Explicit Start owns
+    // retrying persistence; otherwise the error sheet itself would repeatedly restart capture.
+    !persistenceFailureBlocked &&
+    ((foregroundStartBlocked && foregroundStartRetryAvailable) || foregroundServiceTimedOut)
 
 internal enum class AudioThreadShutdownWaitResult {
     COMPLETED,

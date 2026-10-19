@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -192,6 +193,21 @@ internal class IncidentHistoryPresentation(val rows: List<IncidentPresentation>)
     val hasAlert: Boolean = rows.any { !it.incident.acknowledged }
 }
 
+internal enum class IncidentHistoryLoadStatus { LOADING, READY, UNAVAILABLE }
+
+internal data class IncidentHistoryUiState(
+    val history: IncidentHistoryPresentation = IncidentHistoryPresentation(emptyList()),
+    val status: IncidentHistoryLoadStatus = IncidentHistoryLoadStatus.LOADING,
+) {
+    val canMutate: Boolean get() = status == IncidentHistoryLoadStatus.READY
+    val showEmptyHistory: Boolean get() = canMutate && history.rows.isEmpty()
+
+    fun loadStarted(): IncidentHistoryUiState = copy(status = IncidentHistoryLoadStatus.LOADING)
+    fun loadFailed(): IncidentHistoryUiState = copy(status = IncidentHistoryLoadStatus.UNAVAILABLE)
+    fun loadSucceeded(loaded: IncidentHistoryPresentation): IncidentHistoryUiState =
+        IncidentHistoryUiState(loaded, IncidentHistoryLoadStatus.READY)
+}
+
 internal fun prepareIncidentHistory(
     incidents: List<RecordingIncident>,
     locale: Locale = Locale.getDefault(),
@@ -215,13 +231,14 @@ internal fun prepareIncidentHistory(
 
 @Composable
 internal fun IncidentsScreen(
-    history: IncidentHistoryPresentation,
+    state: IncidentHistoryUiState,
     onBack: () -> Unit,
     onToggleAcknowledged: (RecordingIncident) -> Unit,
     onDelete: (RecordingIncident) -> Unit,
     modifier: Modifier = Modifier,
     openProgress: () -> Float = { 1f },
 ) {
+    val history = state.history
     val noiseBrush = rememberAppNoiseBrush()
     val topBarNoiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
     Surface(
@@ -257,13 +274,28 @@ internal fun IncidentsScreen(
             if (history.rows.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Icon(AppIcons.incidents, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(34.dp))
-                        Text(stringResource(R.string.incidents_empty), style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            stringResource(R.string.incidents_empty_detail),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (state.status == IncidentHistoryLoadStatus.LOADING) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(AppIcons.incidents, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(34.dp))
+                        }
+                        if (state.showEmptyHistory) {
+                            Text(stringResource(R.string.incidents_empty), style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                stringResource(R.string.incidents_empty_detail),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Text(
+                                stringResource(
+                                    if (state.status == IncidentHistoryLoadStatus.LOADING) R.string.incidents_loading
+                                    else R.string.incidents_unavailable,
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             } else {
@@ -272,12 +304,23 @@ internal fun IncidentsScreen(
                     contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 28.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (state.status == IncidentHistoryLoadStatus.UNAVAILABLE) {
+                        item(key = "incident-history-status") {
+                            Text(
+                                stringResource(R.string.incidents_stale),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                            )
+                        }
+                    }
                     items(
                         items = history.rows,
                         key = { it.key },
                     ) { row ->
                         IncidentCard(
                             row = row,
+                            canMutate = state.canMutate,
                             modifier = Modifier.animateItem(),
                             onToggleAcknowledged = { onToggleAcknowledged(row.incident) },
                             onDelete = { onDelete(row.incident) },
@@ -292,12 +335,14 @@ internal fun IncidentsScreen(
 @Composable
 private fun IncidentCard(
     row: IncidentPresentation,
+    canMutate: Boolean,
     onToggleAcknowledged: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var menuCreated by remember { mutableStateOf(false) }
+    val openMenu = { menuCreated = true; menuExpanded = true }
     val incident = row.incident
     val unacknowledged = !incident.acknowledged
     val date = row.date
@@ -334,8 +379,9 @@ private fun IncidentCard(
                 .fillMaxWidth()
                 .clip(cardShape)
                 .combinedClickable(
-                    onClick = onToggleAcknowledged,
-                    onLongClick = { menuCreated = true; menuExpanded = true },
+                    onClickLabel = if (canMutate) null else stringResource(R.string.open_options),
+                    onClick = if (canMutate) onToggleAcknowledged else openMenu,
+                    onLongClick = openMenu,
                 ),
             shape = cardShape,
             color = fill,
@@ -352,17 +398,18 @@ private fun IncidentCard(
                             .size(46.dp)
                             .clip(CircleShape)
                             .combinedClickable(
-                                onClick = onToggleAcknowledged,
-                                onLongClick = { menuCreated = true; menuExpanded = true },
+                                onClickLabel = if (canMutate) null else stringResource(R.string.open_options),
+                                onClick = if (canMutate) onToggleAcknowledged else openMenu,
+                                onLongClick = openMenu,
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             imageVector = if (incident.acknowledged) AppIcons.checked else AppIcons.unchecked,
-                            contentDescription = stringResource(
+                            contentDescription = if (canMutate) stringResource(
                                 if (incident.acknowledged) R.string.incident_mark_unchecked
                                 else R.string.incident_mark_checked,
-                            ),
+                            ) else null,
                             tint = if (unacknowledged) {
                                 MaterialTheme.colorScheme.error
                             } else {
@@ -395,12 +442,14 @@ private fun IncidentCard(
                     leadingIcon = { Icon(AppIcons.copy, contentDescription = null) },
                     onClick = { menuExpanded = false; copyIncident() },
                 )
-                DropdownMenuItem(
-                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-                    text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
-                    leadingIcon = { Icon(AppIcons.delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                    onClick = { menuExpanded = false; onDelete() },
-                )
+                if (canMutate) {
+                    DropdownMenuItem(
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+                        text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(AppIcons.delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                        onClick = { menuExpanded = false; onDelete() },
+                    )
+                }
             }
         }
     }

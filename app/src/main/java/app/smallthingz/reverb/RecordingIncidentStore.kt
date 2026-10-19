@@ -27,12 +27,71 @@ import java.io.IOException
 internal const val EXIT_REASON_MEMORY_LIMITER = 17
 internal const val EXIT_REASON_ANOMALY = 18
 internal const val MAX_PENDING_INCIDENT_SESSIONS = 128
+internal const val MAX_VISIBLE_RECORDING_INCIDENTS = 128
+// Visible history, all bounded pending capture owners, and a legacy-history-sized reserve for
+// deletion identities whose old payload lacks enough identity to prove that replay has ended.
+// The four extra slots cover the active capture, two process-local retry owners, and app exit.
+internal const val MAX_RECORDING_INCIDENT_HISTORY_RECORDS =
+    MAX_VISIBLE_RECORDING_INCIDENTS * 2 + MAX_PENDING_INCIDENT_SESSIONS + 4
 
 internal fun pendingIncidentQueueCanAppend(existingCount: Int): Boolean =
     existingCount in 0 until MAX_PENDING_INCIDENT_SESSIONS
 
 internal fun atomicReadMissIsAuthoritativeAbsence(backingState: StoragePathState): Boolean =
     backingState == StoragePathState.MISSING
+
+/** A visible unlink is not durable absence until this directory barrier succeeds. */
+private fun requireDurableIncidentAtomicAbsence(
+    baseFile: File,
+    syncDirectory: (File) -> Unit,
+) {
+    fun requireAbsent() {
+        when (atomicFileRegularBackingState(baseFile)) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.PRESENT -> throw IOException(
+                "Incident state is present during removal confirmation: ${baseFile.absolutePath}",
+            )
+            StoragePathState.UNAVAILABLE -> throw IOException(
+                "Unable to confirm incident-state absence: ${baseFile.absolutePath}",
+            )
+        }
+    }
+    requireAbsent()
+    val parent = baseFile.parentFile ?: throw IOException(
+        "Incident state has no durability parent: ${baseFile.absolutePath}",
+    )
+    // Do not convert the barrier's exception to a Boolean: keep its original failure/cause.
+    syncDirectory(parent)
+    // A new base, .new or .bak must be preserved, never deleted by an absence retry.
+    requireAbsent()
+}
+
+internal fun deleteIncidentAtomicStateDurably(
+    baseFile: File,
+    removePresent: () -> Unit,
+    syncDirectory: (File) -> Unit = ::forceRecordingDirectoryDurable,
+) {
+    when (atomicFileRegularBackingState(baseFile)) {
+        StoragePathState.MISSING -> Unit // Retry a prior unlink whose directory barrier failed.
+        StoragePathState.PRESENT -> removePresent()
+        StoragePathState.UNAVAILABLE -> throw IOException(
+            "Unable to inspect durable incident state: ${baseFile.absolutePath}",
+        )
+    }
+    requireDurableIncidentAtomicAbsence(baseFile, syncDirectory)
+}
+
+internal fun completeMissingIncidentMarkerRetry(
+    baseFile: File,
+    preserveIncident: () -> Unit,
+    retireRetry: () -> Unit,
+    syncDirectory: (File) -> Unit = ::forceRecordingDirectoryDurable,
+) {
+    // Missing-marker retry owns confirmation only, never deletion of a replacement marker.
+    requireDurableIncidentAtomicAbsence(baseFile, syncDirectory)
+    preserveIncident()
+    retireRetry()
+}
 
 internal inline fun <T> readIncidentPayloadExact(
     input: DataInputStream,
@@ -89,16 +148,123 @@ internal fun appendRecordingIncidentPreservingDeletions(
     incident: RecordingIncident,
     limit: Int,
 ): List<RecordingIncident> {
-    if (existing.count { it.deleted } >= limit) {
-        throw IOException("Incident history is full of deletion markers")
-    }
+    require(limit > 0)
     val updated = (existing + incident).sortedBy { it.occurredAtMillis }.toMutableList()
-    while (updated.size > limit) {
-        val evictable = updated.indexOfFirst { !it.deleted }
-        if (evictable < 0) throw IOException("Incident history is full of deletion markers")
-        updated.removeAt(evictable)
+    var visibleCount = updated.count { !it.deleted }
+    while (visibleCount > limit) {
+        updated.removeAt(updated.indexOfFirst { !it.deleted })
+        visibleCount--
     }
     return updated
+}
+
+internal data class RecordingIncidentReplayOwners(
+    val captureSessions: List<RecordingIncident> = emptyList(),
+    val exactIncidents: List<RecordingIncident> = emptyList(),
+    val appProcessPid: Int = 0,
+    val appProcessStartedAtMillis: Long = -1L,
+)
+
+/** Missing owner proof never authorizes pruning; the caller supplies only a complete snapshot. */
+internal fun retainRecordingIncidentDeletions(
+    incidents: List<RecordingIncident>,
+    owners: RecordingIncidentReplayOwners,
+    incoming: RecordingIncident,
+): List<RecordingIncident> = incidents.filter { incident ->
+    if (!incident.deleted) true
+    else if (recordingIncidentReferenceMatches(incident, incoming) ||
+        owners.exactIncidents.any { recordingIncidentReferenceMatches(incident, it) }) true
+    else when (incident.kind) {
+        RecordingIncidentKind.UNEXPECTED_SHUTDOWN -> owners.captureSessions.any { session ->
+            if (recordingIncidentHasSessionIdentity(incident)) {
+                recordingIncidentsShareCaptureSession(incident, session)
+            } else {
+                // Legacy cards can be matched only by occurrence time. Any still-owned session
+                // armed before that time could supply delayed evidence with that exact timestamp.
+                incident.occurredAtMillis >= session.captureArmedAtMillis
+            }
+        }
+        RecordingIncidentKind.UNEXPECTED_ERROR -> owners.appProcessPid > 0 &&
+            (incident.pid <= 0 || incident.pid == owners.appProcessPid) && when {
+                incident.pid <= 0 -> incident.occurredAtMillis >= owners.appProcessStartedAtMillis
+                incident.exitReason != ApplicationExitInfo.REASON_UNKNOWN ->
+                    incident.processStartedAtMillis <= 0L || owners.appProcessStartedAtMillis <= 0L ||
+                        incident.processStartedAtMillis == owners.appProcessStartedAtMillis
+                incident.description?.startsWith("Uncaught exception on ") == true ->
+                    // The uncaught-handler timestamp uses the live clock, whereas the process
+                    // marker was sampled at startup. Keep the same tolerance as exit deduplication.
+                    incident.occurredAtMillis >= (owners.appProcessStartedAtMillis - 10_000L).coerceAtLeast(0L)
+                else -> false
+            }
+    }
+}
+
+internal fun compactRecordingIncidentDeletions(
+    incidents: List<RecordingIncident>,
+    incoming: RecordingIncident,
+    readOwners: () -> RecordingIncidentReplayOwners,
+): List<RecordingIncident> {
+    if (incidents.none { it.deleted }) return incidents
+    val owners = try {
+        readOwners()
+    } catch (_: IOException) {
+        // Compaction is optional. Unavailable owner metadata must preserve every identity.
+        return incidents
+    }
+    return retainRecordingIncidentDeletions(incidents, owners, incoming)
+}
+
+internal fun validateRecordingIncidentHistorySize(incidents: List<RecordingIncident>) {
+    if (incidents.size > MAX_RECORDING_INCIDENT_HISTORY_RECORDS ||
+        incidents.count { !it.deleted } > MAX_VISIBLE_RECORDING_INCIDENTS) {
+        throw IOException("Recording incident history exceeds its bounded live/history capacity")
+    }
+}
+
+/** Owns an exact history payload across an uncertain AtomicFile publication, never a toggle. */
+internal class IncidentHistoryPublication {
+    private data class Pending(val file: File, val incidents: List<RecordingIncident>)
+    private var pending: Pending? = null
+    private var refreshPending = false
+
+    fun confirmPending(
+        publish: (File, List<RecordingIncident>, () -> Unit) -> Unit,
+    ) {
+        val target = pending ?: return
+        // Retain the same target and wake-up obligation through repeated failures. The history
+        // reader already owns bounded backoff; another signal here would reset that backoff.
+        publish(target.file, target.incidents) {}
+        pending = null
+    }
+
+    fun completeHistoryRead(): Boolean {
+        val refreshCompleted = refreshPending
+        refreshPending = false
+        return refreshCompleted
+    }
+
+    fun write(
+        file: File,
+        incidents: List<RecordingIncident>,
+        publish: (File, List<RecordingIncident>, () -> Unit) -> Unit,
+        onHistoryChanged: () -> Unit,
+    ) {
+        confirmPending(publish)
+        val target = incidents.toList()
+        var publicationStarted = false
+        try {
+            publish(file, target) { publicationStarted = true }
+        } catch (error: Throwable) {
+            // A pre-publication failure must not acquire authority to replay over rollback
+            // artifacts. Wake the strict reader, but retain a target only past publication.
+            if (publicationStarted) pending = Pending(file, target)
+            if (!refreshPending) {
+                refreshPending = true
+                onHistoryChanged()
+            }
+            throw error
+        }
+    }
 }
 
 internal inline fun throwIncidentAtomicWriteFailure(
@@ -220,6 +386,19 @@ internal fun unexpectedProcessExitAlreadyRecorded(
     }
 }
 
+internal fun confirmAlreadyRecordedAppExit(
+    incidents: List<RecordingIncident>,
+    pid: Int,
+    exitTimestampMillis: Long,
+    confirmHistory: (List<RecordingIncident>) -> Unit,
+): Boolean {
+    if (!unexpectedProcessExitAlreadyRecorded(incidents, pid, exitTimestampMillis)) return false
+    // Visible history may come from a previous process whose publication barrier failed.
+    // The old process marker remains its recovery owner until this proof succeeds.
+    confirmHistory(incidents)
+    return true
+}
+
 private data class ActiveRecordingSessionMarker(
     val armed: Boolean,
     val pid: Int,
@@ -268,6 +447,59 @@ internal enum class KnownCaptureStopResult {
     DURABLE,
     FAILED_REARMED,
     FAILED_UNCERTAIN,
+}
+
+/**
+ * The caller holds the incident-store monitor. Resolve old-process evidence before granting a
+ * known Stop authority over its marker; an unreadable marker is never authority to delete it.
+ */
+internal fun <Marker : Any> completeKnownCaptureStop(
+    retryPendingEvidence: () -> Unit,
+    readMarker: () -> Marker?,
+    isArmed: (Marker) -> Boolean,
+    belongsToCurrentProcess: (Marker) -> Boolean,
+    recoverPriorSession: () -> Unit,
+    confirmDisarmed: (Marker) -> Unit,
+    retainUncertainEvidence: (Marker) -> Unit,
+    disarm: (Marker) -> Unit,
+    remove: () -> Unit,
+    restore: (Marker) -> Unit,
+): KnownCaptureStopResult {
+    val existing = try {
+        retryPendingEvidence()
+        var marker = readMarker()
+        if (marker != null && isArmed(marker) && !belongsToCurrentProcess(marker)) {
+            recoverPriorSession()
+            marker = readMarker()
+        }
+        marker
+    } catch (_: Exception) {
+        return KnownCaptureStopResult.FAILED_UNCERTAIN
+    }
+    if (existing == null) {
+        // Confirm durable absence, including an earlier unlink whose directory sync failed.
+        return if (runCatching(remove).isSuccess) KnownCaptureStopResult.DURABLE
+        else KnownCaptureStopResult.FAILED_UNCERTAIN
+    }
+    if (!isArmed(existing)) {
+        // A failed publication barrier can leave a readable disarmed marker. Reading it alone
+        // does not turn the earlier uncertain Stop into a durability acknowledgement.
+        return if (runCatching { confirmDisarmed(existing) }.isSuccess) KnownCaptureStopResult.DURABLE
+        else KnownCaptureStopResult.FAILED_UNCERTAIN
+    }
+    // Recovery must retire the old owner before this Stop can grant any disarm/delete authority.
+    if (!belongsToCurrentProcess(existing)) return KnownCaptureStopResult.FAILED_UNCERTAIN
+    if (runCatching { disarm(existing) }.isSuccess) return KnownCaptureStopResult.DURABLE
+    if (runCatching(remove).isSuccess) return KnownCaptureStopResult.DURABLE
+    return if (runCatching { restore(existing) }.isSuccess) {
+        KnownCaptureStopResult.FAILED_REARMED
+    } else {
+        // finishWrite may have exposed a disarmed marker before its directory barrier failed.
+        // Keep the original armed identity before the caller's interrupted-session lookup can
+        // see that changed marker (or an unlink whose barrier failed).
+        retainUncertainEvidence(existing)
+        KnownCaptureStopResult.FAILED_UNCERTAIN
+    }
 }
 
 internal fun captureSessionStartDisposition(
@@ -370,8 +602,9 @@ internal object RecordingIncidentStore {
     private const val SESSION_FORMAT_VERSION = 2
     private const val PROCESS_FORMAT_VERSION = 1
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
-    private const val HISTORY_FORMAT_VERSION = 2
-    private const val MAX_INCIDENTS = 128
+    private const val PREVIOUS_HISTORY_FORMAT_VERSION = 2
+    private const val HISTORY_FORMAT_VERSION = 3
+    private const val MAX_INCIDENTS = MAX_VISIBLE_RECORDING_INCIDENTS
     private const val MAX_DESCRIPTION_CHARS = 384
     private const val SESSION_FILE_NAME = "recording-session.bin"
     private const val PROCESS_FILE_NAME = "app-process.bin"
@@ -385,6 +618,7 @@ internal object RecordingIncidentStore {
     private val historyMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pendingServiceStopIncidentRetries = mutableListOf<PendingProcessIncidentRetry>()
     private val pendingCaptureInterruptionRetries = mutableListOf<PendingProcessIncidentRetry>()
+    private val historyPublication = IncidentHistoryPublication()
     private var lastUnexpectedErrorAtMillis = 0L
 
     fun recordUnexpectedErrorInBackground(context: Context, source: String, error: Throwable) {
@@ -440,7 +674,10 @@ internal object RecordingIncidentStore {
         if (previous != null && previous != currentMarker && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             historicalUnexpectedAppExit(appContext, previous)?.let { exit ->
                 val existing = readHistory(historyFile(appContext))
-                if (!unexpectedProcessExitAlreadyRecorded(existing, previous.pid, exit.timestamp)) {
+                if (!confirmAlreadyRecordedAppExit(existing, previous.pid, exit.timestamp) {
+                        writeHistory(historyFile(appContext), it)
+                    }
+                ) {
                     val description = exit.description
                         ?.trim()
                         ?.takeIf { it.isNotEmpty() }
@@ -666,52 +903,41 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun recordKnownCaptureStop(context: Context): KnownCaptureStopResult {
         val appContext = context.applicationContext
-        // Do not let a later explicit Stop erase same-process interruption evidence that is only
-        // waiting on transient incident/session I/O. Uncertain retry state follows the existing
-        // fail-closed Stop path, which preserves/reclassifies the armed marker instead of silently
-        // declaring the interruption known.
-        try {
-            retryPendingCaptureInterruptions(appContext)
-        } catch (_: Exception) {
-            return KnownCaptureStopResult.FAILED_UNCERTAIN
-        }
         val file = sessionFile(appContext)
-        val existing = try {
-            readSession(file)
-        } catch (_: IOException) {
-            // A known Stop may retire unreadable incident metadata only if that removal is
-            // durable. Otherwise the prior armed state is unknown and the caller must fail closed.
-            return if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
-                KnownCaptureStopResult.DURABLE
-            } else {
-                KnownCaptureStopResult.FAILED_UNCERTAIN
-            }
-        }
-        if (existing == null) {
-            // AtomicFile.openRead can report no readable base while backup/new state is still
-            // ambiguous. The durable delete helper distinguishes real absence from uncertainty.
-            return if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
-                KnownCaptureStopResult.DURABLE
-            } else {
-                KnownCaptureStopResult.FAILED_UNCERTAIN
-            }
-        }
-        if (!existing.armed) return KnownCaptureStopResult.DURABLE
-        if (runCatching { writeSession(file, existing.copy(armed = false)) }.isSuccess) {
-            return KnownCaptureStopResult.DURABLE
-        }
-        // Durable deletion is a valid known-Stop fallback. If deletion cannot be proven, restore
-        // the exact original armed marker before allowing capture to continue. A failed re-arm
-        // means marker state is uncertain, so the caller must stop/reclassify rather than record
-        // with potentially disabled incident tracking.
-        if (runCatching { deleteAtomicDurablyIfPresent(file) }.isSuccess) {
-            return KnownCaptureStopResult.DURABLE
-        }
-        return if (runCatching { writeSession(file, existing) }.isSuccess) {
-            KnownCaptureStopResult.FAILED_REARMED
-        } else {
-            KnownCaptureStopResult.FAILED_UNCERTAIN
-        }
+        return completeKnownCaptureStop(
+            retryPendingEvidence = {
+                retryPendingCaptureInterruptions(appContext)
+                retryPendingServiceStopIncidents(appContext)
+            },
+            readMarker = { readSession(file) },
+            isArmed = { it.armed },
+            belongsToCurrentProcess = ::markerBelongsToCurrentProcess,
+            recoverPriorSession = { recoverPriorSessionIfNeeded(appContext) },
+            confirmDisarmed = { marker ->
+                if (readSession(file) != marker) {
+                    throw IOException("Disarmed recording session changed before durable confirmation")
+                }
+                // Reuse the descriptor-bound payload/publication/directory proof; an earlier
+                // readable false marker may have survived a failed publication barrier.
+                writeSession(file, marker)
+            },
+            retainUncertainEvidence = { marker ->
+                val interruptedAtMillis = System.currentTimeMillis()
+                val description = "Capture stopped because known-Stop incident state could not be persisted"
+                enqueueCaptureInterruptionRetry(
+                    PendingProcessIncidentRetry(
+                        occurredAtMillis = interruptedAtMillis,
+                        description = description,
+                        expectedPid = marker.pid,
+                        expectedProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+                        incident = incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
+                    ),
+                )
+            },
+            disarm = { marker -> writeSession(file, marker.copy(armed = false)) },
+            remove = { deleteAtomicDurablyIfPresent(file) },
+            restore = { marker -> writeSession(file, marker) },
+        )
     }
 
     @Synchronized
@@ -728,7 +954,11 @@ internal object RecordingIncidentStore {
         // so retry the complete prior-session recovery here too; otherwise one transient startup
         // failure can leave an armed previous-process marker invisible until capture starts again.
         recoverPriorSessionIfNeeded(appContext)
-        return readHistory(historyFile(appContext)).filterNot { it.deleted }
+        val incidents = readHistory(historyFile(appContext)).filterNot { it.deleted }
+        // Only a complete authoritative history read ends the failure episode. A successful
+        // internal read/write during still-failing recovery must not reset its wake-up budget.
+        if (historyPublication.completeHistoryRead()) signalHistoryChanged()
+        return incidents
     }
 
     fun deleteIncidentInBackground(context: Context, incident: RecordingIncident) {
@@ -751,7 +981,14 @@ internal object RecordingIncidentStore {
         val file = historyFile(context)
         val existing = readHistory(file)
         val index = existing.indexOfFirst { recordingIncidentReferenceMatches(it, incident) }
-        if (index < 0 || existing[index].deleted) return
+        if (index < 0) return
+        if (existing[index].deleted) {
+            // A previous publication can be visible without its directory barrier succeeding.
+            // Explicit retry confirms the tombstone and refreshes the still-visible UI row.
+            writeHistory(file, existing)
+            signalHistoryChanged()
+            return
+        }
         val updated = existing.toMutableList().apply {
             this[index] = this[index].copy(acknowledgedAtMillis = Long.MIN_VALUE)
         }
@@ -853,8 +1090,11 @@ internal object RecordingIncidentStore {
                         // If history was already built before marker retirement failed, keep that
                         // incident. With no marker left there is no exact session identity from
                         // which an earlier read failure can safely synthesize one.
-                        retry.incident?.let { appendIncident(context, it) }
-                        iterator.remove()
+                        completeMissingIncidentMarkerRetry(
+                            baseFile = markerFile.baseFile,
+                            preserveIncident = { retry.incident?.let { appendIncident(context, it) } },
+                            retireRetry = { iterator.remove() },
+                        )
                         continue
                     }
                     StoragePathState.PRESENT,
@@ -932,7 +1172,11 @@ internal object RecordingIncidentStore {
     ) {
         val file = pendingSessionFile(context)
         val existing = readPendingSessions(file)
-        if (existing.any { sameSession(it.marker, marker) }) return
+        if (existing.any { sameSession(it.marker, marker) }) {
+            // Recovery must not retire the old armed marker on merely visible pending evidence.
+            writePendingSessions(file, existing)
+            return
+        }
         if (!pendingIncidentQueueCanAppend(existing.size)) {
             throw IOException(
                 "Pending recording incident queue is full; refusing to discard interruption evidence",
@@ -1118,9 +1362,31 @@ internal object RecordingIncidentStore {
         signalHistoryChanged()
     }
 
+    private fun historyRetainingReplayableDeletions(
+        context: Context,
+        existing: List<RecordingIncident>,
+        incoming: RecordingIncident,
+    ): List<RecordingIncident> = compactRecordingIncidentDeletions(existing, incoming) {
+            // Every producer of delayed evidence is serialized by the store's monitor. Read all
+            // durable owners before pruning; a failed read is not proof that an owner is absent.
+            val active = readSession(sessionFile(context))?.takeIf { it.armed }
+            val pending = readPendingSessions(pendingSessionFile(context))
+            val process = readProcessMarker(AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)))
+            RecordingIncidentReplayOwners(
+                captureSessions = (pending.map { it.marker } + listOfNotNull(active)).map { marker ->
+                    incidentWithoutExitEvidence(marker, marker.armedAtMillis)
+                },
+                exactIncidents = (pendingCaptureInterruptionRetries + pendingServiceStopIncidentRetries)
+                    .mapNotNull { it.incident },
+                appProcessPid = process?.pid ?: 0,
+                appProcessStartedAtMillis = process?.processStartedAtMillis ?: -1L,
+            )
+    }
+
     private fun appendIncident(context: Context, incident: RecordingIncident) {
         val file = historyFile(context)
-        val existing = readHistory(file)
+        val previous = readHistory(file)
+        val existing = historyRetainingReplayableDeletions(context, previous, incident)
         val sessionIndex = existing.indexOfFirst { candidate ->
             candidate.kind == incident.kind &&
                 recordingIncidentsShareCaptureSession(candidate, incident)
@@ -1136,7 +1402,13 @@ internal object RecordingIncidentStore {
         } else {
             appendRecordingIncidentPreservingDeletions(existing, incident, MAX_INCIDENTS)
         }
-        if (updated == existing) return
+        if (updated == previous) {
+            // A retried append may find bytes published before a failed directory barrier,
+            // including after process replacement. Re-establish write-ahead proof before its
+            // caller is allowed to retire the armed/pending capture owner.
+            writeHistory(file, previous)
+            return
+        }
         writeHistory(file, updated)
         signalHistoryChanged()
     }
@@ -1155,26 +1427,7 @@ internal object RecordingIncidentStore {
     private fun historyFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, HISTORY_FILE_NAME))
 
     private fun deleteAtomicDurablyIfPresent(file: AtomicFile) {
-        when (atomicFileRegularBackingState(file.baseFile)) {
-            StoragePathState.MISSING -> return
-            StoragePathState.UNAVAILABLE -> throw IOException(
-                "Unable to inspect durable incident state: ${file.baseFile.absolutePath}",
-            )
-            StoragePathState.PRESENT -> Unit
-        }
-        file.delete()
-        when (atomicFileRegularBackingState(file.baseFile)) {
-            StoragePathState.MISSING -> Unit
-            StoragePathState.PRESENT -> throw IOException(
-                "Unable to remove durable incident state: ${file.baseFile.absolutePath}",
-            )
-            StoragePathState.UNAVAILABLE -> throw IOException(
-                "Unable to confirm durable incident removal: ${file.baseFile.absolutePath}",
-            )
-        }
-        if (!confirmFileDirectoryStateDurable(file.baseFile)) {
-            throw IOException("Unable to persist incident-state removal: ${file.baseFile.absolutePath}")
-        }
+        deleteIncidentAtomicStateDurably(file.baseFile, removePresent = file::delete)
     }
 
     private fun readProcessMarker(file: AtomicFile): AppProcessMarker? =
@@ -1281,15 +1534,22 @@ internal object RecordingIncidentStore {
         output.writeLong(marker.packageLastUpdateTimeMillis)
     }
 
-    private fun readHistory(file: AtomicFile): List<RecordingIncident> =
-        readAtomic(file, "recording incident history") { input ->
-            if (input.readInt() != HISTORY_MAGIC) throw IOException("Invalid recording incident history magic")
-            when (val version = input.readUnsignedByte()) {
-                LEGACY_HISTORY_FORMAT_VERSION -> readLegacyHistory(input)
-                HISTORY_FORMAT_VERSION -> readCurrentHistory(input)
-                else -> throw IOException("Unsupported recording incident history version $version")
-            }
-        } ?: emptyList()
+    private fun readHistory(file: AtomicFile): List<RecordingIncident> {
+        historyPublication.confirmPending(::publishHistory)
+        return readAtomic(file, "recording incident history", ::readHistoryPayload) ?: emptyList()
+    }
+
+    internal fun readHistoryPayload(input: DataInputStream): List<RecordingIncident> {
+        if (input.readInt() != HISTORY_MAGIC) throw IOException("Invalid recording incident history magic")
+        val incidents = when (val version = input.readUnsignedByte()) {
+            LEGACY_HISTORY_FORMAT_VERSION -> readLegacyHistory(input)
+            PREVIOUS_HISTORY_FORMAT_VERSION -> readCurrentHistory(input, MAX_INCIDENTS)
+            HISTORY_FORMAT_VERSION -> readCurrentHistory(input, MAX_RECORDING_INCIDENT_HISTORY_RECORDS)
+            else -> throw IOException("Unsupported recording incident history version $version")
+        }
+        validateRecordingIncidentHistorySize(incidents)
+        return incidents
+    }
 
     private fun readLegacyHistory(input: DataInputStream): List<RecordingIncident> {
         val count = input.readUnsignedShort()
@@ -1306,9 +1566,9 @@ internal object RecordingIncidentStore {
         }
     }
 
-    private fun readCurrentHistory(input: DataInputStream): List<RecordingIncident> {
+    private fun readCurrentHistory(input: DataInputStream, maximumRecords: Int): List<RecordingIncident> {
         val count = input.readUnsignedShort()
-        if (count > MAX_INCIDENTS) throw IOException("Incident count $count exceeds $MAX_INCIDENTS")
+        if (count > maximumRecords) throw IOException("Incident count $count exceeds $maximumRecords")
         return buildList(count) {
             repeat(count) {
                 val kindCode = input.readByte()
@@ -1351,25 +1611,38 @@ internal object RecordingIncidentStore {
     }
 
     private fun writeHistory(file: AtomicFile, incidents: List<RecordingIncident>) {
-        writeAtomic(file) { output ->
-            output.writeInt(HISTORY_MAGIC)
-            output.writeByte(HISTORY_FORMAT_VERSION)
-            output.writeShort(incidents.size)
-            incidents.forEach { incident ->
-                output.writeByte(incident.kind.storageCode.toInt())
-                output.writeLong(incident.occurredAtMillis)
-                output.writeLong(incident.resumedAtMillis)
-                output.writeLong(incident.acknowledgedAtMillis)
-                output.writeInt(incident.exitReason)
-                output.writeInt(incident.exitStatus)
-                output.writeInt(incident.pid)
-                output.writeInt(incident.importance)
-                output.writeLong(incident.pssKb)
-                output.writeLong(incident.rssKb)
-                output.writeLong(incident.processStartedAtMillis)
-                output.writeLong(incident.captureArmedAtMillis)
-                output.writeUTF(incident.description.orEmpty().take(MAX_DESCRIPTION_CHARS))
-            }
+        validateRecordingIncidentHistorySize(incidents)
+        historyPublication.write(file.baseFile, incidents, ::publishHistory, ::signalHistoryChanged)
+    }
+
+    private fun publishHistory(
+        file: File,
+        incidents: List<RecordingIncident>,
+        onPublicationStarted: () -> Unit,
+    ) {
+        validateRecordingIncidentHistorySize(incidents)
+        writeAtomic(AtomicFile(file), onPublicationStarted) { output -> writeHistoryPayload(output, incidents) }
+    }
+
+    internal fun writeHistoryPayload(output: DataOutputStream, incidents: List<RecordingIncident>) {
+        validateRecordingIncidentHistorySize(incidents)
+        output.writeInt(HISTORY_MAGIC)
+        output.writeByte(HISTORY_FORMAT_VERSION)
+        output.writeShort(incidents.size)
+        incidents.forEach { incident ->
+            output.writeByte(incident.kind.storageCode.toInt())
+            output.writeLong(incident.occurredAtMillis)
+            output.writeLong(incident.resumedAtMillis)
+            output.writeLong(incident.acknowledgedAtMillis)
+            output.writeInt(incident.exitReason)
+            output.writeInt(incident.exitStatus)
+            output.writeInt(incident.pid)
+            output.writeInt(incident.importance)
+            output.writeLong(incident.pssKb)
+            output.writeLong(incident.rssKb)
+            output.writeLong(incident.processStartedAtMillis)
+            output.writeLong(incident.captureArmedAtMillis)
+            output.writeUTF(incident.description.orEmpty().take(MAX_DESCRIPTION_CHARS))
         }
     }
 
@@ -1393,15 +1666,18 @@ internal object RecordingIncidentStore {
             throw IOException("Unable to read $label while AtomicFile backing state is $backingState", error)
         }
         return try {
-            val descriptorIdentity = bindAtomicFileReadDescriptor(file.baseFile, stream.fd)
-                ?: throw IOException("Unable to bind $label to its AtomicFile backing object")
-            val result = DataInputStream(BufferedInputStream(stream)).use { input ->
-                readIncidentPayloadExact(input, label, block)
+            // Descriptor binding can fail before the buffered input takes ownership.
+            stream.use {
+                val descriptorIdentity = bindAtomicFileReadDescriptor(file.baseFile, stream.fd)
+                    ?: throw IOException("Unable to bind $label to its AtomicFile backing object")
+                val result = DataInputStream(BufferedInputStream(stream)).use { input ->
+                    readIncidentPayloadExact(input, label, block)
+                }
+                if (!atomicFileReadDescriptorRemainsCurrent(file.baseFile, descriptorIdentity)) {
+                    throw IOException("AtomicFile backing object changed while reading $label")
+                }
+                result
             }
-            if (!atomicFileReadDescriptorRemainsCurrent(file.baseFile, descriptorIdentity)) {
-                throw IOException("AtomicFile backing object changed while reading $label")
-            }
-            result
         } catch (error: IOException) {
             throw IOException("Unable to read $label", error)
         } catch (error: RuntimeException) {
@@ -1420,28 +1696,34 @@ internal object RecordingIncidentStore {
         if (version != expectedVersion) throw IOException("Unsupported $label version $version")
     }
 
-    private inline fun writeAtomic(file: AtomicFile, block: (DataOutputStream) -> Unit) {
+    private inline fun writeAtomic(
+        file: AtomicFile,
+        crossinline onPublicationStarted: () -> Unit = {},
+        block: (DataOutputStream) -> Unit,
+    ) {
         if (atomicFileRegularBackingState(file.baseFile) == StoragePathState.UNAVAILABLE) {
             throw IOException("AtomicFile backing state is unsafe for write: ${file.baseFile.absolutePath}")
         }
         val stream = file.startWrite()
-        var committed = false
+        var publicationAttempted = false
         try {
             val output = DataOutputStream(BufferedOutputStream(stream))
             block(output)
             output.flush()
-            file.finishWrite(stream)
-            committed = true
-            if (atomicFileRegularBackingState(file.baseFile) != StoragePathState.PRESENT) {
-                throw IOException("AtomicFile publication is not a regular backing file: ${file.baseFile.absolutePath}")
-            }
-            if (!confirmFileDirectoryStateDurable(file.baseFile)) {
-                throw IOException("Unable to persist incident-state publication: ${file.baseFile.absolutePath}")
-            }
+            finishDurableAtomicWrite(
+                baseFile = file.baseFile,
+                output = stream,
+                finishWrite = file::finishWrite,
+                syncDirectory = { confirmFileDirectoryStateDurable(file.baseFile) },
+                onPublicationStarted = {
+                    publicationAttempted = true
+                    onPublicationStarted()
+                },
+            )
         } catch (error: Throwable) {
             throwIncidentAtomicWriteFailure(
                 primaryFailure = error,
-                committed = committed,
+                committed = publicationAttempted,
                 rollback = { file.failWrite(stream) },
             )
         }

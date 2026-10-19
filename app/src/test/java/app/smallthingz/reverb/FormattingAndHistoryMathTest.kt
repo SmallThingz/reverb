@@ -1577,45 +1577,170 @@ class FormattingAndHistoryMathTest {
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+                foregroundStartRetryAvailable = true,
             ),
         )
         assertTrue(
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = false,
+                foregroundStartRetryAvailable = true,
             ),
         )
-        assertTrue(
+        assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = true,
+                foregroundStartRetryAvailable = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = false, appUiForeground = false, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+                foregroundStartRetryAvailable = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = false,
                 foregroundServiceTimedOut = false, persistenceFailureBlocked = false,
+                foregroundStartRetryAvailable = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
                 false, serviceDestroying = false, appUiForeground = true, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+                foregroundStartRetryAvailable = true,
             ),
         )
         assertFalse(
             shouldRetrySuspendedListeningWithForegroundUi(
                 true, serviceDestroying = true, appUiForeground = true, foregroundStartBlocked = true,
                 foregroundServiceTimedOut = true, persistenceFailureBlocked = true,
+                foregroundStartRetryAvailable = true,
             ),
         )
     }
+
+    @Test
+    fun storageFailureCannotRetryOnErrorSheetFocusReturnEvenWithForegroundRestriction() {
+        // An error sheet takes focus from Capture; dismissing it restores focus without a
+        // user Start command or any change to the failed incident-history/store state.
+        for (foregroundBlocked in listOf(false, true)) {
+            for (foregroundTimedOut in listOf(false, true)) {
+                for (focused in listOf(false, true, false, true)) {
+                    assertFalse(
+                        shouldRetrySuspendedListeningWithForegroundUi(
+                            listeningIntentEnabled = true,
+                            serviceDestroying = false,
+                            appUiForeground = focused,
+                            foregroundStartBlocked = foregroundBlocked,
+                            foregroundServiceTimedOut = foregroundTimedOut,
+                            persistenceFailureBlocked = true,
+                            foregroundStartRetryAvailable = true,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun queuedForegroundFailureCannotPauseANewerExplicitRetryWithTheSamePcmGeneration() {
+        val pcmGeneration = 7L
+        var admissionGeneration = 40L
+        val failedAutomaticAttempt = ForegroundCaptureAttempt(pcmGeneration, admissionGeneration, true)
+        var paused = false
+        var microphoneStarts = 0
+        val queuedFailure = {
+            if (failedAutomaticAttempt.isCurrent(pcmGeneration, admissionGeneration)) paused = true
+        }
+
+        // A single Start from the still-paused UI retires the old attempt before its
+        // queued error runs. It requests a fresh platform admission, not only LISTENING.
+        admissionGeneration++
+        assertFalse(failedAutomaticAttempt.isCurrent(pcmGeneration, admissionGeneration))
+        val retriedPlatformAttempt = ForegroundCaptureAttempt(pcmGeneration, admissionGeneration, true)
+        queuedFailure()
+        if (retriedPlatformAttempt.isCurrent(pcmGeneration, admissionGeneration) && !paused) microphoneStarts++
+
+        assertFalse(paused)
+        assertEquals(1, microphoneStarts)
+        assertEquals(failedAutomaticAttempt.commandGeneration, retriedPlatformAttempt.commandGeneration)
+    }
+
+    @Test
+    fun replacedForegroundAdmissionRejectsBothItsQueuedSuccessAndFailure() {
+        val earlier = ForegroundCaptureAttempt(commandGeneration = 7L, admissionGeneration = 40L, foregroundAtAttempt = true)
+        val replacement = ForegroundCaptureAttempt(commandGeneration = 7L, admissionGeneration = 41L, foregroundAtAttempt = true)
+        assertFalse(earlier.isCurrent(replacement.commandGeneration, replacement.admissionGeneration))
+        assertTrue(replacement.isCurrent(replacement.commandGeneration, replacement.admissionGeneration))
+        // Stop/new capture still fences admission even if a caller retained the attempt token.
+        assertFalse(replacement.isCurrent(currentCommandGeneration = 8L, currentAdmissionGeneration = 41L))
+    }
+
+    @Test
+    fun backgroundForegroundFailureGetsOneAutomaticRetryAcrossErrorSheetFocusReturns() {
+        val gate = ForegroundCaptureRetryGate()
+        gate.startFailed(foregroundAtAttempt = false)
+        assertFalse(foregroundRetryForTest(gate, focused = false))
+        assertTrue(foregroundRetryForTest(gate, focused = true))
+        gate.retryAccepted()
+        gate.startFailed(foregroundAtAttempt = true)
+        for (focused in listOf(false, true, false, true)) {
+            assertFalse(foregroundRetryForTest(gate, focused))
+        }
+    }
+
+    @Test
+    fun failedEligibleStartDoesNotCreateARecoveryOpportunityWhenItsErrorSheetCloses() {
+        val gate = ForegroundCaptureRetryGate()
+        // The attempt was foreground even if its failure callback is delivered after a
+        // window took focus. Classification follows the captured attempt, not delivery.
+        gate.startFailed(foregroundAtAttempt = true)
+        assertFalse(foregroundRetryForTest(gate, focused = false))
+        assertFalse(foregroundRetryForTest(gate, focused = true))
+    }
+
+    @Test
+    fun consumedForegroundRetryCannotRearmWhenFocusChangesBeforeFailureDelivery() {
+        val gate = ForegroundCaptureRetryGate()
+        gate.startFailed(foregroundAtAttempt = false)
+        gate.retryAccepted()
+        // Even a retry that raced back into background cannot grant itself another try.
+        gate.startFailed(foregroundAtAttempt = false)
+        assertFalse(foregroundRetryForTest(gate, focused = true))
+    }
+
+    @Test
+    fun acceptedExplicitCaptureIntentResetsAutomaticRetryBudgetWithoutStartingItself() {
+        val gate = ForegroundCaptureRetryGate()
+        gate.startFailed(foregroundAtAttempt = true)
+        assertFalse(gate.retryAvailable)
+        // The same reset runs after accepted Start or Stop. Start itself calls the normal
+        // start path; reset alone must not schedule capture or fabricate a failed attempt.
+        gate.resetForExplicitIntent()
+        assertFalse(gate.retryAvailable)
+        gate.startFailed(foregroundAtAttempt = false)
+        assertTrue(foregroundRetryForTest(gate, focused = true))
+        gate.retryAccepted()
+        gate.resetForExplicitIntent()
+        gate.startFailed(foregroundAtAttempt = false)
+        assertTrue(foregroundRetryForTest(gate, focused = true))
+    }
+
+    private fun foregroundRetryForTest(gate: ForegroundCaptureRetryGate, focused: Boolean): Boolean =
+        shouldRetrySuspendedListeningWithForegroundUi(
+            listeningIntentEnabled = true,
+            serviceDestroying = false,
+            appUiForeground = focused,
+            foregroundStartBlocked = true,
+            foregroundServiceTimedOut = false,
+            persistenceFailureBlocked = false,
+            foregroundStartRetryAvailable = gate.retryAvailable,
+        )
 
     @Test
     fun logicalListeningState_followsNewestUserIntentDuringAsyncStop() {

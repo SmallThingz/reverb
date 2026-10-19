@@ -178,6 +178,9 @@
     <string name="open_incidents">Open incidents</string>
     <string name="incidents_empty">No recording incidents</string>
     <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
+    <string name="incidents_loading">Loading incidents…</string>
+    <string name="incidents_unavailable">Couldn\'t load incidents. Retrying…</string>
+    <string name="incidents_stale">Showing previous incidents. Retrying…</string>
     <string name="incident_mark_checked">Mark incident checked</string>
     <string name="incident_mark_unchecked">Mark incident unchecked</string>
     <string name="incident_copy">Copy</string>

@@ -60,7 +60,8 @@ class RecordingIncidentStoreTest {
             listOf(deleted, visible), RecordingIncident(occurredAtMillis = 3L), limit = 2,
         )
         assertTrue(appended.contains(deleted))
-        assertFalse(appended.contains(visible))
+        assertTrue(appended.contains(visible))
+        assertEquals(2, appended.count { !it.deleted })
     }
 
     @Test

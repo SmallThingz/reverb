@@ -14,13 +14,20 @@ internal fun verifyTileHydrationConverges(context: Context) {
     fun drain() { worker.submit {}.get(15, TimeUnit.SECONDS) }
     drain()
     val lock = requireNotNull(field("stateLock").get(cache))
-    val names = listOf("cachedSnapshot", "stateGeneration", "hydrationGeneration", "runtimeAuthoritative")
-    val original = synchronized(lock) { names.associateWith { field(it).get(cache) } }
+    val names = listOf("cachedSnapshot", "stateGeneration", "hydrationGeneration", "runtimeAuthoritative",
+        "runtimeOwner", "runtimeOwnerStopped")
+    @Suppress("UNCHECKED_CAST")
+    val pendingClearedBuffers = field("pendingClearedBuffers").get(cache) as MutableSet<ReverbService.BufferSlot>
+    val (original, originalClearedBuffers) = synchronized(lock) {
+        names.associateWith { field(it).get(cache) } to pendingClearedBuffers.toSet()
+    }
+    val owner = Any()
     val preferences = getRecorderPreferences(context)
     val duration = preferences.snapshotDurablePreferenceValue(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS)
     try {
         val persisted = type.getDeclaredMethod("readPersisted", Context::class.java)
             .apply { isAccessible = true }.invoke(cache, context) as RecordingTileSnapshot
+        cache.beginRuntime(owner)
         synchronized(lock) {
             field("cachedSnapshot").set(cache, persisted)
             field("stateGeneration").setLong(cache, 100L)
@@ -44,14 +51,24 @@ internal fun verifyTileHydrationConverges(context: Context) {
         repeat(24) { cache.hydratePersistedAsync(context); drain() }
         check(field("stateGeneration").getLong(cache) == 101L)
         val running = cache.readNonBlocking().copy(listening = true, commandGeneration = 77L)
-        cache.publish(running)
+        check(cache.publish(owner, running)) { "Test runtime owner could not publish live tile state" }
         cache.hydratePersistedAsync(context)
         drain()
         check(cache.readNonBlocking() === running) { "Stopped hydration overwrote live capture" }
     } finally {
-        drain()
-        check(preferences.edit().restoreDurablePreferenceValue(
-            PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS, duration).commit())
-        synchronized(lock) { original.forEach { (name, value) -> field(name).set(cache, value) } }
+        try {
+            drain()
+        } finally {
+            try {
+                check(preferences.edit().restoreDurablePreferenceValue(
+                    PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS, duration).commit())
+            } finally {
+                synchronized(lock) {
+                    original.forEach { (name, value) -> field(name).set(cache, value) }
+                    pendingClearedBuffers.clear()
+                    pendingClearedBuffers.addAll(originalClearedBuffers)
+                }
+            }
+        }
     }
 }

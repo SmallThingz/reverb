@@ -917,8 +917,8 @@ private fun MainScreen(
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
-    var incidentHistory by remember { mutableStateOf(IncidentHistoryPresentation(emptyList())) }
-    val hasIncidentAlert = incidentHistory.hasAlert
+    var incidentHistory by remember { mutableStateOf(IncidentHistoryUiState()) }
+    val hasIncidentAlert = incidentHistory.history.hasAlert
 
     suspend fun loadIncidents(): Boolean {
         val loaded = try {
@@ -928,13 +928,15 @@ private fun MainScreen(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
+            incidentHistory = incidentHistory.loadFailed()
             return false
         }
-        incidentHistory = loaded
+        incidentHistory = incidentHistory.loadSucceeded(loaded)
         return true
     }
 
     fun toggleIncidentAcknowledged(incident: RecordingIncident) {
+        if (!incidentHistory.canMutate) return
         // The store owns this accepted user mutation past Activity/Compose lifetime. Its durable
         // revision stream remains the sole source of UI convergence for rapid toggles.
         RecordingIncidentStore.toggleIncidentAcknowledgedInBackground(context, incident)
@@ -949,6 +951,7 @@ private fun MainScreen(
         // recovery, resume-time completion, or checked-state changes durable history. Latest-only
         // collection cancels an obsolete read/retry when a newer durable revision arrives.
         RecordingIncidentStore.historyRevision.collectLatest {
+            incidentHistory = incidentHistory.loadStarted()
             var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
             while (!loadIncidents()) {
                 delay(retryDelayMillis)
@@ -1243,10 +1246,12 @@ private fun MainScreen(
 
         if (incidentsOverlayVisible) {
             IncidentsScreen(
-                history = incidentHistory,
+                state = incidentHistory,
                 onBack = { showIncidents = false },
                 onToggleAcknowledged = ::toggleIncidentAcknowledged,
-                onDelete = { RecordingIncidentStore.deleteIncidentInBackground(context, it) },
+                onDelete = {
+                    if (incidentHistory.canMutate) RecordingIncidentStore.deleteIncidentInBackground(context, it)
+                },
                 openProgress = {
                     incidentsPanelOpenProgress(
                         settledProgress = incidentsMotion.progress,
