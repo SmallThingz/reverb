@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.util.Log
 import java.io.IOException
+import java.nio.channels.FileChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -13,6 +14,11 @@ private const val TRIM_TAG = "RecordingTrim"
 
 internal fun recordingHasStableTrimIdentity(recording: RecordingEntity): Boolean =
     recording.fileIdentity.isNotBlank()
+
+// Discovery identifies containers by their bytes, so trim must use the same rule.
+// A null layout delegates FLAC decoding to the conversion path, which validates it fully.
+internal fun readWavTrimLayoutOrNull(source: FileChannel): WavPcmLayout? =
+    if (channelHasFlac(source)) null else readWavPcmLayout(source)
 
 internal fun recordingTrimFailureMessage(context: Context, failure: Throwable): String =
     if (failure is RecordingOutputCapacityException && failure.format == ExportFormat.WAV) {
@@ -96,8 +102,8 @@ private fun writeTrimmedRecordingCopy(
         throw IOException("Recording identity is unavailable for trim")
     }
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
-    return withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
-        val layout = readWavPcmLayout(source)
+    val trimmedWav = withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
+        val layout = readWavTrimLayoutOrNull(source) ?: return@withRecordingWavChannelIdentityGuard null
         val startFrame = millisToFrame(startMillis, layout.sampleRate)
             .coerceIn(0L, layout.frameCount - 1L)
         val endFrame = millisToFrame(endMillis, layout.sampleRate)
@@ -176,6 +182,12 @@ private fun writeTrimmedRecordingCopy(
             )
         }
     }
+    // Close the detection descriptor before conversion reacquires and revalidates the
+    // selected recording. Conversion retains its own final source/publication checks.
+    return trimmedWav ?: writeConvertedRecordingCopy(
+        context, recording, format, getConfiguredFlacCompression(context),
+        startMillis.toLong(), endMillis.toLong(), " trim",
+    )
 }
 
 internal fun recordingTimestampWithOffset(
