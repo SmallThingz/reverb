@@ -5,6 +5,7 @@ internal class RetentionMaintenanceSchedulerState {
     private var active = false
     private var queuedPassId: Long? = null
     private var nextPassId = 1L
+    private var activeGeneration = 0L
 
     fun isActive(): Boolean = synchronized(lock) { active }
 
@@ -34,6 +35,7 @@ internal class RetentionMaintenanceSchedulerState {
         }
         if (!needed) return@synchronized null
         active = true
+        activeGeneration++
         claimPassLocked()
     }
 
@@ -54,9 +56,69 @@ internal class RetentionMaintenanceSchedulerState {
         true
     }
 
+    fun ownsPass(passId: Long): Boolean = synchronized(lock) { active && queuedPassId == passId }
+
+    fun cancelPass(passId: Long): Boolean = synchronized(lock) {
+        if (queuedPassId != passId) return@synchronized false
+        active = false
+        queuedPassId = null
+        true
+    }
+
+    fun currentGeneration(): Long? = synchronized(lock) { activeGeneration.takeIf { active } }
+
+    fun clearGeneration(generation: Long): Boolean = synchronized(lock) {
+        if (!active || activeGeneration != generation) return@synchronized false
+        active = false
+        queuedPassId = null
+        true
+    }
+
     private fun claimPassLocked(): Long {
         val passId = nextPassId++
         queuedPassId = passId
         return passId
     }
+}
+
+/** A claimed pass cannot touch storage until its current foreground owner accepts it on main. */
+internal fun admitRetentionPassOnMain(
+    state: RetentionMaintenanceSchedulerState,
+    passId: Long,
+    post: (Runnable) -> Boolean,
+    mayRun: () -> Boolean,
+    protect: () -> Boolean,
+    submit: (Long) -> Unit,
+    rejected: () -> Unit,
+) {
+    fun retire() { if (state.cancelPass(passId)) rejected() }
+    val task = Runnable {
+        if (!state.ownsPass(passId)) return@Runnable
+        if (!mayRun()) { retire(); return@Runnable }
+        if (!protect()) { retire(); return@Runnable }
+        // Platform promotion may invoke controlled callbacks; ownership must still be exact.
+        if (!state.ownsPass(passId)) return@Runnable
+        if (!mayRun()) { retire(); return@Runnable }
+        submit(passId)
+    }
+    if (!post(task)) retire()
+}
+
+/** Called on main after capture, export and Clear have relinquished their foreground owners. */
+internal fun settleIdleServiceLifetime(
+    retention: RetentionMaintenanceSchedulerState,
+    protectRetention: () -> Boolean,
+    settingsActive: () -> Boolean,
+    stopForeground: () -> Unit,
+    stopService: () -> Unit,
+) {
+    val generation = retention.currentGeneration()
+    if (generation != null) {
+        if (protectRetention()) return
+        retention.clearGeneration(generation)
+        if (retention.isActive()) return
+    }
+    // Settings owns a started lifetime, but cannot remove another owner's data-sync foreground.
+    stopForeground()
+    if (!settingsActive()) stopService()
 }

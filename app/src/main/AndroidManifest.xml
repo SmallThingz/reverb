@@ -98,6 +98,54 @@
         </service>
 
 
+        <service android:name=".LoopingQuickSaveTileService" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_1"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".OneShotQuickSaveTileService" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_2"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile3" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_3"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile4" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_4"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile5" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_5"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile6" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_6"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile7" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_7"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
+        <service android:name=".QuickSaveTile8" android:exported="true" android:enabled="false"
+            android:icon="@drawable/ic_qs_quick_save" android:label="@string/quick_save_option_8"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+
         <provider
             android:name=".VerifiedRecordingProvider"
             android:authorities="${applicationId}.recording-provider"

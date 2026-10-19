@@ -60,10 +60,11 @@ enum class ExportFormat(
     val storageCode: Byte,
 ) {
     WAV(R.string.format_wav, 1),
+    FLAC(R.string.format_flac, 2),
     ;
 
-    val extension: String get() = "wav"
-    val outputMimeType: String get() = "audio/wav"
+    val extension: String get() = when (this) { WAV -> "wav"; FLAC -> "flac" }
+    val outputMimeType: String get() = when (this) { WAV -> "audio/wav"; FLAC -> "audio/flac" }
 
     companion object {
         fun fromStorageCode(value: Int): ExportFormat? =
@@ -495,7 +496,7 @@ fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat = readByteBa
 fun isCodecCompatibleWithFormat(
     format: ExportFormat,
     codec: ExportCodec,
-): Boolean = format == ExportFormat.WAV && codec == ExportCodec.PCM_16
+): Boolean = format in ExportFormat.entries && codec == ExportCodec.PCM_16
 
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode =
     AudioSourceMode.fromStorageCode(
@@ -635,7 +636,7 @@ fun formatDurationInput(seconds: Long): String {
 fun exportFileSizeLimitBytes(format: ExportFormat): Long =
     // RIFF ChunkSize is fileSize - 8, so a max unsigned-32 ChunkSize permits eight
     // additional physical file bytes beyond 0xFFFF_FFFF.
-    WAV_MAX_RIFF_CHUNK_BYTES + WAV_RIFF_SIZE_EXCLUDED_PREFIX_BYTES
+    if (format == ExportFormat.FLAC) Long.MAX_VALUE else WAV_MAX_RIFF_CHUNK_BYTES + WAV_RIFF_SIZE_EXCLUDED_PREFIX_BYTES
 
 fun exportPayloadLimitBytes(
     format: ExportFormat,
@@ -646,26 +647,36 @@ fun exportPayloadLimitBytes(
     return if (sampleFormat == PcmSampleFormat.PCM_8) (budget - 1L).coerceAtLeast(0L) else budget
 }
 
+fun exportFrameLimit(
+    format: ExportFormat,
+    codec: ExportCodec,
+    sampleRate: Int,
+    channelCount: Int,
+    sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+): Long {
+    if (sampleRate <= 0 || channelCount <= 0) return 0L
+    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0L
+    if (format == ExportFormat.FLAC) return 0xF_FFFF_FFFFL
+    val bytesPerSecond = bytesPerSecond(sampleRate, channelCount, sampleFormat)
+    if (bytesPerSecond <= 0L) return 0L
+    val frameBytes = channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
+    if (frameBytes <= 0L) return 0L
+    // WavAudioFileWriter accepts only complete PCM frames. Keep the UI/service limit on the
+    // largest whole-frame payload that fits the container so a duration cannot render safe
+    // and then fail merely because the raw byte budget ends in the middle of a frame.
+    val payloadBudget = exportPayloadLimitBytes(format, sampleFormat)
+    val frameAlignedPayloadBudget = payloadBudget - payloadBudget % frameBytes
+    return frameAlignedPayloadBudget / frameBytes
+}
+
 fun exportDurationLimitExactSeconds(
     format: ExportFormat,
     codec: ExportCodec,
     sampleRate: Int,
     channelCount: Int,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
-): Double {
-    if (sampleRate <= 0 || channelCount <= 0) return 0.0
-    if (!isExportConfigurationSupported(format, codec, sampleRate, channelCount)) return 0.0
-    val bytesPerSecond = bytesPerSecond(sampleRate, channelCount, sampleFormat)
-    if (bytesPerSecond <= 0L) return 0.0
-    val frameBytes = channelCount.toLong() * sampleFormat.bytesPerSample.toLong()
-    if (frameBytes <= 0L) return 0.0
-    // WavAudioFileWriter accepts only complete PCM frames. Keep the UI/service limit on the
-    // largest whole-frame payload that fits the container so a duration cannot render safe
-    // and then fail merely because the raw byte budget ends in the middle of a frame.
-    val payloadBudget = exportPayloadLimitBytes(format, sampleFormat)
-    val frameAlignedPayloadBudget = payloadBudget - payloadBudget % frameBytes
-    return frameAlignedPayloadBudget.toDouble() / bytesPerSecond.toDouble()
-}
+): Double = if (sampleRate <= 0) 0.0 else
+    exportFrameLimit(format, codec, sampleRate, channelCount, sampleFormat).toDouble() / sampleRate.toDouble()
 
 fun resolveOperationalSampleRate(
     context: Context,
@@ -794,7 +805,8 @@ internal fun isExportConfigurationSupported(
     sampleRate: Int,
     channelCount: Int,
 ): Boolean {
-    return format == ExportFormat.WAV && codec == ExportCodec.PCM_16 && sampleRate > 0 && channelCount in 1..2
+    return codec == ExportCodec.PCM_16 && sampleRate > 0 && channelCount in 1..2 &&
+        (format != ExportFormat.FLAC || sampleRate <= 655350)
 }
 
 fun orderSampleRatesByPreference(
@@ -832,3 +844,18 @@ internal fun captureIntentPersistenceRequired(
     previousStoredSlot = previousStoredSlot,
     requestedSlot = requestedSlot,
 )
+
+internal fun getConfiguredFlacCompression(context: Context): Int =
+    getRecorderPreferences(context).safeInt(PrefKey.FLAC_COMPRESSION_LEVEL, DEFAULT_FLAC_COMPRESSION)
+        .takeIf(::validFlacCompression) ?: DEFAULT_FLAC_COMPRESSION
+
+internal fun getConfiguredQuickSaveSeconds(context: Context): Int =
+    getRecorderPreferences(context).safeInt(PrefKey.QUICK_SAVE_SECONDS, DEFAULT_QUICK_SAVE_SECONDS)
+        .takeIf(::validQuickSaveSeconds) ?: DEFAULT_QUICK_SAVE_SECONDS
+
+
+/** Missing legacy configuration keeps notification saving; malformed stored flags fail closed. */
+internal fun getConfiguredQuickSaveEnabled(context: Context): Boolean {
+    val prefs = getRecorderPreferences(context)
+    return !prefs.contains(PrefKey.QUICK_SAVE_ENABLED) || prefs.safeBoolean(PrefKey.QUICK_SAVE_ENABLED, false)
+}

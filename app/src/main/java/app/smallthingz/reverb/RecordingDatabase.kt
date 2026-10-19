@@ -393,7 +393,7 @@ internal fun preserveCorruptRecordingDatabase(
     val sources = recordingDatabaseFilesForPreservation(databaseFile) ?: return null
     if (sources.isEmpty()) return null
     return runCatching {
-        val recoveryRootCreated = ensureDirectoryEntryNoFollow(recoveryRoot)
+        ensureRecordingDirectoryDurable(recoveryRoot, io::forceDirectory)
         val recoveryRootIdentity = resolveDirectoryIdentity(recoveryRoot).takeIf { it.isNotBlank() }
             ?: throw IOException("Recording database recovery root identity is unavailable")
         fun requireRecoveryRootCurrent() {
@@ -401,12 +401,6 @@ internal fun preserveCorruptRecordingDatabase(
             if (!fileIdentityMatches(recoveryRootIdentity, currentIdentity)) {
                 throw IOException("Recording database recovery root changed during preservation")
             }
-        }
-        if (recoveryRootCreated) {
-            val recoveryParent = recoveryRoot.parentFile
-                ?: throw IOException("Recording database recovery root has no parent")
-            io.forceDirectory(recoveryParent)
-            requireRecoveryRootCurrent()
         }
 
         requireRecoveryRootCurrent()

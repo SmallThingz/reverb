@@ -116,6 +116,17 @@ internal fun recordingTileClickAction(
     -> RecordingTileClickAction.NONE
 }
 
+/** Command intent may lead microphone startup; published tile state must still use actual capture. */
+internal fun recordingTileQueuedClickAction(
+    bufferSlot: ReverbService.BufferSlot,
+    snapshot: RecordingTileSnapshot,
+    acceptedCaptureBuffer: ReverbService.BufferSlot?,
+): RecordingTileClickAction = recordingTileClickAction(
+    bufferSlot,
+    if (acceptedCaptureBuffer == null) snapshot
+    else snapshot.copy(listening = true, activeBuffer = acceptedCaptureBuffer),
+)
+
 internal fun stoppedRecordingTileSnapshot(
     persisted: RecordingTileSnapshot,
     live: RecordingTileSnapshot?,
@@ -213,11 +224,29 @@ internal object RecordingQuickTileStateCache {
     private var hydrationGeneration: Long? = null
     private var runtimeAuthoritative = false
 
-    fun publish(snapshot: RecordingTileSnapshot) {
+    private var runtimeOwner: Any? = null
+    private var runtimeOwnerStopped = false
+    private val pendingClearedBuffers = mutableSetOf<ReverbService.BufferSlot>()
+
+    /** The token has no Service/Context reference and is claimed before any store observation. */
+    fun beginRuntime(owner: Any) {
         synchronized(stateLock) {
+            runtimeOwner = owner
+            runtimeOwnerStopped = false
+            pendingClearedBuffers.clear()
+            cachedSnapshot = failClosedRecordingTileSnapshot(cachedSnapshot)
+            stateGeneration++
+            runtimeAuthoritative = false
+        }
+    }
+
+    fun publish(owner: Any, snapshot: RecordingTileSnapshot): Boolean {
+        synchronized(stateLock) {
+            if (runtimeOwner !== owner || runtimeOwnerStopped) return false
             cachedSnapshot = snapshot
             stateGeneration++
             runtimeAuthoritative = true
+            return true
         }
     }
 
@@ -236,26 +265,33 @@ internal object RecordingQuickTileStateCache {
         )
     }
 
-    fun observeRuntimeOneShotFull(context: Context, full: Boolean) {
-        val appContext = context.applicationContext
+    fun observeRuntimeOneShotFull(context: Context, owner: Any, full: Boolean) {
+        // Load preferences before taking the cache lock; only process-local apply is inside it.
+        val preferences = getRecorderPreferences(context.applicationContext)
+        preferences.contains(PrefKey.QUICK_TILE_ONE_SHOT_FULL.name)
         synchronized(oneShotFullPreferenceLock) {
-            val preferences = getRecorderPreferences(appContext)
-            val decision = oneShotFullRuntimeObservationDecision(
-                currentRuntimeGeneration = oneShotFullRuntimeGeneration,
-                currentPreferenceValue = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
-                observedFull = full,
-            )
-            if (decision.preferenceWriteRequired) {
-                preferences.edit {
-                    putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full)
-                }
+            synchronized(stateLock) {
+                if (runtimeOwner !== owner || runtimeOwnerStopped) return
+                observeRuntimeOneShotFullLocked(preferences, full)
             }
-            // Advance on every authoritative store observation, even when Settings has already
-            // made the process-local preference equal to this value. Otherwise a failed Settings
-            // rollback could restore stale raw state without noticing the live store observation.
-            latestRuntimeOneShotFull = decision.latestRuntimeValue
-            oneShotFullRuntimeGeneration = decision.runtimeGeneration
         }
+    }
+
+    private fun observeRuntimeOneShotFullLocked(
+        preferences: android.content.SharedPreferences,
+        full: Boolean,
+    ) {
+        val decision = oneShotFullRuntimeObservationDecision(
+            currentRuntimeGeneration = oneShotFullRuntimeGeneration,
+            currentPreferenceValue = preferences.safeBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false),
+            observedFull = full,
+        )
+        if (decision.preferenceWriteRequired) preferences.edit {
+            putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, full)
+        }
+        // Every accepted store observation fences a failed Settings rollback, even if equal.
+        latestRuntimeOneShotFull = decision.latestRuntimeValue
+        oneShotFullRuntimeGeneration = decision.runtimeGeneration
     }
 
     fun reconcileOneShotFullAfterFailedSettings(
@@ -276,8 +312,8 @@ internal object RecordingQuickTileStateCache {
         }
     }
 
-    fun markServiceStopped(context: Context): RecordingTileSnapshot =
-        markRuntimeUnavailable(context, persistLatestDurations = true)
+    fun markServiceStopped(context: Context, owner: Any): RecordingTileSnapshot =
+        markRuntimeUnavailable(context, persistLatestDurations = true, stoppedOwner = owner)
 
     fun markRuntimeUnavailable(context: Context): RecordingTileSnapshot =
         markRuntimeUnavailable(context, persistLatestDurations = false)
@@ -285,11 +321,16 @@ internal object RecordingQuickTileStateCache {
     private fun markRuntimeUnavailable(
         context: Context,
         persistLatestDurations: Boolean,
+        stoppedOwner: Any? = null,
     ): RecordingTileSnapshot {
         val appContext = context.applicationContext
         val stopped: RecordingTileSnapshot
         val expectedGeneration: Long
+        val expectedOwner: Any?
         synchronized(stateLock) {
+            if (stoppedOwner != null && runtimeOwner !== stoppedOwner) return readNonBlocking()
+            if (stoppedOwner != null) runtimeOwnerStopped = true
+            expectedOwner = runtimeOwner
             stopped = failClosedRecordingTileSnapshot(cachedSnapshot)
             cachedSnapshot = stopped
             stateGeneration++
@@ -299,10 +340,10 @@ internal object RecordingQuickTileStateCache {
         persistedReadExecutor.execute {
             // Duration cache is convenience state. Keep the latest live counters, but resolve
             // enabled/full/destination from durable settings off UI/audio threads.
-            if (persistLatestDurations) persistDurations(appContext, stopped)
+            if (persistLatestDurations) persistOwnedDurations(appContext, expectedOwner)
             val persisted = runCatching { readPersisted(appContext) }.getOrNull()
                 ?: return@execute
-            val hydrated = stoppedRecordingTileSnapshot(persisted, stopped)
+            var hydrated = stoppedRecordingTileSnapshot(persisted, stopped)
             val accepted = synchronized(stateLock) {
                 if (runtimeAuthoritative || !tileHydrationCanApply(
                         expectedGeneration = expectedGeneration,
@@ -313,6 +354,7 @@ internal object RecordingQuickTileStateCache {
                 ) {
                     false
                 } else {
+                    hydrated = applyPendingClears(hydrated)
                     cachedSnapshot = hydrated
                     stateGeneration++
                     runtimeAuthoritative = false
@@ -351,21 +393,23 @@ internal object RecordingQuickTileStateCache {
                 }
                 return@execute
             }
+            var hydrated: RecordingTileSnapshot = persisted
             val accepted = synchronized(stateLock) {
+                hydrated = applyPendingClears(persisted)
                 if (hydrationGeneration == expectedGeneration) hydrationGeneration = null
                 if (runtimeAuthoritative || !tileHydrationCanApply(
                         expectedGeneration = expectedGeneration,
                         currentGeneration = stateGeneration,
                         expectedSnapshot = expectedSnapshot,
                         currentSnapshot = cachedSnapshot,
-                    ) || cachedSnapshot == persisted
+                    ) || cachedSnapshot == hydrated
                 ) {
                     // SystemUI can start listening again after requestListeningState().
                     // Republishing identical persisted state would request another refresh,
                     // which hydrates again forever even with no recorder or visible tiles.
                     false
                 } else {
-                    cachedSnapshot = persisted
+                    cachedSnapshot = hydrated
                     stateGeneration++
                     runtimeAuthoritative = false
                     true
@@ -374,7 +418,7 @@ internal object RecordingQuickTileStateCache {
             if (accepted) {
                 RecordingQuickTiles.refreshCachedSnapshot(
                     context = appContext,
-                    snapshot = persisted,
+                    snapshot = hydrated,
                     requestSystemRefresh = true,
                 )
             }
@@ -399,45 +443,63 @@ internal object RecordingQuickTileStateCache {
         )
     }
 
-    fun recordBufferCleared(context: Context, bufferSlot: ReverbService.BufferSlot) {
+    private fun applyPendingClears(snapshot: RecordingTileSnapshot): RecordingTileSnapshot =
+        pendingClearedBuffers.fold(snapshot, ::recordingTileSnapshotAfterClear)
+
+    fun recordBufferCleared(context: Context, owner: Any, bufferSlot: ReverbService.BufferSlot) {
         val appContext = context.applicationContext
-        val cleared = synchronized(stateLock) {
-            val updated = recordingTileSnapshotAfterClear(
-                cachedSnapshot ?: failClosedRecordingTileSnapshot(),
-                bufferSlot,
+        synchronized(stateLock) {
+            if (runtimeOwner !== owner) return
+            cachedSnapshot = recordingTileSnapshotAfterClear(
+                cachedSnapshot ?: failClosedRecordingTileSnapshot(), bufferSlot,
             )
-            cachedSnapshot = updated
+            pendingClearedBuffers += bufferSlot
             stateGeneration++
-            // The store clear just completed, so this memory snapshot is more authoritative than
-            // persisted fallback data until markServiceStopped() transfers ownership to stopped
-            // hydration a moment later.
-            runtimeAuthoritative = true
-            updated
+            // A terminal correction does not reclaim runtime authority after Service teardown.
+            // Pending clears also mask any persisted read admitted before this write completes.
         }
-        if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) {
-            // apply() changes this process immediately, so markServiceStopped() cannot hydrate a
-            // stale Full bit while its disk write completes asynchronously.
-            observeRuntimeOneShotFull(appContext, false)
+        persistedReadExecutor.execute {
+            val preferences = getRecorderPreferences(appContext)
+            val editor = preferences.edit()
+            synchronized(oneShotFullPreferenceLock) {
+                synchronized(stateLock) {
+                    if (runtimeOwner !== owner) return@execute
+                    if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) {
+                        observeRuntimeOneShotFullLocked(preferences, false)
+                    }
+                    // Never persist the other buffer from an old Clear snapshot.
+                    editor.apply {
+                        putLong(if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT)
+                            PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS
+                        else PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L)
+                    }.apply()
+                    pendingClearedBuffers -= bufferSlot
+                }
+            }
+            RecordingQuickTiles.refreshCachedSnapshot(appContext, readNonBlocking(), true)
+            // Clear invalidated older reads. Admit a fresh read at the current stopped generation.
+            hydratePersistedAsync(appContext)
         }
-        persistedReadExecutor.execute { persistDurations(appContext, cleared) }
     }
 
-    fun persistCurrentDurations(context: Context) {
-        val snapshot = cachedSnapshot ?: return
+    fun persistCurrentDurations(context: Context, owner: Any) {
         val appContext = context.applicationContext
-        persistedReadExecutor.execute { persistDurations(appContext, snapshot) }
+        persistedReadExecutor.execute { persistOwnedDurations(appContext, owner) }
     }
 
-    private fun persistDurations(context: Context, snapshot: RecordingTileSnapshot) {
-        getRecorderPreferences(context).edit {
-            putLong(
-                PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS,
-                quickTileDurationMillis(snapshot.oneShotSeconds),
-            )
-            putLong(
-                PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS,
-                quickTileDurationMillis(snapshot.loopingSeconds),
-            )
+    private fun persistOwnedDurations(context: Context, owner: Any?) {
+        val preferences = getRecorderPreferences(context)
+        val editor = preferences.edit()
+        synchronized(stateLock) {
+            if (runtimeOwner !== owner) return
+            // Use the current counters, including a Clear accepted after this task was queued.
+            val snapshot = cachedSnapshot ?: return
+            editor.apply {
+                putLong(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS,
+                    quickTileDurationMillis(snapshot.oneShotSeconds))
+                putLong(PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS,
+                    quickTileDurationMillis(snapshot.loopingSeconds))
+            }.apply()
         }
     }
 }
@@ -572,10 +634,11 @@ internal object RecordingQuickTiles {
 
     fun publishSnapshot(
         context: Context,
+        owner: Any,
         snapshot: RecordingTileSnapshot,
         requestSystemRefresh: Boolean,
     ) {
-        RecordingQuickTileStateCache.publish(snapshot)
+        if (!RecordingQuickTileStateCache.publish(owner, snapshot)) return
         dispatchSnapshot(context, snapshot, requestSystemRefresh)
     }
 

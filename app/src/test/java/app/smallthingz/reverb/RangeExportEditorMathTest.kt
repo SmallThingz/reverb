@@ -2,6 +2,10 @@ package app.smallthingz.reverb
 
 import androidx.compose.ui.geometry.Rect
 import java.io.IOException
+import kotlin.math.PI
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -579,12 +583,15 @@ class RangeExportEditorMathTest {
 
         val twice = transformShuttlePcm16Mono(source, 2f)
         assertEquals(7, twice.size / 2)
-        assertEquals(100, decode(twice).first())
-        assertEquals(800, decode(twice).last())
+        val forward = decode(twice)
+        // Decimation filters the ramp's extended edges; direction and alignment
+        // survive, but accelerated endpoint samples need not equal the originals.
+        assertTrue(forward.first() in 100 until 200)
+        assertTrue(forward.last() in 701..800)
+        assertTrue(forward.zipWithNext().all { (left, right) -> left < right })
         val reverseTwice = transformShuttlePcm16Mono(source, -2f)
         assertEquals(7, reverseTwice.size / 2)
-        assertEquals(800, decode(reverseTwice).first())
-        assertEquals(100, decode(reverseTwice).last())
+        assertEquals(forward.reversed(), decode(reverseTwice))
         val eightTimes = transformShuttlePcm16Mono(source, 8f)
         assertEquals(5, eightTimes.size / 2)
         assertEquals(1.1f, shuttleAudibleSpeed(2f), 0.0001f)
@@ -596,6 +603,36 @@ class RangeExportEditorMathTest {
         assertEquals(1f, shuttleAudibleSpeed(0.2f), 0f)
         assertEquals(0.024, shuttleSourceGrainSeconds(1f), 0.000001)
         assertEquals(0.0408, shuttleSourceGrainSeconds(8f), 0.000001)
+    }
+
+    @Test
+    fun shuttleDecimationKeepsAudiblePassbandAndRejectsAliasingInBothDirections() {
+        val amplitude = 16_000
+        fun tone(cyclesPerFrame: Double): ByteArray = ByteArray(2_048 * 2).also { bytes ->
+            repeat(bytes.size / 2) { frame ->
+                val sample = (amplitude * sin(2 * PI * cyclesPerFrame * frame)).roundToInt()
+                bytes[frame * 2] = (sample and 0xff).toByte()
+                bytes[frame * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+            }
+        }
+        fun normalizedRms(bytes: ByteArray): Double {
+            // Exclude finite-grain edge extension from the steady-state measurement.
+            val frames = 128 until bytes.size / 2 - 128
+            val energy = frames.sumOf { frame ->
+                val sample = ((bytes[frame * 2 + 1].toInt() shl 8) or
+                    (bytes[frame * 2].toInt() and 0xff)).toShort().toDouble() / amplitude
+                sample * sample
+            }
+            return sqrt(energy / frames.count())
+        }
+        for (rate in listOf(8f, -8f)) {
+            // Audible 1.7x pitch must retain this tone; filtering at the 8x
+            // transport speed instead would incorrectly remove it.
+            val passband = normalizedRms(transformShuttlePcm16Mono(tone(0.2), rate))
+            assertEquals("$rate shuttle passband", 1.0 / sqrt(2.0), passband, 0.01)
+            val rejected = normalizedRms(transformShuttlePcm16Mono(tone(0.4), rate))
+            assertTrue("$rate shuttle aliases with normalized RMS $rejected", rejected < 0.003)
+        }
     }
 
     @Test

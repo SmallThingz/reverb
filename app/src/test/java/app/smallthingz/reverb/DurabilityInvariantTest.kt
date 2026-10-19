@@ -474,7 +474,9 @@ class DurabilityInvariantTest {
             val original = byteArrayOf(1, 2, 3, 4)
             val database = File(root, "recordings.db").apply { writeBytes(original) }
             val recoveryRoot = File(root, "recovery")
-            val io = InjectedRecordingDatabaseRecoveryIo(failForceAt = 3)
+            val io = InjectedRecordingDatabaseRecoveryIo(beforeForce = { directory ->
+                if (directory.name == "snapshot.partial") throw IOException("Snapshot directory sync failed")
+            })
 
             assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", io))
             assertArrayEquals(original, database.readBytes())
@@ -493,7 +495,11 @@ class DurabilityInvariantTest {
             val original = byteArrayOf(1, 2, 3, 4)
             val database = File(root, "recordings.db").apply { writeBytes(original) }
             val recoveryRoot = File(root, "recovery")
-            val io = InjectedRecordingDatabaseRecoveryIo(failForceAt = 4)
+            val io = InjectedRecordingDatabaseRecoveryIo(beforeForce = { directory ->
+                if (directory == recoveryRoot && File(recoveryRoot, "snapshot").isDirectory) {
+                    throw IOException("Published snapshot directory sync failed")
+                }
+            })
 
             assertEquals(null, preserveCorruptRecordingDatabase(database, recoveryRoot, "snapshot", io))
             assertArrayEquals(original, database.readBytes())
@@ -2856,10 +2862,9 @@ class DurabilityInvariantTest {
 private class InjectedRecordingDatabaseRecoveryIo(
     private val copyOverride: ((File, File) -> Unit)? = null,
     private val afterCopy: ((File, File) -> Unit)? = null,
-    private val failForceAt: Int? = null,
     private val atomicMoveError: IOException? = null,
+    private val beforeForce: ((File) -> Unit)? = null,
 ) : RecordingDatabaseRecoveryIo {
-    private var forceCalls = 0
 
     override fun sha256(file: File): ByteArray = DefaultRecordingDatabaseRecoveryIo.sha256(file)
 
@@ -2871,8 +2876,7 @@ private class InjectedRecordingDatabaseRecoveryIo(
     }
 
     override fun forceDirectory(directory: File) {
-        forceCalls++
-        if (forceCalls == failForceAt) throw IOException("Injected directory sync failure")
+        beforeForce?.invoke(directory)
         DefaultRecordingDatabaseRecoveryIo.forceDirectory(directory)
     }
 

@@ -2111,15 +2111,6 @@ class FormattingAndHistoryMathTest {
         assertTrue(recorderCommandGenerationMayApply(expectedGeneration = 8L, currentGeneration = 8L))
         assertFalse(recorderCommandGenerationMayApply(expectedGeneration = 7L, currentGeneration = 8L))
 
-        val accepted = ReverbService.ListeningCommandResult(accepted = true, generation = 7L)
-        val rejectedSame = ReverbService.ListeningCommandResult(accepted = false, generation = 7L)
-        val rejectedSuperseded = ReverbService.ListeningCommandResult(accepted = false, generation = 8L)
-        assertFalse(quickTileRejectedCommandRequiresResample(7L, accepted))
-        assertFalse(quickTileRejectedCommandRequiresResample(7L, rejectedSame))
-        assertTrue(quickTileRejectedCommandRequiresResample(7L, rejectedSuperseded))
-        assertFalse(quickTileRejectedCommandRequiresResample(Long.MIN_VALUE, rejectedSuperseded))
-        assertFalse(quickTileRejectedCommandRequiresResample(7L, null))
-
         val snapshot = recordingTileSnapshot(
             listeningIntentEnabled = true,
             runtimeCaptureActive = true,

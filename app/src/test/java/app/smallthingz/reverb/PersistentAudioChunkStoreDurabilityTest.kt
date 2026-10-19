@@ -1027,7 +1027,7 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
-    fun oneShotShrink_failedAtomicReplacementLeavesOriginalAuthoritative() = withStoreRoot { root ->
+    fun oneShotShrink_failedAtomicReplacementKeepsOriginalCutoffAfterDurableSuffixRetirement() = withStoreRoot { root ->
         val expected = pcmBytes(8_192)
         val store = PersistentAudioChunkStore(
             rootDirectory = root,
@@ -1039,9 +1039,16 @@ class PersistentAudioChunkStoreDurabilityTest {
         store.sealActiveChunk()
 
         assertThrows(IOException::class.java) { configure(store, 4_100L) }
-        assertEquals(expected.size.toLong(), store.countFilledBytes())
-        assertArrayEquals(expected, readAll(store))
+        // Newest-first retirement already committed chunks after the 512-byte cutoff
+        // chunk. The failed atomic move leaves that entire original cutoff authoritative.
+        val retained = expected.copyOf(4_608)
+        assertEquals(retained.size.toLong(), store.countFilledBytes())
+        assertArrayEquals(retained, readAll(store))
         store.close()
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            configure(reopened, 8_192L)
+            assertArrayEquals(retained, readAll(reopened))
+        }
     }
 
     @Test

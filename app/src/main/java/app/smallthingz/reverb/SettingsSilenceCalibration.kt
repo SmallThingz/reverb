@@ -1,0 +1,180 @@
+package app.smallthingz.reverb
+
+import android.content.Context
+import android.view.View
+import android.view.ViewTreeObserver
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+/** A bounded microphone sample owns a draft, never a preference write or capture intent. */
+internal class SettingsSilenceCalibration(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val view: View,
+    private val lifecycle: Lifecycle,
+    private val readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
+    private val onCalibrated: (SilenceGateConfig) -> Unit,
+) {
+    var running by mutableStateOf(false)
+        private set
+    var preparing by mutableIntStateOf(0)
+        private set
+    var progress by mutableStateOf<Float?>(null)
+        private set
+    var measured by mutableStateOf<SilenceCalibrationResult?>(null)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    private var generation = 0L
+    private var job: Job? = null
+    private var disposed = false
+
+    private fun acceptsInput(): Boolean = !disposed && scope.isActive &&
+        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+        view.isAttachedToWindow && view.hasWindowFocus()
+
+    fun begin(config: SilenceGateConfig, input: SilenceCalibrationInput) {
+        if (!acceptsInput() || !config.enabled || running) return
+        val owner = readOwner(config, input) ?: return
+        val request = ++generation
+        running = true
+        preparing = 3
+        progress = null
+        error = null
+        measured = null
+        fun isCurrent(): Boolean = request == generation && acceptsInput() &&
+            readOwner(config, input) == owner
+        job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                val result = calibrateSilence(
+                    createSampler = {
+                        if (!isCurrent()) throw CancellationException()
+                        SilenceSampleOwner(context, expectedInput = input)
+                    },
+                    onPreparing = {
+                        if (!isCurrent()) throw CancellationException()
+                        preparing = it
+                    },
+                    onProgress = {
+                        if (!isCurrent()) throw CancellationException()
+                        preparing = 0
+                        progress = it.progress
+                    },
+                )
+                // Both this live admission read and the draft callback execute on Main without
+                // suspension. Undo, input changes and Back revoke ownership before recomposition.
+                if (isCurrent()) {
+                    measured = result
+                    onCalibrated(config.copy(points = result.points))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (isCurrent()) error = when (failure) {
+                    is SilenceCalibrationTooLoud -> context.getString(R.string.silence_calibration_too_loud)
+                    is SilenceCalibrationTimedOut -> context.getString(R.string.silence_calibration_timeout)
+                    else -> failure.message ?: context.getString(R.string.silence_sample_failed)
+                }
+            } finally {
+                if (request == generation) {
+                    job = null
+                    running = false
+                    preparing = 0
+                    progress = null
+                }
+            }
+        }
+    }
+
+    fun cancel(clearMeasurement: Boolean = false) {
+        generation++
+        job?.cancel()
+        job = null
+        running = false
+        preparing = 0
+        progress = null
+        if (clearMeasurement) {
+            measured = null
+            error = null
+        }
+    }
+
+    fun close() {
+        disposed = true
+        cancel(clearMeasurement = true)
+    }
+}
+
+@Composable
+internal fun rememberSettingsSilenceCalibration(
+    readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
+    onCalibrated: (SilenceGateConfig) -> Unit,
+): SettingsSilenceCalibration {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val scope = rememberCoroutineScope()
+    val latestOwner = rememberUpdatedState(readOwner)
+    val latestResult = rememberUpdatedState(onCalibrated)
+    val controller = remember(context, view, lifecycle, scope) {
+        SettingsSilenceCalibration(context, scope, view, lifecycle,
+            readOwner = { config, input -> latestOwner.value(config, input) },
+            onCalibrated = { latestResult.value(it) })
+    }
+    DisposableEffect(controller, view, lifecycle) {
+        var tree: ViewTreeObserver? = null
+        val focus = ViewTreeObserver.OnWindowFocusChangeListener {
+            if (!it) controller.cancel()
+        }
+        fun removeFocusListener() {
+            tree?.takeIf { it.isAlive }?.removeOnWindowFocusChangeListener(focus)
+            tree = null
+        }
+        fun observeAttachment() {
+            removeFocusListener()
+            if (view.isAttachedToWindow) view.viewTreeObserver.takeIf { it.isAlive }?.let {
+                tree = it
+                it.addOnWindowFocusChangeListener(focus)
+            }
+        }
+        val attachment = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = observeAttachment()
+            override fun onViewDetachedFromWindow(v: View) {
+                controller.cancel()
+                removeFocusListener()
+            }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP ||
+                event == Lifecycle.Event.ON_DESTROY) controller.cancel()
+        }
+        view.addOnAttachStateChangeListener(attachment)
+        lifecycle.addObserver(observer)
+        observeAttachment()
+        onDispose {
+            controller.close()
+            view.removeOnAttachStateChangeListener(attachment)
+            lifecycle.removeObserver(observer)
+            removeFocusListener()
+        }
+    }
+    return controller
+}

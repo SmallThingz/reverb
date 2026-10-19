@@ -10,6 +10,32 @@ import org.junit.Test
 
 class ServiceForegroundLifetimeTest {
     @Test
+    fun coldRecompressionTerminalKeepsCaptureUntilInitializationRestoresRuntime() {
+        // The export worker can fail before the audio initialization/main restoration handoff.
+        // READY is not healthy capture yet, but a valid pending restore still owns the Service.
+        assertFalse(serviceHasHealthyListeningLifetime(ReverbService.STATE_READY, true, false, false, false))
+        assertTrue(serviceHasPendingCaptureInitializationLifetime(true, true, false, false, false))
+        // Initialization transfers ownership to normal listening; it must not leave a permanent
+        // pending owner that could preserve a stopped recorder after a later terminal export.
+        assertFalse(serviceHasPendingCaptureInitializationLifetime(false, true, false, false, false))
+        assertTrue(serviceHasHealthyListeningLifetime(ReverbService.STATE_LISTENING, true, false, false, false))
+        assertFalse(serviceHasHealthyListeningLifetime(ReverbService.STATE_READY, true, false, false, false))
+    }
+
+    @Test
+    fun pendingCaptureInitializationNeverPreservesDisabledOrFailedCapture() {
+        for (mask in 0 until 16) {
+            val enabled = mask and 1 != 0
+            val foregroundBlocked = mask and 2 != 0
+            val timedOut = mask and 4 != 0
+            val storageBlocked = mask and 8 != 0
+            assertEquals(enabled && !foregroundBlocked && !timedOut && !storageBlocked,
+                serviceHasPendingCaptureInitializationLifetime(true, enabled, foregroundBlocked, timedOut, storageBlocked))
+            assertFalse(serviceHasPendingCaptureInitializationLifetime(false, enabled, foregroundBlocked, timedOut, storageBlocked))
+        }
+    }
+
+    @Test
     fun serviceStartRequiresReturnedComponent() {
         assertEquals("component", requireServiceStarted { "component" })
 

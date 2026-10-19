@@ -9,6 +9,7 @@ class ReverbApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installUnexpectedErrorHandler()
+        QuickSaveTileOptions.refresh(this)
         Thread(
             {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }

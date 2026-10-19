@@ -27,6 +27,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.URI
 import java.net.URLDecoder
@@ -56,6 +57,9 @@ private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 private const val VERIFIED_FILE_IDENTITY_QUERY = "reverb_identity"
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
 private const val STAGING_SESSION_SEPARATOR = "__"
+private const val MAX_RECORDING_COMPONENT_UTF8_BYTES = 255
+private const val MAX_COLLISION_SUFFIX_UTF8_BYTES = 13 // " (2147483647)"
+private const val STAGING_NAME_DIGEST_PREFIX = "~"
 private val OUTPUT_STAGING_SESSION_ID = UUID.randomUUID().toString()
 
 internal enum class StagingOutputKind(
@@ -669,6 +673,7 @@ fun buildCodecSummary(
     sampleRate: Int,
     channelCount: Int,
     sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
+    flacCompression: Int? = null,
 ): String {
     val channelLabel = if (channelCount >= 2) {
         context.getString(R.string.channel_mode_stereo)
@@ -683,6 +688,10 @@ fun buildCodecSummary(
         append(sampleRateLabel(sampleRate))
         append(CODEC_SUMMARY_SEPARATOR)
         append(channelLabel)
+        if (format == ExportFormat.FLAC && flacCompression?.let(::validFlacCompression) == true) {
+            append(CODEC_SUMMARY_SEPARATOR)
+            append(context.getString(R.string.flac_level_short, flacCompression))
+        }
     }
 }
 
@@ -1068,12 +1077,23 @@ internal fun publishStagedFile(
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): PublishedStagedFile {
+    if (!isDirectChildRecordingName(finalDisplayName)) {
+        throw IOException("Output publication requires a recording basename")
+    }
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
     if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
         throw IOException("Verified file output has no stable object identity")
     }
     while (true) {
-        val finalName = findAvailableDisplayName(finalDisplayName) { candidate -> File(parent, candidate).exists() }
+        val finalName = findAvailableDisplayName(finalDisplayName) { candidate ->
+            // A dangling symlink still owns its directory entry. Following it would select
+            // the same occupied name again after every FileAlreadyExistsException retry.
+            when (observeStoragePath(File(parent, candidate)).state) {
+                StoragePathState.PRESENT -> true
+                StoragePathState.MISSING -> false
+                StoragePathState.UNAVAILABLE -> throw IOException("Unable to inspect output name: $candidate")
+            }
+        }
         val destination = File(parent, finalName)
         try {
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
@@ -2161,8 +2181,6 @@ fun copyRecordingToDirectory(
     targetTreeUri: Uri?,
 ): RecordingEntity? {
     var target: RecordingOutputTarget? = null
-    var cleanupFingerprint: StableOutputFingerprint? = null
-    var preserveVerifiedCopyOnFailure = false
     return try {
         val resolvedTarget = createOutputTargetInDirectory(
             context = context,
@@ -2223,7 +2241,8 @@ fun copyRecordingToDirectory(
         if (!copyDigestMatches(sourceDigest, targetFingerprint.digest)) {
             throw IOException("Recording copy content verification failed")
         }
-        cleanupFingerprint = targetFingerprint
+        // A verified copy may become the only retained version at any later point.
+        // Keep it across publication failure even if this source recheck succeeds.
         val sourceAfterCopy = runCatching {
             sha256StableRecording(context, recording)
         }.onFailure {
@@ -2235,14 +2254,12 @@ fun copyRecordingToDirectory(
             // The verified staging target may now be the only surviving version of the bytes
             // selected by the user. Keep it if any later step fails. A proven content change
             // aborts the move; an unavailable recheck may still safely publish the verified copy.
-            preserveVerifiedCopyOnFailure = true
             if (sourceAfterCopy != null) {
                 throw IOException("Recording source changed during copy")
             }
         }
         val finalizedTarget = finalizeOutputTarget(context, resolvedTarget, targetFingerprint)
         target = finalizedTarget
-        cleanupFingerprint = outputCleanupFingerprintForTarget(finalizedTarget, targetFingerprint)
 
         // The finalizer already verified and pinned the published object. Only legacy/non-staging
         // callers may need a fresh lookup; never re-resolve a verified move target after publish.
@@ -2270,22 +2287,8 @@ fun copyRecordingToDirectory(
         )
     } catch (e: Exception) {
         Log.w(TAG, "exportToTarget failed for ${target?.displayName ?: recording.displayName}", e)
-        target?.let { cleanupTarget ->
-            if (preserveVerifiedCopyOnFailure) {
-                Log.w(TAG, "Retaining verified copied recording after source changed: ${cleanupTarget.id}")
-            } else {
-                val expectedFingerprint = cleanupFingerprint
-                if (expectedFingerprint == null) {
-                    Log.w(TAG, "Retaining partial copied recording because cleanup identity is uncertain: ${cleanupTarget.id}")
-                } else if (!suppressAndDeleteOutputTarget(
-                        context,
-                        cleanupTarget,
-                        expectedFingerprint = expectedFingerprint,
-                    )) {
-                    Log.w(TAG, "Deferred cleanup for partial copied recording ${cleanupTarget.id}")
-                }
-            }
-        }
+        // Unverified staging has no cleanup authority; verified staging may be the
+        // only surviving copy. Neither can be deleted safely on this failure path.
         null
     }
 }
@@ -2503,6 +2506,7 @@ internal fun verifyWavOutputStreamAndDigest(
     payloadBytes: Long,
     expectedPayloadSha256: ByteArray,
     bufferSize: Int = FILE_COPY_BUFFER_BYTES,
+    checkCancelled: () -> Unit = {},
 ): CopyDigest {
     require(expectedFileBytes > 0L)
     require(payloadOffsetBytes == expectedPrefix.size.toLong())
@@ -2511,8 +2515,24 @@ internal fun verifyWavOutputStreamAndDigest(
     val paddingBytes = expectedFileBytes - payloadOffsetBytes - payloadBytes
     require(paddingBytes in 0L..1L)
 
+    // Verification is cancellable only when its pre-publication caller supplies an owner.
+    // The outer target reader retains descriptor cleanup; this adapter owns no resource.
+    val source = object : InputStream() {
+        override fun read(): Int {
+            checkCancelled()
+            val value = input.read()
+            checkCancelled()
+            return value
+        }
+        override fun read(bytes: ByteArray, offset: Int, count: Int): Int {
+            checkCancelled()
+            val read = input.read(bytes, offset, count)
+            checkCancelled()
+            return read
+        }
+    }
     val observedPrefix = ByteArray(expectedPrefix.size)
-    if (!input.readFully(observedPrefix) || !observedPrefix.contentEquals(expectedPrefix)) {
+    if (!source.readFully(observedPrefix) || !observedPrefix.contentEquals(expectedPrefix)) {
         throw IOException("Export header verification failed")
     }
 
@@ -2523,10 +2543,10 @@ internal fun verifyWavOutputStreamAndDigest(
     var remaining = payloadBytes
     while (remaining > 0L) {
         val requested = minOf(buffer.size.toLong(), remaining).toInt()
-        val count = input.read(buffer, 0, requested)
+        val count = source.read(buffer, 0, requested)
         if (count < 0) throw IOException("Unexpected EOF verifying recording payload")
         if (count == 0) {
-            val value = input.read()
+            val value = source.read()
             if (value < 0) throw IOException("Unexpected EOF verifying recording payload")
             val byte = value.toByte()
             payloadDigest.update(byte)
@@ -2542,11 +2562,12 @@ internal fun verifyWavOutputStreamAndDigest(
         throw IOException("Export payload verification failed")
     }
     if (paddingBytes == 1L) {
-        val padding = input.read()
+        val padding = source.read()
         if (padding != 0) throw IOException("Invalid WAV padding byte")
         fullDigest.update(0.toByte())
     }
-    if (input.read() >= 0) throw IOException("Export contains unexpected trailing bytes")
+    if (source.read() >= 0) throw IOException("Export contains unexpected trailing bytes")
+    checkCancelled()
     return CopyDigest(expectedFileBytes, fullDigest.digest())
 }
 
@@ -2559,7 +2580,9 @@ internal fun verifyWavOutputTargetAndDigest(
     payloadOffsetBytes: Long,
     payloadBytes: Long,
     expectedPayloadSha256: ByteArray,
+    checkCancelled: () -> Unit = {},
 ): StableOutputFingerprint {
+    checkCancelled()
     var providerRevision: ProviderPayloadRevision? = null
     val fingerprint = when (target.storageType) {
         RecordingStorageType.FILE -> {
@@ -2575,6 +2598,7 @@ internal fun verifyWavOutputTargetAndDigest(
                     payloadOffsetBytes = payloadOffsetBytes,
                     payloadBytes = payloadBytes,
                     expectedPayloadSha256 = expectedPayloadSha256,
+                    checkCancelled = checkCancelled,
                 )
                 val closedIdentity = resolveFileDescriptorIdentity(source.fd)
                 if (openedIdentity != closedIdentity) {
@@ -2615,6 +2639,7 @@ internal fun verifyWavOutputTargetAndDigest(
                     payloadOffsetBytes = payloadOffsetBytes,
                     payloadBytes = payloadBytes,
                     expectedPayloadSha256 = expectedPayloadSha256,
+                    checkCancelled = checkCancelled,
                 )
                 val afterRead = resolveProviderRecordingIdentity(context, target.storageType, uri, before)
                 if (!providerReadRemainsStable(before, afterOpen, afterRead) ||
@@ -2631,6 +2656,7 @@ internal fun verifyWavOutputTargetAndDigest(
             }
         }
     }
+    checkCancelled()
     if (!stagingFingerprintMatchesCreatedObject(target, fingerprint)) {
         throw IOException("Verified output no longer matches the created staging object")
     }
@@ -2717,13 +2743,23 @@ private fun recoverStagedFileOutputs(
         if (pathObservation.state != StoragePathState.PRESENT || !pathObservation.isRegularFile ||
             !isStagingOutputName(name)
         ) return@forEach
-        val metadata = parseStagingOutputMetadata(name) ?: return@forEach
-        val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
-            verifiedExportStagingFingerprint(context, RecordingStorageType.FILE, file.absolutePath)
-        } else {
-            null
-        }
+        val recovery = resolveStagingOutputRecovery(name) {
+            verifiedExportStagingRecovery(context, RecordingStorageType.FILE, file.absolutePath)
+        } ?: return@forEach
+        val metadata = recovery.metadata
+        val trackedFingerprint = recovery.fingerprint
         if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
+        if (metadata.finalDisplayName.endsWith(".flac", ignoreCase = true)) {
+            if (trackedFingerprint == null) return@forEach
+            val target = RecordingOutputTarget(file.absolutePath, metadata.finalDisplayName, "audio/flac",
+                RecordingStorageType.FILE, directory.absolutePath,
+                resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.lastModified()), file = file, staging = true)
+            val recovered = runCatching { finalizeOutputTarget(context, target, trackedFingerprint) }
+                .onFailure { Log.w(TAG, "Unable to recover verified FLAC staging ${target.id}", it) }.isSuccess
+            if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, trackedFingerprint)
+            changed = changed || recovered
+            return@forEach
+        }
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
         val observation = runCatching { readRecoverableStagingFile(file) }
             .onFailure { Log.w(TAG, "Unable to inspect staging recording $file", it) }
@@ -2832,13 +2868,23 @@ private fun recoverStagedDocumentOutputs(
         if (file.uri.toString() in suppressedIds) return@forEach
         val name = file.name ?: return@forEach
         if (!file.isFile || !isStagingOutputName(name)) return@forEach
-        val metadata = parseStagingOutputMetadata(name) ?: return@forEach
-        val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
-            verifiedExportStagingFingerprint(context, RecordingStorageType.DOCUMENT, file.uri.toString())
-        } else {
-            null
-        }
+        val recovery = resolveStagingOutputRecovery(name) {
+            verifiedExportStagingRecovery(context, RecordingStorageType.DOCUMENT, file.uri.toString())
+        } ?: return@forEach
+        val metadata = recovery.metadata
+        val trackedFingerprint = recovery.fingerprint
         if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) return@forEach
+        if (metadata.finalDisplayName.endsWith(".flac", ignoreCase = true)) {
+            if (trackedFingerprint == null) return@forEach
+            val target = RecordingOutputTarget(file.uri.toString(), metadata.finalDisplayName, "audio/flac",
+                RecordingStorageType.DOCUMENT, treeUri.toString(),
+                resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.modifiedMillis), uri = file.uri, staging = true)
+            val recovered = runCatching { finalizeOutputTarget(context, target, trackedFingerprint) }
+                .onFailure { Log.w(TAG, "Unable to recover verified FLAC staging ${target.id}", it) }.isSuccess
+            if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, trackedFingerprint)
+            changed = changed || recovered
+            return@forEach
+        }
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
         val observation = runCatching {
             context.contentResolver.openInputStream(file.uri)?.use(::readRecoverableStagingWav)
@@ -2955,7 +3001,17 @@ private fun listFileDirectoryRecordings(
                             throw IOException("Recording path changed before descriptor scan: $file")
                         }
                         val descriptorSize = input.channel.size()
-                        val media = inspectSeekableWavStructure(context, input.channel)
+                        // Publication re-hashes the final file. Reuse its complete decoded FLAC
+                        // proof only while that exact native revision is still pinned here.
+                        val verifiedFlac = if (file.extension.equals("flac", ignoreCase = true)) {
+                            VerifiedFileDigestCache.current(file)?.takeIf { fingerprint ->
+                                verifiedFileReadHandoffMatchesExpected(
+                                    fingerprint.fileKey.orEmpty(), identity,
+                                    openedDescriptorIdentity, resolveFileIdentity(file),
+                                ) && fingerprint.digest.byteCount == descriptorSize
+                            }?.let { VerifiedFlacMetadataCache.get(it.digest) }
+                        } else null
+                        val media = inspectSeekableWavStructure(context, input.channel, verifiedFlac)
                         val strictDuration = media.durationMillis
                         val startedAtMillis = resolveRecordingStartTimeMillis(
                             displayName = file.name,
@@ -3046,9 +3102,14 @@ private fun scanProviderRecording(
         ) {
             throw IOException("Recording changed while opening scan descriptor $uri")
         }
-        val seekableMetadata = if (descriptor.statSize >= 0L) {
-            inspectSeekableWavStructure(context, source.channel)
-        } else null
+        val seekableMetadata = when {
+            descriptor.statSize >= 0L -> inspectSeekableWavStructure(context, source.channel)
+            displayName.substringAfterLast('.', "").equals(ExportFormat.FLAC.extension, ignoreCase = true) ->
+                withSeekableRecordingScanCopy(source, context.cacheDir) { channel ->
+                    inspectSeekableWavStructure(context, channel)
+                }
+            else -> null
+        }
         val strictDuration = seekableMetadata?.durationMillis
             ?: structurallyCompleteRecordingDurationMillis(displayName, source)
         val media = seekableMetadata ?: if (strictDuration > 0L) {
@@ -3227,22 +3288,28 @@ private fun listMediaStoreRecordings(
                     var recoveredPublishedIdentity: String? = null
 
                     if (pending) {
-                        val metadata = parseStagingOutputMetadata(storedName)
-                        if (metadata != null) {
-                            val trackedFingerprint = if (metadata.kind == StagingOutputKind.EXPORT_TRACKED) {
-                                verifiedExportStagingFingerprint(
-                                    context,
-                                    RecordingStorageType.MEDIASTORE,
-                                    uri.toString(),
-                                )
-                            } else {
-                                null
-                            }
+                        val recovery = resolveStagingOutputRecovery(storedName) {
+                            verifiedExportStagingRecovery(
+                                context,
+                                RecordingStorageType.MEDIASTORE,
+                                uri.toString(),
+                            )
+                        }
+                        if (recovery != null) {
+                            val metadata = recovery.metadata
+                            val trackedFingerprint = recovery.fingerprint
                             if (!shouldRecoverStagingOutput(metadata, verifiedTrackedExport = trackedFingerprint != null)) {
                                 continue
                             }
                             val observation = runCatching {
-                                context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWav)
+                                if (metadata.finalDisplayName.endsWith(".flac", ignoreCase = true)) {
+                                    // Only persisted byte/object proof permits recovery of a tracked FLAC.
+                                    if (trackedFingerprint == null) null else {
+                                        context.contentResolver.openInputStream(uri)?.use { input ->
+                                            RecoverableStagingWav(readFlacInfo(input).durationMillis, trackedFingerprint.digest)
+                                        }
+                                    }
+                                } else context.contentResolver.openInputStream(uri)?.use(::readRecoverableStagingWav)
                             }.onFailure { Log.w(TAG, "Unable to inspect pending staged recording $uri", it) }
                                 .getOrNull() ?: continue
                             if (!canRecoverPendingMedia(size, observation.durationMillis)) continue
@@ -3432,16 +3499,31 @@ internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGIN
 internal fun isSupportedRecordingName(name: String): Boolean =
     !isStagingOutputName(name) && name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
 
+internal fun isDirectChildRecordingName(name: String): Boolean =
+    name.isNotBlank() && name != "." && name != ".." &&
+        name.none { it == '/' || it == '\\' || it == '\u0000' } &&
+        name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == name &&
+        isSupportedRecordingName(name)
+
+internal fun decodeRecordingBasename(encodedName: String): String? = runCatching {
+    Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(encodedName))).toString()
+        .takeIf(::isDirectChildRecordingName)
+}.getOrNull()
+
+private fun stagingFinalNameDigest(name: String): String =
+    MessageDigest.getInstance("SHA-256").digest(name.toByteArray(Charsets.UTF_8)).toHexString()
+
 internal fun stagingOutputName(
     finalDisplayName: String,
     token: String,
     sessionId: String = OUTPUT_STAGING_SESSION_ID,
     kind: StagingOutputKind = StagingOutputKind.COPY,
 ): String {
+    if (!isDirectChildRecordingName(finalDisplayName)) throw IOException("Output staging requires a recording basename")
     val extension = finalDisplayName.substringAfterLast('.', "tmp").lowercase().ifBlank { "tmp" }
     val encodedName = Base64.getUrlEncoder().withoutPadding()
         .encodeToString(finalDisplayName.toByteArray(Charsets.UTF_8))
-    return buildString {
+    fun buildName(nameField: String) = buildString {
         append(STAGING_OUTPUT_PREFIX)
         append(kind.storageCode.toInt())
         append(STAGING_SESSION_SEPARATOR)
@@ -3449,13 +3531,37 @@ internal fun stagingOutputName(
         append(STAGING_SESSION_SEPARATOR)
         append(token)
         append(STAGING_SESSION_SEPARATOR)
-        append(encodedName)
+        append(nameField)
         append('.')
         append(extension)
     }
+    val inlineName = buildName(encodedName)
+    if (inlineName.toByteArray(Charsets.UTF_8).size <= MAX_RECORDING_COMPONENT_UTF8_BYTES) return inlineName
+    // The verified-export journal already owns durable recovery authority. Long names use
+    // that same record for their full display name rather than expanding the path component.
+    val compactName = buildName(STAGING_NAME_DIGEST_PREFIX + stagingFinalNameDigest(finalDisplayName))
+    if (compactName.toByteArray(Charsets.UTF_8).size > MAX_RECORDING_COMPONENT_UTF8_BYTES) {
+        throw IOException("Output staging identity exceeds the filename component budget")
+    }
+    return compactName
 }
 
-internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = runCatching {
+private data class StagingOutputNameParts(
+    val kind: StagingOutputKind,
+    val sessionId: String,
+    val nameField: String,
+) {
+    fun metadata(verifiedFinalDisplayName: String?): StagingOutputMetadata? {
+        val finalName = if (nameField.startsWith(STAGING_NAME_DIGEST_PREFIX)) {
+            val candidate = verifiedFinalDisplayName?.takeIf(::isDirectChildRecordingName) ?: return null
+            if (nameField != STAGING_NAME_DIGEST_PREFIX + stagingFinalNameDigest(candidate)) return null
+            candidate
+        } else decodeRecordingBasename(nameField) ?: return null
+        return StagingOutputMetadata(kind, sessionId, finalName)
+    }
+}
+
+private fun parseStagingOutputNameParts(name: String): StagingOutputNameParts? = runCatching {
     if (!isStagingOutputName(name)) return@runCatching null
     val stem = name.substringBeforeLast('.', name).removePrefix(STAGING_OUTPUT_PREFIX)
     val parts = stem.split(STAGING_SESSION_SEPARATOR, limit = 4)
@@ -3463,10 +3569,30 @@ internal fun parseStagingOutputMetadata(name: String): StagingOutputMetadata? = 
     val kind = StagingOutputKind.fromWireValue(parts[0]) ?: return@runCatching null
     val sessionId = parts[1].takeIf { it.isNotBlank() } ?: return@runCatching null
     if (parts[2].isBlank()) return@runCatching null
-    val finalDisplayName = Base64.getUrlDecoder().decode(parts[3]).toString(Charsets.UTF_8)
-        .takeIf { it.isNotBlank() && isSupportedRecordingName(it) } ?: return@runCatching null
-    StagingOutputMetadata(kind, sessionId, finalDisplayName)
+    StagingOutputNameParts(kind, sessionId, parts[3])
 }.getOrNull()
+
+internal fun parseStagingOutputMetadata(
+    name: String,
+    verifiedFinalDisplayName: String? = null,
+): StagingOutputMetadata? = parseStagingOutputNameParts(name)?.metadata(verifiedFinalDisplayName)
+
+internal data class StagingOutputRecovery(
+    val metadata: StagingOutputMetadata,
+    val fingerprint: StableOutputFingerprint?,
+)
+
+internal fun resolveStagingOutputRecovery(
+    name: String,
+    readVerifiedRecovery: () -> VerifiedExportStagingRecovery?,
+): StagingOutputRecovery? {
+    val parts = parseStagingOutputNameParts(name) ?: return null
+    val inlineMetadata = parts.metadata(null)
+    if (inlineMetadata == null && !parts.nameField.startsWith(STAGING_NAME_DIGEST_PREFIX)) return null
+    val verified = if (parts.kind == StagingOutputKind.EXPORT_TRACKED) readVerifiedRecovery() else null
+    val metadata = inlineMetadata ?: parts.metadata(verified?.finalDisplayName) ?: return null
+    return StagingOutputRecovery(metadata, verified?.fingerprint)
+}
 
 internal fun shouldRecoverStagingOutput(
     metadata: StagingOutputMetadata?,
@@ -3515,6 +3641,52 @@ internal fun forceRecordingDirectoryDurable(directory: File) {
     }
 }
 
+/** Publishes the destination and its immediate parent beneath an existing storage anchor. */
+internal fun ensureRecordingDirectoryDurable(
+    directory: File,
+    forceDirectory: (File) -> Unit = ::forceRecordingDirectoryDurable,
+) {
+    val parent = directory.parentFile
+        ?: throw IOException("Recording directory has no parent: ${directory.path}")
+    val anchor = parent.parentFile
+        ?: throw IOException("Recording directory parent has no storage anchor: ${parent.path}")
+    val anchorIdentity = resolveDirectoryIdentity(anchor).takeIf { it.isNotBlank() }
+        ?: throw IOException("Recording storage anchor is unavailable: ${anchor.path}")
+
+    fun requireCurrent(path: File, identity: String) {
+        if (!fileIdentityMatches(identity, resolveDirectoryIdentity(path))) {
+            throw IOException("Recording directory changed during preparation: ${path.path}")
+        }
+    }
+    fun createAndBind(path: File): String {
+        when (storageDirectoryState(path)) {
+            StoragePathState.PRESENT -> Unit
+            StoragePathState.UNAVAILABLE -> throw IOException("Recording directory is unavailable: ${path.path}")
+            StoragePathState.MISSING -> try {
+                // Never mkdirs here: only this immediate parent and destination are owned.
+                Files.createDirectory(path.toPath())
+            } catch (_: FileAlreadyExistsException) {
+                // A concurrent creator is acceptable only if the final entry is a directory.
+            }
+        }
+        return resolveDirectoryIdentity(path).takeIf { it.isNotBlank() }
+            ?: throw IOException("Recording directory identity is unavailable: ${path.path}")
+    }
+
+    val parentIdentity = createAndBind(parent)
+    // PRESENT is not a successful prior barrier. A previous call/process may have created
+    // either entry and failed its parent fsync. Re-prove both links before writing audio or
+    // returning database-reset authority, including when every directory already exists.
+    forceDirectory(anchor)
+    requireCurrent(anchor, anchorIdentity)
+    requireCurrent(parent, parentIdentity)
+    val directoryIdentity = createAndBind(directory)
+    forceDirectory(parent)
+    requireCurrent(anchor, anchorIdentity)
+    requireCurrent(parent, parentIdentity)
+    requireCurrent(directory, directoryIdentity)
+}
+
 internal fun confirmFileDirectoryStateDurable(file: File): Boolean = runCatching {
     val parent = file.parentFile ?: return@runCatching false
     forceRecordingDirectoryDurable(parent)
@@ -3533,28 +3705,24 @@ private fun createLocalOutputTarget(
     storageDir: File = getSavedRecordingsDirectory(context),
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
 ): RecordingOutputTarget {
-    val storageDirectoryCreated = ensureDirectoryEntryNoFollow(storageDir)
-    if (storageDirectoryCreated) {
-        val parent = storageDir.parentFile
-            ?: throw IOException("Recordings directory has no parent: ${storageDir.absolutePath}")
-        forceRecordingDirectoryDurable(parent)
-    }
+    ensureRecordingDirectoryDurable(storageDir)
 
     // Document-provider display names are metadata, not trusted filesystem paths.
     // A name such as "../recording.wav" must never escape app-local storage when
     // recordings are moved from SAF back into the app directory.
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
-    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate -> File(storageDir, candidate).exists() }
+    // UUID staging does not reserve the final name. Resolve collisions only when
+    // publication can claim that name, after the complete output is verified.
     val created = createLocalStagingFile(
         storageDir = storageDir,
-        finalDisplayName = uniqueName,
+        finalDisplayName = safeDisplayName,
         stagingKind = stagingKind,
     )
     val file = created.file
     val stagingIdentity = created.identity
     return RecordingOutputTarget(
         id = file.absolutePath,
-        displayName = uniqueName,
+        displayName = safeDisplayName,
         mimeType = mimeType,
         storageType = RecordingStorageType.FILE,
         directoryId = storageDir.absolutePath,
@@ -3664,7 +3832,7 @@ private fun renameFileRecording(
     val beforeDigest = sha256StableRecording(context, recording) ?: return null
     var suffix = 1
     while (suffix > 0) {
-        val uniqueName = if (suffix == 1) displayName else "$name ($suffix)$extension"
+        val uniqueName = if (suffix == 1) displayName else generatedRecordingDisplayName(name, " ($suffix)", extension)
         val target = File(parent, uniqueName)
         try {
             Files.move(source.toPath(), target.toPath())
@@ -3715,37 +3883,7 @@ private fun renameFileRecording(
                 }
                 throw IllegalStateException("Recording content changed during rename")
             }
-            try {
-                forceRecordingDirectoryDurable(parent)
-            } catch (durabilityError: Exception) {
-                var rollbackMoved = false
-                var rollbackDurable = false
-                try {
-                    Files.move(target.toPath(), source.toPath())
-                    rollbackMoved = true
-                    rollbackDurable = runCatching {
-                        forceRecordingDirectoryDurable(parent)
-                        true
-                    }.getOrDefault(false)
-                } catch (_: Exception) {
-                    // The renamed path remains the best current identity when rollback itself fails.
-                }
-                if (rollbackMoved) {
-                    if (rollbackDurable) {
-                        Log.w(TAG, "File rename durability failed; restored original name ${recording.id}", durabilityError)
-                    } else {
-                        Log.w(TAG, "File rename rollback is visible but not durably synced: ${recording.id}", durabilityError)
-                    }
-                    // Runtime/catalog state must follow the path that actually exists now. A
-                    // later recovery scan can reconcile either outcome after sudden power loss.
-                    return null
-                }
-                // The exact object was verified after the rename, but the directory entry is
-                // not known durable and rollback failed. Keep the visible target identity so
-                // reconciliation can recover either power-loss outcome without touching a
-                // different object that later reuses the original path.
-                Log.w(TAG, "File rename durability uncertain; retaining visible renamed asset $target", durabilityError)
-            }
+            confirmFileRenameDurability(source, target)
             if (parent.absolutePath == getSharedMusicRecordingsDirectory().absolutePath) {
                 MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(recording.mimeType), null)
             }
@@ -3757,6 +3895,8 @@ private fun renameFileRecording(
             suffix++
         } catch (error: IllegalStateException) {
             throw error
+        } catch (uncertain: RecordingRenameStateUncertainException) {
+            throw uncertain
         } catch (error: IOException) {
             if (fileRenameMoveFailureIsUncertain(error)) {
                 throw RecordingRenameStateUncertainException(
@@ -3770,6 +3910,33 @@ private fun renameFileRecording(
         }
     }
     return null
+}
+
+/** Runs only after the moved file's object identity and complete content were verified. */
+internal fun confirmFileRenameDurability(
+    source: File,
+    target: File,
+    syncDirectory: (File) -> Unit = ::forceRecordingDirectoryDurable,
+    rollbackMove: (File, File) -> Unit = ::moveFileWithoutOverwrite,
+) {
+    val parent = source.parentFile ?: throw IOException("Recording source has no parent")
+    try {
+        syncDirectory(parent)
+    } catch (durabilityError: Exception) {
+        try {
+            rollbackMove(target, source)
+            syncDirectory(parent)
+        } catch (rollbackError: Exception) {
+            if (rollbackError !== durabilityError) durabilityError.addSuppressed(rollbackError)
+        }
+        // Even a durably restored basename has a new ctime revision after the two moves.
+        // The caller must reconcile the restored or surviving target before reusing either
+        // catalog identity. A plain rejection would leave the visible row and editor stale.
+        throw RecordingRenameStateUncertainException(
+            "File rename requires reconciliation after a durability failure: ${source.path}",
+            durabilityError,
+        )
+    }
 }
 
 internal fun preserveUnexpectedRenameTarget(
@@ -3829,6 +3996,21 @@ internal class RecordingRenameStateUncertainException(
     message: String,
     cause: Throwable? = null,
 ) : IOException(message, cause)
+
+// A provider has already accepted the rename. Read/close failures cannot prove a no-op.
+internal inline fun <T> verifyProviderRenamePostcondition(
+    recordingId: String,
+    verify: () -> T,
+): T = try {
+    verify()
+} catch (uncertain: RecordingRenameStateUncertainException) {
+    throw uncertain
+} catch (error: Exception) {
+    throw RecordingRenameStateUncertainException(
+        "Unable to verify provider rename result: $recordingId",
+        error,
+    )
+}
 
 internal fun providerRenameStateIsUncertain(
     mutationAccepted: Boolean,
@@ -3928,26 +4110,28 @@ private fun renameMediaStoreRecording(
             )
         }
 
-        val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
-        val renamedDisplayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() }
-        val sameObject = sameProviderObjectAcrossMutation(recording.fileIdentity, renamedIdentity)
-        val renamed = recording.copy(
-            displayName = renamedDisplayName ?: uniqueName,
-            fileIdentity = renamedIdentity,
-        )
-        val afterDigest = if (sameObject) sha256StableRecording(context, renamed) else null
-        val continuityVerified = renameContentContinuityIsSafe(sameObject, beforeDigest, afterDigest)
-        if (providerRenameStateIsUncertain(
-                mutationAccepted = true,
-                contentContinuityVerified = continuityVerified,
-                displayNameVerified = renamedDisplayName == uniqueName,
+        verifyProviderRenamePostcondition(recording.id) {
+            val renamedIdentity = resolveProviderRecordingIdentity(context, RecordingStorageType.MEDIASTORE, uri)
+            val renamedDisplayName = queryContentDisplayName(context, uri)?.takeIf { it.isNotBlank() }
+            val sameObject = sameProviderObjectAcrossMutation(recording.fileIdentity, renamedIdentity)
+            val renamed = recording.copy(
+                displayName = renamedDisplayName ?: uniqueName,
+                fileIdentity = renamedIdentity,
             )
-        ) {
-            throw RecordingRenameStateUncertainException(
-                "MediaStore rename postcondition is uncertain: ${recording.id}",
-            )
+            val afterDigest = if (sameObject) sha256StableRecording(context, renamed) else null
+            val continuityVerified = renameContentContinuityIsSafe(sameObject, beforeDigest, afterDigest)
+            if (providerRenameStateIsUncertain(
+                    mutationAccepted = true,
+                    contentContinuityVerified = continuityVerified,
+                    displayNameVerified = renamedDisplayName == uniqueName,
+                )
+            ) {
+                throw RecordingRenameStateUncertainException(
+                    "MediaStore rename postcondition is uncertain: ${recording.id}",
+                )
+            }
+            rebindRecordingWaveformCache(recording, renamed)
         }
-        rebindRecordingWaveformCache(recording, renamed)
     } catch (uncertain: RecordingRenameStateUncertainException) {
         Log.w(TAG, uncertain.message.orEmpty(), uncertain)
         throw uncertain
@@ -4071,53 +4255,55 @@ private fun renameDocumentRecording(
             }
             return@runCatching null
         }
-        val renamedIdentity = resolveProviderRecordingIdentity(
-            context, RecordingStorageType.DOCUMENT, renamedUri, recording.fileIdentity,
-        )
-        val renamedDisplayName = DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
-        val renamed = recording.copy(
-            id = renamedUri.toString(),
-            displayName = renamedDisplayName ?: uniqueName,
-            fileIdentity = renamedIdentity,
-        )
-        val sourceUriUnchanged = renamedUri == sourceUri
-        val oldState = documentSourceState(context, recording.directoryId.toUri(), sourceUri, renamedUri)
-        // Rename is metadata, not a content mutation. Verify the selected bytes again even when
-        // the provider keeps the same URI; document ID continuity alone cannot prove that a
-        // buggy/provider-side rename did not rewrite or truncate the recording.
-        val afterDigest = sha256StableRecording(context, renamed)
-        val continuityVerified = documentRenameTransitionIsSafe(
-            sourceUriUnchanged = sourceUriUnchanged,
-            oldUriStateAfterRename = oldState,
-            beforeIdentity = recording.fileIdentity,
-            afterIdentity = renamedIdentity,
-            beforeDigest = beforeDigest,
-            afterDigest = afterDigest,
-        )
-        if (providerRenameStateIsUncertain(
-                mutationAccepted = true,
-                contentContinuityVerified = continuityVerified,
-                displayNameVerified = renamedDisplayName == uniqueName,
+        verifyProviderRenamePostcondition(recording.id) {
+            val renamedIdentity = resolveProviderRecordingIdentity(
+                context, RecordingStorageType.DOCUMENT, renamedUri, recording.fileIdentity,
             )
-        ) {
-            if (!continuityVerified && rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
-                !suppressProviderOutputWithoutDeletion(
-                    context = context,
-                    storageType = RecordingStorageType.DOCUMENT,
-                    id = renamedUri.toString(),
-                    // Suppress only while the returned URI still contains the bytes the user
-                    // selected. If it is unrelated/different content, cleanup replay drops the
-                    // suppression without ever granting deletion authority.
-                    digest = beforeDigest,
+            val renamedDisplayName = DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
+            val renamed = recording.copy(
+                id = renamedUri.toString(),
+                displayName = renamedDisplayName ?: uniqueName,
+                fileIdentity = renamedIdentity,
+            )
+            val sourceUriUnchanged = renamedUri == sourceUri
+            val oldState = documentSourceState(context, recording.directoryId.toUri(), sourceUri, renamedUri)
+            // Rename is metadata, not a content mutation. Verify the selected bytes again even when
+            // the provider keeps the same URI; document ID continuity alone cannot prove that a
+            // buggy/provider-side rename did not rewrite or truncate the recording.
+            val afterDigest = sha256StableRecording(context, renamed)
+            val continuityVerified = documentRenameTransitionIsSafe(
+                sourceUriUnchanged = sourceUriUnchanged,
+                oldUriStateAfterRename = oldState,
+                beforeIdentity = recording.fileIdentity,
+                afterIdentity = renamedIdentity,
+                beforeDigest = beforeDigest,
+                afterDigest = afterDigest,
+            )
+            if (providerRenameStateIsUncertain(
+                    mutationAccepted = true,
+                    contentContinuityVerified = continuityVerified,
+                    displayNameVerified = renamedDisplayName == uniqueName,
                 )
             ) {
-                Log.w(TAG, "Unable to suppress rejected document rename result $renamedUri")
+                if (!continuityVerified && rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
+                    !suppressProviderOutputWithoutDeletion(
+                        context = context,
+                        storageType = RecordingStorageType.DOCUMENT,
+                        id = renamedUri.toString(),
+                        // Suppress only while the returned URI still contains the bytes the user
+                        // selected. If it is unrelated/different content, cleanup replay drops the
+                        // suppression without ever granting deletion authority.
+                        digest = beforeDigest,
+                    )
+                ) {
+                    Log.w(TAG, "Unable to suppress rejected document rename result $renamedUri")
+                }
+                throw RecordingRenameStateUncertainException(
+                    "Document recording changed during rename: ${recording.id} -> $renamedUri",
+                )
             }
-            throw RecordingRenameStateUncertainException(
-                "Document recording changed during rename: ${recording.id} -> $renamedUri",
-            )
+            rebindRecordingWaveformCache(recording, renamed)
         }
-        rebindRecordingWaveformCache(recording, renamed)
     }.fold(
         onSuccess = { it },
         onFailure = { error ->
@@ -4298,10 +4484,7 @@ private fun createMediaStoreOutputTarget(
 ): RecordingOutputTarget {
     check(usesMediaStoreDefaultStorage()) { "MediaStore output requires Android 10+" }
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
-    val uniqueName = findAvailableDisplayName(safeDisplayName) { candidate ->
-        mediaStoreNameExists(context, candidate)
-    }
-    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind)
+    val stagingName = stagingOutputName(safeDisplayName, UUID.randomUUID().toString(), kind = stagingKind)
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, stagingName)
         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
@@ -4323,7 +4506,7 @@ private fun createMediaStoreOutputTarget(
     }
     return RecordingOutputTarget(
         id = uri.toString(),
-        displayName = uniqueName,
+        displayName = safeDisplayName,
         mimeType = mimeType,
         storageType = RecordingStorageType.MEDIASTORE,
         directoryId = MEDIA_STORE_DIRECTORY_ID,
@@ -4344,12 +4527,7 @@ private fun createDocumentOutputTarget(
     stagingKind: StagingOutputKind,
 ): RecordingOutputTarget {
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
-    val uniqueName = findAvailableDocumentDisplayName(
-        context = context,
-        treeUri = treeUri,
-        requestedDisplayName = safeDisplayName,
-    )
-    val stagingName = stagingOutputName(uniqueName, UUID.randomUUID().toString(), kind = stagingKind)
+    val stagingName = stagingOutputName(safeDisplayName, UUID.randomUUID().toString(), kind = stagingKind)
     val documentUri = DocumentsContract.createDocument(
         context.contentResolver,
         DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
@@ -4365,7 +4543,7 @@ private fun createDocumentOutputTarget(
 
     return RecordingOutputTarget(
         id = documentUri.toString(),
-        displayName = uniqueName,
+        displayName = safeDisplayName,
         mimeType = mimeType,
         storageType = RecordingStorageType.DOCUMENT,
         directoryId = treeUri.toString(),
@@ -4400,10 +4578,40 @@ internal fun findAvailableDisplayName(
     var candidate = requestedDisplayName
     var suffix = 2
     while (exists(candidate)) {
-        candidate = "$name ($suffix)$extension"
+        candidate = generatedRecordingDisplayName(name, " ($suffix)", extension)
+        if (suffix == Int.MAX_VALUE) throw IOException("No recording filename is available")
         suffix++
     }
     return candidate
+}
+
+internal fun generatedRecordingDisplayName(
+    baseName: String,
+    suffix: String,
+    extension: String,
+    reserveCollisionSuffix: Boolean = false,
+): String {
+    val ending = suffix + extension
+    val reserved = if (reserveCollisionSuffix) MAX_COLLISION_SUFFIX_UTF8_BYTES else 0
+    val baseBudget = MAX_RECORDING_COMPONENT_UTF8_BYTES - reserved - ending.toByteArray(Charsets.UTF_8).size
+    if (baseBudget <= 0) throw IOException("Generated recording suffix exceeds the filename component budget")
+    var end = 0
+    var bytes = 0
+    while (end < baseName.length) {
+        val codePoint = baseName.codePointAt(end)
+        val width = when {
+            codePoint <= 0x7f -> 1
+            codePoint <= 0x7ff -> 2
+            codePoint <= 0xffff -> 3
+            else -> 4
+        }
+        if (bytes + width > baseBudget) break
+        bytes += width
+        end += Character.charCount(codePoint)
+    }
+    // Only automatically generated names enter this helper. Explicit rename/save names
+    // retain their exact spelling until a collision requires an alternate name.
+    return baseName.substring(0, end) + ending
 }
 
 private fun sanitizeBaseName(name: String): String {
@@ -4445,6 +4653,61 @@ private fun parseRecordingStartTimeMillis(value: String): Long? {
     return normalized.toLongOrNull()
 }
 
+/** A pipe cannot serve the decoder's random reads. Keep its original descriptor open and
+ * identity-bound while validating a private copy. Half the currently available cache space
+ * bounds an unknown-length stream without imposing a smaller recording-format limit.
+ * Capacity/read/decode failures escape as unavailable, never as an empty discovery result.
+ */
+internal fun <T> withSeekableRecordingScanCopy(
+    input: InputStream,
+    cacheDirectory: File,
+    maxBytes: Long = cacheDirectory.usableSpace / 2L,
+    checkCancelled: () -> Unit = ::checkRecordingScanInterrupted,
+    inspect: (FileChannel) -> T,
+): T {
+    checkCancelled()
+    if (maxBytes <= 0L) throw IOException("No temporary space available to validate recording")
+    val temporary = File(cacheDirectory, "recording-scan-${UUID.randomUUID()}.tmp")
+    return FileChannel.open(
+        temporary.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.READ,
+        StandardOpenOption.WRITE, StandardOpenOption.DELETE_ON_CLOSE,
+    ).use { channel ->
+        // Unlink before copying even on a filesystem that defers DELETE_ON_CLOSE to close.
+        // The pinned channel remains readable; process death cannot leave audio in the cache.
+        Files.deleteIfExists(temporary.toPath())
+        val bytes = ByteArray(FILE_COPY_BUFFER_BYTES)
+        var copied = 0L
+        while (true) {
+            checkCancelled()
+            var count = input.read(bytes)
+            if (count < 0) break
+            if (count == 0) {
+                val byte = input.read()
+                if (byte < 0) break
+                bytes[0] = byte.toByte()
+                count = 1
+            }
+            checkCancelled()
+            if (count.toLong() > maxBytes - copied) {
+                throw IOException("Recording exceeds temporary validation space")
+            }
+            val buffer = ByteBuffer.wrap(bytes, 0, count)
+            while (buffer.hasRemaining()) {
+                checkCancelled()
+                channel.write(buffer)
+            }
+            copied += count
+        }
+        checkCancelled()
+        channel.position(0L)
+        inspect(channel)
+    }
+}
+
+private fun checkRecordingScanInterrupted() {
+    if (Thread.currentThread().isInterrupted) throw InterruptedIOException("Recording scan cancelled")
+}
+
 internal fun structurallyCompleteRecordingDurationMillis(
     displayName: String,
     input: InputStream,
@@ -4460,14 +4723,23 @@ internal fun structurallyCompleteRecordingDurationMillis(
 private fun inspectSeekableWavStructure(
     context: Context,
     channel: FileChannel,
+    verifiedFlac: FlacInfo? = null,
 ): RecordingMediaMetadata = try {
+    if (channelHasFlac(channel)) {
+        val info = verifiedFlac ?: verifyFlacPcm(channel, checkCancelled = ::checkRecordingScanInterrupted)
+        RecordingMediaMetadata(info.durationMillis, buildCodecSummary(context, ExportFormat.FLAC,
+            info.sampleRate, info.channelCount, PcmSampleFormat.PCM_16, info.compressionLevel))
+    } else {
     val layout = readWavPcmLayout(channel)
     RecordingMediaMetadata(
         durationMillis = layout.frameCount * 1000L / layout.sampleRate,
         codecSummary = buildCodecSummary(context, ExportFormat.WAV, layout.sampleRate,
             layout.channelCount, layout.sampleFormat),
     )
+    }
 } catch (_: InvalidWavStructureException) {
+    RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
+} catch (_: InvalidFlacException) {
     RecordingMediaMetadata(durationMillis = 0L, codecSummary = "")
 }
 

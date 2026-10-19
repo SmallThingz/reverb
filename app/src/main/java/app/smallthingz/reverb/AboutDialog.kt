@@ -11,6 +11,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -113,6 +116,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .graphicsLayer {
                         translationY = -size.height * backProgress
                         alpha = 1f - 0.22f * backProgress
@@ -125,6 +129,7 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                     modifier = Modifier
                         .statusBarsPadding()
                         .appNoise(noiseBrush)
+                        .verticalScroll(rememberScrollState())
                         .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 26.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -206,8 +211,42 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             tone = FeedbackTone.ERROR,
                         )
                     }
+                    Spacer(Modifier.height(18.dp))
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        AboutFeature(
+                            title = stringResource(R.string.about_output_compression_title),
+                            description = stringResource(R.string.about_output_compression_description),
+                        )
+                        AboutFeature(
+                            title = stringResource(R.string.about_skip_silence_title),
+                            description = stringResource(R.string.about_skip_silence_description),
+                        )
+                        AboutFeature(
+                            title = stringResource(R.string.about_quick_save_tiles_title),
+                            description = stringResource(R.string.about_quick_save_tiles_description),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AboutFeature(title: String, description: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

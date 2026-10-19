@@ -490,13 +490,17 @@ internal fun writeRetentionRecoveryConfiguration(
     val bytes = runCatching { encodeRetentionRecoveryConfiguration(configuration) }.getOrNull() ?: return false
     var output: java.io.FileOutputStream? = null
     return try {
-        output = atomicFile.startWrite()
-        output.write(bytes)
-        output.fd.sync()
-        atomicFile.finishWrite(output)
-        output = null
-        atomicFileRegularBackingState(baseFile) == StoragePathState.PRESENT &&
-            syncRetentionRecoveryDirectory(context)
+        val activeOutput = atomicFile.startWrite()
+        output = activeOutput
+        activeOutput.write(bytes)
+        finishDurableAtomicWrite(
+            baseFile = baseFile,
+            output = activeOutput,
+            finishWrite = atomicFile::finishWrite,
+            syncDirectory = { syncRetentionRecoveryDirectory(context) },
+            onPublicationStarted = { output = null },
+        )
+        true
     } catch (error: Exception) {
         val failedOutput = output
         atomicWriteFailureResult(error) {

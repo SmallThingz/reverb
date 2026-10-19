@@ -19,7 +19,8 @@ private const val OUTPUT_CLEANUP_RECORD_VERSION_V1 = "v1"
 private const val OUTPUT_CLEANUP_RECORD_VERSION_V2 = "v2"
 private const val OUTPUT_CLEANUP_RECORD_VERSION = "v3"
 private const val VERIFIED_EXPORT_STAGING_VERSION_V1 = "v1"
-private const val VERIFIED_EXPORT_STAGING_VERSION = "v2"
+private const val VERIFIED_EXPORT_STAGING_VERSION_V2 = "v2"
+private const val VERIFIED_EXPORT_STAGING_VERSION = "v3"
 private val outputCleanupJournalLock = Any()
 private val verifiedExportStagingLock = Any()
 
@@ -50,6 +51,12 @@ internal data class VerifiedExportStagingRecord(
     val sha256Hex: String,
     val fileKey: String?,
     val providerIdentity: String?,
+    val finalDisplayName: String? = null,
+)
+
+internal data class VerifiedExportStagingRecovery(
+    val fingerprint: StableOutputFingerprint,
+    val finalDisplayName: String?,
 )
 
 internal enum class OutputCleanupAssetState { PRESENT, MISSING, UNAVAILABLE }
@@ -157,23 +164,33 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
 
 internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String =
     encodeCleanupRecord(
-        VERIFIED_EXPORT_STAGING_VERSION,
+        if (record.finalDisplayName == null) VERIFIED_EXPORT_STAGING_VERSION_V2 else VERIFIED_EXPORT_STAGING_VERSION,
         record.storageType,
         record.id,
         record.byteCount,
         record.sha256Hex,
         record.fileKey,
         record.providerIdentity,
-    )
+    ) + record.finalDisplayName?.let { "|" + encodeCleanupField(it) }.orEmpty()
 
 internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagingRecord? {
     val parts = raw.split('|')
-    if (parts.size != 7) return null
+    val version = parts.firstOrNull()
+    val expectedSize = when (version) {
+        VERIFIED_EXPORT_STAGING_VERSION_V1, VERIFIED_EXPORT_STAGING_VERSION_V2 -> 7
+        VERIFIED_EXPORT_STAGING_VERSION -> 8
+        else -> return null
+    }
+    if (parts.size != expectedSize) return null
     val storageType = when (parts[0]) {
         VERIFIED_EXPORT_STAGING_VERSION_V1 -> RecordingStorageType.fromLegacyName(parts[1])
-        VERIFIED_EXPORT_STAGING_VERSION -> parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
+        VERIFIED_EXPORT_STAGING_VERSION_V2, VERIFIED_EXPORT_STAGING_VERSION ->
+            parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
         else -> null
     } ?: return null
+    val finalDisplayName = if (version == VERIFIED_EXPORT_STAGING_VERSION) {
+        decodeRecordingBasename(parts[7]) ?: return null
+    } else null
     val fields = decodeCleanupRecordFields(parts, storageType, allowZeroBytes = false) ?: return null
     return VerifiedExportStagingRecord(
         fields.storageType,
@@ -182,6 +199,7 @@ internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagi
         fields.sha256Hex,
         fields.fileKey,
         fields.providerIdentity,
+        finalDisplayName,
     )
 }
 
@@ -397,7 +415,7 @@ internal fun putVerifiedExportStaging(
     target: RecordingOutputTarget,
     fingerprint: StableOutputFingerprint,
 ): Boolean {
-    if (!target.staging || fingerprint.digest.byteCount <= 0L) return false
+    if (!target.staging || fingerprint.digest.byteCount <= 0L || !isDirectChildRecordingName(target.displayName)) return false
     when (target.storageType) {
         RecordingStorageType.FILE -> if (fingerprint.fileKey.isNullOrBlank()) return false
         RecordingStorageType.DOCUMENT,
@@ -411,6 +429,7 @@ internal fun putVerifiedExportStaging(
         sha256Hex = fingerprint.digest.sha256.toHexString(),
         fileKey = fingerprint.fileKey,
         providerIdentity = fingerprint.providerIdentity,
+        finalDisplayName = target.displayName,
     )
     return synchronized(verifiedExportStagingLock) {
         val current = verifiedExportStagingEntriesLocked(context)
@@ -471,16 +490,38 @@ internal fun verifiedExportStagingFingerprint(
     context: Context,
     storageType: RecordingStorageType,
     id: String,
-): StableOutputFingerprint? {
+): StableOutputFingerprint? = verifiedExportStagingRecovery(context, storageType, id)?.fingerprint
+
+internal fun verifiedExportStagingRecovery(
+    context: Context,
+    storageType: RecordingStorageType,
+    id: String,
+): VerifiedExportStagingRecovery? {
     val rawEntries = synchronized(verifiedExportStagingLock) { verifiedExportStagingEntriesLocked(context) }
     val preferences = rawEntries.mapNotNull { raw ->
         decodeVerifiedExportStagingRecord(raw)?.takeIf { it.storageType == storageType && it.id == id }
     }.distinctBy { it.providerIdentity?.let(::parseDocumentNativeIdentity) != null }
     for (record in preferences) {
         val fingerprint = readStableOutputFingerprint(context, storageType, id, record.providerIdentity) ?: continue
-        if (verifiedExportStagingHasFingerprint(rawEntries, storageType, id, fingerprint)) return fingerprint
+        verifiedExportStagingRecoveryForFingerprint(rawEntries, storageType, id, fingerprint)?.let { return it }
     }
     return null
+}
+
+internal fun verifiedExportStagingRecoveryForFingerprint(
+    entries: Set<String>,
+    storageType: RecordingStorageType,
+    id: String,
+    fingerprint: StableOutputFingerprint,
+): VerifiedExportStagingRecovery? {
+    val matching = entries.mapNotNull(::decodeVerifiedExportStagingRecord).filter { record ->
+        record.storageType == storageType && record.id == id && verifiedExportStagingRecordMatches(record, fingerprint)
+    }
+    if (matching.isEmpty()) return null
+    // Conflicting names cannot grant naming authority. Legacy records still prove their
+    // fingerprint, but only an unambiguous new record can resolve a compact staging name.
+    val finalName = matching.mapNotNull { it.finalDisplayName }.distinct().singleOrNull()
+    return VerifiedExportStagingRecovery(fingerprint, finalName)
 }
 
 internal fun verifiedExportStagingHasFingerprint(

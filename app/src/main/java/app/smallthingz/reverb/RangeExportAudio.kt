@@ -201,28 +201,18 @@ internal fun transformShuttlePcm16Mono(input: ByteArray, signedRate: Float): Byt
         frame,
         value.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()),
     )
-    fun cubic(position: Double): Float {
-        val base = position.toInt().coerceIn(0, inputFrames - 1)
-        val t = (position - base.toDouble()).toFloat().coerceIn(0f, 1f)
-        val p0 = readOriented(base - 1)
-        val p1 = readOriented(base)
-        val p2 = readOriented(base + 1)
-        val p3 = readOriented(base + 2)
-        val a = -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3
-        val b = p0 - 2.5f * p1 + 2f * p2 - 0.5f * p3
-        val c = -0.5f * p0 + 0.5f * p2
-        return ((a * t + b) * t + c) * t + p1
-    }
-
     if (outputFrames == 1) {
-        write(0, readOriented(inputFrames / 2))
+        val converter = PcmRateConverter(inputFrames, speed.toDouble()) { frame, _ -> readOriented(frame) }
+        write(0, converter.sample((inputFrames / 2).toDouble(), 0))
         return output
     }
     val sourceSpan = (inputFrames - 1).toDouble()
     val outputSpan = (outputFrames - 1).toDouble()
+    // Pitch compression, not source-head transport speed, owns the decimation ratio.
+    val converter = PcmRateConverter(inputFrames, sourceSpan / outputSpan) { frame, _ -> readOriented(frame) }
     for (frame in 0 until outputFrames) {
         val sourcePosition = frame.toDouble() * sourceSpan / outputSpan
-        write(frame, cubic(sourcePosition))
+        write(frame, converter.sample(sourcePosition, 0))
     }
     return output
 }

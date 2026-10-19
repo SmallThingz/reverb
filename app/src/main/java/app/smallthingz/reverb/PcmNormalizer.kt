@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import java.io.RandomAccessFile
 import java.util.zip.CRC32
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /** Export-only PCM conversion. Recording stores exactly what AudioRecord produced. */
@@ -25,6 +24,7 @@ internal object PcmNormalizer {
         targetSampleFormat: PcmSampleFormat,
         consumer: PersistentAudioChunkStore.Consumer,
     ): Long {
+        checkPcmConversionNotInterrupted()
         if (sourceFrameCount <= 0L || targetFrameCount <= 0L) return 0L
         require(sourceFrameCount <= Int.MAX_VALUE.toLong()) { "Chunk segment too large" }
         require(sourceChannelCount in 1..2 && targetChannelCount in 1..2)
@@ -54,16 +54,26 @@ internal object PcmNormalizer {
             )
         }
 
+        val sourceStep = sourceFrameCount.toDouble() / targetFrameCount
+        val radius = pcmResamplingRadius(sourceStep)
+        require(payloadByteOffset % sourceFrameBytes == 0L)
+        val before = minOf(radius.toLong(), payloadByteOffset / sourceFrameBytes)
+        val after = minOf(radius.toLong(), (payloadBytes - payloadByteOffset - sourceByteCountLong) / sourceFrameBytes)
+        val bufferedFrames = sourceFrameCount + before + after
+        val bufferedBytes = bufferedFrames * sourceFrameBytes
+        require(bufferedBytes <= Int.MAX_VALUE.toLong()) { "PCM filter window too large" }
+        // Halo samples come from the same whole-payload CRC pass, never per-tap reads
+        // or another chunk that might be separated by a silence gap or format change.
         val sourceBytes = readVerifiedSegment(
             file = file,
             payloadDataOffset = payloadDataOffset,
             payloadBytes = payloadBytes,
             expectedPayloadChecksum = expectedPayloadChecksum,
-            segmentByteOffset = payloadByteOffset,
-            segmentByteCount = sourceByteCountLong,
+            segmentByteOffset = payloadByteOffset - before * sourceFrameBytes,
+            segmentByteCount = bufferedBytes,
         )
 
-        val sourceFrames = sourceFrameCount.toInt()
+        val sourceFrames = bufferedFrames.toInt()
         val samples = FloatArray(sourceFrames * sourceChannelCount)
         decode(
             source = sourceBytes,
@@ -71,6 +81,9 @@ internal object PcmNormalizer {
             format = sourceSampleFormat,
             output = samples,
         )
+        val converter = PcmRateConverter(sourceFrames, sourceStep) { frame, channel ->
+            samples[frame * sourceChannelCount + channel]
+        }
 
         val targetFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
         val framesPerOutputBuffer = maxOf(1, OUTPUT_BUFFER_BYTES / targetFrameBytes)
@@ -79,18 +92,15 @@ internal object PcmNormalizer {
         var producedBytes = 0L
 
         while (producedFrames < targetFrameCount) {
+            checkPcmConversionNotInterrupted()
             val batchFrames = minOf(framesPerOutputBuffer.toLong(), targetFrameCount - producedFrames).toInt()
             var outputOffset = 0
             repeat(batchFrames) { batchIndex ->
                 val targetIndex = producedFrames + batchIndex.toLong()
-                val sourcePosition = targetIndex.toDouble() * sourceFrameCount.toDouble() / targetFrameCount.toDouble()
-                val baseFrame = floor(sourcePosition).toInt().coerceIn(0, sourceFrames - 1)
-                val nextFrame = minOf(baseFrame + 1, sourceFrames - 1)
-                val fraction = (sourcePosition - baseFrame.toDouble()).toFloat()
-
-                val left = interpolatedChannel(samples, sourceChannelCount, baseFrame, nextFrame, fraction, 0)
+                val sourcePosition = before + targetIndex.toDouble() * sourceFrameCount.toDouble() / targetFrameCount.toDouble()
+                val left = converter.sample(sourcePosition, 0)
                 val right = if (sourceChannelCount == 2) {
-                    interpolatedChannel(samples, sourceChannelCount, baseFrame, nextFrame, fraction, 1)
+                    converter.sample(sourcePosition, 1)
                 } else {
                     left
                 }
@@ -133,6 +143,7 @@ internal object PcmNormalizer {
 
         var offset = 0
         while (offset < segmentBytes.size) {
+            checkPcmConversionNotInterrupted()
             val count = minOf(OUTPUT_BUFFER_BYTES, segmentBytes.size - offset)
             if (consumer.consume(segmentBytes, offset, count) != count) {
                 throw java.io.IOException("PCM consumer rejected output")
@@ -142,7 +153,7 @@ internal object PcmNormalizer {
         return segmentByteCount
     }
 
-    private fun readVerifiedSegment(
+    internal fun readVerifiedSegment(
         file: java.io.File,
         payloadDataOffset: Long,
         payloadBytes: Long,
@@ -154,6 +165,7 @@ internal object PcmNormalizer {
         require(segmentByteOffset >= 0L && segmentByteCount >= 0L)
         require(segmentByteOffset <= payloadBytes - segmentByteCount) { "PCM segment outside payload" }
 
+        checkPcmConversionNotInterrupted()
         val segmentBytes = ByteArray(segmentByteCount.toInt())
         val segmentEnd = segmentByteOffset + segmentByteCount
         val crc = CRC32()
@@ -163,6 +175,7 @@ internal object PcmNormalizer {
             var remaining = payloadBytes
             var payloadOffset = 0L
             while (remaining > 0L) {
+                checkPcmConversionNotInterrupted()
                 val count = minOf(scratch.size.toLong(), remaining).toInt()
                 input.readFully(scratch, 0, count)
                 crc.update(scratch, 0, count)
@@ -230,20 +243,21 @@ internal object PcmNormalizer {
         }
     }
 
-    private fun interpolatedChannel(
-        samples: FloatArray,
-        channels: Int,
-        baseFrame: Int,
-        nextFrame: Int,
-        fraction: Float,
-        channel: Int,
-    ): Float {
-        val first = samples[baseFrame * channels + channel]
-        val second = samples[nextFrame * channels + channel]
-        return first + (second - first) * fraction
+    internal fun decodeSample(source: ByteArray, offset: Int, format: PcmSampleFormat): Float = when (format) {
+        PcmSampleFormat.PCM_8 -> ((source[offset].toInt() and 255) - 128) / 128f
+        PcmSampleFormat.PCM_16 -> ((source[offset].toInt() and 255) or
+            (source[offset + 1].toInt() shl 8)).toShort() / 32768f
+        PcmSampleFormat.PCM_FLOAT -> {
+            val bits = (source[offset].toInt() and 255) or
+                ((source[offset + 1].toInt() and 255) shl 8) or
+                ((source[offset + 2].toInt() and 255) shl 16) or
+                (source[offset + 3].toInt() shl 24)
+            val value = Float.fromBits(bits)
+            if (value.isFinite()) value.coerceIn(-1f, 1f) else 0f
+        }
     }
 
-    private fun encodeSample(
+    internal fun encodeSample(
         output: ByteArray,
         offset: Int,
         value: Float,

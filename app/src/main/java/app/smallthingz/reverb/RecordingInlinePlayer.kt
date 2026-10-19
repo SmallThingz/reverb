@@ -440,7 +440,7 @@ internal fun RecordingInlinePlayer(
     // change while that write is still running, so busy ownership must survive revision-key
     // recreation and keep the row locked until the operation itself reaches terminal.
     var trimSaving by remember(recording.id) { mutableStateOf(false) }
-    var trimError by remember(recordingRevisionKey) { mutableStateOf(false) }
+    var trimError by remember(recordingRevisionKey) { mutableStateOf<String?>(null) }
     var fineSeekTarget by remember(recordingRevisionKey) { mutableStateOf(InlineFineSeekTarget.PLAYHEAD) }
     val activeTrimReceiver = remember(recording.id) { AtomicReference<InlineTrimResultReceiver?>(null) }
 
@@ -475,7 +475,7 @@ internal fun RecordingInlinePlayer(
         onBack = {
             if (!trimSaving && trimMode) {
                 trimMode = false
-                trimError = false
+                trimError = null
             } else if (!trimSaving) {
                 onCollapse()
             }
@@ -658,7 +658,7 @@ internal fun RecordingInlinePlayer(
         trimEndMillis = adjusted.endMillis
         if (trimMode && target != InlineFineSeekTarget.PLAYHEAD) {
             currentPosition = fineSeekTargetMillis(adjusted)
-            trimError = false
+            trimError = null
         }
     }
 
@@ -712,7 +712,7 @@ internal fun RecordingInlinePlayer(
         fineSeekTarget = InlineFineSeekTarget.TRIM_START
         currentPosition = 0
         seekTo(0)
-        trimError = false
+        trimError = null
         trimMode = true
         return true
     }
@@ -1142,7 +1142,7 @@ internal fun RecordingInlinePlayer(
                                 InlineFineSeekTarget.TRIM_END -> adjusted.endMillis
                                 InlineFineSeekTarget.PLAYHEAD -> currentPosition
                             }
-                            trimError = false
+                            trimError = null
                         }
                         updateFromX(down.position.x)
                         try {
@@ -1292,9 +1292,9 @@ internal fun RecordingInlinePlayer(
         )
 
         if (trimMode) {
-            if (trimError) {
+            if (trimError != null) {
                 Text(
-                    text = stringResource(R.string.trim_failed),
+                    text = trimError.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 8.dp),
@@ -1311,7 +1311,7 @@ internal fun RecordingInlinePlayer(
                     onClick = {
                         if (!trimSaving) {
                             trimMode = false
-                            trimError = false
+                            trimError = null
                         }
                     },
                     enabled = !trimSaving,
@@ -1337,7 +1337,7 @@ internal fun RecordingInlinePlayer(
                         if (!trimSaving && trimEndMillis > trimStartMillis) {
                             pauseInlinePlayback()
                             trimSaving = true
-                            trimError = false
+                            trimError = null
                             onBusyChange(true)
                             lateinit var receiver: InlineTrimResultReceiver
                             receiver = InlineTrimResultReceiver(
@@ -1355,7 +1355,7 @@ internal fun RecordingInlinePlayer(
                                 onFailed = { error ->
                                     trimSaving = false
                                     onBusyChange(false)
-                                    trimError = true
+                                    trimError = recordingTrimFailureMessage(appContext, error)
                                     if (
                                         error is RecordingCatalogIdentityChangedException &&
                                         screenActiveState.value &&
@@ -1371,7 +1371,7 @@ internal fun RecordingInlinePlayer(
                                 },
                                 onDetachedFailure = { error ->
                                     NotifyFileReceiver(appContext).fileFailed(
-                                        appContext.getString(R.string.trim_failed),
+                                        recordingTrimFailureMessage(appContext, error),
                                         error,
                                     )
                                 },

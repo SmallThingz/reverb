@@ -859,21 +859,18 @@ private fun MainScreen(
             settingsBufferTargetCode = -1
         },
     )
-    val incidentsBackMotion = rememberPredictiveBackMotion(
+    val incidentsMotion = rememberIncidentsPanelMotion(showIncidents, PANEL_SETTLE_DURATION_MS)
+    val incidentsBackMotion = rememberIncidentsPredictiveBackMotion(
         enabled = showIncidents && !showAboutDialog,
-        onBack = { showIncidents = false },
-    )
-    val incidentsPredictiveDismissCommitted = incidentsBackMotion.commitCompleted && !showIncidents
-    val incidentsSettledProgress by animateFloatAsState(
-        targetValue = if (showIncidents) 1f else 0f,
-        animationSpec = if (incidentsPredictiveDismissCommitted) {
-            snap()
-        } else {
-            tween(PANEL_SETTLE_DURATION_MS)
+        onStarted = incidentsMotion::beginBack,
+        onCancelled = { incidentsMotion.settleTo(showIncidents) },
+        onDisabled = { interrupted -> incidentsMotion.resumeAfterBack(interrupted, showIncidents) },
+        onBack = {
+            incidentsMotion.snapTo(0f)
+            showIncidents = false
         },
-        label = "incidents-panel-progress",
     )
-    val incidentsOverlayVisible = showIncidents || incidentsSettledProgress > 0f
+    val incidentsOverlayVisible = showIncidents || incidentsMotion.hasVisibleProgress
     val libraryBackMotion = rememberPredictiveBackMotion(
         enabled = showLibrary && !showSettings && !incidentsOverlayVisible && !librarySelectionActive &&
             !libraryExpandedRecordingActive && !showAboutDialog,
@@ -1007,6 +1004,7 @@ private fun MainScreen(
                     .graphicsLayer { alpha = if (settingsPanelProgress > 0f || showSettings) 1f else 0.01f }
                     .semantics { if (!showSettings) hideFromAccessibility() },
                 active = showSettings,
+                isPanelActive = { showSettings && !showAboutDialog },
                 onBack = {
                     showSettings = false
                     settingsBufferTargetCode = -1
@@ -1250,8 +1248,9 @@ private fun MainScreen(
                 onToggleAcknowledged = ::toggleIncidentAcknowledged,
                 onDelete = { RecordingIncidentStore.deleteIncidentInBackground(context, it) },
                 openProgress = {
-                    predictiveBackPanelOpenProgress(
-                        settledProgress = incidentsSettledProgress,
+                    incidentsPanelOpenProgress(
+                        settledProgress = incidentsMotion.progress,
+                        gestureStartOpenProgress = incidentsBackMotion.startOpenProgress,
                         gestureActive = incidentsBackMotion.gestureActive,
                         gestureProgress = incidentsBackMotion.progress.value,
                         commitCompleted = incidentsBackMotion.commitCompleted,

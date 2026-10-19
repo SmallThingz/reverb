@@ -14,6 +14,69 @@ import org.junit.Test
 
 class RecordingWaveformTest {
     @Test
+    fun sharedWaveformFindsStereoPeakOutsideBucketCenterAndReusesProbeBuffer() {
+        val layout = WavPcmLayout(8_000, 2, PcmSampleFormat.PCM_16, 0L, 9_600L * 4)
+        val reads = mutableListOf<Long>()
+        var scratchOwner: ByteArray? = null
+        val delivered = mutableListOf<Int>()
+        val envelope = samplePcmWaveformEnvelopeProgressive(
+            layout, RangeWaveformPass.COARSE,
+            readPcm = { first, frames, scratch ->
+                assertEquals(20, frames)
+                if (scratchOwner == null) scratchOwner = scratch else assertSame(scratchOwner, scratch)
+                scratch.fill(0)
+                // A pulse in the right channel near the end of the first bucket.
+                if (70L in first until first + frames) {
+                    val offset = (70L - first).toInt() * 4 + 2
+                    scratch[offset + 1] = 0x60
+                }
+                reads += first
+            },
+            onBucket = { index, _ -> delivered += index; false },
+        )
+        assertEquals(listOf(15L, 65L), reads)
+        assertEquals(listOf(0), delivered)
+        assertTrue(envelope[0] > 0f)
+        assertTrue(envelope.drop(1).all { it == 0f })
+    }
+
+    @Test
+    fun sharedWaveformBoundsProbesToOneFrameRecording() {
+        val layout = WavPcmLayout(8_000, 1, PcmSampleFormat.PCM_16, 0L, 2L)
+        var reads = 0
+        val envelope = samplePcmWaveformEnvelopeProgressive(
+            layout, RangeWaveformPass.DETAIL,
+            readPcm = { first, frames, scratch ->
+                assertEquals(0L, first)
+                assertEquals(1, frames)
+                scratch[0] = 0
+                scratch[1] = 0x40
+                reads++
+            },
+            onBucket = { _, _ -> false },
+        )
+        assertEquals(3, reads)
+        assertTrue(envelope[0] > 0f)
+    }
+
+    @Test
+    fun sharedWaveformDoesNotPublishIncompleteBucketAfterReadFailure() {
+        val layout = WavPcmLayout(8_000, 1, PcmSampleFormat.PCM_16, 0L, 19_200L)
+        val failure = IOException("decoder read failed")
+        var reads = 0
+        var published = false
+        val actual = assertThrows(IOException::class.java) {
+            samplePcmWaveformEnvelopeProgressive(
+                layout, RangeWaveformPass.COARSE,
+                readPcm = { _, _, _ -> if (++reads == 2) throw failure },
+                onBucket = { _, _ -> published = true; true },
+            )
+        }
+        assertSame(failure, actual)
+        assertFalse(published)
+    }
+
+    @Test
     fun providerPcmRead_verifiesDescriptorHandoffBeforeConsumingBytes() {
         val expected = providerRecordingIdentity(
             RecordingStorageType.DOCUMENT,

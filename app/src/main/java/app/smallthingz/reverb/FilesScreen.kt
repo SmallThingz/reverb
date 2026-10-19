@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import java.util.Date
 import java.util.concurrent.atomic.AtomicBoolean
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +35,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -57,6 +57,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -67,6 +68,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -272,8 +274,11 @@ fun FilesScreen(
         mutableStateOf(librarySnapshotWithoutWaveformTrust(initialRecordings))
     }
     var isRefreshing by remember { mutableStateOf(false) }
-    var hasLoaded by remember { mutableStateOf(initialRecordings.isNotEmpty()) }
-    val refreshGeneration = remember { intArrayOf(0) }
+    // Catalog rows can paint immediately; only this visible session's storage reconciliation
+    // can establish that there are no recordings.
+    var hasLoaded by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
+    val refreshGeneration = remember { LibraryRefreshGeneration { isRefreshing = it } }
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
     val pendingDeletions = remember { mutableStateMapOf<String, RecordingEntity>() }
@@ -289,6 +294,9 @@ fun FilesScreen(
     val shareJob = remember { arrayOfNulls<Job>(1) }
     val shareGeneration = remember { intArrayOf(0) }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
+    val refreshQueue = remember(scope) { LibraryRefreshQueue(scope) { activeState.value } }
+    val firstRefreshReady = remember { booleanArrayOf(false) }
+    val deferredRefreshSpinner = remember { booleanArrayOf(false) }
     val deletionsCommittedInBackground = remember { booleanArrayOf(false) }
     val deletionCommitInFlight = remember { booleanArrayOf(false) }
     var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
@@ -353,12 +361,19 @@ fun FilesScreen(
     }
 
     fun refresh(showSpinner: Boolean = true) {
-        val generation = ++refreshGeneration[0]
-        if (showSpinner) isRefreshing = true
-        scope.launch {
+        if (!activeState.value) return
+        if (!firstRefreshReady[0]) {
+            if (showSpinner) isRefreshing = true
+            deferredRefreshSpinner[0] = deferredRefreshSpinner[0] || showSpinner
+            return
+        }
+        val generation = refreshGeneration.request(showSpinner)
+        loadFailed = false
+        refreshQueue.request {
+            if (!refreshGeneration.isCurrent(generation)) return@request
             try {
                 val stored = RecordingRepository.refresh(context)
-                if (generation != refreshGeneration[0]) return@launch
+                if (!refreshGeneration.isCurrent(generation)) return@request
                 val previousById = recordings.associateBy { it.id }
                 recordings = stored
                 hasLoaded = true
@@ -401,30 +416,38 @@ fun FilesScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                if (generation == refreshGeneration[0]) {
+                if (refreshGeneration.isCurrent(generation)) {
+                    hasLoaded = false
+                    loadFailed = true
                     showPassiveNotice(
                         resources.getString(R.string.recordings_refresh_failed),
                         FeedbackTone.ERROR,
                     )
                 }
             } finally {
-                if (generation == refreshGeneration[0]) isRefreshing = false
+                refreshGeneration.complete(generation)
             }
         }
     }
 
     LaunchedEffect(initialRecordings) {
-        if (pendingDeletions.isEmpty() && initialRecordings != recordings) {
+        val safeInitialRecordings = librarySnapshotWithoutWaveformTrust(initialRecordings)
+        if (pendingDeletions.isEmpty() &&
+            safeInitialRecordings != librarySnapshotWithoutWaveformTrust(recordings)
+        ) {
             // Parent snapshots are catalog-only until this Library session itself has completed
             // storage reconciliation. Keep metadata for the fast first paint, but do not trust a
             // derived waveform cache merely because its stored revision matches stale metadata.
-            val safeInitialRecordings = librarySnapshotWithoutWaveformTrust(initialRecordings)
             val previousById = recordings.associateBy { it.id }
-            recordings = safeInitialRecordings
-            hasLoaded = true
-            val currentById = safeInitialRecordings.associateBy { it.id }
+            // An empty catalog snapshot cannot erase rows while its storage is unavailable.
+            if (safeInitialRecordings.isNotEmpty() || recordings.isEmpty()) {
+                recordings = safeInitialRecordings
+            }
+            hasLoaded = false
+            val currentById = recordings.associateBy { it.id }
             reconcileSelection(currentById)
             reconcileTransientRecordings(previousById, currentById)
+            if (active) refresh(showSpinner = false)
         }
     }
 
@@ -433,11 +456,15 @@ fun FilesScreen(
             // A hidden retained Library no longer has current storage proof. Preserve cheap
             // catalog metadata, but revoke waveform-cache trust before the next visible session.
             recordings = librarySnapshotWithoutWaveformTrust(recordings)
+            hasLoaded = false
+            loadFailed = false
+            firstRefreshReady[0] = false
+            deferredRefreshSpinner[0] = false
+            refreshQueue.dropPending()
             // The Library stays composed behind the home screen. Invalidate any storage refresh
             // launched by the previous visible session so it cannot mutate retained UI state
             // after close or leave a spinner owned by an obsolete generation stuck on reopen.
-            refreshGeneration[0]++
-            isRefreshing = false
+            refreshGeneration.invalidate()
             shareGeneration[0]++
             shareJob[0]?.cancel()
             shareJob[0] = null
@@ -454,10 +481,10 @@ fun FilesScreen(
         }
         if (!hasLoaded) {
             try {
-                recordings = librarySnapshotWithoutWaveformTrust(
+                val known = librarySnapshotWithoutWaveformTrust(
                     RecordingRepository.listKnown(context),
                 )
-                hasLoaded = true
+                if (known.isNotEmpty() || recordings.isEmpty()) recordings = known
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -468,15 +495,20 @@ fun FilesScreen(
         }
 
         // Guarantee a first frame from the local DB before any SAF/filesystem work.
+        // Parent snapshots and pull-to-refresh requests wait here too, so they cannot start
+        // an eager scan followed by a duplicate first-entry scan.
         withFrameNanos { }
         delay(250L)
-        refresh(showSpinner = false)
+        firstRefreshReady[0] = true
+        val showSpinner = deferredRefreshSpinner[0]
+        deferredRefreshSpinner[0] = false
+        refresh(showSpinner = showSpinner)
     }
 
     suspend fun finalizeDeletions() {
         val pending = pendingDeletions.values.toList()
         if (pending.isEmpty()) return
-        val generation = ++refreshGeneration[0]
+        val generation = refreshGeneration.invalidate()
         var deleted = 0
         var failed = false
         val deletedIds = mutableSetOf<String>()
@@ -485,15 +517,9 @@ fun FilesScreen(
         // panel/lifecycle disposal. A cancelled owner must not leave a completed attempt hidden in
         // pendingDeletions after the irreversible delete phase has already run.
         withContext(NonCancellable) {
-            pending.forEach { recording ->
-                val didDelete = try {
-                    RecordingRepository.delete(context, recording)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    failed = true
-                    false
-                }
+            val result = RecordingRepository.deleteBatch(context, pending)
+            failed = result.cleanupFailed
+            pending.zip(result.outcomes).forEach { (recording, didDelete) ->
                 if (didDelete) {
                     deleted++
                     deletedIds += recording.id
@@ -509,8 +535,20 @@ fun FilesScreen(
         }
         val deletePhaseFailed = deletionBatchFailed(pending.size, deleted, failed)
         try {
-            val refreshed = RecordingRepository.refresh(context)
-            if (generation == refreshGeneration[0]) recordings = refreshed
+            val refreshed = if (deletePhaseFailed) {
+                RecordingRepository.refresh(context)
+            } else {
+                librarySnapshotWithoutWaveformTrust(RecordingRepository.listKnown(context))
+            }
+            if (refreshGeneration.isCurrent(generation)) {
+                recordings = refreshed
+                if (deletePhaseFailed) {
+                    hasLoaded = true
+                    loadFailed = false
+                } else if (!hasLoaded) {
+                    refresh(showSpinner = false)
+                }
+            }
         } catch (cancelled: CancellationException) {
             // Local Library UI may already be gone. Preserve failure feedback at process scope.
             if (deletePhaseFailed) {
@@ -521,7 +559,11 @@ fun FilesScreen(
             }
             throw cancelled
         } catch (_: Exception) {
-            if (generation == refreshGeneration[0]) failed = true
+            if (refreshGeneration.isCurrent(generation)) {
+                failed = true
+                hasLoaded = false
+                loadFailed = true
+            }
         }
         if (deletionBatchFailed(pending.size, deleted, failed)) {
             if (activeState.value) {
@@ -734,7 +776,7 @@ fun FilesScreen(
                             scaleX = scale
                             scaleY = scale
                         },
-                        color = chrome.field,
+                        color = MaterialTheme.colorScheme.surface,
                         tonalElevation = 0.dp,
                     ) {
                         Row(
@@ -745,13 +787,11 @@ fun FilesScreen(
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = { clearSelection() }) {
-                            Icon(
-                                AppIcons.close,
-                                contentDescription = stringResource(R.string.clear_selection),
-                                tint = chrome.ink,
-                            )
-                        }
+                        LibrarySelectionAction(
+                            icon = AppIcons.close,
+                            contentDescription = stringResource(R.string.clear_selection),
+                            onClick = { clearSelection() },
+                        )
                         Spacer(Modifier.width(16.dp))
                         Text(
                             text = pluralStringResource(
@@ -759,28 +799,26 @@ fun FilesScreen(
                             ),
                             style = MaterialTheme.typography.titleMedium,
                             color = chrome.ink,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(Modifier.weight(1f))
                         if (selectedIds.isNotEmpty()) {
-                            IconButton(
+                            LibrarySelectionAction(
+                                icon = AppIcons.share,
+                                contentDescription = stringResource(R.string.share_recording),
                                 onClick = { shareRecordings(selectedIds.values.toList()) },
                                 enabled = !selectionHasBusyMutation,
-                            ) {
-                                Icon(
-                                    imageVector = AppIcons.share,
-                                    contentDescription = stringResource(R.string.share_recording),
-                                    tint = chrome.ink,
-                                )
-                            }
+                            )
                         }
                         if (selectedIds.isNotEmpty()) {
-                            IconButton(onClick = { deleteSelected() }, enabled = !isDeleting && !selectionHasBusyMutation) {
-                                Icon(
-                                    AppIcons.delete,
-                                    contentDescription = stringResource(R.string.delete_recording),
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            }
+                            LibrarySelectionAction(
+                                icon = AppIcons.delete,
+                                contentDescription = stringResource(R.string.delete_recording),
+                                onClick = { deleteSelected() },
+                                enabled = !isDeleting && !selectionHasBusyMutation,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
                         }
                         }
                     }
@@ -842,12 +880,24 @@ fun FilesScreen(
                 onRefresh = { refresh(showSpinner = true) },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (!hasLoaded) {
-                    Box(
+                if (listItems.isEmpty() && !hasLoaded) {
+                    Column(
                         modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
                     ) {
-                        CircularProgressIndicator()
+                        if (loadFailed) {
+                            Text(
+                                text = stringResource(R.string.recordings_refresh_failed),
+                                color = chrome.muted,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            TextButton(onClick = { refresh(showSpinner = true) }) {
+                                Text(stringResource(R.string.library_retry))
+                            }
+                        } else {
+                            CircularProgressIndicator()
+                        }
                     }
                 } else if (libraryEmptyStateVisible(
                         hasLoaded = hasLoaded,
@@ -1048,6 +1098,37 @@ fun FilesScreen(
     }
 
 
+}
+
+@Composable
+private fun LibrarySelectionAction(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = appChrome().ink,
+) {
+    val chrome = appChrome()
+    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.size(46.dp),
+            shape = RoundedCornerShape(15.dp),
+            color = chrome.field,
+            border = BorderStroke(1.dp, chrome.border),
+            tonalElevation = 0.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.size(23.dp),
+                    tint = if (enabled) tint else tint.copy(alpha = 0.38f),
+                )
+            }
+        }
+    }
 }
 
 @Composable

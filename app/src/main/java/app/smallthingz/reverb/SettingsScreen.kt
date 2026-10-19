@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,7 +74,10 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -87,13 +91,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -119,9 +124,14 @@ data class SettingsSnapshot(
     val sampleRate: Int = 0,
     val exportDirectoryUri: String? = null,
     val wakeLockEnabled: Boolean = false,
+    val flacCompression: Int = DEFAULT_FLAC_COMPRESSION,
+    val quickSaveEnabled: Boolean = true,
+    val quickSaveSeconds: Int = DEFAULT_QUICK_SAVE_SECONDS,
+    val silenceGate: String = encodeSilenceGate(SilenceGateConfig()),
 )
 
 private data class SettingsInitialConfiguration(
+    val format: ExportFormat,
     val themeMode: AppThemeMode,
     val retention: RetentionConfiguration,
     val sampleFormat: PcmSampleFormat,
@@ -131,6 +141,10 @@ private data class SettingsInitialConfiguration(
     val sampleRate: Int,
     val exportTreeUri: Uri?,
     val wakeLockEnabled: Boolean,
+    val flacCompression: Int,
+    val quickSaveEnabled: Boolean,
+    val quickSaveSeconds: Int,
+    val silence: SilenceGatePreferenceSnapshot,
 )
 
 private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
@@ -142,6 +156,10 @@ private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
     PrefKey.RETENTION_CONFIG_DIGEST,
     PrefKey.OUTPUT_FORMAT,
     PrefKey.OUTPUT_CODEC,
+    PrefKey.FLAC_COMPRESSION_LEVEL,
+    PrefKey.QUICK_SAVE_ENABLED,
+    PrefKey.QUICK_SAVE_SECONDS,
+    PrefKey.SILENCE_GATE,
     PrefKey.PCM_SAMPLE_FORMAT,
     PrefKey.AUDIO_SOURCE,
     PrefKey.CHANNEL_MODE,
@@ -277,11 +295,14 @@ internal suspend fun <T> runCommittedSettingsMove(
 fun SettingsScreen(
     modifier: Modifier = Modifier,
     active: Boolean = true,
+    isPanelActive: () -> Boolean = { active },
     onBack: () -> Unit = {},
     onThemeChanged: (AppThemeMode) -> Unit = {},
     focusRetentionBuffer: ReverbService.BufferSlot? = null,
 ) {
     val context = LocalContext.current
+    val settingsLifecycle = LocalLifecycleOwner.current.lifecycle
+    val settingsView = androidx.compose.ui.platform.LocalView.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -299,11 +320,22 @@ fun SettingsScreen(
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
-    val moveAvailabilityGeneration = remember { intArrayOf(0) }
+    val moveAvailabilityRevision = remember { intArrayOf(0) }
     val settingsEditRevision = remember { longArrayOf(0L) }
+    val outputSelectionRevision = remember { longArrayOf(0L) }
+    val savePanelOwner = remember(active) { Any() }
+    val savePanelOwnerState = androidx.compose.runtime.rememberUpdatedState(savePanelOwner)
+    val quickTileEditorState = remember { QuickSettingsTilesEditorState() }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
 
     // Selected values
+    var selectedFormat by remember { mutableStateOf(ExportFormat.WAV) }
+    var selectedFlacCompression by remember { mutableIntStateOf(DEFAULT_FLAC_COMPRESSION) }
+    var selectedQuickSaveEnabled by remember { mutableStateOf(true) }
+    var selectedQuickSaveSeconds by remember { mutableIntStateOf(DEFAULT_QUICK_SAVE_SECONDS) }
+    var selectedSilence by remember { mutableStateOf(SilenceGateConfig()) }
+    var originalSilenceRaw by remember { mutableStateOf<String?>(null) }
+    var calibrationResetRevision by remember { mutableIntStateOf(0) }
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
     var selectedSampleFormat by remember { mutableStateOf(PcmSampleFormat.PCM_16) }
     var selectedSource by remember { mutableStateOf(AudioSourceMode.availableModes().first()) }
@@ -351,30 +383,28 @@ fun SettingsScreen(
         batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
     }
 
-    fun refreshMoveRecordingsAvailability() {
-        val gen = ++moveAvailabilityGeneration[0]
-        canMove = false
-        if (!activeState.value) return
-        scope.launch {
-            val result = try {
-                RecordingRepository.hasMovableKnownRecordings(
-                    context,
-                    getOutputDirectoryId(context, selectedExportTreeUri),
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                false
-            }
-            if (settingsMoveAvailabilityResultIsCurrent(
-                    active = activeState.value,
-                    requestGeneration = gen,
-                    currentGeneration = moveAvailabilityGeneration[0],
-                )
-            ) {
-                canMove = result
-            }
+    val moveAvailabilityContext = context.applicationContext
+    val moveAvailabilityOwner = remember(scope, moveAvailabilityContext) {
+        SettingsMoveAvailabilityOwner(
+            scope = scope,
+            scan = { target, mayStart ->
+                RecordingRepository.hasMovableKnownRecordings(moveAvailabilityContext, target, mayStart)
+            },
+            publish = { canMove = it },
+        )
+    }
+
+    fun refreshMoveRecordingsAvailability(forceRefresh: Boolean = false) {
+        if (!activeState.value || !settingsInteractionReady ||
+            !settingsLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
+            moveAvailabilityOwner.hide()
+            return
         }
+        // Capture the destination before enqueueing; later picker edits must not retarget a scan.
+        val target = getOutputDirectoryId(moveAvailabilityContext, selectedExportTreeUri)
+        if (forceRefresh) moveAvailabilityRevision[0]++
+        moveAvailabilityOwner.request(target, moveAvailabilityRevision[0])
     }
 
     fun refreshSampleRates(preferredRate: Int? = null) {
@@ -418,7 +448,7 @@ fun SettingsScreen(
         oneShotRetentionSizeBytes = oneShotRetentionSizeBytesValue,
         loopingRetentionTime = loopingRetentionTimeSecondsValue,
         loopingRetentionSizeBytes = loopingRetentionSizeBytesValue,
-        format = ExportFormat.WAV,
+        format = selectedFormat,
         codec = ExportCodec.PCM_16,
         sampleFormat = selectedSampleFormat,
         source = selectedSource,
@@ -427,6 +457,10 @@ fun SettingsScreen(
         sampleRate = selectedSampleRate,
         exportDirectoryUri = selectedExportTreeUri?.toString(),
         wakeLockEnabled = wakeLockEnabled,
+        flacCompression = selectedFlacCompression,
+        quickSaveEnabled = selectedQuickSaveEnabled,
+        quickSaveSeconds = selectedQuickSaveSeconds,
+        silenceGate = encodeSilenceGate(selectedSilence),
     )
 
     fun recomputeUnsavedState() {
@@ -493,6 +527,42 @@ fun SettingsScreen(
         pushUndoState()
     }
 
+    val calibration = rememberSettingsSilenceCalibration(
+        readOwner = { config, input ->
+            if (isPanelActive() && settingsInteractionReady && !settingsPersisting &&
+                config.enabled && selectedSilence == config &&
+                currentSettingsSnapshot().silenceCalibrationInput() == input &&
+                originalSnapshot.silenceCalibrationInput() == input
+            ) settingsEditRevision[0] to calibrationResetRevision else null
+        },
+        onCalibrated = { config -> selectedSilence = config; finishSettingsEdit() },
+    )
+    LaunchedEffect(active, settingsInteractionReady, settingsPersisting,
+        settingsEditRevision[0], calibrationResetRevision) { calibration.cancel() }
+    LaunchedEffect(selectedSampleRate, selectedSampleFormat, selectedChannelMode,
+        selectedSource, selectedRoute, calibrationResetRevision) {
+        calibration.cancel(clearMeasurement = true)
+    }
+    BackHandler(enabled = active && quickTileEditorState.editorOpen) { quickTileEditorState.closeEditor() }
+
+    fun featureOwnerReady(): Boolean = isPanelActive() && settingsInteractionReady &&
+        !settingsPersisting && scope.isActive &&
+        settingsLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+        settingsView.isAttachedToWindow
+
+    fun featureInputReady(): Boolean = featureOwnerReady() && settingsView.hasWindowFocus()
+
+    fun tileCapacityDraftReady(): Boolean =
+        !settingsTileCapacityDraftChanged(originalSnapshot, currentSettingsSnapshot(),
+            oneShotRetentionTimeText, loopingRetentionTimeText,
+            oneShotRetentionSizeText, loopingRetentionSizeText)
+
+    // A modal confirmation owns a different window; its own view supplies the focus guard.
+    fun tileDraftRevision(): Long? = if (featureOwnerReady() && tileCapacityDraftReady())
+        settingsEditRevision[0] else null
+
+    fun tileDraftAdmission(): Long? = tileDraftRevision()?.takeIf { settingsView.hasWindowFocus() }
+
     fun activateRetentionMode(mode: RetentionMode) {
         val change = settingsRetentionModeChange(activeRetentionMode, mode) ?: return
         // onValueChange keeps the active backing value current. Switching modes only
@@ -505,6 +575,14 @@ fun SettingsScreen(
         if (!hasUnsavedChanges) return
         settingsEditRevision[0]++
         val prev = originalSnapshot
+        calibration.cancel(clearMeasurement = true)
+        outputSelectionRevision[0]++
+        selectedFormat = prev.format ?: ExportFormat.WAV
+        selectedFlacCompression = prev.flacCompression
+        selectedQuickSaveEnabled = prev.quickSaveEnabled
+        selectedQuickSaveSeconds = prev.quickSaveSeconds
+        selectedSilence = decodeSilenceGate(prev.silenceGate)
+        calibrationResetRevision++
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
         loopingRetentionTimeError = null
@@ -574,9 +652,19 @@ fun SettingsScreen(
         }
     }
 
+    fun currentSaveAdmission(): SettingsSaveAdmission? = if (quickTileEditorState.editorOpen) null else settingsSaveAdmission(
+        active = isPanelActive() && settingsLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            settingsView.isAttachedToWindow && settingsView.hasWindowFocus(),
+        ownerActive = scope.isActive,
+        restorationConflict = false,
+        panelOwner = savePanelOwnerState.value,
+        editRevision = settingsEditRevision[0],
+    )
+
     @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
     suspend fun persistSettings(): Boolean {
-        if (settingsPersisting) return false
+        if (settingsPersisting || calibration.running || quickTileEditorState.editorOpen) return false
+        val preflightAdmission = currentSaveAdmission() ?: return false
         settingsPersisting = true
         try {
         oneShotRetentionTimeError = null
@@ -584,14 +672,26 @@ fun SettingsScreen(
         loopingRetentionTimeError = null
         loopingRetentionSizeError = null
 
-        if (!retentionMutationIsSafe(context)) {
-            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
-            return false
+        when (readSettingsRetentionPreflight(
+            admission = preflightAdmission,
+            read = { retentionMutationIsSafe(context) },
+            currentAdmission = ::currentSaveAdmission,
+        )) {
+            SettingsRetentionPreflightResult.SUPERSEDED -> return false
+            SettingsRetentionPreflightResult.UNSAFE -> {
+                AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+                return false
+            }
+            SettingsRetentionPreflightResult.READY -> Unit
         }
 
-        val format = ExportFormat.WAV
+        val format = selectedFormat
         val codec = ExportCodec.PCM_16
         val sampleFormat = selectedSampleFormat
+        if (format != originalSnapshot.format && format == ExportFormat.FLAC && sampleFormat != PcmSampleFormat.PCM_16) {
+            AppFeedbackCenter.post(resources.getString(R.string.flac_pcm_required), FeedbackTone.ERROR)
+            return false
+        }
         val channelMode = selectedChannelMode
         val route = selectedRoute
         val source = selectedSource
@@ -682,6 +782,9 @@ fun SettingsScreen(
         // unsaved revision and must never be promoted to the durable baseline by this save.
         val submittedSnapshot = currentSettingsSnapshot()
         val submittedEditRevision = settingsEditRevision[0]
+        val submittedOutputRevision = outputSelectionRevision[0]
+        val submittedSilenceRaw = originalSilenceRaw
+        var committedOutputFormat = format
 
         val preferences = getRecorderPreferences(context)
         val previous = originalSnapshot
@@ -707,8 +810,11 @@ fun SettingsScreen(
             .putLong(PrefKey.RETENTION_SECONDS, loopingRetentionTime.toLong())
             .putLong(PrefKey.AUDIO_MEMORY_SIZE, requestedLoopingSizeBytes)
             .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(retentionConfiguration))
-            .putInt(PrefKey.OUTPUT_FORMAT, format.storageCode.toInt())
             .putInt(PrefKey.OUTPUT_CODEC, codec.storageCode.toInt())
+            .putInt(PrefKey.FLAC_COMPRESSION_LEVEL, submittedSnapshot.flacCompression)
+            .putBoolean(PrefKey.QUICK_SAVE_ENABLED, submittedSnapshot.quickSaveEnabled)
+            .putInt(PrefKey.QUICK_SAVE_SECONDS, submittedSnapshot.quickSaveSeconds)
+            .putString(PrefKey.SILENCE_GATE, submittedSnapshot.silenceGate)
             .putInt(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.storageCode.toInt())
             .putInt(PrefKey.AUDIO_SOURCE, source.storageCode.toInt())
             .putInt(PrefKey.CHANNEL_MODE, channelMode.storageCode.toInt())
@@ -732,6 +838,7 @@ fun SettingsScreen(
             withContext(NonCancellable) {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
+                    SilenceGatePreferences.withSettingsTransaction(context, submittedSilenceRaw) {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
@@ -753,7 +860,23 @@ fun SettingsScreen(
                             // Recovery is the write-ahead side of the transaction. If the process dies before
                             // preferences commit, restart sees a mismatch and existing history fails closed.
                             writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
-                            commitNewPreferences = { settingsEditor.commit() },
+                            commitNewPreferences = {
+                                // An untouched control follows a newer durable output preference;
+                                // an explicit selection owns its value in this atomic transaction.
+                                commitSettingsForSelectedOutput(
+                                    originalFormat = previous.format ?: ExportFormat.WAV,
+                                    selectedFormat = format,
+                                    readCurrentFormat = { getConfiguredOutputFormat(context) },
+                                    codec = codec,
+                                    sampleRate = sampleRate,
+                                    channelMode = channelMode,
+                                    sampleFormat = sampleFormat,
+                                    commit = { output ->
+                                        committedOutputFormat = output
+                                        settingsEditor.putInt(PrefKey.OUTPUT_FORMAT, output.storageCode.toInt()).commit()
+                                    },
+                                )
+                            },
                             restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
                             restorePreferences = {
                                 val editor = preferences.edit()
@@ -771,6 +894,7 @@ fun SettingsScreen(
                                 token = oneShotFullRollback,
                             )
                         }
+                    }
                     }
                 }
                 }
@@ -791,15 +915,30 @@ fun SettingsScreen(
         // Only the submitted snapshot became durable. If the user edited retained Settings
         // while IO was in flight, preserve those live inputs and keep them visibly unsaved.
         // Otherwise normalize presentation from the exact committed backing values.
-        originalSnapshot = submittedSnapshot
+        val durableSnapshot = submittedSnapshot.copy(format = committedOutputFormat)
+        originalSnapshot = durableSnapshot
+        originalSilenceRaw = submittedSnapshot.silenceGate
+        selectedFormat = reconcileSettingsOutputAfterCommit(
+            currentFormat = selectedFormat,
+            committedFormat = committedOutputFormat,
+            submittedOutputRevision = submittedOutputRevision,
+            currentOutputRevision = outputSelectionRevision[0],
+        )
         if (editedWhileSaving) {
             refreshRetentionFields(preserveActiveInputs = true)
             currentSnapshot = currentSettingsSnapshot()
             recomputeUnsavedState()
         } else {
             refreshRetentionFields(preserveActiveInputs = false)
-            currentSnapshot = submittedSnapshot
+            currentSnapshot = durableSnapshot
             hasUnsavedChanges = false
+        }
+        val outputLimit = exportDurationLimitExactSeconds(
+            committedOutputFormat, codec, sampleRate, channelMode.channelCount, sampleFormat,
+        ).toInt().coerceAtMost(86_400)
+        if (submittedSnapshot.quickSaveEnabled && submittedSnapshot.quickSaveSeconds > outputLimit) {
+            AppFeedbackCenter.post(resources.getString(R.string.feature_duration_shortened,
+                committedOutputFormat.name, formatRetentionTimeInput(outputLimit.toLong())))
         }
         return settingsSaveMayContinueAfterCommit(hasUnsavedChanges)
         } finally {
@@ -810,7 +949,9 @@ fun SettingsScreen(
     suspend fun bindUiFromPreferences(): Boolean {
         val hydrationEditRevision = settingsEditRevision[0]
         val initial = withContext(Dispatchers.IO) {
+            withRetentionPersistenceLock {
             SettingsInitialConfiguration(
+                format = getConfiguredOutputFormat(context),
                 themeMode = getConfiguredThemeMode(context),
                 retention = retentionConfigurationForRead(context),
                 sampleFormat = getConfiguredPcmSampleFormat(context),
@@ -820,7 +961,12 @@ fun SettingsScreen(
                 sampleRate = getConfiguredSampleRate(context),
                 exportTreeUri = getConfiguredExportTreeUriForSettings(context),
                 wakeLockEnabled = isWakeLockEnabled(context),
+                flacCompression = getConfiguredFlacCompression(context),
+                quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
+                quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
+                silence = SilenceGatePreferences.read(context),
             )
+            }
         }
         if (!settingsHydrationMayApply(hydrationEditRevision, settingsEditRevision[0])) return false
         val configuredThemeMode = initial.themeMode
@@ -846,6 +992,15 @@ fun SettingsScreen(
         loopingRetentionSizeBytesValue = storedLoopingSizeBytes
         selectedExportTreeUri = configuredExportTreeUriVal
 
+        calibration.cancel(clearMeasurement = true)
+        outputSelectionRevision[0]++
+        selectedFormat = initial.format
+        selectedFlacCompression = initial.flacCompression
+        selectedQuickSaveEnabled = initial.quickSaveEnabled
+        selectedQuickSaveSeconds = initial.quickSaveSeconds
+        selectedSilence = initial.silence.config
+        originalSilenceRaw = initial.silence.raw
+        calibrationResetRevision++
         selectedTheme = configuredThemeMode
         availableRouteModes = supportedInputRouteModes(context)
         selectedRoute = configuredRouteVal.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
@@ -896,6 +1051,27 @@ fun SettingsScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    val refreshMoveAvailabilityState = androidx.compose.runtime.rememberUpdatedState {
+        refreshMoveRecordingsAvailability()
+    }
+    DisposableEffect(moveAvailabilityOwner) {
+        onDispose { moveAvailabilityOwner.close() }
+    }
+    DisposableEffect(active, settingsLifecycle, moveAvailabilityOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> refreshMoveAvailabilityState.value()
+                Lifecycle.Event.ON_STOP -> moveAvailabilityOwner.hide()
+                else -> Unit
+            }
+        }
+        settingsLifecycle.addObserver(observer)
+        if (!active) moveAvailabilityOwner.hide()
+        onDispose {
+            settingsLifecycle.removeObserver(observer)
+            moveAvailabilityOwner.hide()
+        }
+    }
     val serviceBindingGeneration = remember { longArrayOf(0L) }
     val shouldOwnServiceBinding = settingsShouldOwnServiceBinding(active, settingsPersisting)
     DisposableEffect(shouldOwnServiceBinding, lifecycleOwner) {
@@ -1042,7 +1218,7 @@ fun SettingsScreen(
                 },
             )
             if (!moveStarted) return@launch
-            refreshMoveRecordingsAvailability()
+            refreshMoveRecordingsAvailability(forceRefresh = true)
         }
     }
 
@@ -1106,7 +1282,7 @@ fun SettingsScreen(
         Box(modifier = modifier.fillMaxSize())
         return
     }
-    LaunchedEffect(active, selectedExportTreeUri) {
+    LaunchedEffect(active, settingsInteractionReady, selectedExportTreeUri) {
         refreshMoveRecordingsAvailability()
     }
     LaunchedEffect(focusRetentionBuffer, batteryOptimizationRestricted) {
@@ -1143,7 +1319,11 @@ fun SettingsScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (hasUnsavedChanges) {
+                        if (quickTileEditorState.editorOpen) {
+                            quickTileEditorState.closeEditor()
+                        } else if (calibration.running) {
+                            calibration.cancel()
+                        } else if (hasUnsavedChanges) {
                             restorePreviousSettings()
                         } else {
                             releaseInputFocus()
@@ -1161,7 +1341,7 @@ fun SettingsScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            if (!hasUnsavedChanges || settingsPersisting) return@IconButton
+                            if (!hasUnsavedChanges || settingsPersisting || calibration.running || quickTileEditorState.editorOpen) return@IconButton
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                 if (persistSettings()) {
                                     releaseInputFocus()
@@ -1169,7 +1349,7 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        enabled = hasUnsavedChanges && !settingsPersisting,
+                        enabled = hasUnsavedChanges && !settingsPersisting && !calibration.running && !quickTileEditorState.editorOpen,
                     ) {
                         Icon(
                             imageVector = AppIcons.check,
@@ -1302,105 +1482,185 @@ fun SettingsScreen(
 
             item(key = "recording") {
                 Column {
-            SectionTitle(stringResource(R.string.recording_settings_title))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (availableChannelModes.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.channel_mode_label),
-                        selectedValue = selectedChannelMode,
-                        options = availableChannelModes,
-                        optionLabel = { resources.getString(it.labelRes) },
-                        onOptionSelected = { channelMode ->
-                            selectedChannelMode = channelMode
-                            refreshSampleRates(selectedSampleRate)
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (PcmSampleFormat.entries.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.sample_format_label),
-                        selectedValue = selectedSampleFormat,
-                        options = PcmSampleFormat.entries,
-                        optionLabel = { resources.getString(it.labelRes) },
-                        onOptionSelected = { sampleFormat ->
-                            selectedSampleFormat = sampleFormat
-                            refreshSourceModes(
-                                preferredSource = selectedSource,
-                                preferredChannelMode = selectedChannelMode,
-                                preferredRate = selectedSampleRate,
+                    SectionTitle(stringResource(R.string.recording_settings_title))
+                    val showChannels = availableChannelModes.size > 1
+                    val showSampleFormat = PcmSampleFormat.entries.size > 1
+                    val showSampleRate = availableSampleRates.size > 1
+                    val showSource = availableSourceModes.size > 1
+                    val showRoute = availableRouteModes.size > 1
+                    SettingsAudioGroup {
+                        if (showChannels) {
+                            SettingsDropdown(
+                                active = active,
+                                label = stringResource(R.string.channel_mode_label),
+                                selectedValue = selectedChannelMode,
+                                options = availableChannelModes,
+                                optionLabel = { resources.getString(it.labelRes) },
+                                onOptionSelected = { channelMode ->
+                                    selectedChannelMode = channelMode
+                                    refreshSampleRates(selectedSampleRate)
+                                    finishSettingsEdit()
+                                },
                             )
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (availableSampleRates.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.sample_rate_label),
-                        selectedValue = selectedSampleRate,
-                        options = availableSampleRates,
-                        optionLabel = ::sampleRateLabel,
-                        onOptionSelected = { sampleRate ->
-                            selectedSampleRate = sampleRate
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
+                        }
+                        if (showSampleFormat || showSampleRate) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .settingsAudioDivider(top = showChannels),
+                            ) {
+                                if (showSampleFormat) {
+                                    SettingsDropdown(
+                                        active = active,
+                                        label = stringResource(R.string.sample_format_label),
+                                        selectedValue = selectedSampleFormat,
+                                        options = PcmSampleFormat.entries,
+                                        optionLabel = { resources.getString(it.labelRes) },
+                                        onOptionSelected = { sampleFormat ->
+                                            selectedSampleFormat = sampleFormat
+                                            refreshSourceModes(
+                                                preferredSource = selectedSource,
+                                                preferredChannelMode = selectedChannelMode,
+                                                preferredRate = selectedSampleRate,
+                                            )
+                                            finishSettingsEdit()
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (showSampleRate) {
+                                    SettingsDropdown(
+                                        active = active,
+                                        label = stringResource(R.string.sample_rate_label),
+                                        selectedValue = selectedSampleRate,
+                                        options = availableSampleRates,
+                                        optionLabel = ::sampleRateLabel,
+                                        onOptionSelected = { sampleRate ->
+                                            selectedSampleRate = sampleRate
+                                            finishSettingsEdit()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                            .settingsAudioDivider(start = showSampleFormat),
+                                    )
+                                }
+                            }
+                        }
+                        if (showSource || showRoute) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().settingsAudioDivider(
+                                    top = showChannels || showSampleFormat || showSampleRate,
+                                ),
+                            ) {
+                                if (showSource) {
+                                    SettingsDropdown(
+                                        active = active,
+                                        label = stringResource(R.string.audio_source_label),
+                                        selectedValue = selectedSource,
+                                        options = availableSourceModes,
+                                        optionLabel = { resources.getString(it.labelRes) },
+                                        onOptionSelected = { source ->
+                                            selectedSource = source
+                                            refreshChannelModes(selectedChannelMode, selectedSampleRate)
+                                            finishSettingsEdit()
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (showRoute) {
+                                    SettingsDropdown(
+                                        active = active,
+                                        label = stringResource(R.string.input_route_label),
+                                        selectedValue = selectedRoute,
+                                        options = availableRouteModes,
+                                        optionLabel = { resources.getString(it.labelRes) },
+                                        onOptionSelected = { route ->
+                                            selectedRoute = route
+                                            refreshSourceModes(
+                                                preferredSource = selectedSource,
+                                                preferredChannelMode = selectedChannelMode,
+                                                preferredRate = selectedSampleRate,
+                                            )
+                                            finishSettingsEdit()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                            .settingsAudioDivider(start = showSource),
+                                    )
+                                }
+                            }
+                        }
+                        OutputCompressionSettings(
+                            enabled = selectedFormat == ExportFormat.FLAC,
+                            level = selectedFlacCompression,
+                            onEnabledChange = { enabled ->
+                                if (!featureInputReady()) return@OutputCompressionSettings
+                                outputSelectionRevision[0]++
+                                selectedFormat = if (enabled) ExportFormat.FLAC else ExportFormat.WAV
+                                finishSettingsEdit()
+                            },
+                            onLevelChange = { if (featureInputReady()) { selectedFlacCompression = it; finishSettingsEdit() } },
+                            interactionEnabled = settingsInteractionReady && !settingsPersisting,
+                            modifier = Modifier.settingsAudioDivider(top = true),
+                        )
+                        if (selectedFormat == ExportFormat.FLAC && selectedSampleFormat != PcmSampleFormat.PCM_16) {
+                            Text(stringResource(R.string.flac_pcm_required),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                        val renderedSilence = selectedSilence
+                        val renderedSilenceRevision = settingsEditRevision[0]
+                        SkipSilenceSettings(
+                            config = renderedSilence,
+                            onConfigChange = {
+                                if (featureInputReady() && selectedSilence == renderedSilence &&
+                                    settingsEditRevision[0] == renderedSilenceRevision) {
+                                    selectedSilence = it
+                                    finishSettingsEdit()
+                                }
+                            },
+                            onCalibrate = { calibration.begin(selectedSilence, originalSnapshot.silenceCalibrationInput()) },
+                            onCancelCalibration = { calibration.cancel() },
+                            enabled = settingsInteractionReady && !settingsPersisting,
+                            maximumHz = minOf(SILENCE_MAX_HZ, selectedSampleRate / 2),
+                            sampledPeaks = calibration.measured?.peaks,
+                            calibrationAllowed = originalSnapshot.silenceCalibrationInput() == currentSettingsSnapshot().silenceCalibrationInput(),
+                            calibrating = calibration.running,
+                            calibrationProgress = calibration.progress,
+                            calibrationMessage = if (calibration.preparing > 0)
+                                resources.getString(R.string.silence_preparing, calibration.preparing) else null,
+                            calibrationError = calibration.error,
+                            calibrationUnavailableReason = resources.getString(R.string.silence_apply_input_first),
+                            modifier = Modifier.settingsAudioDivider(top = true),
+                        )
+                        NotificationSaveSettings(
+                            enabled = selectedQuickSaveEnabled,
+                            seconds = selectedQuickSaveSeconds,
+                            maxSeconds = exportDurationLimitExactSeconds(selectedFormat, ExportCodec.PCM_16,
+                                selectedSampleRate, selectedChannelMode.channelCount, selectedSampleFormat)
+                                .toInt().coerceIn(1, 86_400),
+                            onEnabledChange = { if (featureInputReady()) { selectedQuickSaveEnabled = it; finishSettingsEdit() } },
+                            onSecondsChange = { selectedQuickSaveSeconds = it; finishSettingsEdit() },
+                            interactionReady = settingsInteractionReady && !settingsPersisting,
+                            editRevision = settingsEditRevision[0],
+                            readEditRevision = {
+                                if (featureInputReady() && selectedQuickSaveEnabled)
+                                    settingsEditRevision[0] else null
+                            },
+                            modifier = Modifier.settingsAudioDivider(top = true),
+                        )
+                    }
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (availableSourceModes.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.audio_source_label),
-                        selectedValue = selectedSource,
-                        options = availableSourceModes,
-                        optionLabel = { resources.getString(it.labelRes) },
-                        onOptionSelected = { source ->
-                            selectedSource = source
-                            refreshChannelModes(selectedChannelMode, selectedSampleRate)
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (availableRouteModes.size > 1) {
-                    SettingsDropdown(
-                        active = active,
-                        label = stringResource(R.string.input_route_label),
-                        selectedValue = selectedRoute,
-                        options = availableRouteModes,
-                        optionLabel = { resources.getString(it.labelRes) },
-                        onOptionSelected = { route ->
-                            selectedRoute = route
-                            refreshSourceModes(
-                                preferredSource = selectedSource,
-                                preferredChannelMode = selectedChannelMode,
-                                preferredRate = selectedSampleRate,
-                            )
-                            finishSettingsEdit()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-                }
+
+            item(key = "quick-save-tiles") {
+                QuickSettingsTilesControls(
+                    active = active,
+                    interactionReady = settingsInteractionReady && !settingsPersisting,
+                    durationSubmissionAllowed = tileCapacityDraftReady(),
+                    editorState = quickTileEditorState,
+                    editRevision = settingsEditRevision[0],
+                    readEditRevision = ::tileDraftAdmission,
+                    readSheetEditRevision = ::tileDraftRevision,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                )
             }
 
             item(key = "storage") {
@@ -1882,6 +2142,35 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
+internal fun SettingsAudioGroup(content: @Composable ColumnScope.() -> Unit) {
+    val chrome = appChrome()
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
+    ) {
+        Column(content = content)
+    }
+}
+
+@Composable
+internal fun Modifier.settingsAudioDivider(top: Boolean = false, start: Boolean = false): Modifier {
+    if (!top && !start) return this
+    val color = appChrome().border
+    return drawWithContent {
+        drawContent()
+        if (top) {
+            drawLine(color, Offset(0f, 0.5f), Offset(size.width, 0.5f), strokeWidth = 1f)
+        }
+        if (start) {
+            val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 0.5f else size.width - 0.5f
+            drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+        }
+    }
+}
+
+@Composable
 private fun <T> SettingsDropdown(
     active: Boolean,
     label: String,
@@ -1905,9 +2194,8 @@ private fun <T> SettingsDropdown(
         Surface(
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RectangleShape,
             color = containerColor,
-            border = BorderStroke(1.dp, chrome.border),
         ) {
             Row(
                 modifier = Modifier

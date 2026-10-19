@@ -14,6 +14,12 @@ private const val TRIM_TAG = "RecordingTrim"
 internal fun recordingHasStableTrimIdentity(recording: RecordingEntity): Boolean =
     recording.fileIdentity.isNotBlank()
 
+internal fun recordingTrimFailureMessage(context: Context, failure: Throwable): String =
+    if (failure is RecordingOutputCapacityException && failure.format == ExportFormat.WAV) {
+        context.getString(R.string.trim_wav_limit,
+            formatDurationInput(failure.maximumDurationMillis / 1000L))
+    } else context.getString(R.string.trim_failed)
+
 internal suspend fun runCommittedInlineTrim(
     save: suspend () -> RecordingEntity,
     onTerminal: (Result<RecordingEntity>) -> Unit,
@@ -56,7 +62,9 @@ internal suspend fun saveTrimmedRecordingCopy(
 
 internal fun trimmedRecordingBaseName(displayName: String): String {
     val base = displayName.substringBeforeLast('.', displayName).trim()
-    return "${base.ifBlank { FALLBACK_DISPLAY_NAME }} trim"
+    return generatedRecordingDisplayName(
+        base.ifBlank { FALLBACK_DISPLAY_NAME }, " trim", ".wav", reserveCollisionSuffix = true,
+    ).removeSuffix(".wav")
 }
 
 
@@ -79,23 +87,25 @@ private fun writeTrimmedRecordingCopy(
     startMillis: Int,
     endMillis: Int,
 ): RecordingEntity {
+    val format = getConfiguredOutputFormat(context)
+    if (format == ExportFormat.FLAC || recording.displayName.endsWith(".flac", ignoreCase = true)) {
+        return writeConvertedRecordingCopy(context, recording, format, getConfiguredFlacCompression(context),
+            startMillis.toLong(), endMillis.toLong(), " trim")
+    }
     if (!recordingHasStableTrimIdentity(recording)) {
         throw IOException("Recording identity is unavailable for trim")
     }
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
-    var target: RecordingOutputTarget? = null
-    var verifiedComplete = false
-    var cleanupFingerprint: StableOutputFingerprint? = null
-    try {
-        return withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
-            val layout = readWavPcmLayout(source)
-            val startFrame = millisToFrame(startMillis, layout.sampleRate)
-                .coerceIn(0L, layout.frameCount - 1L)
-            val endFrame = millisToFrame(endMillis, layout.sampleRate)
-                .coerceIn(startFrame + 1L, layout.frameCount)
-            val selectedFrames = endFrame - startFrame
-            if (selectedFrames <= 0L) throw IOException("Trim range contains no audio")
+    return withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
+        val layout = readWavPcmLayout(source)
+        val startFrame = millisToFrame(startMillis, layout.sampleRate)
+            .coerceIn(0L, layout.frameCount - 1L)
+        val endFrame = millisToFrame(endMillis, layout.sampleRate)
+            .coerceIn(startFrame + 1L, layout.frameCount)
+        val selectedFrames = endFrame - startFrame
+        if (selectedFrames <= 0L) throw IOException("Trim range contains no audio")
 
+        withAdmittedRecordingFrameRange(layout, ExportFormat.WAV, startFrame, selectedFrames) {
             val startedAtMillis = recordingTimestampWithOffset(
                 startedAtMillis = recording.startedAtMillis,
                 offsetMillis = startFrame * 1000L / layout.sampleRate.toLong(),
@@ -106,7 +116,7 @@ private fun writeTrimmedRecordingCopy(
                 mimeType = ExportFormat.WAV.outputMimeType,
                 startedAtMillis = startedAtMillis,
                 stagingKind = StagingOutputKind.EXPORT_TRACKED,
-            ).also { target = it }
+            )
             val writer = WavAudioFileWriter(
                 context = context,
                 target = outputTarget,
@@ -135,7 +145,8 @@ private fun writeTrimmedRecordingCopy(
                 payloadBytes = writer.totalSampleBytesWritten,
                 expectedPayloadSha256 = writer.payloadSha256,
             )
-            cleanupFingerprint = verifiedOutput
+            // Keep verified staging on every subsequent failure: the source can change during
+            // publication, and this may be the only retained copy of the selected audio.
             // The source bytes are complete now, but the target is still hidden. Provider-backed
             // recordings can change while their descriptor remains open, so revalidate the
             // selected source before granting recovery authority or publishing a final name.
@@ -144,8 +155,7 @@ private fun writeTrimmedRecordingCopy(
                 persistRecoveryMarker = { putVerifiedExportStaging(context, outputTarget, verifiedOutput) },
                 targetId = outputTarget.id,
             ) {
-                verifiedComplete = true
-                finalizeOutputTarget(context, outputTarget, verifiedOutput).also { target = it }
+                finalizeOutputTarget(context, outputTarget, verifiedOutput)
             }
             if (!removeVerifiedExportStaging(context, outputTarget.storageType, stagingId, verifiedOutput)) {
                 Log.w(TRIM_TAG, "Unable to clear verified trim recovery marker: $stagingId")
@@ -165,9 +175,6 @@ private fun writeTrimmedRecordingCopy(
                 knownSizeBytes = expectedBytes,
             )
         }
-    } catch (error: Exception) {
-        if (!verifiedComplete) cleanupTrimTarget(context, target, cleanupFingerprint)
-        throw error
     }
 }
 
@@ -209,20 +216,5 @@ private fun copyFrameRange(
         )
         writer.write(buffer, 0, byteCount)
         copiedFrames += frames.toLong()
-    }
-}
-
-private fun cleanupTrimTarget(
-    context: Context,
-    target: RecordingOutputTarget?,
-    expectedFingerprint: StableOutputFingerprint?,
-) {
-    val current = target ?: return
-    if (expectedFingerprint == null) {
-        Log.w(TRIM_TAG, "Retaining unverified trim staging because cleanup identity is uncertain: ${current.id}")
-        return
-    }
-    if (!suppressAndDeleteOutputTarget(context, current, expectedFingerprint = expectedFingerprint)) {
-        Log.w(TRIM_TAG, "Deferred cleanup for failed trim ${current.displayName}")
     }
 }

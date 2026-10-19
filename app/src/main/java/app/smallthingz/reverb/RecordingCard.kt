@@ -37,6 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -152,18 +157,34 @@ private fun RecordingSummaryCard(
         border = BorderStroke(1.dp, borderColor),
         tonalElevation = 0.dp,
     ) {
+        val selectionLabel = stringResource(
+            if (isSelected) R.string.recording_deselect else R.string.recording_select,
+        )
+        val clickLabel = if (selectionActive) selectionLabel else stringResource(
+            if (expanded) R.string.recording_close_player else R.string.recording_open_player,
+        )
+        val longClickLabel = if (selectionActive) selectionLabel else stringResource(R.string.open_options)
         val iconInteractionModifier = if (interactionsEnabled && onClick != null) {
             Modifier.combinedClickable(
+                role = Role.Button,
+                onClickLabel = clickLabel,
                 onClick = onClick,
-                onLongClick = onIconLongClick ?: onLongClick ?: {},
-            )
+                onLongClickLabel = if (onIconLongClick != null) selectionLabel else longClickLabel,
+                onLongClick = onIconLongClick ?: onLongClick,
+            ).semantics {
+                contentDescription = title
+                if (selectionActive) selected = isSelected
+            }
         } else {
             Modifier
         }
         val cardInteractionModifier = if (interactionsEnabled && onClick != null) {
             Modifier.combinedClickable(
+                role = Role.Button,
+                onClickLabel = clickLabel,
                 onClick = onClick,
-                onLongClick = onLongClick ?: {},
+                onLongClickLabel = longClickLabel,
+                onLongClick = onLongClick,
             )
         } else {
             Modifier
@@ -174,7 +195,13 @@ private fun RecordingSummaryCard(
                 .alpha(contentAlpha),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(cardInteractionModifier)
+                    .then(
+                        if (selectionActive) Modifier.semantics { selected = isSelected }
+                        else Modifier,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
             Box(
@@ -210,7 +237,6 @@ private fun RecordingSummaryCard(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .then(cardInteractionModifier)
                     .padding(end = 14.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

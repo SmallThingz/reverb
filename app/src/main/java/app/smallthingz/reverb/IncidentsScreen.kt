@@ -227,7 +227,7 @@ internal fun IncidentsScreen(
     Surface(
         modifier = modifier.graphicsLayer {
             val progress = openProgress().coerceIn(0f, 1f)
-            translationX = size.width * 0.08f * (1f - progress)
+            translationX = incidentsPanelTranslationX(size.width, progress)
             alpha = 0.82f + progress * 0.18f
         },
         color = MaterialTheme.colorScheme.surface,

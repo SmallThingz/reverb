@@ -82,6 +82,10 @@ internal suspend fun <T> recoverCatalogAfterCorruption(
     }
 }
 
+internal class ConfiguredRecordingDirectoryUnavailableException(
+    val directoryId: String,
+) : IOException("Unable to read configured recording directory: $directoryId")
+
 object RecordingRepository {
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -121,12 +125,19 @@ object RecordingRepository {
 
     private suspend fun refreshLocked(context: Context): List<RecordingEntity> {
         replayPendingDeletionsLocked(context)
-        val reconciledDirectoryIds = syncRecoverableDirectories(context).toMutableSet().apply {
-            // Preserve the existing fail-closed rule for the configured destination: if its
-            // directory enumeration fails, that failure is not evidence that every row vanished.
-            add(getConfiguredOutputDirectoryId(context))
+        // Pin this refresh's selected destination before provider I/O. A concurrent Settings
+        // change belongs to its next refresh, not a different failure classification mid-scan.
+        val configuredTreeUri = getConfiguredExportTreeUri(context)
+        val configuredDirectoryId = getOutputDirectoryId(context, configuredTreeUri)
+        val directoryReads = syncRecoverableDirectories(context, configuredTreeUri)
+        // A failed whole-directory read cannot grant individual missing probes authority to
+        // forget that directory's known rows. Successful scopes already reconciled their rows.
+        updateMissingStatesLocked(context, skipDirectoryIds = directoryReads.keys)
+        if (directoryReads[configuredDirectoryId] != true) {
+            // Other successful imports are already durable. Surface the selected-folder failure
+            // so Library keeps known rows and offers Retry instead of reporting a fresh empty scan.
+            throw ConfiguredRecordingDirectoryUnavailableException(configuredDirectoryId)
         }
-        updateMissingStatesLocked(context, skipDirectoryIds = reconciledDirectoryIds)
         val pending = pendingDeletionIds(context)
         return visibleCatalogRecordings(
             dao(context).listAll(),
@@ -170,11 +181,8 @@ object RecordingRepository {
             val previous = backgroundDeleteJob
             backgroundDeleteJob = cleanupScope.launch {
                 previous?.join()
-                var failed = false
-                recordings.forEach { recording ->
-                    val deleted = runCatching { delete(appContext, recording) }.getOrDefault(false)
-                    if (!deleted) failed = true
-                }
+                val result = deleteBatch(appContext, recordings)
+                val failed = result.cleanupFailed || result.outcomes.any { !it }
                 if (failed) {
                     AppFeedbackCenter.post(
                         appContext.getString(R.string.recording_delete_failed),
@@ -188,10 +196,12 @@ object RecordingRepository {
     suspend fun hasMovableKnownRecordings(
         context: Context,
         targetDirectoryId: String = getConfiguredOutputDirectoryId(context),
+        mayStart: () -> Boolean = { true },
     ): Boolean {
         return withContext(Dispatchers.IO) {
+            if (!mayStart()) return@withContext false
             awaitBackgroundDeletes()
-            mutex.withLock {
+            withMoveAvailabilityAdmission(mutex, mayStart) {
                 replayPendingDeletionsLocked(context)
                 val dao = dao(context)
                 val pendingIds = pendingDeletionIds(context)
@@ -205,7 +215,7 @@ object RecordingRepository {
                     val updated = when (selectedRecordingAssetState(context, recording)) {
                         RecordingAssetState.PRESENT -> {
                             val present = markRecordingPresent(recording, nowMillis)
-                            if (recordingDestructiveIdentityMatches(context, present)) movable = true
+                            if (!movable && recordingDestructiveIdentityMatches(context, present)) movable = true
                             present
                         }
                         RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
@@ -282,13 +292,45 @@ object RecordingRepository {
     }
 
     suspend fun delete(context: Context, recording: RecordingEntity): Boolean {
+        return delete(context, recording, replayPending = true)
+    }
+
+    internal suspend fun deleteBatch(context: Context, recordings: List<RecordingEntity>): RecordingDeletionBatchResult =
+        withContext(Dispatchers.IO) {
+            val journalBatch = RecordingDeletionJournalBatch(
+                onCleanupFailure = { error -> reportDeletionMetadataFailure(context, error, detached = false) },
+            ) { entries ->
+                writePendingDeletionEntries(context, pendingDeletionEntries(context) - entries)
+            }
+            val outcomes = runRecordingDeletionBatch(
+                recordings = recordings,
+                replayPending = { mutex.withLock { replayPendingDeletionsLocked(context) } },
+                delete = { delete(context, it, replayPending = false, journalBatch = journalBatch) },
+            )
+            mutex.withLock { journalBatch.flush() }
+            journalBatch.result(outcomes)
+        }
+
+    private suspend fun delete(
+        context: Context,
+        recording: RecordingEntity,
+        replayPending: Boolean,
+        journalBatch: RecordingDeletionJournalBatch? = null,
+    ): Boolean {
         val operation = recordingMutations.tryBegin(recording.id) ?: return false
         try {
             return withContext(Dispatchers.IO) {
                 mutex.withLock {
-                    replayPendingDeletionsLocked(context)
+                    if (replayPending) replayPendingDeletionsLocked(context)
                     val dao = dao(context)
-                    val tracked = dao.findById(recording.id) ?: return@withLock true
+                    // A rebuilt catalog can temporarily omit a still-visible recording while its
+                    // provider is unavailable. Missing metadata is not proof that audio was deleted.
+                    val tracked = dao.findById(recording.id) ?: return@withLock when (recording.storageType) {
+                        RecordingStorageType.FILE -> confirmMissingFileRecordingDurable(File(recording.id))
+                        RecordingStorageType.DOCUMENT,
+                        RecordingStorageType.MEDIASTORE,
+                        -> recordingAssetState(context, recording) == RecordingAssetState.MISSING
+                    }
                     if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
                     if (tracked.storageType == RecordingStorageType.FILE &&
                         !recordingFileIdentityMatches(tracked)
@@ -297,6 +339,18 @@ object RecordingRepository {
                     }
 
                     val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
+                    journalBatch?.prepareForAddition {
+                        val updated = pendingDeletionEntries(context).filterNotTo(mutableSetOf()) { raw ->
+                            pendingDeletionSuppressedId(raw) == intent.id
+                        }
+                        updated += encodePendingDeletionIntent(intent)
+                        try {
+                            boundedDurableStringSet(updated, PrefKey.PENDING_RECORDING_DELETIONS.name)
+                            true
+                        } catch (_: IllegalStateException) {
+                            false
+                        }
+                    }
                     if (!putPendingDeletionLocked(context, intent)) return@withLock false
 
                     val deleted = when (tracked.storageType) {
@@ -322,19 +376,35 @@ object RecordingRepository {
                     // Persist the destructive phase boundary before touching catalog metadata.
                     // If this commit fails, keep the existing planned intent and catalog row; the
                     // pending-id filter hides it and replay can finish cleanup once absence is known.
-                    if (!putPendingDeletionLocked(context, intent.copy(assetDeleted = true))) {
-                        return@withLock true
-                    }
                     // This row describes the object the user selected, not any later object that
                     // may reuse the same path. Retiring metadata cannot delete replacement bytes;
                     // directory reconciliation will import a replacement as a fresh observation.
-                    dao.deleteById(tracked.id)
-                    removePendingDeletionLocked(context, tracked.id)
-                    true
+                    val deletedIntent = intent.copy(assetDeleted = true)
+                    completeRecordingDeletionMetadata(
+                        deletedEntry = encodePendingDeletionIntent(deletedIntent),
+                        persistDeleted = { putPendingDeletionLocked(context, deletedIntent) },
+                        retireCatalog = { dao.deleteById(tracked.id) },
+                        retireJournal = { removePendingDeletionLocked(context, tracked.id) },
+                        journalBatch = journalBatch,
+                        onCleanupFailure = { error ->
+                            reportDeletionMetadataFailure(context, error, detached = journalBatch == null)
+                        },
+                    )
                 }
             }
         } finally {
             recordingMutations.finish(operation)
+        }
+    }
+
+    private fun reportDeletionMetadataFailure(context: Context, error: Exception?, detached: Boolean) {
+        Log.w("RecordingRepository", "Recording deleted; metadata cleanup remains pending", error)
+        if (error is SQLiteDatabaseCorruptException) {
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(context,
+                "Recording deletion catalog corruption", error)
+        }
+        if (detached) {
+            AppFeedbackCenter.post(context.getString(R.string.recording_delete_failed), FeedbackTone.ERROR)
         }
     }
 
@@ -769,7 +839,10 @@ object RecordingRepository {
         return verifiedMoveCommitResult(targetIdentityCurrent = true, sourceCleanupComplete = true)
     }
 
-    private suspend fun syncRecoverableDirectories(context: Context): Set<String> {
+    private suspend fun syncRecoverableDirectories(
+        context: Context,
+        configuredTreeUri: Uri?,
+    ): Map<String, Boolean> {
         // Cleanup replay can hash/provider-query large failed outputs. Run it once for the whole
         // refresh, not once per default/persisted/legacy directory scan. Replay itself is best
         // effort: one cleanup failure must not make unrelated directories unavailable. Each scan
@@ -777,10 +850,10 @@ object RecordingRepository {
         // suppression state itself cannot be read.
         runCatching { retryPendingOutputCleanup(context) }
             .onFailure { error -> Log.w("RecordingRepository", "Unable to replay pending output cleanup", error) }
-        val reconciledDirectoryIds = LinkedHashSet<String>()
+        val directoryReads = LinkedHashMap<String, Boolean>()
         val directoryUris = LinkedHashMap<String, Uri?>()
         directoryUris[getOutputDirectoryId(context, null)] = null
-        getConfiguredExportTreeUri(context)?.let { uri ->
+        configuredTreeUri?.let { uri ->
             directoryUris[getOutputDirectoryId(context, uri)] = uri
         }
         runCatching { context.contentResolver.persistedUriPermissions }
@@ -794,11 +867,8 @@ object RecordingRepository {
             }
 
         for ((directoryId, treeUri) in directoryUris) {
-            if (syncObservedDirectory(context, directoryId) { known ->
-                    listOutputDirectoryRecordings(context, treeUri, known)
-                }
-            ) {
-                reconciledDirectoryIds += directoryId
+            directoryReads[directoryId] = syncObservedDirectory(context, directoryId) { known ->
+                listOutputDirectoryRecordings(context, treeUri, known)
             }
         }
 
@@ -806,11 +876,8 @@ object RecordingRepository {
         // scanning it forever so upgrading never strands a recording in the old location.
         val legacyDirectoryId = getSavedRecordingsDirectory(context).absolutePath
         if (legacyDirectoryId !in directoryUris.keys) {
-            if (syncObservedDirectory(context, legacyDirectoryId) { known ->
-                    listLegacyAppStorageRecordings(context, known)
-                }
-            ) {
-                reconciledDirectoryIds += legacyDirectoryId
+            directoryReads[legacyDirectoryId] = syncObservedDirectory(context, legacyDirectoryId) { known ->
+                listLegacyAppStorageRecordings(context, known)
             }
         }
 
@@ -827,7 +894,7 @@ object RecordingRepository {
         ) {
             migrateLegacyAppStorageLocked(context, legacyDirectoryId)
         }
-        return reconciledDirectoryIds
+        return directoryReads
     }
 
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {

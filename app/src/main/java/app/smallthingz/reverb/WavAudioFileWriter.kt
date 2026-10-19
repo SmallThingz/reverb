@@ -107,7 +107,7 @@ internal inline fun <T> openAfterWavConfigurationValidation(
     return open()
 }
 
-private fun openWavSeekableOutput(
+internal fun openWavSeekableOutput(
     context: Context,
     target: RecordingOutputTarget,
     sampleRate: Int,
@@ -132,7 +132,8 @@ internal class WavAudioFileWriter internal constructor(
     private val channelCount: Int,
     private val sampleFormat: PcmSampleFormat = PcmSampleFormat.PCM_16,
     private val output: WavSeekableOutput,
-) : Closeable {
+    private val maximumFrameCount: Long = Long.MAX_VALUE,
+) : RecordingAudioWriter {
     constructor(
         context: Context,
         target: RecordingOutputTarget,
@@ -170,9 +171,9 @@ internal class WavAudioFileWriter internal constructor(
     private var payloadWriteFailure: Throwable? = null
     private var closed = false
     @Volatile
-    var totalSampleBytesWritten: Long = 0
+    override var totalSampleBytesWritten: Long = 0
         private set
-    val totalFileBytesWritten: Long
+    override val totalFileBytesWritten: Long
         get() = headerSize.toLong() + paddedDataSize(totalSampleBytesWritten)
     val payloadOffsetBytes: Long
         get() = headerSize.toLong()
@@ -183,6 +184,7 @@ internal class WavAudioFileWriter internal constructor(
 
     init {
         try {
+            require(maximumFrameCount >= 0L)
             writeHeader(dataSize = 0)
         } catch (error: Throwable) {
             throw requireNotNull(
@@ -192,7 +194,7 @@ internal class WavAudioFileWriter internal constructor(
     }
 
     @Synchronized
-    fun write(
+    override fun write(
         bytes: ByteArray,
         offset: Int,
         count: Int,
@@ -210,7 +212,7 @@ internal class WavAudioFileWriter internal constructor(
             "WAV writes must contain complete frames: count=$count frameBytes=$frameBytes"
         }
         val nextDataSize = totalSampleBytesWritten + count.toLong()
-        if (paddedDataSize(nextDataSize) > maxPayloadBytes) {
+        if (nextDataSize / frameBytes > maximumFrameCount || paddedDataSize(nextDataSize) > maxPayloadBytes) {
             throw IOException("WAV file exceeds RIFF size limit")
         }
         val buf = ByteBuffer.wrap(bytes, offset, count)
@@ -230,6 +232,11 @@ internal class WavAudioFileWriter internal constructor(
         payloadDigest.update(bytes, offset, count)
         totalSampleBytesWritten += count.toLong()
     }
+
+    override fun verify(context: Context, checkCancelled: () -> Unit): StableOutputFingerprint = verifyWavOutputTargetAndDigest(
+        context, target, totalFileBytesWritten, expectedHeaderBytes, payloadOffsetBytes,
+        totalSampleBytesWritten, payloadSha256, checkCancelled = checkCancelled,
+    )
 
     @Synchronized
     override fun close() {
