@@ -239,11 +239,7 @@ internal fun libraryEmptyStateVisible(
     isRefreshing: Boolean,
 ): Boolean = hasLoaded && listEmpty && !isRefreshing
 
-private data class LibraryNotice(
-    val message: String,
-    val tone: FeedbackTone,
-    val canUndo: Boolean = false,
-)
+private data class LibraryUndoNotice(val message: String, val window: Long)
 
 @Composable
 fun FilesScreen(
@@ -260,6 +256,7 @@ fun FilesScreen(
     onSettingsClick: () -> Unit = {},
     hasIncidents: Boolean = false,
     onDismissLibrary: () -> Unit = {},
+    onUndoVisibleChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -282,27 +279,37 @@ fun FilesScreen(
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
     val pendingDeletions = remember { mutableStateMapOf<String, RecordingEntity>() }
-    var isDeleting by remember { mutableStateOf(false) }
+    val deletionState = remember { LibraryDeletionState() }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var infoRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var expandedRecordingId by remember { mutableStateOf<String?>(null) }
     var trimRequestRecordingId by remember { mutableStateOf<String?>(null) }
-    var notice by remember { mutableStateOf<LibraryNotice?>(null) }
+    var undoNotice by remember { mutableStateOf<LibraryUndoNotice?>(null) }
     val deletionJob = remember { arrayOfNulls<Job>(1) }
     val shareJob = remember { arrayOfNulls<Job>(1) }
     val shareGeneration = remember { intArrayOf(0) }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
+    val undoVisibilityCallback = androidx.compose.runtime.rememberUpdatedState(onUndoVisibleChange)
     val refreshQueue = remember(scope) { LibraryRefreshQueue(scope) { activeState.value } }
     val firstRefreshReady = remember { booleanArrayOf(false) }
     val deferredRefreshSpinner = remember { booleanArrayOf(false) }
-    val deletionsCommittedInBackground = remember { booleanArrayOf(false) }
-    val deletionCommitInFlight = remember { booleanArrayOf(false) }
     var contextMenuRecordingId by remember { mutableStateOf<String?>(null) }
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
-        if (notice?.canUndo != true) notice = LibraryNotice(message, tone)
+        AppFeedbackCenter.post(message, tone)
+    }
+
+    fun clearUndoNotice(window: Long? = null) {
+        if (window != null && undoNotice?.window != window) return
+        undoNotice = null
+        undoVisibilityCallback.value(false)
+    }
+
+    DisposableEffect(active) {
+        undoVisibilityCallback.value(active && undoNotice != null)
+        onDispose { undoVisibilityCallback.value(false) }
     }
 
     fun setExpandedRecording(id: String?) {
@@ -380,13 +387,12 @@ fun FilesScreen(
                 val storedById = stored.associateBy { it.id }
                 reconcileSelection(storedById)
                 reconcileTransientRecordings(previousById, storedById)
-                if (deletionsCommittedInBackground[0]) {
+                if (deletionState.committedInBackground) {
                     // deleteInBackground owns failure reporting through the process feedback
                     // queue before refresh can return. Refresh only reconciles the optimistic
                     // Library transaction; do not render a second local error card for it.
                     pendingDeletions.clear()
-                    deletionsCommittedInBackground[0] = false
-                    isDeleting = false
+                    deletionState.reconcileNoPendingTargets()
                 } else {
                     var pendingTargetInvalidated = false
                     pendingDeletions.keys.toList().forEach { id ->
@@ -403,10 +409,10 @@ fun FilesScreen(
                     if (pendingDeletions.isEmpty()) {
                         deletionJob[0]?.cancel()
                         deletionJob[0] = null
-                        isDeleting = false
-                        if (notice?.canUndo == true) notice = null
+                        deletionState.reconcileNoPendingTargets()
+                        clearUndoNotice()
                         if (pendingTargetInvalidated) {
-                            notice = LibraryNotice(
+                            showPassiveNotice(
                                 resources.getString(R.string.recording_delete_failed),
                                 FeedbackTone.ERROR,
                             )
@@ -476,7 +482,7 @@ fun FilesScreen(
             showInfoDialog = false
             infoRecording = null
             setExpandedRecording(null)
-            notice = null
+            clearUndoNotice()
             return@LaunchedEffect
         }
         if (!hasLoaded) {
@@ -531,7 +537,6 @@ fun FilesScreen(
             // pending entries so a newer reused ID could never be cleared by this older batch.
             recordings = recordings.filterNot { it.id in deletedIds }
             releaseCompletedForegroundDeletionTargets(pendingDeletions, pending)
-            deletionsCommittedInBackground[0] = false
         }
         val deletePhaseFailed = deletionBatchFailed(pending.size, deleted, failed)
         try {
@@ -567,7 +572,7 @@ fun FilesScreen(
         }
         if (deletionBatchFailed(pending.size, deleted, failed)) {
             if (activeState.value) {
-                notice = LibraryNotice(
+                showPassiveNotice(
                     resources.getString(R.string.recording_delete_failed),
                     FeedbackTone.ERROR,
                 )
@@ -581,17 +586,10 @@ fun FilesScreen(
     }
 
     fun commitPendingDeletionsInBackground() {
-        if (!shouldHandoffPendingDeletionsToBackground(
-                hasPending = pendingDeletions.isNotEmpty(),
-                committedInBackground = deletionsCommittedInBackground[0],
-                foregroundCommitInFlight = deletionCommitInFlight[0],
-            )
-        ) return
+        if (!deletionState.handoffToBackground(pendingDeletions.isNotEmpty())) return
         deletionJob[0]?.cancel()
         deletionJob[0] = null
         val pending = pendingDeletions.values.toList()
-        deletionsCommittedInBackground[0] = true
-        isDeleting = true
         RecordingRepository.deleteInBackground(context, pending)
     }
 
@@ -607,7 +605,7 @@ fun FilesScreen(
                 refresh(showSpinner = false)
             }
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
-                notice = null
+                clearUndoNotice()
                 commitPendingDeletionsInBackground()
             }
         }
@@ -616,6 +614,7 @@ fun FilesScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             if (active) {
+                clearUndoNotice()
                 deletionJob[0]?.cancel()
                 // Register any committed delete before asking the parent to refresh. This keeps
                 // its fast DB snapshot from racing ahead of background deletion on sheet close.
@@ -642,12 +641,11 @@ fun FilesScreen(
     }
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
-        if (isDeleting || targets.isEmpty()) return
+        if (targets.isEmpty()) return
+        val undoWindow = deletionState.extendUndoWindow() ?: return
         if (targets.any { it.id == expandedRecordingId }) {
             setExpandedRecording(null)
         }
-        isDeleting = true
-        deletionsCommittedInBackground[0] = false
         targets.forEach { pendingDeletions[it.id] = it }
         onVisibleRecordingsChanged(recordings.filterNot { it.id in pendingDeletions })
         clearSelection()
@@ -655,22 +653,22 @@ fun FilesScreen(
         val count = pendingDeletions.size
         val message = if (count == 1) resources.getString(R.string.recording_deleted)
         else resources.getQuantityString(R.plurals.recordings_deleted, count, count)
-        notice = LibraryNotice(message, FeedbackTone.INFO, canUndo = true)
+        undoVisibilityCallback.value(activeState.value)
+        undoNotice = LibraryUndoNotice(message, undoWindow)
         deletionJob[0]?.cancel()
         deletionJob[0] = scope.launch {
             delay(4_500L)
-            notice = null
+            if (!deletionState.beginForegroundCommit(undoWindow)) return@launch
+            clearUndoNotice(undoWindow)
             // Close the undo transaction before any physical delete begins. A stale
             // FeedbackCard callback may still be dispatched for one frame after notice clears.
             // Mark foreground ownership before dropping the undo Job reference so ON_STOP/panel
             // disposal cannot enqueue the same identity-bound delete concurrently.
-            deletionCommitInFlight[0] = true
             deletionJob[0] = null
             try {
                 finalizeDeletions()
             } finally {
-                deletionCommitInFlight[0] = false
-                isDeleting = false
+                deletionState.completeForegroundCommit()
             }
         }
     }
@@ -681,16 +679,14 @@ fun FilesScreen(
         deleteRecordings(selected)
     }
 
-    fun undoDelete() {
+    fun undoDelete(undoWindow: Long) {
         val undoJob = deletionJob[0] ?: return
-        if (notice?.canUndo != true || deletionsCommittedInBackground[0]) return
+        if (!deletionState.undo(undoWindow)) return
         undoJob.cancel()
         deletionJob[0] = null
         pendingDeletions.clear()
-        deletionsCommittedInBackground[0] = false
         onVisibleRecordingsChanged(recordings)
-        notice = null
-        isDeleting = false
+        clearUndoNotice(undoWindow)
         refresh(showSpinner = false)
     }
 
@@ -816,7 +812,7 @@ fun FilesScreen(
                                 icon = AppIcons.delete,
                                 contentDescription = stringResource(R.string.delete_recording),
                                 onClick = { deleteSelected() },
-                                enabled = !isDeleting && !selectionHasBusyMutation,
+                                enabled = deletionState.acceptsDeletions && !selectionHasBusyMutation,
                                 tint = MaterialTheme.colorScheme.error,
                             )
                         }
@@ -932,6 +928,10 @@ fun FilesScreen(
                                     val recording = item.recording
                                     RecordingItem(
                                         item = item,
+                                        groupEdges = RecordingGroupEdges(
+                                            first = listItems.getOrNull(index - 1) !is ListItem.Recording,
+                                            last = listItems.getOrNull(index + 1) !is ListItem.Recording,
+                                        ),
                                         isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
                                         screenActive = active,
@@ -1042,12 +1042,12 @@ fun FilesScreen(
             }
 
 
-            notice?.let { current ->
+            undoNotice?.let { current ->
                 FeedbackCard(
                     message = current.message,
-                    tone = current.tone,
-                    actionLabel = if (current.canUndo) stringResource(R.string.undo) else null,
-                    onAction = if (current.canUndo) ::undoDelete else null,
+                    tone = FeedbackTone.INFO,
+                    actionLabel = stringResource(R.string.undo),
+                    onAction = { undoDelete(current.window) },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1163,6 +1163,7 @@ private fun HeaderItem(dateLabel: String, compactTop: Boolean = false) {
 @Composable
 private fun RecordingItem(
     item: ListItem.Recording,
+    groupEdges: RecordingGroupEdges,
     isSelected: Boolean,
     selectionActive: Boolean,
     screenActive: Boolean,
@@ -1193,9 +1194,8 @@ private fun RecordingItem(
     Box {
         RecordingEntityCard(
             recording = item.recording,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 10.dp),
+            modifier = Modifier.fillMaxWidth(),
+            groupEdges = groupEdges,
             isSelected = isSelected,
             selectionActive = selectionActive,
             interactionsEnabled = !operationBusy,

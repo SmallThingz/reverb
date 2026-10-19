@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -847,6 +848,7 @@ private fun MainScreen(
     var showLibrary by rememberSaveable { mutableStateOf(false) }
     var librarySelectionActive by remember { mutableStateOf(false) }
     var libraryExpandedRecordingActive by remember { mutableStateOf(false) }
+    var libraryUndoVisible by remember { mutableStateOf(false) }
     var panelDragTarget by remember { mutableStateOf<MainPanelDragTarget?>(null) }
     var settingsDragProgress by remember { mutableFloatStateOf(0f) }
     var libraryDragProgress by remember { mutableFloatStateOf(0f) }
@@ -1146,11 +1148,22 @@ private fun MainScreen(
         }
 
         AppFeedbackHost(
+            deliveryAllowed = !showAboutDialog &&
+                !(showLibrary && !incidentsOverlayVisible && libraryUndoVisible),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .zIndex(2f)
+                .zIndex(when {
+                    incidentsOverlayVisible -> 7f
+                    showLibrary || libraryPanelProgress > 0f -> 5f
+                    else -> 2f
+                })
                 .padding(horizontal = 18.dp)
-                .padding(bottom = if (showSettings) 20.dp else 104.dp),
+                .padding(bottom = when {
+                    incidentsOverlayVisible || showLibrary || libraryPanelProgress > 0f ->
+                        20.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                    showSettings -> 20.dp
+                    else -> 104.dp
+                }),
         )
 
         if (
@@ -1195,6 +1208,7 @@ private fun MainScreen(
                         initialRecordings = librarySnapshot,
                         onSelectionActiveChange = { librarySelectionActive = it },
                         onExpandedRecordingActiveChange = { libraryExpandedRecordingActive = it },
+                        onUndoVisibleChange = { libraryUndoVisible = it },
                         showNormalTopBar = false,
                         onVisibleRecordingsChanged = { visible ->
                             if (librarySnapshot != visible) {

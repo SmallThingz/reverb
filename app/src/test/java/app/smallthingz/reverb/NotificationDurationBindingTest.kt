@@ -95,42 +95,39 @@ class NotificationDurationBindingTest {
         assertNull(binding.commitInput(62, parentOwner))
     }
 
-    @Test fun selectedTileBufferTapRetainsCapacityAndWheelOwnership() {
+    @Test fun selectedTileBufferTapRetainsWheelOwnership() {
         val target = QuickSettingsTileEditorTarget(null)
-        val capacityRevision = target.capacityRevision
         val wheelOwner = target.wheelOwner(7L)
 
         assertFalse(target.selectBuffer(target.buffer))
-        assertEquals(capacityRevision, target.capacityRevision)
         assertEquals(wheelOwner, target.wheelOwner(7L))
     }
 
-    @Test fun rapidTileBufferRoundTripInvalidatesTheOriginalCapacityRequest() {
+    @Test fun rapidTileBufferRoundTripInvalidatesTheOriginalWheelInteraction() {
         val target = QuickSettingsTileEditorTarget(null)
         val originalBuffer = target.buffer
-        val originalCapacityRevision = target.capacityRevision
+        val binding = NotificationDurationBinding()
+        val originalOwner = target.wheelOwner(7L)
+        binding.update(30, 300, enabled = true, owner = originalOwner)
+        binding.beginInteraction(originalOwner)
+        binding.select(45)
 
         assertTrue(target.selectBuffer(ReverbService.BufferSlot.ONE_SHOT))
         assertTrue(target.selectBuffer(originalBuffer))
 
         assertEquals(originalBuffer, target.buffer)
-        assertEquals(originalCapacityRevision + 2L, target.capacityRevision)
+        assertNotEquals(originalOwner, target.wheelOwner(7L))
+        assertNull(binding.finishInteraction(target.wheelOwner(7L)))
+        assertEquals(30, binding.seconds)
     }
 
-    @Test fun tileSaveRejectsBufferChangeAndDurationEditsDoNotReloadCapacity() {
+    @Test fun tileSaveRejectsBufferChangeAndRetainsDraft() {
         val target = QuickSettingsTileEditorTarget(null)
-        val capacityRevision = target.capacityRevision
         val editRevision = target.editRevision
         target.busy = true
 
         assertFalse(target.selectBuffer(ReverbService.BufferSlot.ONE_SHOT))
         assertEquals(ReverbService.BufferSlot.LOOPING, target.buffer)
-        assertEquals(capacityRevision, target.capacityRevision)
         assertEquals(editRevision, target.editRevision)
-
-        target.busy = false
-        target.seconds++
-        target.editRevision++
-        assertEquals(capacityRevision, target.capacityRevision)
     }
 }

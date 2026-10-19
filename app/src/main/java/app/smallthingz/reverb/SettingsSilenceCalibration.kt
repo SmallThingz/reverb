@@ -6,7 +6,7 @@ import android.view.ViewTreeObserver
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,7 +35,9 @@ internal class SettingsSilenceCalibration(
 ) {
     var running by mutableStateOf(false)
         private set
-    var preparing by mutableIntStateOf(0)
+    var holding by mutableStateOf(false)
+        private set
+    var elapsedMillis by mutableLongStateOf(0L)
         private set
     var progress by mutableStateOf<Float?>(null)
         private set
@@ -45,38 +47,41 @@ internal class SettingsSilenceCalibration(
         private set
     private var generation = 0L
     private var job: Job? = null
+    private var activeRequest: SilenceSampleRequest? = null
     private var disposed = false
 
     private fun acceptsInput(): Boolean = !disposed && scope.isActive &&
         lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
         view.isAttachedToWindow && view.hasWindowFocus()
 
-    fun begin(config: SilenceGateConfig, input: SilenceCalibrationInput) {
+    fun beginHeld(config: SilenceGateConfig, input: SilenceCalibrationInput) = begin(config, input, held = true)
+
+    fun beginTimed(config: SilenceGateConfig, input: SilenceCalibrationInput) = begin(config, input, held = false)
+
+    private fun begin(config: SilenceGateConfig, input: SilenceCalibrationInput, held: Boolean) {
         if (!acceptsInput() || !config.enabled || running) return
         val owner = readOwner(config, input) ?: return
         val request = ++generation
         running = true
-        preparing = 3
+        holding = held
+        elapsedMillis = 0L
         progress = null
         error = null
         measured = null
         fun isCurrent(): Boolean = request == generation && acceptsInput() &&
             readOwner(config, input) == owner
-        job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        val startedJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 val result = calibrateSilence(
                     createSampler = {
                         if (!isCurrent()) throw CancellationException()
-                        SilenceSampleOwner(context, expectedInput = input)
-                    },
-                    onPreparing = {
-                        if (!isCurrent()) throw CancellationException()
-                        preparing = it
+                        SilenceSampleOwner(context, expectedInput = input,
+                            request = SilenceSampleRequest(held).also { activeRequest = it })
                     },
                     onProgress = {
                         if (!isCurrent()) throw CancellationException()
-                        preparing = 0
-                        progress = it.progress
+                        elapsedMillis = it.elapsedMillis
+                        progress = if (holding) null else it.progress
                     },
                 )
                 // Both this live admission read and the draft callback execute on Main without
@@ -90,26 +95,48 @@ internal class SettingsSilenceCalibration(
             } catch (failure: Exception) {
                 if (isCurrent()) error = when (failure) {
                     is SilenceCalibrationTooLoud -> context.getString(R.string.silence_calibration_too_loud)
+                    is SilenceCalibrationTooShort -> context.getString(R.string.silence_calibration_too_short)
                     is SilenceCalibrationTimedOut -> context.getString(R.string.silence_calibration_timeout)
                     else -> failure.message ?: context.getString(R.string.silence_sample_failed)
                 }
             } finally {
                 if (request == generation) {
                     job = null
+                    activeRequest = null
                     running = false
-                    preparing = 0
+                    holding = false
                     progress = null
                 }
             }
         }
+        // A bind can reject synchronously; do not reinstall its already-finished job after cleanup.
+        if (request == generation && running) job = startedJob
+    }
+
+    /** A short press keeps its already-started sample and converts it to the ordinary timed run. */
+    fun completeTap() {
+        if (!holding || !running || !acceptsInput()) return
+        holding = false
+        activeRequest?.useTimedSample()
+        progress = activeRequest?.state?.value?.progress
+    }
+
+    /** A held sample ends at release; the audio owner removes both handling edges. */
+    fun finishHeld() {
+        if (!holding || !running || !acceptsInput()) return
+        holding = false
+        activeRequest?.finishHold()
     }
 
     fun cancel(clearMeasurement: Boolean = false) {
         generation++
+        activeRequest?.cancel()
         job?.cancel()
         job = null
+        activeRequest = null
         running = false
-        preparing = 0
+        holding = false
+        elapsedMillis = 0L
         progress = null
         if (clearMeasurement) {
             measured = null

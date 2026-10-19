@@ -10,9 +10,9 @@ import android.os.IBinder
 internal class SilenceSampleOwner(
     context: Context,
     private val expectedInput: SilenceCalibrationInput? = null,
+    override val request: SilenceSampleRequest = SilenceSampleRequest(),
 ) : SilenceSampler {
     private val context = context.applicationContext
-    override val request = SilenceSampleRequest()
     private var bound = false
     private var released = false
     private val connection = object : ServiceConnection {

@@ -1686,7 +1686,7 @@ open class ReverbService : Service() {
                     }
                 }
             }
-            AndroidCaptureAudioInput(configured)
+            AndroidCaptureAudioInput(configured, channelMode.channelCount * pcmSampleFormat.bytesPerSample)
         } catch (error: Exception) {
             Log.e(TAG, "Unable to create AudioRecord", error)
             null
@@ -2890,10 +2890,13 @@ open class ReverbService : Service() {
 
     private fun processCapturedAudio(
         bytes: ByteArray, offset: Int, count: Int, slot: BufferSlot, epoch: Long,
+        readEndedAtNanos: Long, captureStartedAtNanos: Long?,
     ) {
         silenceSampleRequest?.let { request ->
             if (request.running()) try {
-                request.accept(bytes, offset, count, sampleRate, channelMode.channelCount, pcmSampleFormat)
+                if (request.remainingTimeoutMillis() == 0L) request.fail(getString(R.string.silence_sample_failed))
+                else request.acceptCaptured(bytes, offset, count, sampleRate, channelMode.channelCount, pcmSampleFormat,
+                        captureStartedAtNanos, readEndedAtNanos)
             } catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
             if (!request.running()) silenceSampleRequest = null
         }
@@ -2932,15 +2935,38 @@ open class ReverbService : Service() {
         if (state != STATE_LISTENING || epoch != captureContinuityGeneration.get()) finishSilenceGate()
     }
 
-    /** Explicit three-second calibration. Reuse capture when active; otherwise sample only in memory. */
+    /** Reuse capture when active; otherwise sample only in memory, without changing capture intent. */
     internal fun sampleSilence(
         request: SilenceSampleRequest = SilenceSampleRequest(),
         expectedInput: SilenceCalibrationInput? = null,
     ): SilenceSampleRequest {
+        val timeoutCheck = object : Runnable {
+            override fun run() {
+                if (!request.running()) return
+                val remaining = request.remainingTimeoutMillis()
+                if (remaining == 0L) request.fail(getString(R.string.silence_sample_failed))
+                else mainHandler.postDelayed(this, remaining)
+            }
+        }
+        val rearmTimeout = Runnable {
+            mainHandler.removeCallbacks(timeoutCheck)
+            if (request.running()) timeoutCheck.run()
+        }
+        request.setControlWakeup {
+            // Serialize re-arming with timeout dispatch so a short tap replaces the
+            // already-running held deadline, including a stalled audio queue.
+            mainHandler.post(rearmTimeout)
+            audioHandler.post {
+                try { request.processPendingControl() }
+                catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
+            }
+        }
+        mainHandler.post(rearmTimeout)
         if (serviceDestroying || !audioHandler.post {
                 // onCreate posts initialization first. Admission must stay on this queue: a
                 // main-thread bind may observe invented defaults or a valid operational fallback.
-                if (serviceDestroying || !request.running() || !captureStoresAdmitted || !captureStoresReady) {
+                if (serviceDestroying || !request.running() || request.remainingTimeoutMillis() == 0L ||
+                    !captureStoresAdmitted || !captureStoresReady) {
                     request.fail(getString(R.string.silence_sample_failed))
                     return@post
                 }
@@ -2951,9 +2977,6 @@ open class ReverbService : Service() {
                 silenceSampleRequest?.cancel()
                 if (audioRecord != null && state == STATE_LISTENING) {
                     silenceSampleRequest = request
-                    mainHandler.postDelayed({
-                        if (request.running()) request.fail(getString(R.string.silence_sample_failed))
-                    }, 8_000L)
                 } else sampleSilenceWhileIdle(request, expectedInput)
             }) request.fail(getString(R.string.silence_sample_failed))
         return request
@@ -2988,15 +3011,18 @@ open class ReverbService : Service() {
             val frameBytes = channelMode.channelCount * pcmSampleFormat.bytesPerSample
             val bytes = ByteArray(maxOf(frameBytes, sampleRate / 25 * frameBytes))
             val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
-            val deadline = System.nanoTime() + 6_000_000_000L
             while (request.running() && !serviceDestroying && generation == listeningCommandGeneration.get()) {
-                if (System.nanoTime() > deadline) throw IOException(getString(R.string.silence_sample_failed))
+                request.processPendingControl()
+                if (!request.running()) break
+                if (request.remainingTimeoutMillis() == 0L) throw IOException(getString(R.string.silence_sample_failed))
                 buffer.clear()
                 val read = record.read(buffer, bytes.size, AudioRecord.READ_NON_BLOCKING)
+                val readEndedAtNanos = System.nanoTime()
                 if (read < 0) throw IOException(getString(R.string.silence_sample_failed))
                 if (read > 0) {
                     buffer.position(0); buffer.get(bytes, 0, read)
-                    request.accept(bytes, 0, read - read % frameBytes, sampleRate, channelMode.channelCount, pcmSampleFormat)
+                    request.acceptCaptured(bytes, 0, read - read % frameBytes, sampleRate, channelMode.channelCount,
+                        pcmSampleFormat, record.lastReadStartedAtNanos(readEndedAtNanos), readEndedAtNanos)
                 } else Thread.sleep(8L)
             }
             if (request.running()) request.fail(getString(R.string.silence_sample_busy))
@@ -3308,10 +3334,13 @@ open class ReverbService : Service() {
             frameBytes = frameBytes,
             capacityBytes = captureScratch.size,
             visualizationActive = visualizationCallbacks.current() != null,
-            appUiForeground = appUiForeground,
+            appUiForeground = appUiForeground || silenceSampleRequest?.running() == true,
         )
         captureBuffer.clear()
         val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
+        val readEndedAtNanos = System.nanoTime()
+        val captureStartedAtNanos = if (read > 0 && silenceSampleRequest?.running() == true)
+            currentRecord.lastReadStartedAtNanos(readEndedAtNanos) else null
         if (read == AudioRecord.ERROR_DEAD_OBJECT) {
             recoverAudioRecordOnAudioThread(
                 CaptureInputOperationOwner(currentRecord, readContinuityGeneration, readReleaseGeneration),
@@ -3342,7 +3371,8 @@ open class ReverbService : Service() {
             // A destination-only version change may already have moved the UI to the new
             // buffer. Avoid attributing this final old-buffer read to the new visualizer.
             if (commandGenerationUnchanged) publishVisualization(captureScratch, 0, alignedRead)
-            processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration)
+            processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration,
+                readEndedAtNanos, captureStartedAtNanos)
             requestDurabilitySyncIfDue()
         }
 

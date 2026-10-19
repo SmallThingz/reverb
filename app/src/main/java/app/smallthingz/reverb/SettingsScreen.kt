@@ -1624,16 +1624,25 @@ fun SettingsScreen(
                                     finishSettingsEdit()
                                 }
                             },
-                            onCalibrate = { calibration.begin(selectedSilence, originalSnapshot.silenceCalibrationInput()) },
+                            onCalibrate = { calibration.beginTimed(selectedSilence, originalSnapshot.silenceCalibrationInput()) },
+                            onBeginHeldCalibration = {
+                                // Recheck the controller synchronously: a keyboard click can have
+                                // started sampling before Compose refreshes pointer eligibility.
+                                if (calibration.running) false else {
+                                    calibration.beginHeld(selectedSilence, originalSnapshot.silenceCalibrationInput())
+                                    calibration.running && calibration.holding
+                                }
+                            },
+                            onCalibrationTap = { calibration.completeTap() },
+                            onFinishHeldCalibration = { calibration.finishHeld() },
                             onCancelCalibration = { calibration.cancel() },
                             enabled = settingsInteractionReady && !settingsPersisting,
                             maximumHz = minOf(SILENCE_MAX_HZ, selectedSampleRate / 2),
                             sampledPeaks = calibration.measured?.peaks,
                             calibrationAllowed = originalSnapshot.silenceCalibrationInput() == currentSettingsSnapshot().silenceCalibrationInput(),
                             calibrating = calibration.running,
+                            holdingCalibration = calibration.holding,
                             calibrationProgress = calibration.progress,
-                            calibrationMessage = if (calibration.preparing > 0)
-                                resources.getString(R.string.silence_preparing, calibration.preparing) else null,
                             calibrationError = calibration.error,
                             calibrationUnavailableReason = resources.getString(R.string.silence_apply_input_first),
                             modifier = Modifier.settingsAudioDivider(top = true),

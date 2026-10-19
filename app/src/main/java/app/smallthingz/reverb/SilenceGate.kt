@@ -235,7 +235,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                 detectedPowers[channel * powers.size + i] = power
                 detectedFrequencies[channel * powers.size + i] = hz
             }
-            if (frames >= hop) calibrateEdgeTone(channel, frames, mean)
+            if (frames >= hop) calibrateEdgeTone(channel, frames)
         }
         powers.fill(0.0)
         for (channel in 0 until channels) for (bin in powers.indices) {
@@ -283,7 +283,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
     // Conjugate Hann lobes overlap near DC/Nyquist, invalidating interior-bin
     // interpolation. Fit one coherent edge tone with a DC offset instead. The
     // fit is attempted only when an edge dominates, and uses fixed bounded work.
-    private fun calibrateEdgeTone(channel: Int, frames: Int, mean: Double) {
+    private fun calibrateEdgeTone(channel: Int, frames: Int) {
         var lowPower = 0.0; var highPower = 0.0
         for (bin in 1..edgeBins) {
             lowPower = max(lowPower, channelPowers[bin])
@@ -293,13 +293,28 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         val high = sampleRate / 2 <= SILENCE_MAX_HZ &&
             highPower > channelPowers[powers.lastIndex - edgeBins]
         if (!low && !high) return
+        // Fit under the same Hann observation as the FFT. A rectangular fit can
+        // correlate a distant stationary tone with a low edge tone at a partial
+        // boundary, then manufacture a louder residual when that fit is removed.
+        val pad = (size - frames) / 2
+        var weight = 0.0
+        var weightedSum = 0.0
+        for (i in 0 until frames) {
+            val w = analysisWindow[pad + i]
+            weight += w
+            weightedSum += w * samples[i]
+        }
+        val weightedMean = weightedSum / weight
         var energy = 0.0
-        for (i in 0 until frames) energy += (samples[i] - mean) * (samples[i] - mean)
+        for (i in 0 until frames) {
+            val value = samples[i] - weightedMean
+            energy += analysisWindow[pad + i] * value * value
+        }
         if (energy <= 1e-24) return
         // The two edges are independent. A quiet low-frequency companion must
         // not prevent a dominant near-Nyquist tone from being calibrated.
-        if (low && calibrateEdgeTone(channel, frames, mean, energy, low = true)) return
-        if (high && calibrateEdgeTone(channel, frames, mean, energy, low = false)) return
+        if (low && calibrateEdgeTone(channel, frames, weightedMean, energy, low = true)) return
+        if (high && calibrateEdgeTone(channel, frames, weightedMean, energy, low = false)) return
     }
 
     private fun calibrateEdgeTone(channel: Int, frames: Int, mean: Double, energy: Double, low: Boolean): Boolean {
@@ -438,15 +453,21 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         var c = 1.0; var s = 0.0
         var cc = 0.0; var ss = 0.0; var cs = 0.0
         var sumC = 0.0; var sumS = 0.0; var xc = 0.0; var xs = 0.0
+        var weight = 0.0
+        var sumX = 0.0
+        val pad = (size - frames) / 2
         for (i in 0 until frames) {
+            val w = analysisWindow[pad + i]
             val value = samples[i] - mean
-            cc += c * c; ss += s * s; cs += c * s
-            sumC += c; sumS += s; xc += value * c; xs += value * s
+            weight += w; sumX += w * value
+            cc += w * c * c; ss += w * s * s; cs += w * c * s
+            sumC += w * c; sumS += w * s; xc += w * value * c; xs += w * value * s
             val nextC = c * stepCos - s * stepSin
             s = s * stepCos + c * stepSin; c = nextC
         }
-        cc -= sumC * sumC / frames; ss -= sumS * sumS / frames
-        cs -= sumC * sumS / frames
+        cc -= sumC * sumC / weight; ss -= sumS * sumS / weight
+        cs -= sumC * sumS / weight
+        xc -= sumX * sumC / weight; xs -= sumX * sumS / weight
         val determinant = cc * ss - cs * cs
         val trace = cc + ss
         val condition = determinant / (trace * trace)

@@ -344,6 +344,25 @@ class SilenceGateTest {
         }
     }
 
+    @Test fun partialUpperBandToneCannotInventLowEdgeAudioOrHideARealCompanion() {
+        val curve = SilenceGateConfig(true, listOf(SilencePoint(20, -96), SilencePoint(1250, -96),
+            SilencePoint(2500, -34), SilencePoint(5000, -34), SilencePoint(20000, -50)))
+        for (frames in listOf(256, 352, 512)) for (hz in listOf(20.0, 31.25, 40.0)) {
+            for (db in listOf(-100.0, -80.0)) for (phase in listOf(0.0, 1.0)) {
+                val bytes = ByteBuffer.allocate(frames * 4).order(ByteOrder.nativeOrder()).apply {
+                    repeat(frames) { frame ->
+                        putFloat((0.01 * sin(2 * PI * 3000 * frame / 8000) +
+                            Math.pow(10.0, db / 20) * sin(2 * PI * hz * frame / 8000 + phase)).toFloat())
+                    }
+                }.array()
+                val result = run(bytes, curve, rate = 8000, format = PcmSampleFormat.PCM_FLOAT)
+                val label = "frames=$frames hz=$hz db=$db phase=$phase"
+                if (db > -96) assertArrayEquals(label, bytes, result.bytes)
+                else assertEquals(label, 0, result.bytes.size)
+            }
+        }
+    }
+
     @Test fun unrelatedFrequencyEnergyDoesNotDisableEdgeAmplitudeCalibration() {
         val spectrum = SilenceSpectrum(16000, 1, PcmSampleFormat.PCM_FLOAT)
         val amplitude = Math.pow(10.0, -39.8 / 20)
@@ -544,7 +563,7 @@ class SilenceGateTest {
     @Test fun samplingIsBoundedAndProducesEditableFrequencyCurve() {
         val sample = SilenceSampleRequest()
         val noise = pcm(16000, 8000, 300.0, 0.01)
-        repeat(6) { sample.accept(noise, 0, noise.size, 16000, 1, PcmSampleFormat.PCM_16) }
+        repeat(8) { sample.accept(noise, 0, noise.size, 16000, 1, PcmSampleFormat.PCM_16) }
         assertTrue(sample.state.value.complete)
         val before = sample.state.value
         sample.accept(noise, 0, noise.size, 16000, 1, PcmSampleFormat.PCM_16)

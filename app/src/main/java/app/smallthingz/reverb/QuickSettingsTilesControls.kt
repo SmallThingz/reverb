@@ -47,7 +47,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -62,9 +61,46 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.floor
 
-private data class TileCapacity(val maximumSeconds: Int, val retainedSeconds: Double?)
+internal data class TileCapacity(val maximumSeconds: Int, val retainedSeconds: Double?)
 
-private fun readTileCapacity(context: Context, buffer: ReverbService.BufferSlot): TileCapacity = withRetentionPersistenceLock {
+/** Both choices share one format limit and one coherent retention snapshot. */
+internal data class TileCapacities(
+    val maximumSeconds: Int,
+    val loopingSeconds: Double?,
+    val oneShotSeconds: Double?,
+) {
+    fun forBuffer(buffer: ReverbService.BufferSlot) = TileCapacity(maximumSeconds,
+        if (buffer == ReverbService.BufferSlot.LOOPING) loopingSeconds else oneShotSeconds)
+}
+
+/** Keep the wheel mounted during refresh without treating its old limits as save authority. */
+internal class TileCapacityLoad {
+    internal class Request(val revision: Long)
+    private var request: Request? = null
+    private var readyRevision by mutableStateOf<Long?>(null)
+    var visible by mutableStateOf<TileCapacities?>(null)
+        private set
+
+    fun begin(revision: Long?): Request? {
+        readyRevision = null
+        return revision?.let(::Request).also { request = it }
+    }
+
+    fun isCurrent(candidate: Request, liveRevision: Long?): Boolean =
+        request === candidate && candidate.revision == liveRevision
+
+    fun finish(candidate: Request, liveRevision: Long?, capacities: TileCapacities): Boolean {
+        if (!isCurrent(candidate, liveRevision)) return false
+        visible = capacities
+        readyRevision = candidate.revision
+        return true
+    }
+
+    fun ready(liveRevision: Long?): TileCapacities? =
+        visible.takeIf { liveRevision != null && readyRevision == liveRevision }
+}
+
+private fun readTileCapacities(context: Context): TileCapacities = withRetentionPersistenceLock {
     val rate = getConfiguredSampleRate(context)
     val channels = getConfiguredChannelMode(context).channelCount
     val sampleFormat = getConfiguredPcmSampleFormat(context)
@@ -72,7 +108,7 @@ private fun readTileCapacity(context: Context, buffer: ReverbService.BufferSlot)
         getConfiguredOutputFormat(context), ExportCodec.PCM_16, rate, channels, sampleFormat,
     )
     val retention = retentionConfigurationForRead(context)
-    val retained = when (retention.mode) {
+    fun retained(buffer: ReverbService.BufferSlot) = when (retention.mode) {
         RetentionMode.TIME -> (if (buffer == ReverbService.BufferSlot.LOOPING)
             retention.loopingSeconds else retention.oneShotSeconds).takeIf { it > 0 }?.toDouble()
         RetentionMode.SIZE -> {
@@ -82,7 +118,8 @@ private fun readTileCapacity(context: Context, buffer: ReverbService.BufferSlot)
             if (bytes > 0 && bytesPerSecond > 0) bytes / bytesPerSecond else null
         }
     }
-    TileCapacity(floor(formatLimit.coerceIn(0.0, 86_400.0)).toInt(), retained)
+    TileCapacities(floor(formatLimit.coerceIn(0.0, 86_400.0)).toInt(),
+        retained(ReverbService.BufferSlot.LOOPING), retained(ReverbService.BufferSlot.ONE_SHOT))
 }
 
 private fun Context.quickTileActivity(): Activity? = when (this) {
@@ -131,8 +168,6 @@ internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?)
     internal var seconds by mutableIntStateOf(existing?.seconds ?: DEFAULT_QUICK_SAVE_SECONDS)
     internal var busy by mutableStateOf(false)
     internal var editRevision by mutableLongStateOf(0L)
-    internal var capacityRevision by mutableLongStateOf(0L)
-        private set
     private var lastWheelOwner: Pair<Long, Long>? = null
     private var wheelRevision = 0L
 
@@ -140,7 +175,6 @@ internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?)
         if (busy || buffer == selected) return false
         buffer = selected
         editRevision++
-        capacityRevision++
         return true
     }
 
@@ -351,9 +385,10 @@ private fun QuickTileInlineEditor(
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
-    var capacity by remember { mutableStateOf<TileCapacity?>(null) }
+    val capacityLoad = remember { TileCapacityLoad() }
     var message by remember { mutableStateOf<String?>(null) }
     var shortened by remember { mutableStateOf<TileCapacity?>(null) }
+    var capacityRetry by remember { mutableLongStateOf(0L) }
     var attached by remember { mutableStateOf(true) }
     DisposableEffect(target) { onDispose { attached = false } }
     fun admission(): Long? = readEditRevision()?.takeIf {
@@ -362,20 +397,16 @@ private fun QuickTileInlineEditor(
     fun draftAdmission(): Long? = readDraftRevision()?.takeIf {
         attached && owner.target === target && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }
-    val capacityRevision = target.capacityRevision
-    LaunchedEffect(capacityRevision, interactionReady, durationSubmissionAllowed, editRevision, lifecycleState) {
-        capacity = null
+    LaunchedEffect(interactionReady, durationSubmissionAllowed, editRevision, lifecycleState, capacityRetry) {
+        val request = capacityLoad.begin(draftAdmission())
         shortened = null
-        val revision = draftAdmission() ?: return@LaunchedEffect
-        val requestedBuffer = target.buffer
-        fun requestCurrent(): Boolean = draftAdmission() == revision &&
-            target.buffer == requestedBuffer && target.capacityRevision == capacityRevision
+        if (request == null) return@LaunchedEffect
         try {
-            val read = withContext(Dispatchers.IO) { readTileCapacity(context.applicationContext, requestedBuffer) }
-            if (currentCoroutineContext().isActive && requestCurrent()) { capacity = read; message = null }
+            val read = withContext(Dispatchers.IO) { readTileCapacities(context.applicationContext) }
+            if (currentCoroutineContext().isActive && capacityLoad.finish(request, draftAdmission(), read)) message = null
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            if (currentCoroutineContext().isActive && requestCurrent()) {
+            if (currentCoroutineContext().isActive && capacityLoad.isCurrent(request, draftAdmission())) {
                 message = error.message ?: context.getString(R.string.tile_save_failed)
             }
         }
@@ -383,7 +414,7 @@ private fun QuickTileInlineEditor(
     fun close() { if (!target.busy && owner.target === target) owner.target = null }
     fun save() {
         val revision = admission() ?: return
-        if (target.busy) return
+        if (target.busy || capacityLoad.ready(revision) == null) return
         val buffer = target.buffer
         val seconds = target.seconds
         val confirmed = shortened
@@ -391,12 +422,14 @@ private fun QuickTileInlineEditor(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
                 try {
-                    val fresh = withContext(Dispatchers.IO) { readTileCapacity(context.applicationContext, buffer) }
+                    val freshCapacities = withContext(Dispatchers.IO) { readTileCapacities(context.applicationContext) }
                     if (admission() != revision) {
                         AppFeedbackCenter.post(context.getString(R.string.tiles_ui_save_interrupted), FeedbackTone.ERROR)
                         return@withContext
                     }
-                    capacity = fresh
+                    val refresh = capacityLoad.begin(revision)!!
+                    capacityLoad.finish(refresh, admission(), freshCapacities)
+                    val fresh = freshCapacities.forBuffer(buffer)
                     when {
                         seconds > fresh.maximumSeconds -> message = context.getString(R.string.tiles_ui_maximum, formatDurationInput(fresh.maximumSeconds))
                         fresh.retainedSeconds == null -> message = context.getString(R.string.tiles_ui_disabled_buffer)
@@ -421,6 +454,9 @@ private fun QuickTileInlineEditor(
         }
     }
     val enabled = interactionReady && durationSubmissionAllowed && !target.busy && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    val capacities = capacityLoad.visible
+    val capacity = capacities?.forBuffer(target.buffer)
+    val capacityReady = capacityLoad.ready(editRevision) != null
     Surface(shape = RoundedCornerShape(20.dp), color = chrome.field, border = BorderStroke(1.dp, chrome.border)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -428,47 +464,46 @@ private fun QuickTileInlineEditor(
                     Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 IconButton(onClick = ::close, enabled = !target.busy) { Icon(AppIcons.close, stringResource(R.string.cancel)) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (buffer in listOf(ReverbService.BufferSlot.LOOPING, ReverbService.BufferSlot.ONE_SHOT)) {
-                    val selected = target.buffer == buffer
-                    Surface(onClick = {
-                        if (enabled && admission() != null && target.selectBuffer(buffer)) {
-                            capacity = null
-                            shortened = null
-                            message = null
-                        }
-                    },
-                        enabled = enabled, shape = RoundedCornerShape(14.dp),
-                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else chrome.field,
-                        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else chrome.border),
-                        modifier = Modifier.weight(1f).semantics { this.selected = selected }) {
-                        Text(stringResource(if (buffer == ReverbService.BufferSlot.LOOPING) R.string.buffer_loop else R.string.buffer_one_shot),
-                            Modifier.padding(horizontal = 12.dp, vertical = 10.dp), style = MaterialTheme.typography.labelLarge)
+            BufferSelector(
+                selectedBuffer = target.buffer,
+                activeBuffer = null,
+                isListening = false,
+                oneShotEnabled = capacities?.oneShotSeconds != null,
+                oneShotFull = false,
+                loopingEnabled = capacities?.loopingSeconds != null,
+                interactionEnabled = enabled,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                onSelectBuffer = { buffer ->
+                    val revision = admission()
+                    if (enabled && revision != null && target.selectBuffer(buffer)) {
+                        shortened = null
+                        message = null
+                        if (capacityLoad.ready(revision) == null) capacityRetry++
                     }
-                }
-            }
+                },
+            )
             when {
                 !durationSubmissionAllowed -> Unit
                 capacity == null -> if (message == null) TileStatus(stringResource(R.string.tiles_ui_loading))
-                capacity!!.maximumSeconds < 1 -> TileStatus(stringResource(R.string.tiles_ui_unavailable))
+                capacity.maximumSeconds < 1 -> TileStatus(stringResource(R.string.tiles_ui_unavailable))
                 else -> {
-                    val maximum = quickTileRepresentableSeconds(capacity!!.maximumSeconds)
+                    val maximum = quickTileRepresentableSeconds(capacity.maximumSeconds)
                     NotificationDurationWheel(target.seconds, maximum, { seconds ->
-                        if (enabled && !target.busy && admission() != null) {
+                        if (enabled && !target.busy && capacityLoad.ready(admission()) != null) {
                             target.editRevision++
                             target.seconds = quickTileRepresentableSeconds(seconds.coerceIn(1, maximum))
                             shortened = null
                             message = null
                         }
-                    }, enabled = enabled, editRevision = target.wheelOwner(editRevision), readEditRevision = {
-                        admission()?.takeIf { attached && !target.busy && capacity?.maximumSeconds?.let(::quickTileRepresentableSeconds) == maximum }?.let(target::wheelOwner)
+                    }, enabled = enabled && capacityReady, editRevision = target.wheelOwner(editRevision), readEditRevision = {
+                        admission()?.takeIf { attached && !target.busy && capacityLoad.ready(it)?.maximumSeconds?.let(::quickTileRepresentableSeconds) == maximum }?.let(target::wheelOwner)
                     })
                     if (target.seconds > maximum) TileStatus(stringResource(R.string.tiles_ui_reduce_duration, formatDurationInput(target.seconds)))
                 }
             }
             message?.let { TileStatus(it) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = ::save, enabled = enabled && capacity?.maximumSeconds?.let { it >= target.seconds } == true) {
+                TextButton(onClick = ::save, enabled = enabled && capacityReady && capacity?.maximumSeconds?.let { it >= target.seconds } == true) {
                     Text(stringResource(if (shortened == null) R.string.tiles_ui_save else R.string.tiles_ui_save_anyway))
                 }
             }

@@ -37,8 +37,10 @@
     <string name="quick_save_shortened">Saved the latest %1$s of %2$s requested.</string>
     <string name="silence_apply_input_first">Apply audio changes before calibrating.</string>
     <string name="silence_calibrate">Calibrate</string>
+    <string name="silence_calibration_hint">Hold while quiet · tap for 4 seconds</string>
     <string name="silence_calibration_timeout">Could not finish listening. Try again.</string>
     <string name="silence_calibration_too_loud">Too much sound. Try again somewhere quieter.</string>
+    <string name="silence_calibration_too_short">Hold a little longer and try again.</string>
     <string name="silence_curve_accessibility_value">Point %1$d of %2$d, %3$d Hz, %4$d dBFS</string>
     <string name="silence_curve_lower_cutoff">Lower cutoff</string>
     <string name="silence_curve_lower_frequency">Lower frequency</string>
@@ -49,7 +51,7 @@
     <string name="silence_graph_description">Silence cutoff curve. Drag a point to adjust it. Arrow keys select points and change the cutoff. Shift+Left or Right changes frequency.</string>
     <string name="silence_input_changed">Input has changed. Reopen Settings to calibrate.</string>
     <string name="silence_invalid_settings">Silence settings could not be read. All audio is being kept.</string>
-    <string name="silence_preparing">Listening in %1$d…</string>
+    <string name="silence_release_to_finish">Release to finish</string>
     <string name="silence_sample_busy">The audio input changed. Sample the room again.</string>
     <string name="silence_sample_failed">Could not sample the microphone. Try again while Reverb is open.</string>
     <string name="silence_sampling">Listening…</string>

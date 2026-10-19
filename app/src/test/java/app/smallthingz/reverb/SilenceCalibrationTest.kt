@@ -9,13 +9,14 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 
 class SilenceCalibrationTest {
     private fun pcm(rate: Int, channels: Int, format: PcmSampleFormat, amplitude: Double, frequencyHz: Int = 1_000): ByteArray {
-        val buffer = ByteBuffer.allocate(rate * 3 * channels * format.bytesPerSample).order(ByteOrder.nativeOrder())
-        repeat(rate * 3) { frame ->
+        val buffer = ByteBuffer.allocate(rate * 4 * channels * format.bytesPerSample).order(ByteOrder.nativeOrder())
+        repeat(rate * 4) { frame ->
             repeat(channels) { channel ->
                 val value = amplitude * sin(2 * PI * frequencyHz * frame / rate) * if (channel == 0) 1 else -1
                 when (format) {
@@ -42,12 +43,14 @@ class SilenceCalibrationTest {
         return request.state.value
     }
 
-    private class FakeSampler(val startAction: (SilenceSampleRequest) -> Unit = {}) : SilenceSampler {
-        override val request = SilenceSampleRequest()
+    private class FakeSampler(
+        override val request: SilenceSampleRequest = SilenceSampleRequest(),
+        val startAction: (SilenceSampleRequest) -> Unit = {},
+    ) : SilenceSampler {
         var starts = 0
         var closes = 0
         var closeFailure: Exception? = null
-        override fun start() { starts++; startAction(request) }
+        override fun start() { starts++; request.processPendingControl(); startAction(request) }
         override fun close() {
             closes++
             request.cancel()
@@ -104,11 +107,11 @@ class SilenceCalibrationTest {
                 }
                 val (quietGate, quietBytes) = filter(room)
                 assertEquals("$rate Hz/$frequency Hz/$format room", 0L, quietGate.retainedFrames)
-                assertEquals(rate * 3L, quietGate.skippedFrames)
+                assertEquals(rate * 4L, quietGate.skippedFrames)
                 assertEquals(0, quietBytes.size)
                 val louder = pcm(rate, 1, format, 0.1, frequency)
                 val (loudGate, loudBytes) = filter(louder)
-                assertEquals("$rate Hz/$frequency Hz/$format louder", rate * 3L, loudGate.retainedFrames)
+                assertEquals("$rate Hz/$frequency Hz/$format louder", rate * 4L, loudGate.retainedFrames)
                 assertArrayEquals(louder, loudBytes)
             }
         }
@@ -134,7 +137,7 @@ class SilenceCalibrationTest {
         }
         val complete = SilenceSampleState(progress = 1f, sampleRate = 16_000,
             peaks = List(SILENCE_GRAPH_BINS) { -50f }, complete = true)
-        for (invalid in listOf(complete.copy(complete = false), complete.copy(cancelled = true),
+        for (invalid in listOf(complete.copy(complete = false), complete.copy(cancelled = true), complete.copy(tooShort = true),
             complete.copy(error = "failed"), complete.copy(progress = 0.5f), complete.copy(sampleRate = 0),
             complete.copy(peaks = List(SILENCE_GRAPH_BINS) { Float.NaN }))) {
             assertThrows(IllegalArgumentException::class.java) { silenceCalibrationResult(invalid) }
@@ -142,16 +145,16 @@ class SilenceCalibrationTest {
     }
 
     @Test(timeout = 5_000)
-    fun cancellationDuringPreparationNeverAcquiresMicrophoneOwner() = runBlocking {
+    fun calibrationAcquiresAndStartsImmediatelyWithoutAPreparationWindow() = runBlocking {
         var acquired = 0
-        var preparing = 0
+        val sampler = FakeSampler()
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
-            calibrateSilence(createSampler = { acquired++; FakeSampler() },
-                onPreparing = { preparing = it }, onProgress = {})
+            calibrateSilence(createSampler = { acquired++; sampler }, onProgress = {})
         }
-        assertEquals(3, preparing)
+        assertEquals(1, acquired)
+        assertEquals(1, sampler.starts)
         job.cancelAndJoin()
-        assertEquals(0, acquired)
+        assertEquals(1, sampler.closes)
     }
 
     @Test(timeout = 5_000)
@@ -159,7 +162,7 @@ class SilenceCalibrationTest {
         val sampler = FakeSampler()
         var delivered = false
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
-            calibrateSilence({ sampler }, {}, {}, preparationMillis = 0)
+            calibrateSilence({ sampler }, {})
             delivered = true
         }
         assertEquals(1, sampler.starts)
@@ -176,7 +179,7 @@ class SilenceCalibrationTest {
     fun completedSamplingProducesOnlyAReviewResultAndClosesOwner() = runBlocking {
         val bytes = pcm(16_000, 1, PcmSampleFormat.PCM_16, 0.02)
         val sampler = FakeSampler { it.accept(bytes, 0, bytes.size, 16_000, 1, PcmSampleFormat.PCM_16) }
-        val result = calibrateSilence({ sampler }, {}, {}, preparationMillis = 0)
+        val result = calibrateSilence({ sampler }, {})
         assertEquals(16_000, result.sampleRate)
         assertEquals(1, sampler.starts)
         assertEquals(1, sampler.closes)
@@ -187,7 +190,7 @@ class SilenceCalibrationTest {
     fun stalledSamplerTimesOutAsFailureAndClosesOwner() = runBlocking {
         val sampler = FakeSampler()
         try {
-            calibrateSilence({ sampler }, {}, {}, preparationMillis = 0, samplingTimeoutMillis = 10)
+            calibrateSilence({ sampler }, {}, samplingTimeoutMillis = 10)
             fail("A stalled input must not produce a curve")
         } catch (_: SilenceCalibrationTimedOut) {
             assertEquals(1, sampler.closes)
@@ -200,12 +203,131 @@ class SilenceCalibrationTest {
         val cleanup = IOException("cleanup")
         val sampler = FakeSampler { it.fail("input unavailable") }.apply { closeFailure = cleanup }
         try {
-            calibrateSilence({ sampler }, {}, {}, preparationMillis = 0)
+            calibrateSilence({ sampler }, {})
             fail("Failed input must not produce a curve")
         } catch (failure: IOException) {
             assertEquals("input unavailable", failure.message)
             assertEquals(listOf(cleanup), failure.suppressed.toList())
             assertEquals(1, sampler.closes)
+        }
+    }
+
+    @Test(timeout = 5_000)
+    fun shortTapBeforeBindingKeepsTheOriginalRequestAndCompletesTimedCalibration() = runBlocking {
+        val request = SilenceSampleRequest(held = true)
+        request.useTimedSample()
+        val bytes = pcm(16_000, 1, PcmSampleFormat.PCM_16, 0.02)
+        val sampler = FakeSampler(request) {
+            assertFalse(it.state.value.held)
+            it.accept(bytes, 0, bytes.size, 16_000, 1, PcmSampleFormat.PCM_16)
+        }
+        val result = calibrateSilence({ sampler }, {})
+        assertEquals(16_000, result.sampleRate)
+        assertSame(request, sampler.request)
+        assertEquals(1, sampler.starts)
+        assertEquals(1, sampler.closes)
+    }
+
+    @Test(timeout = 5_000)
+    fun heldReleaseBeforeBindingIsTooShortAndCannotProduceAReplacementDraft() = runBlocking {
+        val request = SilenceSampleRequest(held = true)
+        request.finishHold()
+        val sampler = FakeSampler(request)
+        var delivered = false
+        try {
+            calibrateSilence({ sampler }, {})
+            delivered = true
+            fail("No captured interior must not replace the user's curve")
+        } catch (_: SilenceCalibrationTooShort) {
+            assertFalse(delivered)
+            assertEquals(1, sampler.starts)
+            assertEquals(1, sampler.closes)
+            assertTrue(request.cancelled.get())
+        }
+    }
+
+    @Test(timeout = 5_000)
+    fun conversionAfterAcquisitionStartedUsesTheSameDeadlineAsASemanticTap() = runBlocking {
+        for (initiallyHeld in listOf(true, false)) {
+            // Advance the press clock, not coroutine time: the real production deadline
+            // should now expire shortly, whereas the old captured hold bound had 48s left.
+            val request = SilenceSampleRequest(held = initiallyHeld,
+                startedAtNanos = System.nanoTime() - 11_950_000_000L)
+            val sampler = FakeSampler(request)
+            var failure: Throwable? = null
+            val job = launch(start = CoroutineStart.UNDISPATCHED) {
+                try { calibrateSilence({ sampler }, {}) }
+                catch (error: Throwable) { failure = error }
+            }
+            assertEquals(1, sampler.starts)
+            if (initiallyHeld) {
+                assertTrue(request.remainingTimeoutMillis() > 40_000L)
+                request.useTimedSample()
+            }
+            assertEquals(0L, request.remainingTimeoutMillis())
+            withTimeout(1_000L) { job.join() }
+            assertTrue("held=$initiallyHeld failure=$failure", failure is SilenceCalibrationTimedOut)
+            assertEquals(1, sampler.closes)
+            assertTrue(request.cancelled.get())
+        }
+    }
+
+    @Test(timeout = 5_000)
+    fun pointerTapWithUnavailableCaptureClockDoesNotRetainTheHeldDeadline() = runBlocking {
+        val request = SilenceSampleRequest(held = true,
+            startedAtNanos = System.nanoTime() - 11_950_000_000L)
+        val bytes = pcm(16_000, 1, PcmSampleFormat.PCM_16, 0.02)
+        val sampler = FakeSampler(request) {
+            it.acceptCaptured(bytes, 0, bytes.size, 16_000, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = null, readEndedAtNanos = System.nanoTime())
+        }
+        var failure: Throwable? = null
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { calibrateSilence({ sampler }, {}) }
+            catch (error: Throwable) { failure = error }
+        }
+        assertEquals(0, request.state.value.sampleRate)
+        request.useTimedSample()
+        withTimeout(1_000L) { job.join() }
+        assertTrue(failure is SilenceCalibrationTimedOut)
+        assertEquals(1, sampler.closes)
+        assertFalse(request.state.value.complete)
+    }
+
+    @Test(timeout = 5_000)
+    fun releaseDuringStalledBindingIsPromptAndRejectsLateAdmission() = runBlocking {
+        val request = SilenceSampleRequest(held = true)
+        val sampler = FakeSampler(request)
+        var failure: Throwable? = null
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { calibrateSilence({ sampler }, {}) }
+            catch (error: Throwable) { failure = error }
+        }
+        assertEquals(1, sampler.starts)
+        request.finishHold()
+        withTimeout(1_000L) { job.join() }
+        assertTrue(failure is SilenceCalibrationTooShort)
+        assertEquals(1, sampler.closes)
+        val terminal = request.state.value
+        request.processPendingControl()
+        val bytes = pcm(16_000, 1, PcmSampleFormat.PCM_16, 0.02)
+        request.accept(bytes, 0, bytes.size, 16_000, 1, PcmSampleFormat.PCM_16)
+        request.fail("late callback")
+        assertEquals(terminal, request.state.value)
+        assertTrue(terminal.cancelled)
+        assertFalse(terminal.complete)
+    }
+
+    @Test(timeout = 5_000)
+    fun staleOwnerRejectionAfterAcquisitionStillClosesExactlyOnce() = runBlocking {
+        val sampler = FakeSampler()
+        try {
+            calibrateSilence({ sampler }, { throw kotlinx.coroutines.CancellationException("owner changed") })
+            fail("A stale settings owner must not receive a sample")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            assertEquals(0, sampler.starts)
+            assertEquals(1, sampler.closes)
+            assertTrue(sampler.request.cancelled.get())
         }
     }
 }

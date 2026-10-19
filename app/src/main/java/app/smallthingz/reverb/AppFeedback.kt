@@ -19,18 +19,26 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -86,31 +94,72 @@ object AppFeedbackCenter {
     }
 }
 
+/** Cancellation or obscuration leaves the head queued for a full visible delivery next time. */
+internal suspend fun deliverFeedbackEvent(
+    event: FeedbackEvent,
+    canDisplay: () -> Boolean,
+    display: (FeedbackEvent?) -> Unit,
+    awaitVisibleFrame: suspend () -> Unit,
+    acknowledge: (Long) -> Unit,
+    waitForDuration: suspend (Long) -> Unit = { delay(it) },
+) {
+    if (!canDisplay()) return
+    display(event)
+    try {
+        awaitVisibleFrame()
+        if (!canDisplay()) return
+        waitForDuration(if (event.tone == FeedbackTone.ERROR) 4_500L else 2_800L)
+        currentCoroutineContext().ensureActive()
+        if (canDisplay()) acknowledge(event.id)
+    } finally {
+        display(null)
+    }
+}
+
 @Composable
 internal fun AppFeedbackHost(
     modifier: Modifier = Modifier,
+    deliveryAllowed: Boolean = true,
 ) {
     var event by remember { mutableStateOf<FeedbackEvent?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val window = LocalWindowInfo.current
+    val view = LocalView.current
+    val currentDeliveryAllowed = rememberUpdatedState(deliveryAllowed)
 
-    LaunchedEffect(lifecycleOwner) {
+    LaunchedEffect(lifecycleOwner, window, view) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            AppFeedbackCenter.events
-                .map { pending -> pending.firstOrNull() }
-                .distinctUntilChangedBy { next -> next?.id }
-                .collect { next ->
-                    if (next == null) {
-                        event = null
-                        return@collect
-                    }
-                    event = next
-                    delay(if (next.tone == FeedbackTone.ERROR) 4_500L else 2_800L)
-                    if (event?.id == next.id) event = null
-                    AppFeedbackCenter.acknowledge(next.id)
+            snapshotFlow { currentDeliveryAllowed.value && window.isWindowFocused }
+                .collectLatest { allowed ->
+                    if (!allowed) return@collectLatest
+                    AppFeedbackCenter.events
+                        .map { pending -> pending.firstOrNull() }
+                        .distinctUntilChangedBy { next -> next?.id }
+                        .collect { next ->
+                            if (next == null) return@collect
+                            deliverFeedbackEvent(
+                                event = next,
+                                canDisplay = {
+                                    currentDeliveryAllowed.value && window.isWindowFocused &&
+                                        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                                        view.isAttachedToWindow && view.isShown && view.hasWindowFocus()
+                                },
+                                display = { event = it },
+                                awaitVisibleFrame = {
+                                    // A state write is not a displayed notice. Allow composition and
+                                    // its following frame before starting the acknowledged duration.
+                                    withFrameNanos { }
+                                    withFrameNanos { }
+                                },
+                                acknowledge = AppFeedbackCenter::acknowledge,
+                            )
+                        }
                 }
         }
     }
 
+    // An actionable local notice owns this region immediately, without overlapping an exit fade.
+    if (!deliveryAllowed || !window.isWindowFocused) return
     AnimatedVisibility(
         visible = event != null,
         modifier = modifier,

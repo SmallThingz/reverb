@@ -36,6 +36,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -45,10 +51,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+internal data class RecordingGroupEdges(val first: Boolean, val last: Boolean)
+
 @Composable
 internal fun RecordingEntityCard(
     recording: RecordingEntity,
     modifier: Modifier = Modifier,
+    groupEdges: RecordingGroupEdges? = null,
     isSelected: Boolean = false,
     selectionActive: Boolean = false,
     interactionsEnabled: Boolean = true,
@@ -64,6 +73,7 @@ internal fun RecordingEntityCard(
         subtitle = "${formatSavedRecordingDuration(context, recording.durationMillis)} \u2022 ${formatShortFileSize(recording.sizeBytes)}",
         trailingTop = formatRecordingStartTimestamp(context, recording.startedAtMillis),
         modifier = modifier,
+        groupEdges = groupEdges,
         isSelected = isSelected,
         selectionActive = selectionActive,
         interactionsEnabled = interactionsEnabled,
@@ -106,6 +116,7 @@ private fun RecordingSummaryCard(
     subtitle: String,
     trailingTop: String?,
     modifier: Modifier,
+    groupEdges: RecordingGroupEdges? = null,
     isSelected: Boolean = false,
     selectionActive: Boolean = false,
     interactionsEnabled: Boolean = true,
@@ -148,13 +159,22 @@ private fun RecordingSummaryCard(
         animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
         label = "recordingCardSelectionAlpha",
     )
+    val cardShape = if (groupEdges == null) RoundedCornerShape(16.dp) else RoundedCornerShape(
+        topStart = if (groupEdges.first) 16.dp else 0.dp,
+        topEnd = if (groupEdges.first) 16.dp else 0.dp,
+        bottomStart = if (groupEdges.last) 16.dp else 0.dp,
+        bottomEnd = if (groupEdges.last) 16.dp else 0.dp,
+    )
     Surface(
         modifier = modifier.animateContentSize(
             animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        ).then(
+            if (groupEdges == null) Modifier
+            else Modifier.recordingGroupOutline(groupEdges, borderColor, chrome.border),
         ),
-        shape = RoundedCornerShape(16.dp),
+        shape = cardShape,
         color = bgColor,
-        border = BorderStroke(1.dp, borderColor),
+        border = if (groupEdges == null) BorderStroke(1.dp, borderColor) else null,
         tonalElevation = 0.dp,
     ) {
         val selectionLabel = stringResource(
@@ -281,6 +301,47 @@ private fun RecordingSummaryCard(
                     expandedContent?.invoke(this)
                 }
             }
+        }
+    }
+}
+
+private fun Modifier.recordingGroupOutline(
+    edges: RecordingGroupEdges,
+    color: Color,
+    separatorColor: Color,
+): Modifier = drawWithCache {
+    val width = 1.dp.toPx()
+    val inset = width / 2f
+    val left = inset
+    val right = size.width - inset
+    val top = inset
+    val bottom = size.height - inset
+    val radius = (16.dp.toPx() - inset).coerceAtMost((right - left) / 2f)
+        .coerceAtMost((bottom - top) / 2f).coerceAtLeast(0f)
+    val outline = Path().apply {
+        if (edges.first) {
+            moveTo(left, top + radius)
+            arcTo(Rect(left, top, left + 2f * radius, top + 2f * radius), 180f, 90f, false)
+            lineTo(right - radius, top)
+            arcTo(Rect(right - 2f * radius, top, right, top + 2f * radius), 270f, 90f, false)
+        } else {
+            moveTo(right, 0f)
+        }
+        lineTo(right, if (edges.last) bottom - radius else size.height)
+        if (edges.last) {
+            arcTo(Rect(right - 2f * radius, bottom - 2f * radius, right, bottom), 0f, 90f, false)
+            lineTo(left + radius, bottom)
+            arcTo(Rect(left, bottom - 2f * radius, left + 2f * radius, bottom), 90f, 90f, false)
+        } else {
+            moveTo(left, size.height)
+        }
+        lineTo(left, if (edges.first) top + radius else 0f)
+    }
+    onDrawWithContent {
+        drawContent()
+        drawPath(outline, color, style = Stroke(width))
+        if (!edges.first) {
+            drawLine(separatorColor, Offset(0f, 0.5f), Offset(size.width, 0.5f), strokeWidth = 1f)
         }
     }
 }
