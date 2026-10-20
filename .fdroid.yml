@@ -14,7 +14,7 @@ Binaries: https://github.com/SmallThingz/reverb/releases/download/v%v/reverb-%v.
 Builds:
   - versionName: 0.1.0
     versionCode: 1
-    commit: v0.1.0
+    commit: dc65d5cac5a57fcedab5a43a666f7c0ae5d0fb0d
     subdir: app
     gradle:
       - yes
@@ -28,7 +28,7 @@ Builds:
 
   - versionName: 0.1.2-rc1
     versionCode: 3
-    commit: v0.1.2-rc1
+    commit: 8c439fb829bca0a8345b42df3511bc61aeed7015
     subdir: app
     gradle:
       - yes

@@ -1,0 +1,5 @@
+Add lossless FLAC output compression and silence skipping, with tap or hold calibration.
+Add Quick Save tiles and notification saving with duration controls.
+Improve onboarding and grouped Settings and Library controls.
+Fix repeated error feedback, consecutive deletion and Undo, playback, and tile handoffs.
+Reduce redundant audio, storage, and UI work.

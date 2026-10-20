@@ -15,8 +15,8 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 
    ```sh
    python3 scripts/test_verify_release.py
-   python3 scripts/verify_release.py v0.1.2-rc1 \
-     .tmp/release-0.1.2-rc1/reverb-0.1.2-rc1.apk \
+   python3 scripts/verify_release.py v0.1.2 \
+     .tmp/release-0.1.2-20261020/reverb-0.1.2.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
@@ -34,20 +34,20 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 
 ## Prerelease ordering and F-Droid
 
-`0.1.2-rc1` uses Android version code 3. Every later public APK, including final
-`0.1.2`, must use a higher code; do not reuse code 3 for the stable release.
+`0.1.2-rc1` uses Android version code 3. Stable `0.1.2` uses code 4; every later
+public APK must use a higher code. Never reuse a published version code.
 
-This release candidate is intended for F-Droid pickup as well as GitHub. Keep
+Stable releases and release candidates are intended for F-Droid pickup as well as GitHub. Keep
 `versionCode` and `versionName` as literals in `android.defaultConfig`: the current
 F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard reads
 that same Android configuration instead of maintaining a second version constant.
 
 Verify the current upstream `check_tags` and Gradle parser against the exact release
-tag and the current central fdroiddata metadata. They must select `0.1.2-rc1` (3),
-and its `Binaries` URL must resolve to `reverb-0.1.2-rc1.apk` on the matching tag.
-Central metadata currently uses unfiltered `Tags` and `AutoUpdateMode: Version`, so
-it will select this RC as the newest version; GitHub's prerelease label does not
-create a separate F-Droid beta channel. Keep GitHub's latest stable release intact.
+tag and the current central fdroiddata metadata. They must select `0.1.2` (4),
+and its `Binaries` URL must resolve to `reverb-0.1.2.apk` on `v0.1.2`.
+Check the central `UpdateCheckMode` and `AutoUpdateMode` rather than assuming that
+GitHub's prerelease label creates a separate F-Droid beta channel. Future prereleases
+must leave GitHub's latest stable release intact.
 
 Changes to this repository's `.fdroid.yml` alone do not update central fdroiddata.
 Local checker and independent rebuild success are preflight evidence, not proof
