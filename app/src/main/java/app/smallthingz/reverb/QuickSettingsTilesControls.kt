@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
@@ -282,6 +283,7 @@ internal fun QuickSettingsTilesControls(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val options by QuickSaveTileOptions.options.collectAsState()
@@ -409,9 +411,9 @@ internal fun QuickSettingsTilesControls(
                         withContext(NonCancellable) {
                             try {
                                 withContext(Dispatchers.IO) { QuickSaveTileOptions.remove(context.applicationContext, target.option) }
-                                AppFeedbackCenter.post(context.getString(R.string.tiles_ui_deleted))
+                                AppFeedbackCenter.post(resources.getString(R.string.tiles_ui_deleted))
                             } catch (error: Exception) {
-                                AppFeedbackCenter.post(error.message ?: context.getString(R.string.tile_save_failed), FeedbackTone.ERROR)
+                                AppFeedbackCenter.post(error.message ?: resources.getString(R.string.tile_save_failed), FeedbackTone.ERROR)
                             } finally {
                                 editorState.deletingBusy = false
                                 if (editorState.deleting === target) editorState.deleting = null
@@ -441,6 +443,7 @@ private fun QuickTileInlineEditor(
     readDraftRevision: () -> Long?,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val scope = rememberCoroutineScope()
@@ -468,7 +471,7 @@ private fun QuickTileInlineEditor(
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
             if (currentCoroutineContext().isActive && capacityLoad.isCurrent(request, draftAdmission())) {
-                message = error.message ?: context.getString(R.string.tile_save_failed)
+                message = error.message ?: resources.getString(R.string.tile_save_failed)
             }
         }
     }
@@ -486,30 +489,30 @@ private fun QuickTileInlineEditor(
                 try {
                     val freshCapacities = withContext(Dispatchers.IO) { readTileCapacities(context.applicationContext) }
                     if (admission() != revision) {
-                        AppFeedbackCenter.post(context.getString(R.string.tiles_ui_save_interrupted), FeedbackTone.ERROR)
+                        AppFeedbackCenter.post(resources.getString(R.string.tiles_ui_save_interrupted), FeedbackTone.ERROR)
                         return@withContext
                     }
                     val refresh = capacityLoad.begin(revision)!!
                     capacityLoad.finish(refresh, admission(), freshCapacities)
                     val fresh = freshCapacities.forBuffer(buffer)
                     when {
-                        seconds > fresh.maximumSeconds -> message = context.getString(R.string.tiles_ui_maximum, formatDurationInput(fresh.maximumSeconds))
-                        fresh.retainedSeconds == null -> message = context.getString(R.string.tiles_ui_disabled_buffer)
+                        seconds > fresh.maximumSeconds -> message = resources.getString(R.string.tiles_ui_maximum, formatDurationInput(fresh.maximumSeconds))
+                        fresh.retainedSeconds == null -> message = resources.getString(R.string.tiles_ui_disabled_buffer)
                         seconds > fresh.retainedSeconds && confirmed != fresh -> {
                             shortened = fresh
-                            message = context.getString(R.string.tiles_ui_shorter,
-                                if (fresh.retainedSeconds < 1.0) context.getString(R.string.tiles_ui_less_than_second)
+                            message = resources.getString(R.string.tiles_ui_shorter,
+                                if (fresh.retainedSeconds < 1.0) resources.getString(R.string.tiles_ui_less_than_second)
                                 else formatDurationInput(floor(fresh.retainedSeconds).toInt()))
                         }
                         else -> {
                             val (amount, unit) = quickTileAmountAndUnit(seconds)
                             withContext(Dispatchers.IO) { QuickSaveTileOptions.create(context.applicationContext, buffer, amount, unit) }
                             if (owner.target === target) owner.target = null
-                            AppFeedbackCenter.post(context.getString(R.string.tiles_ui_saved))
+                            AppFeedbackCenter.post(resources.getString(R.string.tiles_ui_saved))
                         }
                     }
                 } catch (error: Exception) {
-                    val text = error.message ?: context.getString(R.string.tile_save_failed)
+                    val text = error.message ?: resources.getString(R.string.tile_save_failed)
                     if (attached) message = text else AppFeedbackCenter.post(text, FeedbackTone.ERROR)
                 } finally { target.busy = false }
             }

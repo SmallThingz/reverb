@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<!-- Untranslated feature text uses the English fallback, as in strings.xml. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MissingTranslation">
     <item type="id" name="silence_curve_previous_point_action" />
     <item type="id" name="silence_curve_next_point_action" />
     <item type="id" name="silence_curve_lower_frequency_action" />
