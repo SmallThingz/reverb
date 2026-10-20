@@ -50,7 +50,7 @@
     <string name="onboarding_one_shot_body">Fills once. It keeps that audio until you clear it.</string>
     <string name="onboarding_looping_title">Looping</string>
     <string name="onboarding_looping_body">Keeps the newest audio. Old audio is overwritten.</string>
-    <string name="onboarding_order">Choose which buffer to record into. When One-shot fills, recording continues in Looping if it is enabled. Set either limit to 0 to turn that buffer off.</string>
+    <string name="onboarding_order">When One-shot fills, recording continues in Looping if it is enabled.</string>
     <string name="onboarding_continue">Continue</string>
     <string name="onboarding_back">Back</string>
     <string name="onboarding_get_started">Get started</string>
