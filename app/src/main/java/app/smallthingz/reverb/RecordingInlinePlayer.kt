@@ -602,14 +602,12 @@ internal fun RecordingInlinePlayer(
             },
         )
     }
-    val backProgress = if (!trimSaving && backMotion.gestureActive) {
+    val trimBackProgress = if (trimMode && !trimSaving && backMotion.gestureActive) {
         backMotion.progress.value.coerceIn(0f, 1f)
     } else {
         0f
     }
     val backDirection = predictiveBackHorizontalDirection(backMotion.swipeEdge)
-    val trimBackProgress = if (trimMode) backProgress else 0f
-    val collapseBackProgress = if (!trimMode) backProgress else 0f
 
     fun reportPlaybackCleanupFailure(error: Throwable) {
         Log.e(INLINE_PLAYER_TAG, "Saved recording playback cleanup failed", error)
@@ -1232,7 +1230,13 @@ internal fun RecordingInlinePlayer(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .predictiveBackCollapse(collapseBackProgress)
+            .predictiveBackCollapse {
+                if (!trimMode && !trimSaving && backMotion.gestureActive) {
+                    backMotion.progress.value.coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+            }
             .graphicsLayer {
                 translationX = backDirection * size.width * 0.08f * trimBackProgress
             }
@@ -1627,10 +1631,10 @@ internal fun RecordingInlinePlayer(
     }
 }
 
-private fun Modifier.predictiveBackCollapse(progress: Float): Modifier {
-    val p = progress.coerceIn(0f, 1f)
+private fun Modifier.predictiveBackCollapse(progress: () -> Float): Modifier {
     return this
         .layout { measurable, constraints ->
+            val p = progress().coerceIn(0f, 1f)
             val placeable = measurable.measure(constraints)
             val visibleHeight = (placeable.height * (1f - p)).roundToInt().coerceAtLeast(0)
             layout(placeable.width, visibleHeight) {
@@ -1639,6 +1643,7 @@ private fun Modifier.predictiveBackCollapse(progress: Float): Modifier {
         }
         .clipToBounds()
         .graphicsLayer {
+            val p = progress().coerceIn(0f, 1f)
             alpha = 1f - p
             scaleY = 1f - 0.04f * p
             transformOrigin = TransformOrigin(0.5f, 0f)

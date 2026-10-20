@@ -579,7 +579,6 @@ private fun OnboardingScreen(
         },
         onBack = { navigateTo((pagerState.settledPage - 1).coerceAtLeast(0), animate = false) },
     )
-    val backProgress = if (backMotion.gestureActive) backMotion.progress.value.coerceIn(0f, 1f) else 0f
     val backDirection = predictiveBackHorizontalDirection(backMotion.swipeEdge)
     val chrome = appChrome()
     val footerPage = predictiveTarget?.sourcePage ?: minOf(page, pagerState.targetPage)
@@ -622,6 +621,7 @@ private fun OnboardingScreen(
                         onSkipSilenceChange = {},
                         modifier = Modifier.fillMaxSize().semantics { hideFromAccessibility() }
                             .graphicsLayer {
+                                val backProgress = if (backMotion.gestureActive) backMotion.progress.value.coerceIn(0f, 1f) else 0f
                                 translationX = -backDirection * size.width * 0.08f * (1f - backProgress)
                                 val scale = 0.97f + 0.03f * backProgress
                                 scaleX = scale
@@ -635,6 +635,7 @@ private fun OnboardingScreen(
                     userScrollEnabled = !finishing && !backMotion.gestureActive,
                     key = { it },
                     modifier = Modifier.fillMaxSize().graphicsLayer {
+                        val backProgress = if (backMotion.gestureActive) backMotion.progress.value.coerceIn(0f, 1f) else 0f
                         translationX = backDirection * size.width * backProgress
                         alpha = 1f - 0.05f * backProgress
                     },

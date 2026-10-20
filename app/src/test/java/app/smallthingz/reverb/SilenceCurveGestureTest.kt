@@ -10,6 +10,74 @@ class SilenceCurveGestureTest {
     private fun SilenceCurveGesture.grab(index: Int = 1, dx: Float = 0f, dy: Float = 0f) =
         begin(plot.x(points[index].hz) + dx, plot.y(points[index].db) + dy, plot, 32f, 8f)
 
+    @Test fun equivalentBindingsReuseTheOwnedPointSnapshot() {
+        val state = state()
+        val snapshot = state.points
+        repeat(20) {
+            assertFalse(state.bind(original.toMutableList(), 1, true))
+            assertSame(snapshot, state.points)
+        }
+    }
+
+    @Test fun selectionAndEnabledChangesDoNotCopyAnUnchangedCurve() {
+        val state = state()
+        val snapshot = state.points
+        assertTrue(state.bind(original, Int.MAX_VALUE, true))
+        assertEquals(original.lastIndex, state.selected)
+        assertSame(snapshot, state.points)
+        assertFalse(state.bind(original, original.lastIndex, true))
+        assertTrue(state.bind(original, original.lastIndex, false))
+        assertSame(snapshot, state.points)
+        assertFalse(state.bind(original, Int.MAX_VALUE, false))
+        assertFalse(state.grab())
+        assertTrue(state.bind(original, original.lastIndex, true))
+        assertTrue(state.grab())
+    }
+
+    @Test fun mutableModelChangesRemainObservableWithoutAliasingTheCaller() {
+        val model = original.toMutableList()
+        val state = SilenceCurveGesture().apply { bind(model, 1, true) }
+        val originalSnapshot = state.points
+        model[1] = SilencePoint(400, -60)
+        assertEquals(original, originalSnapshot)
+        assertTrue(state.bind(model, 1, true))
+        assertEquals(model, state.points)
+        assertNotSame(model, state.points)
+        val updatedSnapshot = state.points
+        assertFalse(state.bind(model, 1, true))
+        assertSame(updatedSnapshot, state.points)
+        model[1] = SilencePoint(600, -40)
+        assertEquals(SilencePoint(400, -60), updatedSnapshot[1])
+        assertTrue(state.bind(model, 1, true))
+        assertEquals(model, state.points)
+    }
+
+    @Test fun inPlaceModelChangeRevokesAPreviewAndCannotBeCommittedByLateUp() {
+        val model = original.toMutableList()
+        val state = SilenceCurveGesture().apply { bind(model, 1, true) }
+        assertTrue(state.grab())
+        state.move(plot.x(900), plot.y(-20))
+        model[1] = SilencePoint(400, -60)
+        assertTrue(state.bind(model, 1, true))
+        assertFalse(state.active)
+        state.move(plot.x(1_000), plot.y(-10))
+        assertNull(state.finish())
+        assertEquals(model, state.points)
+    }
+
+    @Test fun acceptedControlEditAlreadyHasAnOwnedSnapshotForEquivalentBinding() {
+        val state = state()
+        val edit = requireNotNull(state.adjustFrequency(1))
+        val snapshot = state.points
+        assertFalse(state.bind(edit.points, edit.selected, true))
+        assertSame(snapshot, state.points)
+        assertEquals(edit.points, snapshot)
+        assertTrue(state.grab())
+        state.move(plot.x(900), plot.y(-20))
+        state.cancel()
+        assertSame(snapshot, state.points)
+    }
+
     @Test fun repeatedMissesAndEmptyCurveDragsNeverInsertPoints() {
         val state = state()
         repeat(20) {
@@ -91,9 +159,9 @@ class SilenceCurveGestureTest {
         assertTrue(state.grab())
         state.move(plot.x(900), plot.y(-20))
         val preview = state.points
-        state.bind(original.toList(), 2, true)
+        assertFalse(state.bind(original.toList(), 2, true))
         assertTrue(state.active)
-        assertEquals(preview, state.points)
+        assertSame(preview, state.points)
         assertEquals(1, state.selected)
         assertEquals(preview, requireNotNull(state.finish()).points)
     }
@@ -103,7 +171,7 @@ class SilenceCurveGestureTest {
         assertTrue(state.grab())
         state.move(plot.x(900), plot.y(-20))
         val replacement = original.toMutableList().apply { set(1, SilencePoint(400, -60)) }
-        state.bind(replacement, 1, true)
+        assertTrue(state.bind(replacement, 1, true))
         assertFalse(state.active)
         state.move(plot.x(1_000), plot.y(-10))
         assertNull(state.finish())
@@ -114,7 +182,7 @@ class SilenceCurveGestureTest {
         val state = state()
         assertTrue(state.grab())
         state.move(plot.x(900), plot.y(-20))
-        state.bind(original, 3, true)
+        assertTrue(state.bind(original, 3, true))
         assertNull(state.finish())
         assertEquals(3, state.selected)
         assertEquals(original, state.points)
@@ -124,7 +192,7 @@ class SilenceCurveGestureTest {
         val state = state()
         assertTrue(state.grab())
         state.move(plot.x(900), plot.y(-20))
-        state.bind(original, 1, false)
+        assertTrue(state.bind(original, 1, false))
         assertFalse(state.active)
         assertEquals(original, state.points)
         assertNull(state.finish())

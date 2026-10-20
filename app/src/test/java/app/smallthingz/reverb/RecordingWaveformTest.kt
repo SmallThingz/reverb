@@ -4,7 +4,10 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.roundToInt
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -143,6 +146,61 @@ class RecordingWaveformTest {
             }
         } finally {
             file.delete()
+        }
+    }
+
+    @Test
+    fun floatPreviewSanitizesBeforeResamplingAndStereoDownmix() {
+        val bits = intArrayOf(
+            0, Int.MIN_VALUE, 1, Int.MIN_VALUE + 1,
+            0x007fffff, 0x807fffff.toInt(), 0x00800000, 0x80800000.toInt(),
+            0x3f000000, 0xbf000000.toInt(), 0x3f7fffff, 0xbf7fffff.toInt(),
+            0x3f800000, 0xbf800000.toInt(), 0x3f800001, 0xbf800001.toInt(),
+            0x7f7fffff, 0xff7fffff.toInt(), 0x7f800000, 0xff800000.toInt(),
+            0x7fc01234, 0xffc01234.toInt(), 0x7f800001,
+        )
+        val canonical = floatArrayOf(
+            0f, -0f, Float.MIN_VALUE, -Float.MIN_VALUE,
+            Float.fromBits(0x007fffff), -Float.fromBits(0x007fffff),
+            Float.fromBits(0x00800000), -Float.fromBits(0x00800000),
+            0.5f, -0.5f, Float.fromBits(0x3f7fffff), -Float.fromBits(0x3f7fffff),
+            1f, -1f, 1f, -1f, 1f, -1f, 0f, 0f, 0f, 0f, 0f,
+        )
+        val source = testFile("float-preview-${System.nanoTime()}.wav")
+        val reference = testFile("float-preview-reference-${System.nanoTime()}.wav")
+        try {
+            for (channels in 1..2) {
+                val frames = 512
+                val raw = ByteBuffer.allocate(frames * channels * 4).order(ByteOrder.LITTLE_ENDIAN)
+                val finite = ByteBuffer.allocate(raw.capacity()).order(ByteOrder.LITTLE_ENDIAN)
+                repeat(frames) { frame ->
+                    repeat(channels) { channel ->
+                        val index = (frame + channel * 7) % bits.size
+                        raw.putInt(bits[index])
+                        finite.putFloat(canonical[index])
+                    }
+                }
+                val header = buildWavHeaderBytes(8_000, channels, PcmSampleFormat.PCM_FLOAT, raw.capacity().toLong())
+                source.writeBytes(header + raw.array())
+                reference.writeBytes(header + finite.array())
+                FileInputStream(source).channel.use { actualChannel ->
+                    FileInputStream(reference).channel.use { expectedChannel ->
+                        val layout = readWavPcmLayout(actualChannel)
+                        val expectedLayout = readWavPcmLayout(expectedChannel)
+                        for (rate in listOf(4_000, 8_000, 16_000)) {
+                            for ((start, end) in listOf(0.0 to 0.064, 0.000_0625 to 0.023_1875, 0.04 to 0.064)) {
+                                val expected = readWavPcm16MonoRange(expectedChannel, expectedLayout, start, end, rate)
+                                val actual = readWavPcm16MonoRange(actualChannel, layout, start, end, rate)
+                                assertTrue(expected.any { it != 0.toByte() })
+                                assertArrayEquals("channels=$channels rate=$rate range=$start..$end", expected, actual)
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            source.delete()
+            reference.delete()
         }
     }
 

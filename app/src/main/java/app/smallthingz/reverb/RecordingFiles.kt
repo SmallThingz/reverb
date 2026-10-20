@@ -29,6 +29,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.io.PushbackInputStream
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.channels.FileChannel
@@ -495,12 +496,6 @@ fun formatRecordingStartTimestamp(context: Context, startedAtMillis: Long): Stri
     val date = java.util.Date(startedAtMillis)
     val timeFormat = android.text.format.DateFormat.getTimeFormat(context)
     return timeFormat.format(date)
-}
-
-fun formatRecordingDateHeader(context: Context, startedAtMillis: Long): String {
-    val date = java.util.Date(startedAtMillis)
-    val dateFormat = android.text.format.DateFormat.getLongDateFormat(context)
-    return dateFormat.format(date)
 }
 
 private data class RecordingMediaMetadata(
@@ -3116,16 +3111,17 @@ private fun scanProviderRecording(
         ) {
             throw IOException("Recording changed while opening scan descriptor $uri")
         }
+        val pipeSource = if (descriptor.statSize < 0L) PushbackInputStream(source, 4) else null
         val seekableMetadata = when {
-            descriptor.statSize >= 0L -> inspectSeekableWavStructure(context, source.channel)
-            displayName.substringAfterLast('.', "").equals(ExportFormat.FLAC.extension, ignoreCase = true) ->
-                withSeekableRecordingScanCopy(source, context.cacheDir) { channel ->
+            pipeSource == null -> inspectSeekableWavStructure(context, source.channel)
+            recordingStreamNeedsSeekableScan(displayName, pipeSource) ->
+                withSeekableRecordingScanCopy(pipeSource, context.cacheDir) { channel ->
                     inspectSeekableWavStructure(context, channel)
                 }
             else -> null
         }
         val strictDuration = seekableMetadata?.durationMillis
-            ?: structurallyCompleteRecordingDurationMillis(displayName, source)
+            ?: structurallyCompleteRecordingDurationMillis(displayName, pipeSource ?: source)
         val media = seekableMetadata ?: if (strictDuration > 0L) {
             inspectRecordingMedia(
                 context = context,
@@ -4702,7 +4698,32 @@ private fun parseRecordingStartTimeMillis(value: String): Long? {
             if (suffix.all { it in '0'..'9' }) value.substring(0, openParen) else value
         }
     }
-    return normalized.toLongOrNull()
+    return normalized.toLongOrNull()?.takeIf { it >= 0L }
+}
+
+/** Preserve the four-byte prefix for the chosen reader; the caller owns the source stream. */
+internal fun recordingStreamNeedsSeekableScan(
+    displayName: String,
+    input: PushbackInputStream,
+): Boolean {
+    if (displayName.substringAfterLast('.', "").equals(ExportFormat.FLAC.extension, ignoreCase = true)) return true
+    val prefix = ByteArray(4)
+    var count = 0
+    while (count < prefix.size) {
+        checkRecordingScanInterrupted()
+        var read = input.read(prefix, count, prefix.size - count)
+        if (read < 0) break
+        if (read == 0) {
+            val byte = input.read()
+            if (byte < 0) break
+            prefix[count] = byte.toByte()
+            read = 1
+        }
+        count += read
+    }
+    checkRecordingScanInterrupted()
+    input.unread(prefix, 0, count)
+    return count == prefix.size && prefix.regionMatchesAscii(0, "fLaC")
 }
 
 /** A pipe cannot serve the decoder's random reads. Keep its original descriptor open and

@@ -702,6 +702,18 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
+    fun formatPlaybackTime_floorsExactMillisecondsWithoutFloatRounding() {
+        assertEquals("0:00", formatPlaybackTime(0))
+        assertEquals("0:00", formatPlaybackTime(-1))
+        assertEquals("0:00", formatPlaybackTime(Int.MIN_VALUE))
+        assertEquals("0:00", formatPlaybackTime(999))
+        assertEquals("0:01", formatPlaybackTime(1_000))
+        assertEquals("4:39:37", formatPlaybackTime(16_777_999))
+        assertEquals("4:39:38", formatPlaybackTime(16_778_000))
+        assertEquals("596:31:23", formatPlaybackTime(Int.MAX_VALUE))
+    }
+
+    @Test
     fun formatShortFileSize_usesStableHumanReadableUnits() {
         assertEquals("0.0 MiB", formatShortFileSize(0))
         assertEquals("0.0 MiB", formatShortFileSize(1024))

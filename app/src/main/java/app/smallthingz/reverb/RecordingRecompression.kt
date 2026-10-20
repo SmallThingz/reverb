@@ -55,12 +55,15 @@ internal fun writeConvertedRecordingCopy(
                 }
                 if (isFlac) {
                     FlacPcmDecoder(channel, RecordingReadCleanup.Propagate).use { decoder ->
-                        val digest = MessageDigest.getInstance("MD5")
+                        // STREAMINFO's checksum covers the whole source, not a selected range.
+                        val digest = if (first == 0L && frames == decoder.info.frameCount) {
+                            MessageDigest.getInstance("MD5")
+                        } else null
                         decoder.readFrames(first, frames) { bytes, offset, count ->
-                            digest.update(bytes, offset, count)
+                            digest?.update(bytes, offset, count)
                             consume(bytes, offset, count)
                         }
-                        if (first == 0L && frames == decoder.info.frameCount &&
+                        if (digest != null &&
                             !flacPcmChecksumMatches(decoder.info.md5, digest.digest())) {
                             throw IOException("Original FLAC audio checksum does not match")
                         }

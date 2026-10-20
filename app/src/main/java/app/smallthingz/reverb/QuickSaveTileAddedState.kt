@@ -2,6 +2,8 @@ package app.smallthingz.reverb
 
 import java.util.concurrent.atomic.AtomicLongArray
 
+private val quickSaveTileObservationIdPattern = Regex("[0-9a-f]{32}")
+
 /** Observations, not a public query of SystemUI's current tile list. */
 internal enum class QuickSaveTileAddedState { ADDED, NOT_ADDED, UNKNOWN }
 
@@ -11,8 +13,8 @@ internal data class QuickSaveTileAddedObservation(
     val state: QuickSaveTileAddedState,
 ) {
     init {
-        require(revision.matches(Regex("[0-9a-f]{32}")))
-        require(lifetimeId.matches(Regex("[0-9a-f]{32}")))
+        require(revision.matches(quickSaveTileObservationIdPattern))
+        require(lifetimeId.matches(quickSaveTileObservationIdPattern))
     }
 }
 

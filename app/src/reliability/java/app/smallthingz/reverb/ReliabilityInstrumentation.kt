@@ -41,6 +41,11 @@ class ReliabilityInstrumentation : Instrumentation() {
                 prepareLargeHistoryUi(targetContext)
                 report.append("PASS ui_seed_large_history\n")
             }
+            if (requestedTest == "flac_output_buffer_roundtrip") {
+                executed++
+                verifyFlacOutputBufferRoundTrip(targetContext, report)
+                report.append("PASS flac_output_buffer_roundtrip\n")
+            }
             if (requestedTest == "ui_range_loading") {
                 executed++
                 verifyLargeHistoryRangeUi(this, report)

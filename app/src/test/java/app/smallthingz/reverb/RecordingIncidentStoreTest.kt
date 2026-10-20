@@ -495,6 +495,72 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
+    fun unexpectedErrorDescription_withoutCauseKeepsTheOriginalDescription() {
+        val error = IllegalStateException("  standalone  ").apply { stackTrace = emptyArray() }
+
+        assertEquals(
+            "Unexpected app error: java.lang.IllegalStateException: standalone",
+            unexpectedErrorIncidentDescription("  ", error),
+        )
+    }
+
+    @Test(timeout = 1_000)
+    fun unexpectedErrorDescription_mutualCauseCycleUsesTheLastDistinctCause() {
+        val outer = IOException("Outer").apply { stackTrace = emptyArray() }
+        val inner = IOException("Inner", outer)
+        outer.initCause(inner)
+
+        assertEquals(
+            "Failure: java.io.IOException: Outer; cause java.io.IOException: Inner",
+            unexpectedErrorIncidentDescription("Failure", outer),
+        )
+    }
+
+    @Test(timeout = 1_000)
+    fun unexpectedErrorDescription_cycleAfterAPrefixUsesTheLastDistinctCause() {
+        val first = IOException("First")
+        val second = IOException("Second")
+        val third = IOException("Third", first)
+        first.initCause(second)
+        second.initCause(third)
+        val outer = IllegalStateException("Outer", first).apply { stackTrace = emptyArray() }
+
+        assertEquals(
+            "Failure: java.lang.IllegalStateException: Outer; cause java.io.IOException: Third",
+            unexpectedErrorIncidentDescription("Failure", outer),
+        )
+    }
+
+    @Test
+    fun unexpectedErrorDescription_preservesTheDeepestFiniteCause() {
+        var error: Throwable = IOException("Deepest").apply { stackTrace = emptyArray() }
+        repeat(128) { index ->
+            error = IllegalStateException("Wrapper $index", error).apply { stackTrace = emptyArray() }
+        }
+
+        assertTrue(
+            unexpectedErrorIncidentDescription("Failure", error)
+                .endsWith("; cause java.io.IOException: Deepest"),
+        )
+    }
+
+    @Test
+    fun unexpectedErrorDescription_comparesCauseIdentityRatherThanEquality() {
+        class EqualCause(message: String, cause: Throwable? = null) : Exception(message, cause) {
+            override fun equals(other: Any?): Boolean = other is EqualCause
+            override fun hashCode(): Int = 0
+        }
+        val deepest = EqualCause("Deepest")
+        val middle = EqualCause("Middle", deepest)
+        val outer = EqualCause("Outer", middle).apply { stackTrace = emptyArray() }
+
+        assertTrue(
+            unexpectedErrorIncidentDescription("Failure", outer, maxChars = 1_024)
+                .endsWith("; cause ${deepest.javaClass.name}: Deepest"),
+        )
+    }
+
+    @Test
     fun pendingIncidentCanCarryAnAlreadyObservedResumeTime() {
         val incident = RecordingIncident(
             occurredAtMillis = 10_000L,

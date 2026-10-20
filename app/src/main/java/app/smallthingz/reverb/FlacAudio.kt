@@ -24,6 +24,22 @@ internal fun validQuickSaveSeconds(seconds: Int): Boolean = seconds in 1..86_400
 internal fun flacPcmChecksumMatches(expected: ByteArray, actual: ByteArray): Boolean =
     expected.all { it == 0.toByte() } || expected.contentEquals(actual)
 
+internal fun writeFlacOutputBuffer(
+    output: WavSeekableOutput,
+    bytes: ByteBuffer,
+    digest: MessageDigest? = null,
+): Int {
+    val count = bytes.remaining()
+    // Writes advance the source position; retain the exact range for hashing after success.
+    val digestBytes = if (digest != null) bytes.duplicate() else null
+    while (bytes.hasRemaining()) {
+        checkFlacExportNotInterrupted()
+        if (output.write(bytes) <= 0) throw IOException("FLAC output stalled")
+    }
+    if (digest != null) digest.update(requireNotNull(digestBytes))
+    return count
+}
+
 internal data class FlacInfo(
     val sampleRate: Int,
     val channelCount: Int,
@@ -132,10 +148,10 @@ internal fun channelHasFlac(channel: FileChannel): Boolean {
 
 internal fun readFlacInfo(channel: FileChannel): FlacInfo {
     val old = channel.position()
-    return try {
+    return withOwnedResource(old, release = { channel.position(it) }) {
         channel.position(0)
         readFlacInfo(Channels.newInputStream(channel))
-    } finally { channel.position(old) }
+    }
 }
 
 private fun flacComment(level: Int): ByteArray {
@@ -189,14 +205,6 @@ internal class FlacAudioFileWriter(
         }
     }
 
-    private fun writeAll(bytes: ByteArray) {
-        val b = ByteBuffer.wrap(bytes)
-        while (b.hasRemaining()) {
-            checkFlacExportNotInterrupted()
-            if (output.write(b) <= 0) throw IOException("FLAC output stalled")
-        }
-    }
-
     private fun config(bytes: ByteArray) {
         if (prefix != null) return
         val stream = when {
@@ -205,7 +213,7 @@ internal class FlacAudioFileWriter(
             else -> throw IOException("Invalid FLAC encoder configuration")
         }
         prefix = byteArrayOf(102, 76, 97, 67, 0, 0, 0, 34) + stream + flacComment(level)
-        writeAll(requireNotNull(prefix))
+        writeFlacOutputBuffer(output, ByteBuffer.wrap(requireNotNull(prefix)))
     }
 
     private fun drain(waitUs: Long): Boolean {
@@ -217,18 +225,18 @@ internal class FlacAudioFileWriter(
             return true
         }
         if (index < 0) return false
-        try {
-            val b = codec.getOutputBuffer(index) ?: throw IOException("Missing FLAC encoder output")
+        withOwnedResource(index, release = { codec.releaseOutputBuffer(it, false) }) { ownedIndex ->
+            val b = codec.getOutputBuffer(ownedIndex) ?: throw IOException("Missing FLAC encoder output")
             b.position(bufferInfo.offset); b.limit(bufferInfo.offset + bufferInfo.size)
-            val bytes = ByteArray(bufferInfo.size); b.get(bytes)
             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                val bytes = ByteArray(bufferInfo.size); b.get(bytes)
                 config(bytes)
-            } else if (bytes.isNotEmpty()) {
+            } else if (b.hasRemaining()) {
                 check(prefix != null) { "FLAC encoder omitted STREAMINFO" }
-                writeAll(bytes); encodedDigest.update(bytes); encodedBytes += bytes.size
+                encodedBytes += writeFlacOutputBuffer(output, b, encodedDigest)
             }
             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) eos = true
-        } finally { codec.releaseOutputBuffer(index, false) }
+        }
         return true
     }
 
@@ -285,7 +293,7 @@ internal class FlacAudioFileWriter(
                     ByteBuffer.wrap(header, 18, 8).order(ByteOrder.BIG_ENDIAN).putLong(packed)
                     pcmMd5.digest().copyInto(header, 26)
                     checkFlacExportNotInterrupted()
-                    output.position(0); writeAll(header)
+                    output.position(0); writeFlacOutputBuffer(output, ByteBuffer.wrap(header))
                     checkFlacExportNotInterrupted()
                     output.truncate(totalFileBytesWritten)
                     checkFlacExportNotInterrupted()
@@ -414,8 +422,8 @@ internal class FlacPcmDecoder(
                 validatePcmFormat(output)
                 progress = true
             } else if (index >= 0) {
-                try {
-                    val output = codec.getOutputBuffer(index) ?: throw IOException("Missing FLAC decoder output")
+                withOwnedResource(index, release = { codec.releaseOutputBuffer(it, false) }) { ownedIndex ->
+                    val output = codec.getOutputBuffer(ownedIndex) ?: throw IOException("Missing FLAC decoder output")
                     val frameBytes = info.channelCount * 2
                     if (bufferInfo.size % frameBytes != 0) throw IOException("Unaligned FLAC decoder output")
                     val first = (bufferInfo.presentationTimeUs.toDouble() * info.sampleRate / 1_000_000.0).roundToLong()
@@ -431,7 +439,7 @@ internal class FlacPcmDecoder(
                         consume(bytes, 0, bytes.size); copied += take
                     }
                     outputEnd = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                } finally { codec.releaseOutputBuffer(index, false) }
+                }
                 progress = true
             }
             if (progress) deadline = System.nanoTime() + 30_000_000_000L

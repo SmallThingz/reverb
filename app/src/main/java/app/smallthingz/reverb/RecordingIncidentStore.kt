@@ -24,6 +24,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.IdentityHashMap
 
 internal const val EXIT_REASON_MEMORY_LIMITER = 17
 internal const val EXIT_REASON_ANOMALY = 18
@@ -720,8 +721,15 @@ internal fun unexpectedErrorIncidentDescription(
             if (stack.lineNumber > 0) append(':').append(stack.lineNumber)
         }
     }.orEmpty()
-    val root = generateSequence(error.cause) { it.cause }.lastOrNull()
-        ?.takeIf { it !== error }
+    val seenCauses = IdentityHashMap<Throwable, Boolean>()
+    seenCauses[error] = true
+    var root: Throwable? = null
+    var cause = error.cause
+    // A repeated object closes a cause cycle; retain the last distinct cause instead.
+    while (cause != null && seenCauses.put(cause, true) == null) {
+        root = cause
+        cause = cause.cause
+    }
     val rootDetail = root?.let { cause ->
         val causeMessage = cause.message?.trim().orEmpty()
         buildString {

@@ -253,16 +253,14 @@ internal fun releaseCompletedForegroundDeletionTargets(
 internal fun librarySnapshotWithoutWaveformTrust(
     recordings: List<RecordingEntity>,
 ): List<RecordingEntity> {
-    var changed = false
-    val sanitized = recordings.map { recording ->
-        if (recording.waveformData.isEmpty() && recording.waveformRevision.isEmpty()) {
-            recording
-        } else {
-            changed = true
-            recording.copy(waveformData = "", waveformRevision = "")
+    var sanitized: MutableList<RecordingEntity>? = null
+    recordings.forEachIndexed { index, recording ->
+        if (recording.waveformData.isNotEmpty() || recording.waveformRevision.isNotEmpty()) {
+            val result = sanitized ?: recordings.toMutableList().also { sanitized = it }
+            result[index] = recording.copy(waveformData = "", waveformRevision = "")
         }
     }
-    return if (changed) sanitized else recordings
+    return sanitized ?: recordings
 }
 
 internal fun libraryEmptyStateVisible(
@@ -599,8 +597,11 @@ fun FilesScreen(
         withContext(NonCancellable) {
             val result = RecordingRepository.deleteBatch(context, pending)
             failed = result.cleanupFailed
-            pending.zip(result.outcomes).forEach { (recording, didDelete) ->
-                if (didDelete) {
+            val targets = pending.iterator()
+            val outcomes = result.outcomes.iterator()
+            while (targets.hasNext() && outcomes.hasNext()) {
+                val recording = targets.next()
+                if (outcomes.next()) {
                     deleted++
                     deletedTargets += recording
                 }
@@ -874,10 +875,11 @@ fun FilesScreen(
         enabled = active && selectionActive,
         onBack = ::clearSelection,
     )
-    val selectionBackProgress = if (selectionBackMotion.gestureActive) {
-        selectionBackMotion.progress.value.coerceIn(0f, 1f)
-    } else {
-        0f
+    val showSelectionBackUnderlay by remember(selectionBackMotion) {
+        derivedStateOf {
+            selectionBackMotion.gestureActive &&
+                selectionBackMotion.progress.value.coerceIn(0f, 1f) > 0f
+        }
     }
     val selectionBackDirection = predictiveBackHorizontalDirection(selectionBackMotion.swipeEdge)
 
@@ -888,7 +890,7 @@ fun FilesScreen(
         topBar = {
             if (selectionActive) {
                 Box {
-                    if (selectionBackProgress > 0f) {
+                    if (showSelectionBackUnderlay) {
                         AppTopBar(
                             onBrandClick = onBrandClick,
                             onIncidentsClick = onIncidentsClick,
@@ -900,6 +902,11 @@ fun FilesScreen(
                     }
                     Surface(
                         modifier = Modifier.graphicsLayer {
+                            val selectionBackProgress = if (selectionBackMotion.gestureActive) {
+                                selectionBackMotion.progress.value.coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            }
                             translationX = selectionBackDirection * size.width * selectionBackProgress
                             alpha = 1f - 0.18f * selectionBackProgress
                             val scale = 1f - 0.015f * selectionBackProgress
@@ -992,7 +999,7 @@ fun FilesScreen(
                         } ?: return@awaitEachGesture
                         if (!accepted) return@awaitEachGesture
 
-                        verticalDrag(dragStart.id) { change ->
+                        val completed = verticalDrag(dragStart.id) { change ->
                             val deltaY = change.positionChange().y
                             downwardDrag = if (deltaY >= 0f) {
                                 downwardDrag + deltaY
@@ -1001,7 +1008,7 @@ fun FilesScreen(
                             }
                             change.consume()
                         }
-                        if (downwardDrag >= edgeDismissDistancePx) onDismissLibrary()
+                        if (completed && downwardDrag >= edgeDismissDistancePx) onDismissLibrary()
                     }
                 },
         ) {
@@ -1607,10 +1614,12 @@ private fun RecordingInfoRow(label: String, value: String) {
 }
 
 private fun buildListItems(context: Context, recordings: List<RecordingEntity>): List<ListItem> {
+    if (recordings.isEmpty()) return emptyList()
+    val dateFormat = android.text.format.DateFormat.getLongDateFormat(context)
     val items = mutableListOf<ListItem>()
     var currentDateHeader = ""
     recordings.forEach { recording ->
-        val dateHeader = formatRecordingDateHeader(context, recording.startedAtMillis)
+        val dateHeader = dateFormat.format(Date(recording.startedAtMillis))
         if (dateHeader != currentDateHeader) {
             currentDateHeader = dateHeader
             items.add(ListItem.Header(dateHeader))

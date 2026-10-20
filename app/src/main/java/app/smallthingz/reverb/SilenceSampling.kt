@@ -214,8 +214,7 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
             override fun gap() = Unit
         }) { spectrum, _ ->
             if (spectrum.invalidSamples) throw java.io.IOException("Invalid microphone samples. Sample the room again.")
-            val graph = spectrum.graph()
-            for (i in peaks.indices) peaks[i] = maxOf(peaks[i], graph[i])
+            spectrum.accumulateGraphPeaks(peaks)
         }
     }
 

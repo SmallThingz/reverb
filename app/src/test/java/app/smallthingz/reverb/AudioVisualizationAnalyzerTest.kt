@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Random
 import kotlin.math.PI
 import kotlin.math.sin
 import org.junit.Assert.assertEquals
@@ -147,6 +148,64 @@ class AudioVisualizationAnalyzerTest {
             }
             .array()
         assertTrue(analyzer.analyze(floatPcm, 0, floatPcm.size, PcmSampleFormat.PCM_FLOAT, 1, SAMPLE_RATE.toInt()).activity > 0.1f)
+    }
+
+    @Test
+    fun pcmFloatSanitization_matchesFiniteClampedInputAcrossCaptureSlices() {
+        val boundaries = intArrayOf(
+            0, Int.MIN_VALUE,
+            1, 0x80000001.toInt(),
+            0x007fffff, 0x807fffff.toInt(),
+            0x00800000, 0x80800000.toInt(),
+            0x3f7fffff, 0xbf7fffff.toInt(),
+            0x3f800000, 0xbf800000.toInt(),
+            0x3f800001, 0xbf800001.toInt(),
+            0x7f7fffff, 0xff7fffff.toInt(),
+            0x7f800000, 0xff800000.toInt(),
+            0x7fc00000, 0xffc00000.toInt(),
+            0x7f800001, 0xff800001.toInt(),
+            0x7fffffff, 0xffffffff.toInt(),
+        )
+        val random = Random(0x50434dL)
+        val bits = IntArray(4_096) { index ->
+            if (index < boundaries.size) boundaries[index] else random.nextInt()
+        }
+        val prefixBytes = 12
+        val raw = ByteBuffer.allocate(prefixBytes + bits.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .apply {
+                position(prefixBytes)
+                bits.forEach(::putInt)
+            }.array()
+        val sanitized = ByteBuffer.allocate(raw.size)
+            .order(ByteOrder.nativeOrder())
+            .apply {
+                position(prefixBytes)
+                bits.forEach { sampleBits ->
+                    val value = Float.fromBits(sampleBits)
+                    putFloat(when {
+                        value.isNaN() || value.isInfinite() -> 0f
+                        value < -1f -> -1f
+                        value > 1f -> 1f
+                        else -> value
+                    })
+                }
+            }.array()
+
+        for (channels in 1..2) {
+            val actual = AudioVisualizationAnalyzer()
+            val expected = AudioVisualizationAnalyzer()
+            for (firstSample in bits.indices step 128) {
+                val offset = prefixBytes + firstSample * Float.SIZE_BYTES
+                val count = 128 * Float.SIZE_BYTES
+                val actualFrame = actual.analyze(raw, offset, count, PcmSampleFormat.PCM_FLOAT, channels, 48_000)
+                val expectedFrame = expected.analyze(sanitized, offset, count, PcmSampleFormat.PCM_FLOAT, channels, 48_000)
+                assertEquals(expectedFrame.activity.toRawBits(), actualFrame.activity.toRawBits())
+                actualFrame.bins.indices.forEach { index ->
+                    assertEquals(expectedFrame.bins[index].toRawBits(), actualFrame.bins[index].toRawBits())
+                }
+            }
+        }
     }
 
     private fun pcm16Tone(

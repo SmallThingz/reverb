@@ -98,11 +98,6 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
             enabled = !dismissing,
             onBack = onDismiss,
         )
-        val backProgress = if (backMotion.gestureActive) {
-            backMotion.progress.value.coerceIn(0f, 1f)
-        } else {
-            0f
-        }
         val dialogView = LocalView.current
         SideEffect {
             (dialogView.parent as? DialogWindowProvider)?.window?.setGravity(Gravity.TOP)
@@ -118,6 +113,11 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .graphicsLayer {
+                        val backProgress = if (backMotion.gestureActive) {
+                            backMotion.progress.value.coerceIn(0f, 1f)
+                        } else {
+                            0f
+                        }
                         translationY = -size.height * backProgress
                         alpha = 1f - 0.22f * backProgress
                     },

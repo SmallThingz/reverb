@@ -363,6 +363,21 @@ private fun shiftedSin(
     phaseCos: Float,
 ): Float = baseSin * phaseCos + baseCos * phaseSin
 
+private inline fun withWaveformSample(
+    values: FloatArray,
+    builtCount: Int,
+    u: Float,
+    consume: (Float) -> Unit,
+) {
+    if (builtCount <= 0 || values.isEmpty()) return
+    val position = u.coerceIn(0f, 1f) * values.lastIndex.toFloat()
+    val first = position.toInt().coerceIn(0, values.lastIndex)
+    if (first >= builtCount) return
+    val second = minOf(first + 1, builtCount - 1, values.lastIndex)
+    val fraction = (position - first.toFloat()).coerceIn(0f, 1f)
+    consume(values[first] + (values[second] - values[first]) * fraction)
+}
+
 private fun waveformConstructionPath(
     path: Path,
     amplitudes: FloatArray,
@@ -413,16 +428,6 @@ private fun waveformConstructionPath(
     val phase113Sin = kotlin.math.sin(phase113)
     val phase113Cos = kotlin.math.cos(phase113)
 
-    fun sampledValue(values: FloatArray, builtCount: Int, u: Float): Float? {
-        if (builtCount <= 0 || values.isEmpty()) return null
-        val position = u.coerceIn(0f, 1f) * values.lastIndex.toFloat()
-        val first = position.toInt().coerceIn(0, values.lastIndex)
-        if (first >= builtCount) return null
-        val second = minOf(first + 1, builtCount - 1, values.lastIndex)
-        val fraction = (position - first.toFloat()).coerceIn(0f, 1f)
-        return values[first] + (values[second] - values[first]) * fraction
-    }
-
     fun revealWeight(front: Float, u: Float, feather: Float): Float {
         if (front >= 0.999f) return 1f
         val distance = front - u
@@ -459,15 +464,13 @@ private fun waveformConstructionPath(
         var sample = blobEnvelope + (ribbonWobble - blobEnvelope) * morph
 
         if (u <= coarseAvailable + 0.04f) {
-            val coarse = sampledValue(coarseWaveform, coarseBuiltCount, u)
-            if (coarse != null) {
+            withWaveformSample(coarseWaveform, coarseBuiltCount, u) { coarse ->
                 val fixedShape = blobEnvelope + (coarse.coerceIn(0f, 1f) - blobEnvelope) * morph
                 sample += (fixedShape - sample) * revealWeight(visibleCoarse, u, 0.036f)
             }
         }
         if (u <= detailAvailable + 0.03f) {
-            val detail = sampledValue(detailWaveform, detailBuiltCount, u)
-            if (detail != null) {
+            withWaveformSample(detailWaveform, detailBuiltCount, u) { detail ->
                 val fixedShape = blobEnvelope + (detail.coerceIn(0f, 1f) - blobEnvelope) * morph
                 sample += (fixedShape - sample) * revealWeight(visibleDetail, u, 0.024f)
             }

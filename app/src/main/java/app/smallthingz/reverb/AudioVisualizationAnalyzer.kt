@@ -289,7 +289,8 @@ internal class AudioVisualizationAnalyzer {
                     ((array[index + 1].toInt() and 0xff) shl 16) or
                     (array[index].toInt() shl 24)
             }
-            Float.fromBits(bits).takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+            val sample = Float.fromBits(bits)
+            if (sample.isFinite()) sample.coerceIn(-1f, 1f) else 0f
         }
     }
 

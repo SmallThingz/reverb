@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /** Each manifest component is a stable slot; its saved buffer and duration are independent. */
@@ -45,7 +46,7 @@ abstract class QuickSaveTileService : TileService() {
         listener = scope.launch {
             combine(QuickSaveTileOptions.options, QuickSaveTileOptions.error) { options, error ->
                 options?.find { it.slot == optionSlot }.takeIf { error == null }
-            }.collect { option ->
+            }.distinctUntilChanged().collect { option ->
                 displayed = option
                 qsTile?.apply {
                     label = option?.let { getString(if (it.buffer == ReverbService.BufferSlot.LOOPING)

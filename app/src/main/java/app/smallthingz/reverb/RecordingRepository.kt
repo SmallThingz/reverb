@@ -1624,7 +1624,16 @@ internal fun pendingDeletionReplayAction(
     else -> PendingDeletionReplayAction.CLEAN_CATALOG
 }
 
-internal fun ByteArray.toHexString(): String = joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+internal fun ByteArray.toHexString(): String {
+    val digits = "0123456789abcdef"
+    val encoded = CharArray(size * 2)
+    for (index in indices) {
+        val value = this[index].toInt() and 0xff
+        encoded[index * 2] = digits[value ushr 4]
+        encoded[index * 2 + 1] = digits[value and 0x0f]
+    }
+    return String(encoded)
+}
 
 internal fun isRecordingEligibleForMove(id: String, pendingDeletionIds: Set<String>): Boolean =
     id !in pendingDeletionIds
@@ -1772,7 +1781,7 @@ internal fun mergeObservedRecording(
     val revision = recordingWaveformRevision(merged)
     val preserveWaveform = revision.isNotBlank() &&
         waveformFallback?.waveformRevision == revision &&
-        decodeRecordingWaveform(waveformFallback.waveformData) != null
+        isValidRecordingWaveformData(waveformFallback.waveformData)
     return merged.copy(
         waveformData = if (preserveWaveform) waveformFallback.waveformData else "",
         waveformRevision = if (preserveWaveform) revision else "",

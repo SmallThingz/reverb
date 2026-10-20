@@ -169,7 +169,7 @@ private fun moveAudioChunkForPreservation(source: File, target: File) {
  */
 internal class PersistentAudioChunkStore internal constructor(
     private val rootDirectory: File,
-    private val legacyDirectory: File?,
+    @Suppress("UNUSED_PARAMETER") legacyDirectory: File?,
     private val overwriteOldest: Boolean,
     private val directorySync: (File) -> Unit = ::forceAudioStoreDirectoryDurable,
     private val atomicChunkReplace: (File, File) -> Unit = ::replaceAudioChunkAtomically,
@@ -959,21 +959,21 @@ internal class PersistentAudioChunkStore internal constructor(
             if (!startOffsetSeconds.isFinite() || !endOffsetSeconds.isFinite()) return null
             val start = startOffsetSeconds.coerceIn(0.0, durationSeconds)
             val end = endOffsetSeconds.coerceIn(start, durationSeconds)
-            if (end <= start) return null
+            if (end <= start || segments.isEmpty()) return null
 
             synchronized(store) {
                 val selected = ArrayList<Segment>()
-                var cursor = 0.0
                 var selectedStartedAtMillis = 0L
                 var selectedEndedAtMillis = 0L
                 var selectedDuration = 0.0
-                for (segment in segments) {
+                // Both range constructors cache these boundaries with the same ordered
+                // duration additions, including frame rounding in nested child ranges.
+                for (index in segmentIndexAt(start)..segments.lastIndex) {
+                    val segment = segments[index]
                     val rate = segment.record.sampleRate
                     if (rate <= 0 || segment.frameCount <= 0L) continue
-                    val segmentDuration = segment.frameCount.toDouble() / rate.toDouble()
-                    val segmentStart = cursor
-                    val segmentEnd = cursor + segmentDuration
-                    cursor = segmentEnd
+                    val segmentStart = segment.timelineStartSeconds
+                    val segmentEnd = segment.timelineEndSeconds
                     if (end <= segmentStart) break
                     if (start >= segmentEnd) continue
 
@@ -1389,11 +1389,6 @@ internal class PersistentAudioChunkStore internal constructor(
         // Never delete an older buffer format automatically. Even if this version cannot
         // decode it, those bytes may be the only surviving copy after a downgrade/upgrade.
         // A future explicit migration can consume it; user data must not be cleanup collateral.
-        legacyDirectory?.let { legacy ->
-            if (legacy != rootDirectory && legacy.exists()) {
-                // Intentionally preserved.
-            }
-        }
         runCatching { File(rootDirectory, indexA.name + ".tmp").delete() }
         runCatching { File(rootDirectory, indexB.name + ".tmp").delete() }
 

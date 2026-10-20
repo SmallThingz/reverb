@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.util.LinkedList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -270,5 +271,39 @@ class RecordingBackgroundDeletionTest {
         assertEquals(listOf(replacement, b), rows)
         assertEquals(replacement, pending[a.id])
         assertEquals(b, pending[b.id])
+    }
+
+    @Test
+    fun linkedBatchUsesLastSuccessfulDuplicateAndPublishesBeforeReleasingTargets() {
+        val original = recording("/recordings/a.wav", "original")
+        val deletedReplacement = original.copy(fileIdentity = "deleted-replacement")
+        val failedReplacement = original.copy(fileIdentity = "failed-replacement")
+        val failed = recording("/recordings/b.wav")
+        val deleted = recording("/recordings/c.wav")
+        val untouched = recording("/recordings/untouched.wav")
+        val attempted = LinkedList(listOf(original, failed, deletedReplacement, deleted, failedReplacement))
+        val outcomes = LinkedList(listOf(true, false, true, true, false))
+        val state = LibraryDeletionState()
+        val revision = beginBackground(state)
+        val pending = linkedMapOf(original.id to failedReplacement, failed.id to failed, deleted.id to deleted)
+        val expectedPending = pending.toMap()
+        var rows = listOf(untouched, original, deletedReplacement, failed, failedReplacement, deleted)
+        var publications = 0
+
+        assertTrue(settleCompletedBackgroundDeletion(
+            state, revision, attempted,
+            RecordingDeletionBatchResult(outcomes, cleanupFailed = false),
+            pending, rows,
+        ) {
+            assertEquals(expectedPending, pending)
+            assertTrue(state.committedInBackground)
+            rows = it
+            publications++
+        })
+
+        assertEquals(listOf(untouched, original, failed, failedReplacement), rows)
+        assertEquals(1, publications)
+        assertTrue(pending.isEmpty())
+        assertTrue(state.acceptsDeletions)
     }
 }

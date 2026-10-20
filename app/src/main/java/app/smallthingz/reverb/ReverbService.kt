@@ -566,10 +566,10 @@ open class ReverbService : Service() {
             this,
             "Recorder service stopped while capture was running",
         )
-        val stoppedTileSnapshot = RecordingQuickTileStateCache.markServiceStopped(this, quickTileStateOwner)
+        RecordingQuickTileStateCache.markServiceStopped(this, quickTileStateOwner)
         // markServiceStopped already installs the fail-closed snapshot and asynchronously
         // hydrates persisted stopped state. Dispatch it without republishing/invalidation.
-        RecordingQuickTiles.refreshCachedSnapshot(this, stoppedTileSnapshot, requestSystemRefresh = true)
+        RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = true)
         releaseWakeLock()
         stopForegroundTracked()
 
@@ -968,7 +968,7 @@ open class ReverbService : Service() {
             if (resolvedGeneration != null && targetChanged && switchingWhileRecording) {
                 // Keep the QS handoff marker ordered with the slot transaction. A later automatic
                 // or user switch must be able to replace this marker before either snapshot emits.
-                RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot)
+                RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot, resolvedGeneration)
             }
             if (resolvedGeneration != null) captureControlFence.recordAcceptedControl(expectedControl)
             resolvedGeneration
@@ -1318,7 +1318,7 @@ open class ReverbService : Service() {
                 switchGeneration = listeningCommandGeneration.incrementAndGet()
                 // This marker is tiny in-memory state only. Keep it inside the destination lock
                 // so older handoff callbacks cannot overwrite a newer winning slot transaction.
-                RecordingQuickTiles.beginHandoff(previousActiveBuffer, resolved)
+                RecordingQuickTiles.beginHandoff(previousActiveBuffer, resolved, switchGeneration)
             }
             changed = true
             true
@@ -3665,34 +3665,46 @@ open class ReverbService : Service() {
         }
     }
 
-    private fun runtimeCaptureActiveOnAudioThread(): Boolean {
+    private fun runtimeCaptureStateOnAudioThread(commandGeneration: Long): RecordingTileCaptureState {
         check(audioHandler.looper == Looper.myLooper())
-        val record = audioRecord ?: return false
-        if (state != STATE_LISTENING || !isListeningEnabled()) return false
-        if (audioRecordGeneration != listeningCommandGeneration.get()) return false
-        return runCatching {
+        val record = audioRecord ?: return RecordingTileCaptureState.UNAVAILABLE
+        val captureAllowed = !serviceDestroying && serviceHasHealthyListeningLifetime(
+            recorderState = state,
+            listeningIntentEnabled = durableListeningIntentEnabled,
+            foregroundStartBlocked = foregroundStartBlocked,
+            foregroundServiceTimedOut = foregroundServiceTimedOut,
+            persistenceFailureBlocked = persistenceFailureBlocked,
+        )
+        if (!captureAllowed) return RecordingTileCaptureState.UNAVAILABLE
+        val nativeInputRecording = runCatching {
             record.recordingState == AudioRecord.RECORDSTATE_RECORDING
         }.getOrDefault(false)
+        return recordingTileCaptureState(captureAllowed, nativeInputRecording, audioRecordGeneration, commandGeneration)
     }
 
     private fun buildRecordingTileSnapshotOnAudioThread(): RecordingTileSnapshot {
         check(audioHandler.looper == Looper.myLooper())
-        // Bind this sample to the capture-intent epoch. A UI/binder mutation can race the
-        // remaining reads even though this method runs on the audio thread; the tile command
-        // carries this epoch into its mutation. Queued taps hold the intent lock across both
-        // sampling and dispatch, so a failed durable attempt is never resampled as a new toggle.
-        val commandGeneration = listeningCommandGeneration.get()
-        return recordingTileSnapshot(
-            listeningIntentEnabled = isListeningEnabled(),
-            runtimeCaptureActive = runtimeCaptureActiveOnAudioThread(),
-            activeBuffer = activeBufferSlot,
-            oneShotEnabled = oneShotBufferEnabled,
-            oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull(),
-            loopingEnabled = loopingBufferEnabled,
-            oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat(),
-            loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat(),
-            commandGeneration = commandGeneration,
-        )
+        // Read store counters before taking the intent lock. Input, destination and command
+        // must form one sample so a queued generation adoption cannot masquerade as Stop.
+        val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
+        val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
+        val loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat()
+        return synchronized(listeningIntentLock) {
+            val commandGeneration = listeningCommandGeneration.get()
+            val captureState = runtimeCaptureStateOnAudioThread(commandGeneration)
+            recordingTileSnapshot(
+                listeningIntentEnabled = durableListeningIntentEnabled,
+                runtimeCaptureActive = captureState == RecordingTileCaptureState.RECORDING,
+                activeBuffer = activeBufferSlot,
+                oneShotEnabled = oneShotBufferEnabled,
+                oneShotFull = oneShotFull,
+                loopingEnabled = loopingBufferEnabled,
+                oneShotSeconds = oneShotSeconds,
+                loopingSeconds = loopingSeconds,
+                commandGeneration = commandGeneration,
+                captureGenerationPending = captureState == RecordingTileCaptureState.GENERATION_PENDING,
+            )
+        }
     }
 
     private fun publishQuickTileSnapshotOnAudioThread(
@@ -3712,15 +3724,26 @@ open class ReverbService : Service() {
             buildRecordingTileSnapshotOnAudioThread()
         } catch (error: Exception) {
             Log.w(TAG, "Unable to refresh quick tile snapshot", error)
-            runtimeRecordingTileFallbackSnapshot(
-                cached = RecordingQuickTileStateCache.readCachedOrNull(),
-                activeBuffer = activeBufferSlot,
-                oneShotEnabled = oneShotBufferEnabled,
-                loopingEnabled = loopingBufferEnabled,
-            )
+            synchronized(listeningIntentLock) {
+                runtimeRecordingTileFallbackSnapshot(
+                    cached = RecordingQuickTileStateCache.readCachedOrNull(),
+                    activeBuffer = activeBufferSlot,
+                    oneShotEnabled = oneShotBufferEnabled,
+                    loopingEnabled = loopingBufferEnabled,
+                ).copy(commandGeneration = listeningCommandGeneration.get())
+            }
         }
-        RecordingQuickTiles.publishSnapshot(this, quickTileStateOwner, snapshot, requestSystemRefresh = refreshTiles)
-        if (persistDurations) RecordingQuickTileStateCache.persistCurrentDurations(this, quickTileStateOwner)
+        val published = synchronized(listeningIntentLock) {
+            recordingTileSnapshotMayPublish(serviceDestroying, snapshot.commandGeneration,
+                listeningCommandGeneration.get()) &&
+                RecordingQuickTileStateCache.publish(quickTileStateOwner, snapshot)
+        }
+        if (published) {
+            // A newer command owns its replacement publication. Dispatch is a current-cache
+            // wake-up outside the intent lock, never permission to replay this local sample.
+            RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = refreshTiles)
+            if (persistDurations) RecordingQuickTileStateCache.persistCurrentDurations(this, quickTileStateOwner)
+        }
         return snapshot
     }
 
@@ -3759,8 +3782,8 @@ open class ReverbService : Service() {
             }
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to accept Quick Settings capture command", error)
-            val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(this)
-            RecordingQuickTiles.refreshCachedSnapshot(this, fallback, requestSystemRefresh = true)
+            RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+            RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = true)
             false
         }
     }

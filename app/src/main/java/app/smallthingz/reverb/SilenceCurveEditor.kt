@@ -62,13 +62,25 @@ internal class SilenceCurveView(context: Context) : View(context) {
     fun bind(config: SilenceGateConfig, selectedPoint: Int, peaks: List<Float>?, maxHz: Int,
              accentColor: Int, inkColor: Int, mutedColor: Int, editable: Boolean) {
         val wasActive = gesture.active
-        gesture.bind(config.points, selectedPoint, editable)
+        var changed = gesture.bind(config.points, selectedPoint, editable)
         if (wasActive && !gesture.active) releasePointer()
-        sampled = peaks?.takeIf { it.size >= 2 }
-        maximumHz = maxHz.coerceIn(20, 20_000)
-        accent = accentColor; ink = inkColor; muted = mutedColor
-        isEnabled = editable
-        invalidate()
+        val nextSamples = peaks?.takeIf { it.size >= 2 }
+        if (sampled != nextSamples) {
+            // Keep an owned snapshot so a caller's in-place sample update is observable.
+            sampled = nextSamples?.toList()
+            changed = true
+        }
+        val nextMaximumHz = maxHz.coerceIn(20, 20_000)
+        if (maximumHz != nextMaximumHz || accent != accentColor || ink != inkColor || muted != mutedColor) {
+            maximumHz = nextMaximumHz
+            accent = accentColor; ink = inkColor; muted = mutedColor
+            changed = true
+        }
+        if (isEnabled != editable) {
+            isEnabled = editable
+            changed = true
+        }
+        if (changed) invalidate()
     }
 
     private fun x(hz: Int) = plot.left + silenceFrequencyFraction(hz.toDouble()).toFloat() * plot.width()
@@ -383,18 +395,23 @@ internal class SilenceCurveGesture {
         var moved = false
     }
 
-    fun bind(model: List<SilencePoint>, selectedPoint: Int, enabled: Boolean) {
+    fun bind(model: List<SilencePoint>, selectedPoint: Int, enabled: Boolean): Boolean {
+        val enabledChanged = editable != enabled
         editable = enabled
         val nextSelection = selectedPoint.coerceIn(model.indices)
-        if (active) {
+        val wasActive = active
+        if (wasActive) {
             // Ordinary Compose/palette/sample updates must not overwrite a held drag. A new
             // model or selection, however, revokes it before the old UP can publish stale edits.
-            if (enabled && model == boundPoints && nextSelection == boundSelected) return
+            if (enabled && model == boundPoints && nextSelection == boundSelected) return false
             cancel()
         }
-        points = model.toList()
+        val modelChanged = points != model
+        val selectionChanged = selected != nextSelection
+        if (modelChanged) points = model.toList()
         selected = nextSelection
         acceptCurrentModel()
+        return wasActive || modelChanged || selectionChanged || enabledChanged
     }
 
     fun begin(x: Float, y: Float, plot: SilenceCurvePlot, hitRadius: Float, touchSlop: Float): Boolean {

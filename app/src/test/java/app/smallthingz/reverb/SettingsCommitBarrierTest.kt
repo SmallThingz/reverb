@@ -73,19 +73,19 @@ class SettingsCommitBarrierTest {
             }
         }
         try {
-            assertEquals("Replacement really read before predecessor acquired the lock", 1, reads)
-            assertFalse("The old read cannot become an editable baseline", replacement.isCompleted)
+            assertEquals("Replacement must not read ahead of the accepted save", 0, reads)
+            assertFalse("Pending save cannot become an editable baseline", replacement.isCompleted)
         } finally {
             releaseSave.complete(Unit)
         }
         assertEquals(commit && !throwFailure, withTimeout(5_000L) { save.await() })
         val result = withTimeout(5_000L) { replacement.await() }
-        assertEquals("Settlement requires a new durable baseline", 2, reads)
+        assertEquals("Only the settled durable baseline needs to be read", 1, reads)
         result
     }
 
     @Test
-    fun sameSubmittedDraftBecomesCleanAfterReplacementReadWinsPersistenceLock() = runBlocking {
+    fun sameSubmittedDraftBecomesCleanAfterReplacementWaitsForAcceptedSave() = runBlocking {
         val draft = SettingsUiDraft.normalized(submitted)
         val result = replacementBeforeTerminal(draft)
         assertEquals(submitted, result.baseline)
@@ -169,6 +169,7 @@ class SettingsCommitBarrierTest {
         val finishRuntimeApply = CompletableDeferred<Unit>()
         var durable = baseline
         var runtimeApplied = false
+        var reads = 0
         val save = launch(start = CoroutineStart.UNDISPATCHED) {
             barrier.runAcceptedSave {
                 withRetentionPersistenceLock { durable = submitted }
@@ -178,6 +179,7 @@ class SettingsCommitBarrierTest {
         }
         val replacement = async(start = CoroutineStart.UNDISPATCHED) {
             hydrate(barrier, restored(SettingsUiDraft.normalized(submitted))) {
+                reads++
                 withRetentionPersistenceLock { durable }
             }
         }
@@ -185,12 +187,14 @@ class SettingsCommitBarrierTest {
             save.cancel()
             assertFalse(save.isCompleted)
             assertFalse(replacement.isCompleted)
+            assertEquals("Runtime convergence still owns the accepted save", 0, reads)
         } finally {
             finishRuntimeApply.complete(Unit)
         }
         withTimeout(5_000L) { save.join() }
         val result = withTimeout(5_000L) { replacement.await() }
         assertTrue(runtimeApplied)
+        assertEquals(1, reads)
         assertEquals(submitted, result.baseline)
         assertFalse(result.hasUnsavedChanges)
     }
@@ -203,6 +207,7 @@ class SettingsCommitBarrierTest {
         val newest = SettingsUiDraft.normalized(submitted.copy(sampleRate = 32_000))
             .copy(oneShotTimeText = "15,00", loopingSizeText = "-")
         var restoration = restored(newest)
+        var reads = 0
         val save = launch(start = CoroutineStart.UNDISPATCHED) {
             barrier.runAcceptedSave {
                 releaseSave.await()
@@ -212,10 +217,14 @@ class SettingsCommitBarrierTest {
         try {
             repeat(3) {
                 val retired = async(start = CoroutineStart.UNDISPATCHED) {
-                    hydrate(barrier, restoration) { withRetentionPersistenceLock { durable } }
+                    hydrate(barrier, restoration) {
+                        reads++
+                        withRetentionPersistenceLock { durable }
+                    }
                 }
                 assertFalse(retired.isCompleted)
                 retired.cancelAndJoin()
+                assertEquals("Cancelled replacements must not read pending state", 0, reads)
                 restoration = SettingsDraftRestoration.restore(
                     restoration.save(true, false, false, SettingsSnapshot()) {
                         error("Unhydrated placeholders cannot replace the pending draft")
@@ -226,7 +235,11 @@ class SettingsCommitBarrierTest {
             releaseSave.complete(Unit)
         }
         withTimeout(5_000L) { save.join() }
-        val result = hydrate(barrier, restoration) { withRetentionPersistenceLock { durable } }
+        val result = hydrate(barrier, restoration) {
+            reads++
+            withRetentionPersistenceLock { durable }
+        }
+        assertEquals(1, reads)
         assertEquals(submitted, result.baseline)
         assertEquals(newest, result.displayed)
         assertTrue(result.hasUnsavedChanges)
@@ -239,6 +252,7 @@ class SettingsCommitBarrierTest {
         val finishSecond = CompletableDeferred<Unit>()
         var durable = baseline
         val latest = submitted.copy(sampleRate = 32_000)
+        var reads = 0
         val first = launch(start = CoroutineStart.UNDISPATCHED) {
             barrier.runAcceptedSave {
                 finishFirst.await()
@@ -253,6 +267,7 @@ class SettingsCommitBarrierTest {
         }
         val replacement = async(start = CoroutineStart.UNDISPATCHED) {
             hydrate(barrier, restored(SettingsUiDraft.normalized(latest))) {
+                reads++
                 withRetentionPersistenceLock { durable }
             }
         }
@@ -260,12 +275,14 @@ class SettingsCommitBarrierTest {
             finishFirst.complete(Unit)
             withTimeout(5_000L) { first.join() }
             assertFalse(replacement.isCompleted)
+            assertEquals("The second accepted save still owns settlement", 0, reads)
         } finally {
             finishFirst.complete(Unit)
             finishSecond.complete(Unit)
         }
         withTimeout(5_000L) { second.join() }
         val result = withTimeout(5_000L) { replacement.await() }
+        assertEquals(1, reads)
         assertEquals(latest, result.baseline)
         assertFalse(result.hasUnsavedChanges)
     }

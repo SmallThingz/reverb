@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 internal const val QUICK_SAVE_TILE_COUNT = 8
+private val quickSaveTileRevisionPattern = Regex("[0-9a-f]{32}")
 
 internal enum class QuickSaveUnit(val seconds: Int, val symbol: String, val labelRes: Int) {
     SECONDS(1, "s", R.string.tile_seconds),
@@ -41,7 +42,7 @@ internal data class QuickSaveTileOption(
 ) {
     init {
         require(slot in 0 until QUICK_SAVE_TILE_COUNT)
-        require(revision.matches(Regex("[0-9a-f]{32}")))
+        require(revision.matches(quickSaveTileRevisionPattern))
         require(quickSaveTileSeconds(amount, unit) != null)
     }
     val seconds: Int get() = requireNotNull(quickSaveTileSeconds(amount, unit))

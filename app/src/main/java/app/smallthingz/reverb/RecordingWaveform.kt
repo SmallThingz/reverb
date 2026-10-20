@@ -44,7 +44,7 @@ internal fun isValidRecordingWaveformCache(
     return recording.missingSinceMillis == null &&
         expectedRevision.isNotBlank() &&
         waveformRevision == expectedRevision &&
-        decodeRecordingWaveform(waveformData) != null
+        isValidRecordingWaveformData(waveformData)
 }
 
 internal fun rebindRecordingWaveformCache(
@@ -69,10 +69,18 @@ internal fun encodeRecordingWaveform(values: FloatArray): String {
     return Base64.getEncoder().withoutPadding().encodeToString(bytes)
 }
 
-internal fun decodeRecordingWaveform(data: String): FloatArray? {
+private fun decodeRecordingWaveformBytes(data: String): ByteArray? {
     if (data.length != RECORDING_WAVEFORM_ENCODED_LENGTH) return null
     val bytes = runCatching { Base64.getDecoder().decode(data) }.getOrNull() ?: return null
     if (bytes.size != RANGE_WAVEFORM_DETAIL_BUCKETS) return null
+    return bytes
+}
+
+internal fun isValidRecordingWaveformData(data: String): Boolean =
+    decodeRecordingWaveformBytes(data) != null
+
+internal fun decodeRecordingWaveform(data: String): FloatArray? {
+    val bytes = decodeRecordingWaveformBytes(data) ?: return null
     return FloatArray(bytes.size) { index -> (bytes[index].toInt() and 0xff) / 255f }
 }
 
@@ -306,7 +314,8 @@ internal fun readWavPcm16MonoRange(
                     ((sourceBytes[offset + 1].toInt() and 0xff) shl 8) or
                     ((sourceBytes[offset + 2].toInt() and 0xff) shl 16) or
                     (sourceBytes[offset + 3].toInt() shl 24)
-                Float.fromBits(bits).takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+                val sample = Float.fromBits(bits)
+                if (sample.isFinite()) sample.coerceIn(-1f, 1f) else 0f
             }
         }
     }

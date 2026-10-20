@@ -31,13 +31,13 @@ internal class SettingsCommitBarrier {
     }
 
     /**
-     * A read may acquire the persistence lock before an accepted save's queued IO does.
-     * Await settlement only after the read releases that lock, then discard a crossed revision.
+     * Wait for accepted saves before reading, without acquiring the persistence lock.
+     * If a save crosses the read, await settlement after releasing its lock and retry.
      * The caller resumes on its UI dispatcher and applies the result without another suspension.
      */
     suspend fun <T> readSettled(read: suspend () -> T): T {
         while (true) {
-            val before = state.value
+            val before = state.first { it.acceptedSaves == 0 }
             val result = try {
                 Result.success(read())
             } catch (cancelled: CancellationException) {

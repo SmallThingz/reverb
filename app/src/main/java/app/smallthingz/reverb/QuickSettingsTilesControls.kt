@@ -210,6 +210,10 @@ internal class QuickSettingsTileEditorTarget {
     }
 }
 
+/** Reject callbacks belonging to a parent draft that changed before recomposition. */
+internal fun quickSettingsTileActionRevision(renderedRevision: Long, currentRevision: Long?): Long? =
+    currentRevision?.takeIf { it == renderedRevision }
+
 internal class QuickSettingsTileDeleteTarget(val option: QuickSaveTileOption, val editRevision: Long) {
     fun canConfirm(
         currentTarget: QuickSettingsTileDeleteTarget?,
@@ -271,6 +275,8 @@ internal fun QuickSettingsTilesControls(
     durationSubmissionAllowed: Boolean,
     editorState: QuickSettingsTilesEditorState,
     editRevision: Long,
+    readActionRevision: () -> Long?,
+    readSheetActionRevision: () -> Long?,
     readEditRevision: () -> Long?,
     readSheetEditRevision: () -> Long?,
     modifier: Modifier = Modifier,
@@ -285,17 +291,22 @@ internal fun QuickSettingsTilesControls(
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
     val interactive = active && interactionReady && lifecycleState.isAtLeast(Lifecycle.State.RESUMED) &&
-        editorState.pinning == null && !editorState.mutationInProgress && readSheetEditRevision() != null
-    fun inputReady() = readEditRevision() != null && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        editorState.pinning == null && !editorState.mutationInProgress &&
+        quickSettingsTileActionRevision(editRevision, readSheetActionRevision()) != null
+    fun actionRevision(): Long? = quickSettingsTileActionRevision(editRevision, readActionRevision())?.takeIf {
+        active && interactionReady && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            editorState.pinning == null && !editorState.mutationInProgress
+    }
     LaunchedEffect(active, interactionReady) {
         if (active && interactionReady) QuickSaveTileOptions.refresh(context)
     }
     fun openCreation() {
-        if (!interactive || !inputReady() || failure != null || editorState.editorOpen) return
+        if (!interactive || actionRevision() == null || readEditRevision() != editRevision ||
+            failure != null || editorState.editorOpen) return
         editorState.target = QuickSettingsTileEditorTarget()
     }
     fun add(option: QuickSaveTileOption) {
-        if (!interactive || !inputReady() || editorState.editorOpen || QuickSaveTileOptions.error.value != null) return
+        if (!interactive || actionRevision() == null || editorState.editorOpen || QuickSaveTileOptions.error.value != null) return
         if (QuickSaveTileOptions.options.value?.find { it.slot == option.slot } != option ||
             quickSaveTileAddedState(option, QuickSaveTileOptions.addedStates.value) == QuickSaveTileAddedState.ADDED) return
         val request = Any()
@@ -331,8 +342,10 @@ internal fun QuickSettingsTilesControls(
                                     stringResource(if (added == QuickSaveTileAddedState.NOT_ADDED) R.string.tiles_ui_add else R.string.tiles_ui_setup))
                             }
                             IconButton(onClick = {
-                                val revision = readEditRevision() ?: return@IconButton
-                                if (inputReady() && enabled) editorState.deleting = QuickSettingsTileDeleteTarget(option, revision)
+                                val revision = actionRevision() ?: return@IconButton
+                                if (enabled && !editorState.editorOpen && QuickSaveTileOptions.error.value == null &&
+                                    QuickSaveTileOptions.options.value?.find { it.slot == option.slot } == option)
+                                    editorState.deleting = QuickSettingsTileDeleteTarget(option, revision)
                             }, enabled = enabled) {
                                 Icon(AppIcons.delete, stringResource(R.string.tiles_ui_delete))
                             }
@@ -356,7 +369,7 @@ internal fun QuickSettingsTilesControls(
         if (!durationSubmissionAllowed) TileStatus(stringResource(R.string.tiles_ui_apply_first))
         (failure ?: observationFailure)?.let {
             TileStatus(it)
-            TextButton(onClick = { if (inputReady()) QuickSaveTileOptions.refresh(context) }, enabled = interactive) {
+            TextButton(onClick = { if (interactive && actionRevision() != null) QuickSaveTileOptions.refresh(context) }, enabled = interactive) {
                 Text(stringResource(R.string.tiles_ui_retry))
             }
         }
@@ -373,7 +386,7 @@ internal fun QuickSettingsTilesControls(
                 val sheetLifecycleState by sheetLifecycle.currentStateFlow.collectAsState()
                 fun confirmationReady(): Boolean = target.canConfirm(
                     currentTarget = editorState.deleting,
-                    currentRevision = readSheetEditRevision(),
+                    currentRevision = readSheetActionRevision(),
                     currentOption = QuickSaveTileOptions.options.value?.find { it.slot == target.option.slot },
                     sheetReady = sheetLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
                         sheetView.isAttachedToWindow && sheetView.isShown && sheetView.hasWindowFocus(),
@@ -382,7 +395,7 @@ internal fun QuickSettingsTilesControls(
                 )
                 val confirmationEnabled = target.canConfirm(
                     currentTarget = editorState.deleting,
-                    currentRevision = readSheetEditRevision(),
+                    currentRevision = readSheetActionRevision(),
                     currentOption = options?.find { it.slot == target.option.slot },
                     sheetReady = sheetWindow.isWindowFocused && sheetLifecycleState.isAtLeast(Lifecycle.State.RESUMED),
                     mutationAvailable = active && interactionReady && editorState.pinning == null &&

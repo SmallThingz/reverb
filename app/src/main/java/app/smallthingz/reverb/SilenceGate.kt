@@ -86,7 +86,6 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
     private val real = DoubleArray(size)
     private val imaginary = DoubleArray(size)
     private val channelPowers = DoubleArray(powers.size)
-    private val peakFrequencies = DoubleArray(powers.size)
     private val detectedPowers = DoubleArray(channels * powers.size)
     private val detectedFrequencies = DoubleArray(channels * powers.size)
     private val fittedPowers = DoubleArray(channels * 2)
@@ -122,9 +121,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
 
     fun analyze(bytes: ByteArray, frames: Int, observeBoundaries: Boolean = false) {
         require(frames in 1..size && bytes.size >= frames * frameBytes)
-        powers.fill(0.0)
         fittedPowers.fill(0.0)
-        for (bin in peakFrequencies.indices) peakFrequencies[bin] = frequency(bin)
         invalidSamples = false
         analyzedFrames = frames
         boundaryObservationsAvailable = observeBoundaries
@@ -228,10 +225,6 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                     if (hz > SILENCE_MAX_HZ && hz - SILENCE_MAX_HZ <= error) hz = SILENCE_MAX_HZ.toDouble()
                     if (hz < SILENCE_MIN_HZ && SILENCE_MIN_HZ - hz <= error) hz = SILENCE_MIN_HZ.toDouble()
                 }
-                if (power > powers[i]) {
-                    powers[i] = power
-                    peakFrequencies[i] = hz
-                }
                 detectedPowers[channel * powers.size + i] = power
                 detectedFrequencies[channel * powers.size + i] = hz
             }
@@ -242,14 +235,12 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
             val index = channel * powers.size + bin
             if (detectedPowers[index] > powers[bin]) {
                 powers[bin] = detectedPowers[index]
-                peakFrequencies[bin] = detectedFrequencies[index]
             }
         }
         for (index in fittedPowers.indices) {
             val bin = (fittedFrequencies[index] * size / sampleRate).roundToInt().coerceIn(1, powers.lastIndex)
             if (fittedPowers[index] > powers[bin]) {
                 powers[bin] = fittedPowers[index]
-                peakFrequencies[bin] = fittedFrequencies[index]
             }
         }
     }
@@ -519,6 +510,14 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
 
     fun graph(): List<Float> {
         val output = FloatArray(SILENCE_GRAPH_BINS) { -120f }
+        accumulateGraphPeaks(output)
+        return output.toList()
+    }
+
+    fun accumulateGraphPeaks(output: FloatArray) {
+        require(output.size == SILENCE_GRAPH_BINS)
+        // Empty buckets still contribute the graph floor when merging into existing peaks.
+        for (index in output.indices) output[index] = max(output[index], -120f)
         for (channel in 0 until channels) for (bin in 1 until powers.size) {
             val index = channel * powers.size + bin
             val hz = detectedFrequencies[index]
@@ -533,7 +532,6 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
             val bucket = (silenceFrequencyFraction(hz) * (output.size - 1)).roundToInt()
             output[bucket] = max(output[bucket], (10 * log10(fittedPowers[index].coerceAtLeast(1e-12))).toFloat())
         }
-        return output.toList()
     }
 
     private fun sample(bytes: ByteArray, offset: Int): Double = when (format) {
@@ -605,8 +603,6 @@ internal class SilenceGateStream(
         private set
     var skippedFrames = 0L
         private set
-
-    init { config.validate() }
 
     fun accept(bytes: ByteArray, offset: Int, count: Int) {
         check(!finished && !failed)

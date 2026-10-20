@@ -80,9 +80,13 @@ internal fun settleCompletedBackgroundDeletion(
     // A missing outcome is unknown, not a failed or successful physical deletion.
     if (result.outcomes.size != attempted.size) return false
     return state.completeBackgroundCommit(revision) {
-        val deleted = attempted.zip(result.outcomes)
-            .filter { (_, didDelete) -> didDelete }
-            .associate { (recording, _) -> recording.id to recording }
+        val deleted = LinkedHashMap<String, RecordingEntity>()
+        val targets = attempted.iterator()
+        val outcomes = result.outcomes.iterator()
+        while (targets.hasNext() && outcomes.hasNext()) {
+            val recording = targets.next()
+            if (outcomes.next()) deleted[recording.id] = recording
+        }
         publishRecordings(recordings.filterNot { current ->
             deleted[current.id]?.let { requested -> sameRecordingActionTarget(requested, current) } == true
         })

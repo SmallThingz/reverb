@@ -52,4 +52,4 @@ fun formatSavedRecordingDuration(context: Context, durationMillis: Long): String
 }
 
 fun formatPlaybackTime(durationMillis: Int): String =
-    formatShortTimer(durationMillis.coerceAtLeast(0) / 1000f)
+    formatDurationInput(durationMillis.coerceAtLeast(0) / 1000)

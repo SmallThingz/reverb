@@ -24,6 +24,10 @@ internal fun readSilenceCalibrationInput(context: Context) = SilenceCalibrationI
     getConfiguredChannelMode(context), getConfiguredAudioSourceMode(context), getConfiguredInputRouteMode(context),
 )
 
+/** Existing definitions need owner admission; only a new duration needs applied capacity. */
+internal fun settingsTileDurationRevision(ownerRevision: Long?, capacityDraftReady: Boolean): Long? =
+    ownerRevision?.takeIf { capacityDraftReady }
+
 /** A tile is usable immediately, so an unapplied Settings preview cannot authorize its duration. */
 internal fun settingsTileCapacityDraftChanged(
     baseline: SettingsSnapshot,

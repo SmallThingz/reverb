@@ -485,6 +485,14 @@ fun SettingsScreen(
         refreshChannelModes(preferredChannelMode, preferredRate)
     }
 
+    fun currentSilenceInput() = SilenceCalibrationInput(
+        sampleRate = selectedSampleRate,
+        sampleFormat = selectedSampleFormat,
+        channelMode = selectedChannelMode,
+        source = selectedSource,
+        route = selectedRoute,
+    )
+
     fun currentSettingsSnapshot(wakeLockEnabled: Boolean = currentSnapshot.wakeLockEnabled) = SettingsSnapshot(
         themeMode = selectedTheme,
         retentionMode = activeRetentionMode,
@@ -605,7 +613,7 @@ fun SettingsScreen(
         readOwner = { config, input ->
             if (isPanelActive() && settingsInteractionReady && !settingsPersisting &&
                 config.enabled && selectedSilence == config &&
-                currentSettingsSnapshot().silenceCalibrationInput() == input &&
+                currentSilenceInput() == input &&
                 originalSnapshot.silenceCalibrationInput() == input
             ) settingsEditRevision[0] to calibrationResetRevision else null
         },
@@ -637,8 +645,14 @@ fun SettingsScreen(
             oneShotRetentionSizeText, loopingRetentionSizeText)
 
     // A modal confirmation owns a different window; its own view supplies the focus guard.
-    fun tileDraftRevision(): Long? = if (featureOwnerReady() && tileCapacityDraftReady())
+    fun tileActionRevision(): Long? = if (featureOwnerReady())
         settingsEditRevision[0] else null
+
+    fun tileActionAdmission(): Long? = tileActionRevision()?.takeIf { settingsView.hasWindowFocus() }
+
+    fun tileDraftRevision(): Long? = tileActionRevision()?.let {
+        settingsTileDurationRevision(it, tileCapacityDraftReady())
+    }
 
     fun tileDraftAdmission(): Long? = tileDraftRevision()?.takeIf { settingsView.hasWindowFocus() }
 
@@ -701,10 +715,9 @@ fun SettingsScreen(
     }
 
     fun refreshStoppedQuickTileFallback() {
-        val fallback = RecordingQuickTileStateCache.markRuntimeUnavailable(context)
+        RecordingQuickTileStateCache.markRuntimeUnavailable(context)
         RecordingQuickTiles.refreshCachedSnapshot(
             context = context,
-            snapshot = fallback,
             requestSystemRefresh = true,
         )
     }
@@ -1788,13 +1801,7 @@ fun SettingsScreen(
                         }
                         val renderedSilence = selectedSilence
                         val renderedSilenceRevision = settingsEditRevision[0]
-                        val currentSilenceCalibrationInput = SilenceCalibrationInput(
-                            sampleRate = selectedSampleRate,
-                            sampleFormat = selectedSampleFormat,
-                            channelMode = selectedChannelMode,
-                            source = selectedSource,
-                            route = selectedRoute,
-                        )
+                        val currentSilenceCalibrationInput = currentSilenceInput()
                         SkipSilenceSettings(
                             config = renderedSilence,
                             onConfigChange = {
@@ -1855,6 +1862,8 @@ fun SettingsScreen(
                     durationSubmissionAllowed = tileCapacityDraftReady(),
                     editorState = quickTileEditorState,
                     editRevision = settingsEditRevision[0],
+                    readActionRevision = ::tileActionAdmission,
+                    readSheetActionRevision = ::tileActionRevision,
                     readEditRevision = ::tileDraftAdmission,
                     readSheetEditRevision = ::tileDraftRevision,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
