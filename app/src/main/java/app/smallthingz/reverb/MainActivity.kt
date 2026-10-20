@@ -14,7 +14,9 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.compose.setContent
 
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -40,6 +42,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
@@ -53,6 +56,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -71,6 +75,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -79,6 +84,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 
 private const val URI_SCHEME_PACKAGE = "package"
@@ -115,8 +121,8 @@ class MainActivity : ComponentActivity() {
     private var showPermissionDenied by mutableStateOf(false)
     private var showOnboarding by mutableStateOf(false)
     private var onboardingBufferAvailability by mutableStateOf<ConfiguredBufferAvailability?>(null)
-    private var onboardingFinishing by mutableStateOf(false)
     private var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
+    private lateinit var themePresentation: ThemePresentationOwner
 
     private val microphonePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -170,99 +176,110 @@ class MainActivity : ComponentActivity() {
         microphonePermissionGranted = hasMicrophonePermission()
         storagePermissionGranted = hasLegacyStoragePermission()
         permissionsGranted = microphonePermissionGranted && storagePermissionGranted
-        showOnboarding = isOnboardingPending(this)
+        showOnboarding = onboardingPendingForUi(
+            finishState = processOnboardingFinish.state.value,
+            readDurablePending = { isOnboardingPending(this) },
+        )
         if (showOnboarding) {
             notificationPermissionGranted = hasNotificationPermission()
             mediaRecoveryAllowed = hasMediaRecoveryPermission()
             batteryOptimizationAllowed = isIgnoringBatteryOptimizations(this)
         }
-        themeMode = configuredThemeMode
-        if (showOnboarding) startOnboardingBufferHydration()
+        themePresentation = ThemePresentationOwner(configuredThemeMode)
+        themePresentation.observeCommitted(processCommittedTheme.state.value)
+        themeMode = themePresentation.mode
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                processCommittedTheme.state.collect {
+                    // A newer commit can supersede a payload already queued for this Activity.
+                    themePresentation.observeCommitted(processCommittedTheme.state.value)
+                    themeMode = themePresentation.mode
+                }
+            }
+        }
+        if (showOnboarding) {
+            startOnboardingBufferHydration()
+            observeOnboardingFinish()
+        }
         setContent {
             val systemDarkTheme = isSystemInDarkTheme()
+            val onboardingFinishState by processOnboardingFinish.state.collectAsState()
             ReverbTheme(darkTheme = themeMode.isDark(systemDarkTheme)) {
                 if (showOnboarding) {
-                    val onboardingBuffers = onboardingBufferAvailability
-                    if (onboardingBuffers == null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    } else {
-                    OnboardingScreen(
-                        status = OnboardingStatus(
-                            microphoneAllowed = microphonePermissionGranted,
-                            storageAllowed = storagePermissionGranted,
-                            storagePermissionRequired = requiresLegacyStoragePermission(),
-                            recoveryAllowed = mediaRecoveryAllowed,
-                            recoveryPermissionRequired = mediaRecoveryPermission() != null,
-                            notificationAllowed = notificationPermissionGranted,
-                            notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-                            batteryOptimizationAllowed = batteryOptimizationAllowed,
-                        ),
-                        initialOneShotEnabled = onboardingBuffers.oneShotEnabled,
-                        initialLoopingEnabled = onboardingBuffers.loopingEnabled,
-                        finishing = onboardingFinishing,
-                        onRequestMicrophone = {
-                            microphonePermissionRequested = true
-                            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        },
-                        onRequestStorage = {
-                            if (requiresLegacyStoragePermission()) {
-                                storagePermissionRequested = true
-                                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    Box(Modifier.fillMaxSize()) {
+                        val onboardingBuffers = onboardingBufferAvailability
+                        if (onboardingBuffers == null) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
                             }
-                        },
-                        onRequestRecovery = {
-                            mediaRecoveryPermission()?.let { permission ->
-                                recoveryPermissionRequested = true
-                                recoveryPermissionLauncher.launch(permission)
-                            }
-                        },
-                        onRequestNotifications = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                notificationPermissionRequested = true
-                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                        },
-                        onReviewBatteryOptimization = {
-                            if (!openBatteryOptimizationReview(this)) {
-                                AppFeedbackCenter.post(
-                                    getString(R.string.no_app_available),
-                                    FeedbackTone.ERROR,
-                                )
-                            }
-                        },
-                        onFinish = { oneShotEnabled, loopingEnabled ->
-                            if (!onboardingFinishing) {
-                                onboardingFinishing = true
-                                submitCommittedDurableUiBooleanAttempt(
-                                    block = {
-                                        finishOnboarding(
-                                            applicationContext,
-                                            oneShotEnabled,
-                                            loopingEnabled,
+                        } else {
+                            OnboardingScreen(
+                                status = OnboardingStatus(
+                                    microphoneAllowed = microphonePermissionGranted,
+                                    storageAllowed = storagePermissionGranted,
+                                    storagePermissionRequired = requiresLegacyStoragePermission(),
+                                    recoveryAllowed = mediaRecoveryAllowed,
+                                    recoveryPermissionRequired = mediaRecoveryPermission() != null,
+                                    notificationAllowed = notificationPermissionGranted,
+                                    notificationPermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                                    batteryOptimizationAllowed = batteryOptimizationAllowed,
+                                ),
+                                initialOneShotEnabled = onboardingBuffers.oneShotEnabled,
+                                initialLoopingEnabled = onboardingBuffers.loopingEnabled,
+                                finishing = onboardingFinishState != OnboardingFinishState.IDLE,
+                                onRequestMicrophone = {
+                                    microphonePermissionRequested = true
+                                    microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                },
+                                onRequestStorage = {
+                                    if (requiresLegacyStoragePermission()) {
+                                        storagePermissionRequested = true
+                                        storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                    }
+                                },
+                                onRequestRecovery = {
+                                    mediaRecoveryPermission()?.let { permission ->
+                                        recoveryPermissionRequested = true
+                                        recoveryPermissionLauncher.launch(permission)
+                                    }
+                                },
+                                onRequestNotifications = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notificationPermissionRequested = true
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                },
+                                onReviewBatteryOptimization = {
+                                    if (!openBatteryOptimizationReview(this@MainActivity)) {
+                                        AppFeedbackCenter.post(
+                                            getString(R.string.no_app_available),
+                                            FeedbackTone.ERROR,
                                         )
-                                    },
-                                    onTerminal = { finished ->
-                                        runOnUiThread {
-                                            if (isFinishing || isDestroyed) return@runOnUiThread
-                                            onboardingFinishing = false
-                                            if (finished) {
-                                                onboardingBufferAvailability = null
-                                                showOnboarding = false
-                                                beginPermissionFlow()
-                                            } else {
-                                                AppFeedbackCenter.post(
-                                                    getString(R.string.recorder_state_persist_failed),
-                                                    FeedbackTone.ERROR,
-                                                )
-                                            }
-                                        }
-                                    },
-                                )
-                            }
-                        },
-                    )
+                                    }
+                                },
+                                onFinish = { oneShotEnabled, loopingEnabled ->
+                                    val appContext = applicationContext
+                                    processOnboardingFinish.submit(
+                                        block = {
+                                            finishOnboarding(appContext, oneShotEnabled, loopingEnabled)
+                                        },
+                                        onFailure = {
+                                            AppFeedbackCenter.post(
+                                                appContext.getString(R.string.recorder_state_persist_failed),
+                                                FeedbackTone.ERROR,
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                        AppFeedbackHost(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .safeDrawingPadding()
+                                .padding(horizontal = 18.dp)
+                                .padding(bottom = 84.dp),
+                        )
                     }
                 } else {
                     if (showPermissionDenied) {
@@ -292,8 +309,29 @@ class MainActivity : ComponentActivity() {
                             }
                             startActivity(intent)
                         },
-                        onThemeChanged = { themeMode = it },
+                        onThemeChanged = {
+                            themePresentation.preview(it, processCommittedTheme.state.value)
+                            themeMode = themePresentation.mode
+                        },
                     )
+                }
+            }
+        }
+    }
+
+    private fun observeOnboardingFinish() {
+        lifecycleScope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                processOnboardingFinish.state.collect { state ->
+                    if (
+                        state == OnboardingFinishState.SUCCEEDED && showOnboarding &&
+                        !isFinishing && !isDestroyed &&
+                        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                    ) {
+                        onboardingBufferAvailability = null
+                        showOnboarding = false
+                        beginPermissionFlow()
+                    }
                 }
             }
         }
@@ -328,6 +366,11 @@ class MainActivity : ComponentActivity() {
                 retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (::themePresentation.isInitialized) themePresentation.close()
+        super.onDestroy()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -757,10 +800,16 @@ private fun OnboardingBufferCard(
         markerIcon = icon,
         title = title,
         body = body,
+        rowModifier = Modifier.toggleable(
+            value = checked,
+            enabled = enabled,
+            role = Role.Switch,
+            onValueChange = onCheckedChange,
+        ),
         trailing = {
             Switch(
                 checked = checked,
-                onCheckedChange = onCheckedChange,
+                onCheckedChange = null,
                 enabled = enabled,
             )
         },
@@ -773,6 +822,7 @@ private fun OnboardingCard(
     markerIcon: ImageVector? = null,
     title: String,
     body: String,
+    rowModifier: Modifier = Modifier,
     trailing: @Composable () -> Unit,
 ) {
     val chrome = appChrome()
@@ -784,6 +834,7 @@ private fun OnboardingCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(rowModifier)
                 .padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -839,7 +890,7 @@ private fun MainScreen(
     permissionsGranted: Boolean,
     showPermissionDenied: Boolean,
     onReviewMicrophonePermission: () -> Unit,
-    onThemeChanged: (AppThemeMode) -> Unit,
+    onThemeChanged: (AppThemeMode?) -> Unit,
 ) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var settingsBufferTargetCode by rememberSaveable { mutableIntStateOf(-1) }
@@ -1098,6 +1149,12 @@ private fun MainScreen(
                 if (permissionsGranted) {
                     CaptureScreen(
                         visualizerVisible = !showSettings && !showLibrary && !incidentsOverlayVisible && !showAboutDialog,
+                        isSaveFeedbackVisible = {
+                            // Read live navigation state at delivery, including before recomposition.
+                            !showSettings && !showLibrary && !showIncidents && !showAboutDialog &&
+                                panelDragTarget == null && settingsSettledProgress == 0f &&
+                                librarySettledProgress == 0f && !incidentsMotion.hasVisibleProgress
+                        },
                         onOpenLibrary = { showLibrary = true },
                         onRecordingSaved = { refreshLibrarySnapshot() },
                         onOpenBufferSettings = { bufferSlot ->

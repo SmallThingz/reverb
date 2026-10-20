@@ -306,7 +306,7 @@ internal class FlacAudioFileWriter(
             header.size.toLong(), encodedBytes, requireNotNull(finalEncodedDigest), checkCancelled = checkCancelled)
         val identity = fingerprint.fileKey ?: fingerprint.providerIdentity.orEmpty()
         val provisional = buildRecordingEntity(context, target, 1, "FLAC", totalFileBytesWritten).copy(fileIdentity = identity)
-        val info = withRecordingWavChannel(context, provisional) { channel ->
+        val info = withRecordingWavChannel(context, provisional, RecordingReadCleanup.Propagate) { channel ->
             verifyFlacPcm(channel, expectedPcmMd5 = header.copyOfRange(26, 42), checkCancelled = checkCancelled)
         }
         checkCancelled()
@@ -326,8 +326,16 @@ private class ChannelMediaSource(private val channel: FileChannel) : MediaDataSo
     }
 }
 
-internal class FlacPcmDecoder(private val channel: FileChannel) : Closeable {
-    val info = readFlacInfo(channel)
+internal interface FlacPcmVerificationSource : Closeable {
+    val info: FlacInfo
+    fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit)
+}
+
+internal class FlacPcmDecoder(
+    private val channel: FileChannel,
+    setupCleanup: RecordingReadCleanup,
+) : FlacPcmVerificationSource {
+    override val info = readFlacInfo(channel)
     private val extractor = MediaExtractor()
     private val codec: MediaCodec?
     // A waveform pass seeks once per bucket; retain bounded raw buffers across those reads.
@@ -358,13 +366,13 @@ internal class FlacPcmDecoder(private val channel: FileChannel) : Closeable {
                 created.configure(format, null, null, 0); created.start(); codec = created
             }
         } catch (error: Throwable) {
-            closePreservingPrimaryFailure(error) { created?.release() }
-            closePreservingPrimaryFailure(error) { extractor.release() }
+            setupCleanup.closeAfterFailure(error) { created?.release() }
+            setupCleanup.closeAfterFailure(error) { extractor.release() }
             throw error
         }
     }
 
-    fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit) {
+    override fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit) {
         check(!closed)
         require(start >= 0 && count >= 0 && start <= info.frameCount - count)
         if (count == 0L) return
@@ -517,17 +525,32 @@ internal fun verifyFlacPcm(
     channel: FileChannel,
     expectedPcmMd5: ByteArray? = null,
     checkCancelled: () -> Unit = {},
-): FlacInfo = FlacPcmDecoder(channel).use { decoder ->
-    val md5 = MessageDigest.getInstance("MD5")
-    checkCancelled()
-    decoder.readFrames(0, decoder.info.frameCount) { bytes, offset, count ->
+): FlacInfo = verifyFlacPcmSource(
+    FlacPcmDecoder(channel, RecordingReadCleanup.Propagate), expectedPcmMd5, checkCancelled,
+)
+
+internal fun verifyFlacPcmSource(
+    source: FlacPcmVerificationSource,
+    expectedPcmMd5: ByteArray? = null,
+    checkCancelled: () -> Unit = {},
+): FlacInfo {
+    val (info, actual) = source.use { decoder ->
+        val md5 = MessageDigest.getInstance("MD5")
         checkCancelled()
-        md5.update(bytes, offset, count)
+        decoder.readFrames(0, decoder.info.frameCount) { bytes, offset, count ->
+            checkCancelled()
+            md5.update(bytes, offset, count)
+        }
+        checkCancelled()
+        decoder.info to md5.digest()
     }
     checkCancelled()
-    val actual = md5.digest()
-    val matches = if (expectedPcmMd5 != null) expectedPcmMd5.contentEquals(actual)
-        else flacPcmChecksumMatches(decoder.info.md5, actual)
-    if (!matches) throw IOException("FLAC decoded audio checksum mismatch")
-    decoder.info
+    // Discovery may skip invalid content only after every read and native release succeeds.
+    // An explicit export checksum remains a failed output verification, not invalid discovery.
+    if (expectedPcmMd5 != null) {
+        if (!expectedPcmMd5.contentEquals(actual)) throw IOException("FLAC decoded audio checksum mismatch")
+    } else if (!flacPcmChecksumMatches(info.md5, actual)) {
+        throw InvalidFlacException("FLAC decoded audio checksum mismatch")
+    }
+    return info
 }

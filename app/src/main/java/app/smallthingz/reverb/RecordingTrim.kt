@@ -102,7 +102,7 @@ private fun writeTrimmedRecordingCopy(
         throw IOException("Recording identity is unavailable for trim")
     }
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
-    val trimmedWav = withRecordingWavChannelIdentityGuard(context, recording) { source, sourceStillCurrent ->
+    val trimmedWav = withRecordingWavChannelIdentityGuard(context, recording, RecordingReadCleanup.Propagate) { source, sourceStillCurrent ->
         val layout = readWavTrimLayoutOrNull(source) ?: return@withRecordingWavChannelIdentityGuard null
         val startFrame = millisToFrame(startMillis, layout.sampleRate)
             .coerceIn(0L, layout.frameCount - 1L)

@@ -17,6 +17,9 @@ internal class LibraryDeletionState {
     val committedInBackground: Boolean
         get() = phase == Phase.BACKGROUND_COMMIT
 
+    val backgroundCommitRevision: Long?
+        get() = undoRevision.takeIf { committedInBackground }
+
     /** Adding another target extends the existing window; feedback is never a busy state. */
     fun extendUndoWindow(): Long? {
         if (!acceptsDeletions) return null
@@ -36,23 +39,53 @@ internal class LibraryDeletionState {
         return true
     }
 
-    fun handoffToBackground(hasPending: Boolean): Boolean {
+    fun handoffToBackground(hasPending: Boolean): Long? {
         if (!shouldHandoffPendingDeletionsToBackground(
                 hasPending = hasPending,
                 committedInBackground = committedInBackground,
                 foregroundCommitInFlight = phase == Phase.FOREGROUND_COMMIT,
             )
-        ) return false
+        ) return null
         phase = Phase.BACKGROUND_COMMIT
+        return undoRevision
+    }
+
+    fun completeBackgroundCommit(revision: Long, settle: () -> Unit): Boolean {
+        if (phase != Phase.BACKGROUND_COMMIT || revision != undoRevision) return false
+        settle()
+        phase = Phase.IDLE
         return true
     }
 
     fun reconcileNoPendingTargets() {
-        // A concurrent refresh cannot revoke the physical owner's terminal reconciliation.
-        if (phase == Phase.UNDO || phase == Phase.BACKGROUND_COMMIT) phase = Phase.IDLE
+        // Physical owners require their exact terminal revision, even after an empty scan.
+        if (phase == Phase.UNDO) phase = Phase.IDLE
     }
 
     fun completeForegroundCommit() {
         if (phase == Phase.FOREGROUND_COMMIT) phase = Phase.IDLE
+    }
+}
+
+/** A terminal receipt releases only its exact optimistic batch, never a newer row or window. */
+internal fun settleCompletedBackgroundDeletion(
+    state: LibraryDeletionState,
+    revision: Long,
+    attempted: List<RecordingEntity>,
+    result: RecordingDeletionBatchResult,
+    pending: MutableMap<String, RecordingEntity>,
+    recordings: List<RecordingEntity>,
+    publishRecordings: (List<RecordingEntity>) -> Unit,
+): Boolean {
+    // A missing outcome is unknown, not a failed or successful physical deletion.
+    if (result.outcomes.size != attempted.size) return false
+    return state.completeBackgroundCommit(revision) {
+        val deleted = attempted.zip(result.outcomes)
+            .filter { (_, didDelete) -> didDelete }
+            .associate { (recording, _) -> recording.id to recording }
+        publishRecordings(recordings.filterNot { current ->
+            deleted[current.id]?.let { requested -> sameRecordingActionTarget(requested, current) } == true
+        })
+        releaseCompletedForegroundDeletionTargets(pending, attempted)
     }
 }

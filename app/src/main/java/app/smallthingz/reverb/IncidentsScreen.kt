@@ -208,6 +208,21 @@ internal data class IncidentHistoryUiState(
         IncidentHistoryUiState(loaded, IncidentHistoryLoadStatus.READY)
 }
 
+internal fun recordingIncidentPresentationKey(incident: RecordingIncident): String {
+    val kind = incident.kind.storageCode
+    // Learning a missing process identity may remount a legacy row; a known identity must still
+    // distinguish separate process lifetimes that reused a PID and capture-arm timestamp.
+    val processStart = incident.processStartedAtMillis.takeIf { it > 0L } ?: 0L
+    return if (recordingIncidentHasSessionIdentity(incident)) {
+        // Occurrence can move when Android enriches a provisional capture interruption. The
+        // session identity survives that update and distinguishes equal-time capture incidents.
+        "$kind:session:${incident.pid}:${incident.captureArmedAtMillis}:$processStart"
+    } else {
+        val pid = incident.pid.takeIf { it > 0 } ?: 0
+        "$kind:occurrence:${incident.occurredAtMillis}:$pid:$processStart"
+    }
+}
+
 internal fun prepareIncidentHistory(
     incidents: List<RecordingIncident>,
     locale: Locale = Locale.getDefault(),
@@ -218,7 +233,7 @@ internal fun prepareIncidentHistory(
     return IncidentHistoryPresentation(incidents.asReversed().map { incident ->
         IncidentPresentation(
             incident = incident,
-            key = "${incident.kind.storageCode}:${incident.occurredAtMillis}",
+            key = recordingIncidentPresentationKey(incident),
             date = dateFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone)),
             stopSummary = formatIncidentSummary(incident, clockFormatter, zone),
             cause = incidentCauseLine(incident),

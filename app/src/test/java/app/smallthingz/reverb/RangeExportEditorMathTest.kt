@@ -268,6 +268,7 @@ class RangeExportEditorMathTest {
         val values = RangeEditValues(startSeconds = 30f, endSeconds = 80f)
         var interaction = RangeDurationWheelInteraction().begin(RangeEditTarget.START)
         assertTrue(interaction.active)
+        assertEquals(1L, interaction.generation)
         assertEquals(RangeEditTarget.START, interaction.target)
         assertEquals(RangeEditTarget.START, interaction.commitTarget())
 
@@ -288,6 +289,197 @@ class RangeExportEditorMathTest {
         interaction = interaction.end()
         assertFalse(interaction.active)
         assertEquals(null, interaction.target)
+        assertEquals(1L, interaction.generation)
+        interaction = interaction.begin(RangeEditTarget.END)
+        assertEquals(2L, interaction.generation)
+    }
+
+    @Test
+    fun markerInputBeforeRedraw_preservesPendingWheelCommit() {
+        var interaction = RangeDurationWheelInteraction().begin(RangeEditTarget.START)
+        var values = RangeEditValues(30f, 80f)
+        var lastTarget = RangeEditTarget.START
+        var cancellations = 0
+        var auditions = 0
+        val gesture = RangeInputGesture(
+            interactionAllowed = { true },
+            durationInteraction = { interaction },
+            onCancel = { cancellations++ },
+        )
+
+        assertFalse(gesture.perform {
+            interaction = interaction.invalidateCommit()
+            lastTarget = RangeEditTarget.END
+            values = adjustRangeEditTarget(values, lastTarget, 90f, 100f).values
+        })
+        assertFalse(gesture.finish { auditions++ })
+        assertEquals(RangeEditTarget.START, lastTarget)
+        assertEquals(RangeEditValues(30f, 80f), values)
+        assertEquals(1, cancellations)
+        assertEquals(0, auditions)
+
+        values = resizeRangeSelectionDuration(
+            values, requireNotNull(interaction.commitTarget()), 25f, 100f,
+        ).values
+        interaction = interaction.end()
+        assertEquals(RangeEditValues(55f, 80f), values)
+        assertFalse(interaction.active)
+    }
+
+    @Test
+    fun wheelTakeoverDuringMarkerDrag_revokesResumeAndCannotReviveOldGesture() {
+        var interaction = RangeDurationWheelInteraction()
+        var values = RangeEditValues(30f, 80f)
+        var resumeAfterScrub = true
+        var cancellations = 0
+        var resumes = 0
+        val gesture = RangeInputGesture(
+            interactionAllowed = { true },
+            durationInteraction = { interaction },
+            onCancel = { cancellations++; resumeAfterScrub = false },
+        )
+        assertTrue(gesture.perform {
+            values = adjustRangeEditTarget(values, RangeEditTarget.START, 35f, 100f).values
+        })
+
+        interaction = interaction.begin(RangeEditTarget.START)
+        assertFalse(gesture.perform {
+            interaction = interaction.invalidateCommit()
+            values = adjustRangeEditTarget(values, RangeEditTarget.START, 40f, 100f).values
+        })
+        assertEquals(RangeEditTarget.START, interaction.commitTarget())
+        assertEquals(RangeEditValues(35f, 80f), values)
+        assertFalse(resumeAfterScrub)
+
+        interaction = interaction.end()
+        assertFalse(gesture.finish { resumes++ })
+        assertFalse(gesture.perform { error("retired gesture must remain terminal") })
+        gesture.cancel()
+        assertEquals(1, cancellations)
+        assertEquals(0, resumes)
+
+        val nextGesture = RangeInputGesture({ true }, { interaction }, { error("new gesture is admitted") })
+        assertTrue(nextGesture.perform {
+            values = adjustRangeEditTarget(values, RangeEditTarget.START, 40f, 100f).values
+        })
+        assertTrue(nextGesture.finish { resumes++ })
+        assertEquals(RangeEditValues(40f, 80f), values)
+        assertEquals(1, resumes)
+    }
+
+    @Test
+    fun markerTerminalRechecksWheelOwnerAndExplicitAdmission() {
+        for (wheelTakeover in listOf(true, false)) {
+            var interaction = RangeDurationWheelInteraction()
+            var enabled = true
+            var cancellations = 0
+            var auditions = 0
+            val gesture = RangeInputGesture(
+                interactionAllowed = { enabled },
+                durationInteraction = { interaction },
+                onCancel = { cancellations++ },
+            )
+            assertTrue(gesture.perform {})
+            if (wheelTakeover) interaction = interaction.begin(RangeEditTarget.END) else enabled = false
+
+            assertFalse(gesture.finish { auditions++ })
+            assertFalse(gesture.finish { auditions++ })
+            assertEquals(1, cancellations)
+            assertEquals(0, auditions)
+            if (wheelTakeover) assertEquals(RangeEditTarget.END, interaction.commitTarget())
+        }
+    }
+
+    @Test
+    fun cancelledMarkerGesture_neverRunsNormalFinallyAction() {
+        var resumeAfterScrub = true
+        var cancellations = 0
+        val gesture = RangeInputGesture(
+            interactionAllowed = { true },
+            durationInteraction = { RangeDurationWheelInteraction() },
+            onCancel = { cancellations++; resumeAfterScrub = false },
+        )
+        assertTrue(gesture.perform {})
+        gesture.cancel()
+        assertFalse(gesture.finish { error("cancelled release must not resume or audition") })
+        gesture.cancel()
+        assertFalse(resumeAfterScrub)
+        assertEquals(1, cancellations)
+    }
+
+    @Test
+    fun uninterruptedMarkerGesture_keepsActionsAndOneNormalTerminal() {
+        val events = mutableListOf<String>()
+        val gesture = RangeInputGesture({ true }, { RangeDurationWheelInteraction() }, { events += "cancel" })
+        assertTrue(gesture.perform { events += "select" })
+        assertTrue(gesture.perform { events += "edit" })
+        assertTrue(gesture.finish { events += "release" })
+        assertFalse(gesture.finish { events += "duplicate release" })
+        gesture.cancel()
+        assertEquals(listOf("select", "edit", "release"), events)
+    }
+
+    @Test
+    fun completedWheelInteractionBetweenMarkerCallbacks_retiresOldOriginAndAllowsFreshGestures() {
+        for (commitDuration in listOf(false, true)) {
+            for (releaseIsNextEvent in listOf(false, true)) {
+                var interaction = RangeDurationWheelInteraction()
+                var values = RangeEditValues(30f, 80f)
+                var resumeAfterScrub = true
+                var cancellations = 0
+                val oldGesture = RangeInputGesture(
+                    interactionAllowed = { true },
+                    durationInteraction = { interaction },
+                    onCancel = { cancellations++; resumeAfterScrub = false },
+                )
+                assertTrue(oldGesture.perform {
+                    values = adjustRangeEditTarget(values, RangeEditTarget.START, 35f, 100f).values
+                })
+
+                // Integer-detent generic scroll completes without a suspended marker event.
+                // Profile/unchanged interactions still take ownership even without a value commit.
+                interaction = interaction.begin(RangeEditTarget.START)
+                if (commitDuration) {
+                    values = resizeRangeSelectionDuration(
+                        values, requireNotNull(interaction.commitTarget()), 25f, 100f,
+                    ).values
+                }
+                interaction = interaction.end()
+                assertFalse(interaction.active)
+                val wheelValues = values
+                if (releaseIsNextEvent) {
+                    assertFalse(oldGesture.finish { error("old marker must not resume or audition") })
+                    assertFalse(oldGesture.perform { error("old marker must remain terminal") })
+                } else {
+                    assertFalse(oldGesture.perform {
+                        interaction = interaction.invalidateCommit()
+                        values = adjustRangeEditTarget(values, RangeEditTarget.START, 40f, 100f).values
+                    })
+                    assertFalse(oldGesture.finish { error("old marker must not resume or audition") })
+                }
+                assertEquals(wheelValues, values)
+                assertFalse(resumeAfterScrub)
+                assertEquals(1, cancellations)
+
+                val retainedGeneration = interaction.generation
+                repeat(2) {
+                    val freshGesture = RangeInputGesture(
+                        interactionAllowed = { true },
+                        durationInteraction = { interaction },
+                        onCancel = { error("fresh marker must be admitted") },
+                    )
+                    assertTrue(freshGesture.perform {
+                        interaction = interaction.invalidateCommit()
+                        values = adjustRangeEditTarget(
+                            values, RangeEditTarget.START, values.startSeconds + 1f, 100f,
+                        ).values
+                    })
+                    assertTrue(freshGesture.finish {})
+                }
+                assertEquals(wheelValues.startSeconds + 2f, values.startSeconds, 0f)
+                assertEquals(retainedGeneration, interaction.generation)
+            }
+        }
     }
 
     @Test

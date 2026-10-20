@@ -515,13 +515,15 @@ private data class RetrievedMediaMetadata(
 )
 
 private fun inspectRecordingMedia(
+    context: Context,
     descriptor: FileDescriptor,
     displayName: String,
     fallbackDurationMillis: Long,
 ): RecordingMediaMetadata {
+    val cleanup = optionalRecordingProbeCleanup(context, "Recording metadata retriever cleanup")
     val retriever = MediaMetadataRetriever()
     val metadata = try {
-        withOwnedResource(
+        cleanup.use(
             owner = retriever,
             release = { it.release() },
         ) { configured ->
@@ -1077,15 +1079,15 @@ internal fun publishStagedFile(
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
 ): PublishedStagedFile {
-    if (!isDirectChildRecordingName(finalDisplayName)) {
-        throw IOException("Output publication requires a recording basename")
+    if (!isDiscoverableFileRecordingName(finalDisplayName)) {
+        throw IOException("Output publication requires a discoverable recording basename")
     }
     val parent = source.parentFile ?: throw IOException("Output staging file has no parent")
     if (expectedFingerprint != null && expectedFingerprint.fileKey.isNullOrBlank()) {
         throw IOException("Verified file output has no stable object identity")
     }
     while (true) {
-        val finalName = findAvailableDisplayName(finalDisplayName) { candidate ->
+        val finalName = findAvailableFileDisplayName(finalDisplayName) { candidate ->
             // A dangling symlink still owns its directory entry. Following it would select
             // the same occupied name again after every FileAlreadyExistsException retry.
             when (observeStoragePath(File(parent, candidate)).state) {
@@ -2152,13 +2154,12 @@ internal fun deleteVerifiedDocumentAndConfirm(
     }.getOrDefault(false)
 }
 
-fun renameRecordingAsset(
-    context: Context,
-    recording: RecordingEntity,
+internal fun recordingRenameDisplayName(
+    currentDisplayName: String,
     requestedBaseName: String,
-): RecordingEntity? {
-    if (!recordingDestructiveIdentityMatches(context, recording)) return null
-    val extension = recording.displayName.substringAfterLast('.', "")
+    storageType: RecordingStorageType,
+): String? {
+    val extension = currentDisplayName.substringAfterLast('.', "")
     var sanitized = sanitizeBaseName(requestedBaseName)
     if (sanitized.isBlank()) return null
     if (extension.isNotBlank()) {
@@ -2167,6 +2168,17 @@ fun renameRecordingAsset(
         }
         sanitized = "$sanitized.$extension"
     }
+    return if (storageType == RecordingStorageType.FILE) normalizeFileRecordingDisplayName(sanitized) else sanitized
+}
+
+fun renameRecordingAsset(
+    context: Context,
+    recording: RecordingEntity,
+    requestedBaseName: String,
+): RecordingEntity? {
+    if (!recordingDestructiveIdentityMatches(context, recording)) return null
+    val sanitized = recordingRenameDisplayName(recording.displayName, requestedBaseName, recording.storageType)
+        ?: return null
     if (sanitized == recording.displayName) return recording
     return when (recording.storageType) {
         RecordingStorageType.FILE -> renameFileRecording(context, recording, sanitized)
@@ -2416,13 +2428,16 @@ private fun openVerifiedProviderInputStream(
 
 internal fun openRecordingInputStream(context: Context, recording: RecordingEntity): InputStream? =
     when (recording.storageType) {
-        RecordingStorageType.FILE -> openVerifiedFileInputStream(recording)
+        RecordingStorageType.FILE -> openVerifiedFileInputStream(recording, RecordingReadCleanup.Propagate)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> openVerifiedProviderInputStream(context, recording)
     }
 
-internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputStream? {
+internal fun openVerifiedFileInputStream(
+    recording: RecordingEntity,
+    cleanup: RecordingReadCleanup,
+): FileInputStream? {
     if (recording.storageType != RecordingStorageType.FILE || recording.fileIdentity.isBlank()) return null
     val file = File(recording.id)
     val beforeObservation = observeStoragePath(file)
@@ -2448,7 +2463,7 @@ internal fun openVerifiedFileInputStream(recording: RecordingEntity): FileInputS
             afterPathIdentity = afterIdentity,
         )
     ) {
-        closeRejectedOwnerOrThrow { stream.close() }
+        cleanup.close { stream.close() }
         return null
     }
     return stream
@@ -2969,9 +2984,8 @@ private fun listFileDirectoryRecordings(
         files = directory.listFiles() ?: throw IOException("Unable to relist recordings directory: ${directory.absolutePath}")
     }
     return files.asSequence()
-        .filter { !it.isHidden }
         .filter { it.absolutePath !in suppressedIds }
-        .filter { isSupportedRecordingName(it.name) }
+        .filter { isDiscoverableFileRecordingName(it.name) }
         .mapNotNull { file ->
             when (fileDirectoryEntryScanAction(observeStoragePath(file))) {
                 FileDirectoryEntryScanAction.SKIP -> return@mapNotNull null
@@ -3114,6 +3128,7 @@ private fun scanProviderRecording(
             ?: structurallyCompleteRecordingDurationMillis(displayName, source)
         val media = seekableMetadata ?: if (strictDuration > 0L) {
             inspectRecordingMedia(
+                context = context,
                 descriptor = source.fd,
                 displayName = displayName,
                 fallbackDurationMillis = strictDuration,
@@ -3505,6 +3520,20 @@ internal fun isDirectChildRecordingName(name: String): Boolean =
         name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == name &&
         isSupportedRecordingName(name)
 
+private fun isReservedFileRecordingArtifactName(name: String): Boolean =
+    name.startsWith(STAGING_OUTPUT_PREFIX, ignoreCase = true) ||
+        name.startsWith(DELETION_CLAIM_PREFIX, ignoreCase = true)
+
+// A user-visible final name may start with a dot. Only app artifact namespaces are
+// excluded here; the scanner still requires current suppression, structure and identity proof.
+internal fun isDiscoverableFileRecordingName(name: String): Boolean =
+    isDirectChildRecordingName(name) && !isReservedFileRecordingArtifactName(name)
+
+internal fun normalizeFileRecordingDisplayName(name: String): String {
+    val sanitized = sanitizeBaseName(name)
+    return if (isReservedFileRecordingArtifactName(sanitized)) "$FALLBACK_DISPLAY_NAME $sanitized" else sanitized
+}
+
 internal fun decodeRecordingBasename(encodedName: String): String? = runCatching {
     Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(encodedName))).toString()
         .takeIf(::isDirectChildRecordingName)
@@ -3710,7 +3739,7 @@ private fun createLocalOutputTarget(
     // Document-provider display names are metadata, not trusted filesystem paths.
     // A name such as "../recording.wav" must never escape app-local storage when
     // recordings are moved from SAF back into the app directory.
-    val safeDisplayName = sanitizeBaseName(requestedDisplayName)
+    val safeDisplayName = normalizeFileRecordingDisplayName(requestedDisplayName)
     // UUID staging does not reserve the final name. Resolve collisions only when
     // publication can claim that name, after the complete output is verified.
     val created = createLocalStagingFile(
@@ -3826,9 +3855,7 @@ private fun renameFileRecording(
     val parent = source.parentFile ?: return null
     if (displayName == source.name) return recording
 
-    val dotIndex = displayName.lastIndexOf('.')
-    val name = if (dotIndex > 0) displayName.substring(0, dotIndex) else displayName
-    val extension = if (dotIndex > 0) displayName.substring(dotIndex) else ""
+    val (name, extension) = fileRecordingDisplayNameParts(displayName)
     val beforeDigest = sha256StableRecording(context, recording) ?: return null
     var suffix = 1
     while (suffix > 0) {
@@ -4575,6 +4602,31 @@ internal fun findAvailableDisplayName(
     val dotIndex = requestedDisplayName.lastIndexOf('.')
     val name = if (dotIndex > 0) requestedDisplayName.substring(0, dotIndex) else requestedDisplayName
     val extension = if (dotIndex > 0) requestedDisplayName.substring(dotIndex) else ""
+    return findAvailableDisplayNameWithParts(requestedDisplayName, name, extension, exists)
+}
+
+private fun fileRecordingDisplayNameParts(displayName: String): Pair<String, String> {
+    val dotIndex = displayName.lastIndexOf('.')
+    if (dotIndex < 0) return displayName to ""
+    // Keep a free extension-only name exact; generated collision alternatives still need
+    // a supported extension and a nonempty basename.
+    return displayName.substring(0, dotIndex).ifEmpty { FALLBACK_DISPLAY_NAME } to displayName.substring(dotIndex)
+}
+
+internal fun findAvailableFileDisplayName(
+    requestedDisplayName: String,
+    exists: (String) -> Boolean,
+): String {
+    val (name, extension) = fileRecordingDisplayNameParts(requestedDisplayName)
+    return findAvailableDisplayNameWithParts(requestedDisplayName, name, extension, exists)
+}
+
+private fun findAvailableDisplayNameWithParts(
+    requestedDisplayName: String,
+    name: String,
+    extension: String,
+    exists: (String) -> Boolean,
+): String {
     var candidate = requestedDisplayName
     var suffix = 2
     while (exists(candidate)) {

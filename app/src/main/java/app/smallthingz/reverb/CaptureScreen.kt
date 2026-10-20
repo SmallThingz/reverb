@@ -63,11 +63,16 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -79,10 +84,12 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -102,6 +109,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.Closeable
 import java.util.UUID
@@ -420,6 +428,7 @@ private class CaptureScreenBookkeeping {
 @Composable
 fun CaptureScreen(
     visualizerVisible: Boolean = true,
+    isSaveFeedbackVisible: () -> Boolean = { visualizerVisible },
     onOpenLibrary: () -> Unit = {},
     onRecordingSaved: () -> Unit = {},
     onOpenBufferSettings: (ReverbService.BufferSlot) -> Unit = {},
@@ -428,6 +437,9 @@ fun CaptureScreen(
     val resources = LocalResources.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val accessibilityManager = LocalAccessibilityManager.current
+    val window = LocalWindowInfo.current
+    val currentSaveFeedbackVisible = rememberUpdatedState(isSaveFeedbackVisible)
     val scope = rememberCoroutineScope()
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
@@ -470,6 +482,12 @@ fun CaptureScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var saveStatus by remember { mutableStateOf<CaptureSaveStatus?>(null) }
     val screenAlive = remember { AtomicBoolean(true) }
+    val captureCommandOwner = remember(service) {
+        CaptureCommandUiOwner<ReverbService.UiCaptureCommandResult>()
+    }
+    DisposableEffect(captureCommandOwner) {
+        onDispose { captureCommandOwner.retire() }
+    }
 
     fun invalidateTimelineSnapshotPreparation() {
         bookkeeping.timelineSnapshotRequestGeneration++
@@ -477,6 +495,10 @@ fun CaptureScreen(
         rangeSnapshotBuffer = null
         isPreparingRange = false
     }
+
+    fun canDisplaySaveFeedback(): Boolean = screenAlive.get() && currentSaveFeedbackVisible.value() &&
+        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+        view.isAttachedToWindow && view.isShown && view.hasWindowFocus()
 
     fun detachActiveSaveUi() {
         bookkeeping.activeSaveReceiver?.detachUi()
@@ -938,6 +960,7 @@ fun CaptureScreen(
             onStatus = { saveStatus = it },
             onError = { errorMessage = it },
             onSaved = onRecordingSaved,
+            canDisplay = ::canDisplaySaveFeedback,
             onReceiverCreated = { receiver -> bookkeeping.activeSaveReceiver = receiver },
             onReceiverTerminal = { receiver ->
                 if (bookkeeping.activeSaveReceiver === receiver) bookkeeping.activeSaveReceiver = null
@@ -988,7 +1011,7 @@ fun CaptureScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         val onListenToggle = remember(
             service, serviceStateHydrated, isSaving, isListening, activeBuffer,
-            oneShotEnabled, oneShotFull, loopingEnabled,
+            oneShotEnabled, oneShotFull, loopingEnabled, captureCommandOwner,
         ) {
             { bufferSlot: ReverbService.BufferSlot ->
                 val recorder = service
@@ -1001,20 +1024,32 @@ fun CaptureScreen(
                         oneShotFull = oneShotFull,
                         loopingEnabled = loopingEnabled,
                     )
-                    val result = when (action) {
-                        CaptureBlobTapAction.STOP -> recorder.disableListening()
-                        CaptureBlobTapAction.SWITCH -> recorder.selectCaptureBuffer(bufferSlot)
-                        CaptureBlobTapAction.START -> recorder.enableListening(bufferSlot)
-                        CaptureBlobTapAction.NONE -> null
-                    }
-                    if (result?.accepted == true) {
-                        bookkeeping.latestListeningCommandGeneration = maxOf(
-                            bookkeeping.latestListeningCommandGeneration,
-                            result.generation,
+                    if (captureBlobCommandMaySubmit(action, recorder.canRetryCaptureConfiguration())) {
+                        val connectionGeneration = bookkeeping.serviceConnectionGeneration
+                        val accepted = captureCommandOwner.submit(
+                            transfer = { feedback -> recorder.requestCaptureBlobTap(bufferSlot, feedback) },
+                            onResult = { completion ->
+                                val current = screenAlive.get() && service === recorder &&
+                                    connectionGeneration == bookkeeping.serviceConnectionGeneration
+                                if (current) {
+                                    val result = completion.command
+                                    if (result.accepted &&
+                                        result.generation >= bookkeeping.latestListeningCommandGeneration
+                                    ) {
+                                        bookkeeping.latestListeningCommandGeneration = result.generation
+                                        isListening = completion.action != CaptureBlobTapAction.STOP
+                                        activeBuffer = completion.bufferSlot
+                                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    }
+                                    completion.errorMessage?.let { errorMessage = it }
+                                    requestRecorderState(recorder)
+                                }
+                                current
+                            },
                         )
-                        isListening = action != CaptureBlobTapAction.STOP
-                        activeBuffer = bufferSlot
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        if (!accepted) {
+                            recorder.consumePendingError()?.let { errorMessage = it }
+                        }
                     }
                 }
             }
@@ -1201,7 +1236,15 @@ fun CaptureScreen(
             onExportFull = onExportFull,
             onExportCustom = onExportCustom,
             onSelectBuffer = { selectedBuffer = it },
-            onOpenBufferSettings = onOpenBufferSettings,
+            onOpenBufferSettings = { bufferSlot ->
+                if (service?.isCaptureConfigurationUnavailable() == true) {
+                    // The dimmed unresolved buffer keeps its fail-closed presentation, but an
+                    // explicit tap can retry storage before the recorder decides whether to Start.
+                    onListenToggle(bufferSlot)
+                } else {
+                    onOpenBufferSettings(bufferSlot)
+                }
+            },
             visualizerVisible = visualizerVisible,
             onOpenLibrary = onOpenLibrary,
         )
@@ -1227,11 +1270,25 @@ fun CaptureScreen(
         )
     }
 
-    LaunchedEffect(saveStatus) {
-        val current = saveStatus
-        if (current is CaptureSaveStatus.Saved) {
-            delay(1_500L)
-            if (saveStatus == current) saveStatus = null
+    LaunchedEffect(saveStatus, accessibilityManager, lifecycleOwner, window, view) {
+        val current = saveStatus as? CaptureSaveStatus.Saved ?: return@LaunchedEffect
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            snapshotFlow { currentSaveFeedbackVisible.value() && window.isWindowFocused }
+                .collectLatest { visible ->
+                    if (!visible) return@collectLatest
+                    // A retained hidden notice restarts its full visible deadline on return.
+                    dismissSavedFeedbackAfterTimeout(
+                        expected = current,
+                        accessibilityManager = accessibilityManager,
+                        currentStatus = { saveStatus },
+                        dismiss = { saveStatus = null },
+                        canDisplay = ::canDisplaySaveFeedback,
+                        awaitVisibleFrame = {
+                            withFrameNanos { }
+                            withFrameNanos { }
+                        },
+                    )
+                }
         }
     }
 
@@ -2150,7 +2207,9 @@ private fun CaptureSaveStatusCard(
             )
             is CaptureSaveStatus.Saved -> RecordingEntityCard(
                 recording = current.recording,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+                    liveRegion = LiveRegionMode.Polite
+                },
             )
             null -> Unit
         }
@@ -2449,6 +2508,7 @@ private fun startExport(
     onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit = {},
     onSaved: () -> Unit = {},
+    canDisplay: () -> Boolean = { true },
     onReceiverCreated: (SaveResultReceiver) -> Unit = {},
     onReceiverTerminal: (SaveResultReceiver) -> Unit = {},
 ) {
@@ -2468,6 +2528,7 @@ private fun startExport(
         onStatus = onStatus,
         onError = onError,
         onSaved = onSaved,
+        canDisplay = canDisplay,
         onCommitted = { recording ->
             range.rememberOnSave?.let { memory ->
                 rememberSuccessfulRangeExport(
@@ -2512,7 +2573,8 @@ private fun buildCustomExportRange(
         exportConfig.sampleFormat,
     )
     val selectedDuration = rangeSelectionDurationExactSeconds(start, end)
-    return if (rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {
+    // Empty input is rejection, not overflow: never expand it into a different export.
+    return if (selectedDuration <= 0.0 || rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {
         ExportRange(start, end, null)
     } else {
         ExportRange(
@@ -2574,7 +2636,11 @@ internal class SaveUiCallbackGate(
     onStatus: (CaptureSaveStatus?) -> Unit,
     onError: (String) -> Unit,
     onSaved: () -> Unit,
+    canDisplay: () -> Boolean = { true },
+    onHiddenSaved: ((RecordingEntity) -> Unit)? = null,
 ) {
+    private var canDisplayCallback: (() -> Boolean)? = canDisplay
+    private var hiddenSavedCallback: ((RecordingEntity) -> Unit)? = onHiddenSaved
     private var setSavingCallback: ((Boolean) -> Unit)? = setSaving
     private var statusCallback: ((CaptureSaveStatus?) -> Unit)? = onStatus
     private var errorCallback: ((String) -> Unit)? = onError
@@ -2584,6 +2650,8 @@ internal class SaveUiCallbackGate(
 
     fun detach() {
         attached = false
+        canDisplayCallback = null
+        hiddenSavedCallback = null
         setSavingCallback = null
         statusCallback = null
         errorCallback = null
@@ -2592,18 +2660,23 @@ internal class SaveUiCallbackGate(
 
     fun saved(recording: RecordingEntity): Boolean {
         if (!attached) return false
-        statusCallback?.invoke(CaptureSaveStatus.Saved(recording))
+        val visible = canDisplayCallback?.invoke() == true
+        statusCallback?.invoke(if (visible) CaptureSaveStatus.Saved(recording) else null)
         setSavingCallback?.invoke(false)
         savedCallback?.invoke()
+        if (visible) return true
+        val deliverHidden = hiddenSavedCallback ?: return false
+        deliverHidden(recording)
         return true
     }
 
     fun failed(message: String): Boolean {
         if (!attached) return false
+        val visible = canDisplayCallback?.invoke() == true
         setSavingCallback?.invoke(false)
         statusCallback?.invoke(null)
-        errorCallback?.invoke(message)
-        return true
+        if (visible) errorCallback?.invoke(message)
+        return visible
     }
 
     fun cancelled(): Boolean {
@@ -2614,17 +2687,42 @@ internal class SaveUiCallbackGate(
     }
 }
 
-private class SaveResultReceiver(
-    context: Context,
-    setSaving: (Boolean) -> Unit,
-    onStatus: (CaptureSaveStatus?) -> Unit,
-    onError: (String) -> Unit = {},
-    onSaved: () -> Unit = {},
+internal class SaveResultReceiver(
+    private val uiCallbacks: SaveUiCallbackGate,
+    private val fallback: ReverbService.AudioFileReceiver,
+    private val defaultFailureMessage: () -> String,
     private val onCommitted: (RecordingEntity) -> Unit = {},
     private val onTerminal: (SaveResultReceiver) -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
-    private val appContext = context.applicationContext
-    private val uiCallbacks = SaveUiCallbackGate(setSaving, onStatus, onError, onSaved)
+    constructor(
+        context: Context,
+        setSaving: (Boolean) -> Unit,
+        onStatus: (CaptureSaveStatus?) -> Unit,
+        onError: (String) -> Unit = {},
+        onSaved: () -> Unit = {},
+        canDisplay: () -> Boolean = { true },
+        onCommitted: (RecordingEntity) -> Unit = {},
+        onTerminal: (SaveResultReceiver) -> Unit = {},
+    ) : this(
+        uiCallbacks = SaveUiCallbackGate(
+            setSaving, onStatus, onError, onSaved, canDisplay,
+            onHiddenSaved = context.applicationContext.let { appContext ->
+                { _ ->
+                    AppFeedbackCenter.post(
+                        appContext.getString(R.string.recording_saved),
+                        FeedbackTone.SUCCESS,
+                    )
+                }
+            },
+        ),
+        fallback = NotifyFileReceiver(context.applicationContext),
+        defaultFailureMessage = context.applicationContext.let { appContext ->
+            { appContext.getString(R.string.save_failed) }
+        },
+        onCommitted = onCommitted,
+        onTerminal = onTerminal,
+    )
+
     private val terminalDelivered = AtomicBoolean(false)
 
     fun detachUi() = uiCallbacks.detach()
@@ -2638,7 +2736,7 @@ private class SaveResultReceiver(
                 runCatching { onCommitted(recording) }
                 deliverVisibleTerminalOrFallback(
                     deliverVisible = { uiCallbacks.saved(recording) },
-                    fallback = { NotifyFileReceiver(appContext).fileReady(recording) },
+                    fallback = { fallback.fileReady(recording) },
                 )
             },
             finish = ::finish,
@@ -2649,10 +2747,10 @@ private class SaveResultReceiver(
         if (!terminalDelivered.compareAndSet(false, true)) return
         deliverTerminalResult(
             deliver = {
-                val text = if (message.isBlank()) appContext.getString(R.string.save_failed) else message
+                val text = if (message.isBlank()) defaultFailureMessage() else message
                 deliverVisibleTerminalOrFallback(
                     deliverVisible = { uiCallbacks.failed(text) },
-                    fallback = { NotifyFileReceiver(appContext).fileFailed(message, error) },
+                    fallback = { fallback.fileFailed(message, error) },
                 )
             },
             finish = ::finish,

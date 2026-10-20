@@ -16,9 +16,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
@@ -26,6 +29,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.roundToInt
 
 /** The containing Audio group owns the background, outer border, and separators. */
@@ -39,6 +45,7 @@ internal fun NotificationSaveSettings(
     interactionReady: Boolean,
     editRevision: Long,
     readEditRevision: () -> Long?,
+    interactionState: NotificationDurationInteractionState,
     modifier: Modifier = Modifier,
 ) {
     val chrome = appChrome()
@@ -80,6 +87,7 @@ internal fun NotificationSaveSettings(
                 enabled = interactionReady,
                 editRevision = editRevision,
                 readEditRevision = readEditRevision,
+                interactionState = interactionState,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
@@ -95,12 +103,29 @@ internal fun NotificationDurationWheel(
     enabled: Boolean,
     editRevision: Long,
     readEditRevision: () -> Long?,
+    interactionState: NotificationDurationInteractionState,
     modifier: Modifier = Modifier,
     stepDuration: (Int, Int, Boolean) -> Int = ::notificationDurationStepSeconds,
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_duration)
-    val binding = remember { NotificationDurationBinding() }
+    val binding = remember(interactionState) { NotificationDurationBinding(interactionState) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(binding) { onDispose { binding.release() } }
+    DisposableEffect(binding, lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                // The native View can still be settling. Revoke its commit, but keep Save
+                // locked until its terminal callback resets the pixels or the View is released.
+                binding.invalidateInteraction()
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            binding.invalidateInteraction()
+        }
+    }
     val currentChange by rememberUpdatedState(onSecondsChange)
     val currentOwner by rememberUpdatedState(readEditRevision)
     val maximum = maxSeconds.coerceIn(1, 86_400)
@@ -127,8 +152,9 @@ internal fun NotificationDurationWheel(
             view.onInteractionStart = { binding.beginInteraction(currentOwner()) }
             view.onDurationChanged = binding::select
             view.onInteractionEnd = {
-                binding.finishInteraction(currentOwner(), currentChange)
-                view.setDurationSeconds(binding.seconds.toDouble())
+                binding.finishInteraction(currentOwner(), currentChange) { canonicalSeconds ->
+                    view.setDurationSeconds(canonicalSeconds.toDouble())
+                }
             }
             view.setMaximumDurationSeconds(maximum.toDouble())
             // Retain a saved over-limit request until a deliberate edit. The native wheel
@@ -194,8 +220,26 @@ internal fun notificationDurationStepSeconds(seconds: Int, maximum: Int, forward
     (seconds.coerceIn(1, 86_400) + if (forward) 1 else -1)
         .coerceIn(1, maximum.coerceIn(1, 86_400))
 
+/** Save admission shared by the wheel and its containing Settings/tile Save action. */
+internal class NotificationDurationInteractionState {
+    private val owners = mutableSetOf<Any>()
+    var pending by mutableStateOf(false)
+        private set
+
+    fun begin(): Any = Any().also { owner ->
+        owners += owner
+        pending = true
+    }
+
+    fun end(owner: Any) {
+        if (owners.remove(owner)) pending = owners.isNotEmpty()
+    }
+}
+
 /** A pending native settle cannot overwrite a newer Settings edit, rollback, or save. */
-internal class NotificationDurationBinding {
+internal class NotificationDurationBinding(
+    private val interactionState: NotificationDurationInteractionState = NotificationDurationInteractionState(),
+) {
     var seconds = 1
         private set
     private var maximum = 1
@@ -205,6 +249,7 @@ internal class NotificationDurationBinding {
     private var interactionRevision: Long? = null
     private var ownerRevision: Long? = null
     private var pendingSeconds: Int? = null
+    private var interactionToken: Any? = null
 
     fun update(seconds: Int, maximum: Int, enabled: Boolean, owner: Long) {
         val value = seconds.coerceIn(1, 86_400)
@@ -219,7 +264,11 @@ internal class NotificationDurationBinding {
     }
 
     fun beginInteraction(owner: Long?) {
+        // The native View will move even when its eventual draft commit is inadmissible.
+        // Replace the visual token without a transient Save-admission gap.
+        val nextToken = interactionState.begin()
         cancelInteraction()
+        interactionToken = nextToken
         if (enabled && owner != null && owner == renderedOwner) {
             interactionRevision = revision
             ownerRevision = owner
@@ -230,17 +279,49 @@ internal class NotificationDurationBinding {
         if (interactionRevision != null) pendingSeconds = seconds
     }
 
-    fun finishInteraction(owner: Long?, apply: (Int) -> NotificationDurationCommit?): Int? {
+    fun finishInteraction(owner: Long?, apply: (Int) -> NotificationDurationCommit?): Int? =
+        finishInteraction(owner, apply, resetDisplay = {})
+
+    fun finishInteraction(
+        owner: Long?,
+        apply: (Int) -> NotificationDurationCommit?,
+        resetDisplay: (Int) -> Unit,
+    ): Int? {
         val accepted = pendingSeconds?.takeIf {
             enabled && owner != null && owner == renderedOwner &&
                 owner == ownerRevision && interactionRevision == revision
         }
-        cancelInteraction()
-        return accepted?.let { commit(it, requireNotNull(owner), apply) }
+        val completedToken = interactionToken
+        interactionToken = null
+        invalidateInteraction()
+        var result: Int? = null
+        var failure: Throwable? = null
+        try {
+            result = accepted?.let { commit(it, requireNotNull(owner), apply) }
+        } catch (error: Throwable) {
+            failure = error
+        }
+        try {
+            resetDisplay(seconds)
+        } catch (error: Throwable) {
+            if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
+        } finally {
+            // A reentrant/newer interaction owns a different token and remains pending.
+            completedToken?.let(interactionState::end)
+        }
+        failure?.let { throw it }
+        return result
+    }
+
+    /** Invalidation alone does not end the native gesture or its visible snap animation. */
+    fun invalidateInteraction() {
+        interactionRevision = null
+        ownerRevision = null
+        pendingSeconds = null
     }
 
     fun commitInput(seconds: Int, owner: Long?, apply: (Int) -> NotificationDurationCommit?): Int? =
-        if (enabled && owner != null && owner == renderedOwner && interactionRevision == null) {
+        if (enabled && owner != null && owner == renderedOwner && interactionToken == null) {
             commit(seconds, owner, apply)
         } else null
 
@@ -265,8 +346,9 @@ internal class NotificationDurationBinding {
     }
 
     private fun cancelInteraction() {
-        interactionRevision = null
-        ownerRevision = null
-        pendingSeconds = null
+        val cancelledToken = interactionToken
+        interactionToken = null
+        invalidateInteraction()
+        cancelledToken?.let(interactionState::end)
     }
 }

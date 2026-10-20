@@ -756,28 +756,29 @@ fun isInputConfigSupported(
             return@run false
         }
 
-        try {
-            val record = AudioRecord.Builder()
-                .setAudioSource(sourceMode.sourceValue)
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(sampleFormat.audioEncoding)
-                        .setChannelMask(channelMode.inputChannelMask)
-                        .setSampleRate(sampleRate)
-                        .build(),
-                )
-                .setBufferSizeInBytes(max(minBuffer * 2, 16 * 1024))
-                .build()
-            withOwnedResource(
-                owner = record,
-                release = { it.release() },
-            ) { configured ->
+        probeAudioInputConfiguration(
+            acquire = {
+                AudioRecord.Builder()
+                    .setAudioSource(sourceMode.sourceValue)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(sampleFormat.audioEncoding)
+                            .setChannelMask(channelMode.inputChannelMask)
+                            .setSampleRate(sampleRate)
+                            .build(),
+                    )
+                    .setBufferSizeInBytes(max(minBuffer * 2, 16 * 1024))
+                    .build()
+            },
+            release = { it.release() },
+            onReleaseFailure = { error ->
+                reportAudioInputReleaseFailure(context, "AudioRecord capability probe release", error)
+            },
+            probe = { configured ->
                 val routeAccepted = preferredDevice == null || configured.setPreferredDevice(preferredDevice)
                 routeAccepted && configured.state == AudioRecord.STATE_INITIALIZED
-            }
-        } catch (_: Exception) {
-            false
-        }
+            },
+        )
     }
     if (supported) inputConfigCache.putIfAbsent(key, true)
     return supported

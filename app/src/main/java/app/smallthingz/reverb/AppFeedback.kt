@@ -25,8 +25,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.AccessibilityManager
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -94,6 +99,19 @@ object AppFeedbackCenter {
     }
 }
 
+internal fun recommendedFeedbackTimeoutMillis(
+    accessibilityManager: AccessibilityManager?,
+    originalTimeoutMillis: Long,
+    containsIcons: Boolean,
+    containsText: Boolean,
+    containsControls: Boolean,
+): Long = accessibilityManager?.calculateRecommendedTimeoutMillis(
+    originalTimeoutMillis = originalTimeoutMillis,
+    containsIcons = containsIcons,
+    containsText = containsText,
+    containsControls = containsControls,
+) ?: originalTimeoutMillis
+
 /** Cancellation or obscuration leaves the head queued for a full visible delivery next time. */
 internal suspend fun deliverFeedbackEvent(
     event: FeedbackEvent,
@@ -101,6 +119,7 @@ internal suspend fun deliverFeedbackEvent(
     display: (FeedbackEvent?) -> Unit,
     awaitVisibleFrame: suspend () -> Unit,
     acknowledge: (Long) -> Unit,
+    accessibilityManager: AccessibilityManager? = null,
     waitForDuration: suspend (Long) -> Unit = { delay(it) },
 ) {
     if (!canDisplay()) return
@@ -108,7 +127,16 @@ internal suspend fun deliverFeedbackEvent(
     try {
         awaitVisibleFrame()
         if (!canDisplay()) return
-        waitForDuration(if (event.tone == FeedbackTone.ERROR) 4_500L else 2_800L)
+        val originalTimeoutMillis = if (event.tone == FeedbackTone.ERROR) 4_500L else 2_800L
+        // The queued host renders text-only cards, without icons or action buttons.
+        val timeoutMillis = recommendedFeedbackTimeoutMillis(
+            accessibilityManager = accessibilityManager,
+            originalTimeoutMillis = originalTimeoutMillis,
+            containsIcons = false,
+            containsText = true,
+            containsControls = false,
+        )
+        waitForDuration(timeoutMillis)
         currentCoroutineContext().ensureActive()
         if (canDisplay()) acknowledge(event.id)
     } finally {
@@ -125,9 +153,10 @@ internal fun AppFeedbackHost(
     val lifecycleOwner = LocalLifecycleOwner.current
     val window = LocalWindowInfo.current
     val view = LocalView.current
+    val accessibilityManager = LocalAccessibilityManager.current
     val currentDeliveryAllowed = rememberUpdatedState(deliveryAllowed)
 
-    LaunchedEffect(lifecycleOwner, window, view) {
+    LaunchedEffect(lifecycleOwner, window, view, accessibilityManager) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             snapshotFlow { currentDeliveryAllowed.value && window.isWindowFocused }
                 .collectLatest { allowed ->
@@ -152,6 +181,7 @@ internal fun AppFeedbackHost(
                                     withFrameNanos { }
                                 },
                                 acknowledge = AppFeedbackCenter::acknowledge,
+                                accessibilityManager = accessibilityManager,
                             )
                         }
                 }
@@ -205,7 +235,7 @@ internal fun FeedbackCard(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
                 color = content,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
             )
             if (actionLabel != null && onAction != null) {
                 TextButton(onClick = onAction) {

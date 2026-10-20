@@ -59,7 +59,7 @@ class LibraryDeletionStateTest {
         assertFalse(state.acceptsDeletions)
         assertNull(state.extendUndoWindow())
         assertFalse(state.undo(window))
-        assertFalse(state.handoffToBackground(hasPending = true))
+        assertNull(state.handoffToBackground(hasPending = true))
         assertFalse(state.beginForegroundCommit(window))
 
         state.completeForegroundCommit()
@@ -70,16 +70,18 @@ class LibraryDeletionStateTest {
     fun pendingUndoTransfersOnceToBackgroundAndRevokesStaleCallbacks() {
         val state = LibraryDeletionState()
         val window = state.extendUndoWindow()!!
-        assertTrue(state.handoffToBackground(hasPending = true))
+        assertNotNull(state.handoffToBackground(hasPending = true))
         assertTrue(state.committedInBackground)
-        assertFalse(state.handoffToBackground(hasPending = true))
+        assertNull(state.handoffToBackground(hasPending = true))
         assertFalse(state.undo(window))
         assertFalse(state.beginForegroundCommit(window))
         assertNull(state.extendUndoWindow())
-        // Only authoritative reconciliation releases background ownership.
+        // Generic reconciliation and foreground callbacks cannot release a background owner.
         state.completeForegroundCommit()
         assertTrue(state.committedInBackground)
         state.reconcileNoPendingTargets()
+        assertTrue(state.committedInBackground)
+        assertTrue(state.completeBackgroundCommit(window) {})
         assertFalse(state.committedInBackground)
         assertNotNull(state.extendUndoWindow())
     }
@@ -87,7 +89,7 @@ class LibraryDeletionStateTest {
     @Test
     fun externallyRemovedPendingTargetsCancelTheirOldUndoWindow() {
         val state = LibraryDeletionState()
-        assertFalse(state.handoffToBackground(hasPending = false))
+        assertNull(state.handoffToBackground(hasPending = false))
         val window = state.extendUndoWindow()!!
         state.reconcileNoPendingTargets()
         assertFalse(state.beginForegroundCommit(window))

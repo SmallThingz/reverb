@@ -59,6 +59,10 @@
     <string name="record_all_memory">Export full</string>
     <string name="export_range_title">Export range</string>
     <string name="range_export_duration">Range duration</string>
+    <string name="range_start_accessibility">Range start</string>
+    <string name="range_end_accessibility">Range end</string>
+    <string name="range_endpoint_earlier">Move one second earlier</string>
+    <string name="range_endpoint_later">Move one second later</string>
     <string name="export_limit_dialog_title">Export limit</string>
     <string name="export_limit_dialog_message">Current length is too large. Only exporting last %1$s.</string>
     <string name="saving">Saving…</string>
@@ -132,6 +136,8 @@
     <string name="settings_apply_failed">Saved, but recorder couldn\'t reload settings.</string>
     <string name="audio_input_init_failed">Couldn\'t start microphone.</string>
     <string name="audio_input_release_failed">Couldn\'t release microphone.</string>
+    <string name="waveform_load_failed">Couldn’t load waveform.</string>
+    <string name="audio_preview_failed">Couldn’t play audio preview.</string>
     <string name="audio_preview_release_failed">Couldn\'t release audio preview.</string>
     <string name="custom_memory_size_invalid">Enter a valid number.</string>
     <string name="permission_required">Permission required</string>
@@ -166,6 +172,8 @@
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
     <string name="trim_recording">Trim</string>
+    <string name="trim_start_accessibility">Trim start</string>
+    <string name="trim_end_accessibility">Trim end</string>
     <string name="trim_save_copy">Save copy</string>
     <string name="trim_saving">Saving trim…</string>
     <string name="trim_failed">Couldn\'t save trimmed recording.</string>

@@ -241,12 +241,15 @@ internal fun shuttleSampleRateCandidates(preferredMinBufferBytes: Int): List<Int
 
 internal inline fun <T> createShuttleWithSampleRateFallback(
     preferredMinBufferBytes: Int,
-    create: (Int) -> T,
+    noinline onConfigurationReleaseFailure: (Throwable) -> Unit,
+    create: (Int, (Throwable) -> Unit) -> T,
 ): Pair<T, Int> {
     var earlierFailure: Exception? = null
     for (sampleRate in shuttleSampleRateCandidates(preferredMinBufferBytes)) {
         try {
-            return create(sampleRate) to sampleRate
+            // Configuration rejection may fall back, but its owner's actual release failure
+            // must be reported before a later success discards that primary exception.
+            return create(sampleRate, onConfigurationReleaseFailure) to sampleRate
         } catch (error: Exception) {
             val previous = earlierFailure
             if (previous != null) error.addSuppressed(previous)
@@ -479,8 +482,9 @@ internal class TimelineAudioPreviewController(
     private class RecordingShuttlePcmSource(
         context: Context,
         recording: RecordingEntity,
+        cleanup: RecordingReadCleanup,
     ) : ShuttlePcmSource {
-        private val reader = RecordingPcm16MonoReader.open(context, recording)
+        private val reader = RecordingPcm16MonoReader.open(context, recording, cleanup)
         override val durationSeconds: Double get() = reader.durationSeconds
 
         override fun readPcm16Mono(
@@ -563,7 +567,7 @@ internal class TimelineAudioPreviewController(
                 onProgress = {},
                 onStarted = {},
                 onFinished = {},
-                onError = {},
+                onError = null,
             )
         }
     }
@@ -590,29 +594,31 @@ internal class TimelineAudioPreviewController(
         rate: Float,
         onStarted: () -> Unit = {},
         onFailureAfterStart: () -> Unit = {},
-        onSourceCloseFailure: ((Exception) -> Unit)? = null,
+        onSourceCloseFailure: ((Throwable) -> Unit)? = null,
     ) {
         val appContext = context.applicationContext
+        val reportSourceCloseFailure: (Throwable) -> Unit = onSourceCloseFailure ?: { error ->
+            Log.e("ReverbRangeAudio", "Saved recording shuttle source close failed", error)
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                appContext,
+                "Saved recording shuttle source cleanup",
+                error,
+            )
+            AppFeedbackCenter.post(
+                appContext.getString(R.string.recording_read_cleanup_failed),
+                FeedbackTone.ERROR,
+            )
+        }
+        val sourceCleanup = RecordingReadCleanup(reportSourceCloseFailure)
         startShuttleInternal(
             // Catalog duration can lag MediaPlayer/the opened WAV. The source thread owns the
             // authoritative upper bound, avoiding a wrong first grain then an audible jump.
             atSeconds = sanitizedShuttlePositionSeconds(atSeconds),
             rate = rate,
-            sourceFactory = { RecordingShuttlePcmSource(appContext, recording) },
+            sourceFactory = { RecordingShuttlePcmSource(appContext, recording, sourceCleanup) },
             onStarted = onStarted,
             onFailureAfterStart = onFailureAfterStart,
-            onSourceCloseFailure = onSourceCloseFailure ?: { error ->
-                Log.e("ReverbRangeAudio", "Saved recording shuttle source close failed", error)
-                RecordingIncidentStore.recordUnexpectedErrorInBackground(
-                    appContext,
-                    "Saved recording shuttle source cleanup",
-                    error,
-                )
-                AppFeedbackCenter.post(
-                    appContext.getString(R.string.recording_read_cleanup_failed),
-                    FeedbackTone.ERROR,
-                )
-            },
+            onSourceCloseFailure = reportSourceCloseFailure,
         )
     }
 
@@ -622,7 +628,7 @@ internal class TimelineAudioPreviewController(
         sourceFactory: () -> ShuttlePcmSource,
         onStarted: (() -> Unit)?,
         onFailureAfterStart: (() -> Unit)?,
-        onSourceCloseFailure: (Exception) -> Unit,
+        onSourceCloseFailure: (Throwable) -> Unit,
     ) {
         if (closed) return
         cancelCurrent()
@@ -726,7 +732,7 @@ internal class TimelineAudioPreviewController(
         source: ShuttlePcmSource,
         onStarted: (() -> Unit)?,
         onFailureAfterStart: (() -> Unit)?,
-        onSourceCloseFailure: (Exception) -> Unit,
+        onSourceCloseFailure: (Throwable) -> Unit,
     ) {
         var track: AudioTrack? = null
         var startedCallbackSent = false
@@ -741,7 +747,8 @@ internal class TimelineAudioPreviewController(
             }.getOrDefault(0)
             val (shuttleTrack, shuttleSampleRate) = createShuttleWithSampleRateFallback(
                 preferredMinBufferBytes = preferredMinBufferBytes,
-            ) { sampleRate ->
+                onConfigurationReleaseFailure = ::reportTrackReleaseFailure,
+            ) { sampleRate, onConfigurationReleaseFailure ->
                 val grainBufferBytes = (
                     SHUTTLE_GRAIN_OUTPUT_SECONDS * sampleRate.toDouble() * 2.0
                 ).roundToInt()
@@ -750,6 +757,7 @@ internal class TimelineAudioPreviewController(
                     minimumBufferBytes = grainBufferBytes,
                     lowLatency = true,
                     sampleRate = sampleRate,
+                    onConfigurationReleaseFailure = onConfigurationReleaseFailure,
                 )
             }
             track = shuttleTrack
@@ -935,7 +943,7 @@ internal class TimelineAudioPreviewController(
                 }
                 releaseTrackOnce(track)
             }
-            runCleanupReportingException(
+            runCleanupReportingThrowable(
                 cleanup = source::close,
                 onFailure = onSourceCloseFailure,
             )
@@ -952,17 +960,22 @@ internal class TimelineAudioPreviewController(
         onProgress: (Double) -> Unit,
         onStarted: () -> Unit,
         onFinished: () -> Unit,
-        onError: (Throwable) -> Unit,
+        onError: ((Throwable) -> Unit)?,
     ) {
         var child: PersistentAudioChunkStore.RangeLease? = null
         var track: AudioTrack? = null
+        var playbackFailure: Throwable? = null
+        var trackReleaseFailure: Throwable? = null
         var startedCallbackSent = false
         try {
             checkCurrent(token)
             child = snapshot.acquireRange(startSeconds, endSeconds)
                 ?: throw IOException("No audio available for preview")
             checkCurrent(token)
-            track = createTrack(volume)
+            track = createTrack(
+                volume,
+                onConfigurationReleaseFailure = { trackReleaseFailure = it },
+            )
             synchronized(trackLock) {
                 checkCurrent(token)
                 activeTrack = track
@@ -1036,15 +1049,25 @@ internal class TimelineAudioPreviewController(
         } catch (_: PreviewCancelled) {
             Unit
         } catch (error: Exception) {
-            if (isCurrent(token)) postIfCurrent(token) { onError(error) }
+            playbackFailure = error
         } finally {
             snapshot.releaseChildRangeBestEffort(child)
             if (track != null) {
                 synchronized(trackLock) {
                     if (activeTrack === track) activeTrack = null
                 }
-                releaseTrackOnce(track)
+                releaseTrackOnce(track) { trackReleaseFailure = it }
             }
+            // Deliver after cleanup so one explicit playback failure retains its release
+            // provenance. Superseded playback stays quiet; cleanup-only failures remain visible.
+            completeRangePreviewFailure(
+                playbackFailure = playbackFailure,
+                releaseFailure = trackReleaseFailure,
+                isCurrent = { isCurrent(token) },
+                post = { action -> mainHandler.post { action() } },
+                onPlaybackFailure = onError,
+                onReleaseFailure = ::reportTrackReleaseFailure,
+            )
         }
     }
 
@@ -1053,6 +1076,7 @@ internal class TimelineAudioPreviewController(
         minimumBufferBytes: Int = PREVIEW_WRITE_BYTES * 4,
         lowLatency: Boolean = false,
         sampleRate: Int = PREVIEW_SAMPLE_RATE,
+        onConfigurationReleaseFailure: (Throwable) -> Unit,
     ): AudioTrack {
         val minBuffer = resolvePreviewAudioTrackBufferBytes(
             reportedMinBufferBytes = AudioTrack.getMinBufferSize(
@@ -1082,9 +1106,10 @@ internal class TimelineAudioPreviewController(
                 if (lowLatency) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
             .build()
-        return configureOwnedResourceOrRelease(
+        return configureRangePreviewTrackOrRelease(
             owner = track,
             release = { it.release() },
+            onReleaseFailure = onConfigurationReleaseFailure,
         ) { configured ->
             check(configured.state == AudioTrack.STATE_INITIALIZED) {
                 "AudioTrack failed to initialize"
@@ -1096,7 +1121,10 @@ internal class TimelineAudioPreviewController(
         }
     }
 
-    private fun releaseTrackOnce(track: AudioTrack) {
+    private fun releaseTrackOnce(
+        track: AudioTrack,
+        onFailure: (Throwable) -> Unit = ::reportTrackReleaseFailure,
+    ) {
         synchronized(releasedTracks) {
             if (releasedTracks.put(track, true) != null) return
         }
@@ -1105,11 +1133,13 @@ internal class TimelineAudioPreviewController(
         runCatching { track.stop() }
         runCleanupReportingThrowable(
             cleanup = { track.release() },
-            onFailure = { error ->
-                Log.e("ReverbRangeAudio", "AudioTrack.release failed", error)
-                onTrackReleaseFailure(error)
-            },
+            onFailure = onFailure,
         )
+    }
+
+    private fun reportTrackReleaseFailure(error: Throwable) {
+        Log.e("ReverbRangeAudio", "AudioTrack.release failed", error)
+        onTrackReleaseFailure(error)
     }
 
     private fun checkCurrent(token: Long) {

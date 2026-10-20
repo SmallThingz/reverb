@@ -14,10 +14,10 @@ import java.nio.file.NoSuchFileException
 import java.util.Base64
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -174,22 +174,26 @@ object RecordingRepository {
         }
     }
 
-    fun deleteInBackground(context: Context, recordings: List<RecordingEntity>) {
-        if (recordings.isEmpty()) return
+    internal fun deleteInBackground(
+        context: Context,
+        recordings: List<RecordingEntity>,
+    ): Deferred<RecordingDeletionBatchResult> {
         val appContext = context.applicationContext
-        synchronized(backgroundDeleteLock) {
+        return synchronized(backgroundDeleteLock) {
             val previous = backgroundDeleteJob
-            backgroundDeleteJob = cleanupScope.launch {
-                previous?.join()
-                val result = deleteBatch(appContext, recordings)
-                val failed = result.cleanupFailed || result.outcomes.any { !it }
-                if (failed) {
+            val receipt = cleanupScope.launchRecordingBackgroundDeletion(
+                previous = previous,
+                recordings = recordings,
+                deleteBatch = { targets -> deleteBatch(appContext, targets) },
+                reportFailure = {
                     AppFeedbackCenter.post(
                         appContext.getString(R.string.recording_delete_failed),
                         FeedbackTone.ERROR,
                     )
-                }
-            }
+                },
+            )
+            backgroundDeleteJob = receipt
+            receipt
         }
     }
 
@@ -1142,7 +1146,7 @@ private const val PENDING_DELETION_V1_PREFIX = "v1|"
 private const val PENDING_DELETION_V2_PREFIX = "v2|"
 private const val PENDING_DELETION_V3_PREFIX = "v3|"
 private const val PENDING_DELETION_V4_PREFIX = "v4|"
-private const val DELETION_CLAIM_PREFIX = ".reverb-delete-"
+internal const val DELETION_CLAIM_PREFIX = ".reverb-delete-"
 private const val DELETION_CLAIM_SUFFIX = ".pending"
 
 internal data class PendingDeletionIntent(

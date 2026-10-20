@@ -846,6 +846,34 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun resumedOneShotFull_preservesTerminalSealFailureWithNoWritableFrames() = withStoreRoot { root ->
+        val expected = pcmBytes(16_384)
+        val store = PersistentAudioChunkStore(root, overwriteOldest = false)
+        configure(store, expected.size.toLong())
+        assertEquals(100, store.append(expected, 0, 100))
+        store.sealActiveChunk()
+        assertEquals(expected.size - 100, store.append(expected, 100, expected.size - 100))
+        assertTrue(store.isFull())
+        // Full capacity is independent of the final chunk boundary after a partial prior span.
+        replaceActiveAccessWithFailingClose(store)
+
+        val error = assertThrows(IOException::class.java) { store.sealActiveChunk() }
+        assertTrue(
+            error.message?.contains("Injected active access close failure") == true ||
+                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
+        )
+        assertEquals(expected.size.toLong(), store.countFilledBytes())
+        assertArrayEquals(expected, readAll(store))
+        store.close()
+
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { reopened ->
+            configure(reopened, expected.size.toLong())
+            assertTrue(reopened.isFull())
+            assertArrayEquals(expected, readAll(reopened))
+        }
+    }
+
+    @Test
     fun sealActiveChunk_surfacesActiveAccessCloseFailureAfterFinalizingAudio() = withStoreRoot { root ->
         val expected = pcmBytes(4_096)
         val store = PersistentAudioChunkStore(root)

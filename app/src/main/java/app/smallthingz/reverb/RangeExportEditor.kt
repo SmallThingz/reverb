@@ -1,12 +1,18 @@
 package app.smallthingz.reverb
 
 import android.os.SystemClock
+import android.os.Bundle
+import android.util.Log
+import android.view.KeyEvent
+import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -43,6 +49,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
@@ -50,6 +57,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -57,6 +65,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -65,8 +79,17 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +100,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlin.math.abs
@@ -92,18 +117,62 @@ internal enum class RangeEditTarget { START, END }
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
     val commitAllowed: Boolean = false,
+    // Retain completed interactions so older pointer/frame callbacks cannot mistake idle for the same owner.
+    val generation: Long = 0L,
 ) {
     val active: Boolean get() = target != null
 
     fun begin(target: RangeEditTarget): RangeDurationWheelInteraction =
-        RangeDurationWheelInteraction(target = target, commitAllowed = true)
+        RangeDurationWheelInteraction(target = target, commitAllowed = true, generation = generation + 1L)
 
     fun invalidateCommit(): RangeDurationWheelInteraction =
         if (active && commitAllowed) copy(commitAllowed = false) else this
 
-    fun end(): RangeDurationWheelInteraction = RangeDurationWheelInteraction()
+    fun end(): RangeDurationWheelInteraction = RangeDurationWheelInteraction(generation = generation)
 
     fun commitTarget(): RangeEditTarget? = target?.takeIf { commitAllowed }
+}
+
+/** Every continuous range input loses its whole gesture when the duration wheel takes admission. */
+internal class RangeInputGesture(
+    private val interactionAllowed: () -> Boolean,
+    private val durationInteraction: () -> RangeDurationWheelInteraction,
+    // Local cleanup always runs; editor/audio cleanup belongs only to the still-current owner.
+    private val onCancel: (stillCurrent: Boolean) -> Unit,
+) {
+    private val durationGeneration = durationInteraction().generation
+    private var terminal = false
+
+    fun perform(action: () -> Unit): Boolean {
+        if (!admit()) return false
+        action()
+        return true
+    }
+
+    fun finish(action: () -> Unit): Boolean {
+        if (!admit()) return false
+        terminal = true
+        action()
+        return true
+    }
+
+    fun cancel() {
+        if (terminal) return
+        terminal = true
+        val durationOwner = durationInteraction()
+        onCancel(!durationOwner.active && durationOwner.generation == durationGeneration)
+    }
+
+    private fun admit(): Boolean {
+        if (terminal) return false
+        val durationOwner = durationInteraction()
+        // A generic-scroll step can begin and end entirely between pointer events or frames.
+        if (!interactionAllowed() || durationOwner.active || durationOwner.generation != durationGeneration) {
+            cancel()
+            return false
+        }
+        return true
+    }
 }
 
 private const val BOUNDARY_CURSOR_END_LEAD_IN_SECONDS = 3f
@@ -173,7 +242,14 @@ internal fun restoreRememberedRangeExport(
         .coerceIn(0.0, maxEndOffsetSeconds)
     val end = available.toDouble() - endOffsetSeconds
     val start = (end - selectionSeconds).coerceAtLeast(0.0)
-    return RestoredRangeExport(start.toFloat(), end.toFloat())
+    // Keep the remembered end when Float conversion collapses a valid short selection.
+    val values = ensurePositiveRangeSelection(
+        values = RangeEditValues(start.toFloat(), end.toFloat()),
+        durationSeconds = available,
+        minimumRange = selectionSeconds.toFloat(),
+        preferMovingStart = true,
+    )
+    return RestoredRangeExport(values.startSeconds, values.endSeconds)
 }
 
 internal fun rememberedRangeExportFromSavedRange(
@@ -277,6 +353,26 @@ internal fun rangeTimelineDragDeltaPx(
     currentLocalX: Float,
 ): Float = (currentMarkerCenterPx + currentLocalX) - (initialMarkerCenterPx + downLocalX)
 
+// At long offsets the 50 ms gap can round to zero. Repair only collapsed results,
+// preserving the intended fixed endpoint where a neighbouring Float is available.
+private fun ensurePositiveRangeSelection(
+    values: RangeEditValues,
+    durationSeconds: Float,
+    minimumRange: Float,
+    preferMovingStart: Boolean,
+): RangeEditValues {
+    val start = values.startSeconds
+    val end = values.endSeconds
+    if (durationSeconds <= 0f || !start.isFinite() || !end.isFinite() || start < end) return values
+    return if ((preferMovingStart && end > 0f) || start >= durationSeconds) {
+        val earlier = (end - minimumRange).coerceAtLeast(0f)
+        RangeEditValues(if (earlier < end) earlier else java.lang.Math.nextDown(end), end)
+    } else {
+        val later = (start + minimumRange).coerceAtMost(durationSeconds)
+        RangeEditValues(start, if (later > start) later else java.lang.Math.nextUp(start))
+    }
+}
+
 internal fun adjustRangeEditTarget(
     values: RangeEditValues,
     target: RangeEditTarget,
@@ -313,7 +409,12 @@ internal fun adjustRangeEditTarget(
             }
         }
     }
-    return RangeEditUpdate(RangeEditValues(start, end))
+    return RangeEditUpdate(ensurePositiveRangeSelection(
+        values = RangeEditValues(start, end),
+        durationSeconds = duration,
+        minimumRange = boundedMinimum,
+        preferMovingStart = target == RangeEditTarget.END,
+    ))
 }
 
 internal fun rangeSelectionDurationExactSeconds(
@@ -329,7 +430,7 @@ internal fun rangeExportSelectionWithinLimit(
     maximumDurationSeconds: Double,
 ): Boolean = selectedDurationSeconds.isFinite() &&
     maximumDurationSeconds.isFinite() &&
-    selectedDurationSeconds >= 0.0 &&
+    selectedDurationSeconds > 0.0 &&
     maximumDurationSeconds >= 0.0 &&
     selectedDurationSeconds <= maximumDurationSeconds
 
@@ -389,7 +490,12 @@ internal fun resizeRangeSelectionDuration(
             )
         }
     }
-    return RangeEditUpdate(RangeEditValues(start, end))
+    return RangeEditUpdate(ensurePositiveRangeSelection(
+        values = RangeEditValues(start, end),
+        durationSeconds = duration,
+        minimumRange = minimumRange,
+        preferMovingStart = target == RangeEditTarget.START,
+    ))
 }
 
 private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
@@ -419,6 +525,15 @@ internal fun rangeFineTuneMovementExceedsSlop(
     return deltaX * deltaX + deltaY * deltaY > slop * slop
 }
 
+/** The existing clickable occupies a square, independently of the circular drag-start test. */
+internal fun fineSeekPointerTapInsideBounds(
+    pointerX: Float,
+    pointerY: Float,
+    puckX: Float,
+    puckY: Float,
+    halfSize: Float,
+): Boolean = abs(pointerX - puckX) <= halfSize && abs(pointerY - puckY) <= halfSize
+
 private class FineAdjustCommitAccumulator {
     var deltaSeconds = 0f
     var elapsedNanos = 0L
@@ -438,6 +553,53 @@ private class FineAdjustCommitAccumulator {
         reset()
         return delta
     }
+}
+
+/** Pointer, frame and final-delta callbacks share one guard and one private accumulator. */
+internal class FineSeekInputSession(
+    createInputGesture: ((Boolean) -> Unit) -> RangeInputGesture,
+    onCancel: (FineSeekInputSession, Boolean) -> Unit,
+) {
+    private val commits = FineAdjustCommitAccumulator()
+    private var pointerTapAllowed = true
+    private val input = createInputGesture { stillCurrent ->
+        commits.reset()
+        onCancel(this, stillCurrent)
+    }
+
+    fun perform(action: () -> Unit): Boolean = input.perform(action)
+
+    fun frame(
+        deltaSeconds: Float,
+        elapsedNanos: Long,
+        onCommit: (Float) -> Unit,
+        onShuttle: (Float) -> Unit,
+    ): Boolean = input.perform {
+        commits.add(deltaSeconds, elapsedNanos)
+        if (commits.elapsedNanos >= RANGE_FINE_TUNE_STATE_UPDATE_NANOS) {
+            val delta = commits.takeDelta()
+            if (delta != 0f) onCommit(delta)
+        }
+        onShuttle(commits.deltaSeconds)
+    }
+
+    fun finishFineAdjust(onCommit: (Float) -> Unit, onEnd: () -> Unit): Boolean = input.finish {
+        val delta = commits.takeDelta()
+        if (delta != 0f) onCommit(delta)
+        onEnd()
+    }
+
+    fun finish(action: () -> Unit): Boolean = input.finish(action)
+
+    fun observePointerTap(insideBounds: Boolean, consumed: Boolean) {
+        if (!insideBounds || consumed) pointerTapAllowed = false
+    }
+
+    fun finishPointerTap(action: () -> Unit): Boolean = input.finish {
+        if (pointerTapAllowed) action()
+    }
+
+    fun cancel() = input.cancel()
 }
 
 internal fun rangeFineTuneHorizontalTouchPull(
@@ -541,10 +703,30 @@ internal fun projectFineAdjustShuttleTarget(
 internal fun rangeTimelineDurationSeconds(value: Float): Float =
     value.takeIf { it.isFinite() && it > 0f } ?: 0.05f
 
+/** Optional visualization must not take down capture when a retained-chunk read fails. */
+internal suspend fun constructRangeWaveform(
+    build: suspend () -> Unit,
+    onFailure: (Exception) -> Unit,
+    onFinished: () -> Unit,
+) {
+    try {
+        build()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        // A superseded owner may finish a blocking storage read after cancellation.
+        currentCoroutineContext().ensureActive()
+        onFailure(error)
+    } finally {
+        onFinished()
+    }
+}
+
 internal class RangeExportEditorState(
     initialDurationSeconds: Float,
     private val rememberedRangeExport: RememberedRangeExport? = null,
     onPreviewReleaseFailure: (Throwable) -> Unit = {},
+    private val onPreviewFailure: (Throwable) -> Unit = {},
 ) {
     private val previewController = TimelineAudioPreviewController(
         onTrackReleaseFailure = onPreviewReleaseFailure,
@@ -579,9 +761,8 @@ internal class RangeExportEditorState(
         private set
     var isScrubbing by mutableStateOf(false)
         private set
-    var previewError by mutableStateOf<String?>(null)
+    var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
         private set
-    private var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
 
     val selectionDurationEditing: Boolean
         get() = selectionDurationInteraction.active
@@ -590,6 +771,7 @@ internal class RangeExportEditorState(
     private var previewStarting = false
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
+    private val fineSeekPosition = FineSeekPosition<RangeEditTarget>()
     private var lastAuditionAtMillis = 0L
 
     val selectionDurationExactSeconds: Double
@@ -603,10 +785,24 @@ internal class RangeExportEditorState(
             exportLimitSeconds = exportLimitSeconds,
         )
 
+    val durationActionAvailable: Boolean
+        get() = playbackAllowed && snapshotReady && !selectionDurationEditing &&
+            !isScrubbing && !fineAdjustShuttleActive
+
     val snapshotReady: Boolean
         get() = snapshot != null
 
+    fun inputGesture(
+        interactionAllowed: () -> Boolean,
+        onCancel: (Boolean) -> Unit,
+    ): RangeInputGesture = RangeInputGesture(
+        interactionAllowed = { playbackAllowed && interactionAllowed() },
+        durationInteraction = { selectionDurationInteraction },
+        onCancel = onCancel,
+    )
+
     fun attachSnapshot(value: ReverbService.TimelineSnapshot) {
+        fineSeekPosition.reset()
         invalidateSelectionDurationCommit()
         val previousDuration = durationSeconds
         val nextDuration = rangeTimelineDurationSeconds(value.durationSeconds.toFloat())
@@ -662,9 +858,27 @@ internal class RangeExportEditorState(
     }
 
     fun selectTarget(target: RangeEditTarget) {
+        fineSeekPosition.reset()
         invalidateSelectionDurationCommit()
         lastTarget = target
     }
+
+    fun editEndpointFromAction(
+        target: RangeEditTarget,
+        requestedSeconds: Double?,
+        gesture: RangeInputGesture,
+    ): Boolean = runRangeEndpointAction(
+        values = currentEditValues(),
+        durationSeconds = durationSeconds,
+        target = target,
+        requestedSeconds = requestedSeconds,
+        gesture = gesture,
+        pause = ::pausePreview,
+        apply = { update ->
+            selectTarget(target)
+            applyEditUpdate(update)
+        },
+    )
 
     fun setTarget(target: RangeEditTarget, requestedSeconds: Float) {
         selectTarget(target)
@@ -687,6 +901,7 @@ internal class RangeExportEditorState(
 
     fun setSelectionDuration(requestedDurationSeconds: Float) {
         val target = selectionDurationInteraction.commitTarget() ?: return
+        fineSeekPosition.reset()
         applyEditUpdate(
             resizeRangeSelectionDuration(
                 values = currentEditValues(),
@@ -695,6 +910,12 @@ internal class RangeExportEditorState(
                 durationSeconds = durationSeconds,
             ),
         )
+    }
+
+    fun setSelectionDurationFromAction(requestedDurationSeconds: Float, maximumSeconds: Double) {
+        val target = selectionDurationInteraction.commitTarget() ?: return
+        setSelectionDuration(requestedDurationSeconds)
+        applyEditUpdate(RangeEditUpdate(boundRangeDurationActionValues(currentEditValues(), target, maximumSeconds)))
     }
 
     fun endSelectionDurationEdit() {
@@ -753,6 +974,7 @@ internal class RangeExportEditorState(
 
     fun beginFineAdjust(shuttleRate: Float) {
         if (!playbackAllowed) return
+        fineSeekPosition.reset()
         invalidateSelectionDurationCommit()
         beginScrubPlaybackHandoff()
         fineAdjustShuttleActive = true
@@ -768,22 +990,29 @@ internal class RangeExportEditorState(
     fun updateFineAdjustShuttle(shuttleRate: Float, pendingDeltaSeconds: Float = 0f) {
         if (!fineAdjustShuttleActive) return
         previewController.updateShuttle(
-            atSeconds = projectFineAdjustShuttleTarget(
+            atSeconds = projectRangeFineSeekPosition(
+                position = fineSeekPosition,
                 values = currentEditValues(),
                 target = lastTarget,
                 pendingDeltaSeconds = pendingDeltaSeconds,
                 durationSeconds = durationSeconds,
-            ).toDouble(),
+            ),
             rate = shuttleRate,
         )
     }
 
     fun fineAdjust(deltaSeconds: Float) {
-        val target = lastTarget
-        setTarget(target, targetValue(target) + deltaSeconds)
+        applyEditUpdate(adjustRangeFineSeekPosition(
+            position = fineSeekPosition,
+            values = currentEditValues(),
+            target = lastTarget,
+            deltaSeconds = deltaSeconds,
+            durationSeconds = durationSeconds,
+        ))
     }
 
     fun endFineAdjust() {
+        fineSeekPosition.reset()
         if (fineAdjustShuttleActive) {
             fineAdjustShuttleActive = false
             previewController.stopShuttle()
@@ -800,6 +1029,7 @@ internal class RangeExportEditorState(
     }
 
     fun pausePreview() {
+        fineSeekPosition.reset()
         previewStarting = false
         resumeAfterScrub = false
         isScrubbing = false
@@ -832,7 +1062,6 @@ internal class RangeExportEditorState(
             endSeconds = endSeconds,
             endBoundaryActive = lastTarget == RangeEditTarget.END,
         )
-        previewError = null
         previewStarting = false
         isPlaying = false
         isScrubbing = false
@@ -852,7 +1081,7 @@ internal class RangeExportEditorState(
             onError = { error ->
                 previewStarting = false
                 isPlaying = false
-                previewError = error.message
+                onPreviewFailure(error)
             },
         )
     }
@@ -909,6 +1138,19 @@ internal fun RangeExportHomeContent(
                 )
                 AppFeedbackCenter.post(
                     appContext.getString(R.string.audio_preview_release_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+            onPreviewFailure = { error ->
+                // The bounded incident description omits suppressed cleanup failures.
+                Log.e("ReverbRangeAudio", "Range preview playback failed", error)
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    appContext,
+                    "Range preview playback",
+                    error,
+                )
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.audio_preview_failed),
                     FeedbackTone.ERROR,
                 )
             },
@@ -992,21 +1234,31 @@ internal fun RangeExportHomeContent(
         // essentially settled, resolve real audio into it left-to-right as before.
         snapshotFlow { transitionProgress.value }.first { it >= 0.96f }
 
-        try {
-            buildProgressiveWaveform(
-                readPass = { pass, onBucket ->
-                    readySnapshot.readWaveformEnvelopeProgressive(pass, onBucket)
-                },
-                onPassStarted = { pass ->
-                    if (pass == RangeWaveformPass.DETAIL) state.beginDetailedWaveformPass()
-                },
-                onSnapshot = state::publishWaveformSnapshot,
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } finally {
-            state.finishWaveformConstruction()
-        }
+        constructRangeWaveform(
+            build = {
+                buildProgressiveWaveform(
+                    readPass = { pass, onBucket ->
+                        readySnapshot.readWaveformEnvelopeProgressive(pass, onBucket)
+                    },
+                    onPassStarted = { pass ->
+                        if (pass == RangeWaveformPass.DETAIL) state.beginDetailedWaveformPass()
+                    },
+                    onSnapshot = state::publishWaveformSnapshot,
+                )
+            },
+            onFailure = { error ->
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(
+                    appContext,
+                    "Range waveform construction",
+                    error,
+                )
+                AppFeedbackCenter.post(
+                    appContext.getString(R.string.waveform_load_failed),
+                    FeedbackTone.ERROR,
+                )
+            },
+            onFinished = state::finishWaveformConstruction,
+        )
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -1033,6 +1285,7 @@ internal fun RangeExportHomeContent(
                         state = state,
                         maxExportDurationSeconds = maxExportDurationSeconds,
                         enabled = interactionReady && backProgress <= 0f,
+                        inputVisible = visualizerVisible,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp)
@@ -1107,12 +1360,20 @@ private fun RangeSelectionDurationWheel(
     state: RangeExportEditorState,
     maxExportDurationSeconds: Double,
     enabled: Boolean,
+    inputVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_duration)
     val wheelMaximumDurationSeconds =
         state.selectionDurationWheelLimitExactSeconds(maxExportDurationSeconds)
+    val currentState = rememberUpdatedState(state)
+    val currentEnabled = rememberUpdatedState(enabled && inputVisible)
+    val currentExportLimit = rememberUpdatedState(maxExportDurationSeconds)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // The delegate may survive a recomposition; admission reads live ownership and visibility.
+    val lease = remember(state) { booleanArrayOf(true) }
+    DisposableEffect(lease) { onDispose { lease[0] = false } }
     AndroidView(
         factory = { context -> RangeDurationWheelView(context) },
         update = { view ->
@@ -1131,6 +1392,67 @@ private fun RangeSelectionDurationWheel(
             )
             view.setMaximumDurationSeconds(wheelMaximumDurationSeconds)
             view.setDurationSeconds(state.selectionDurationExactSeconds)
+            fun actionReady(): Boolean = lease[0] && currentState.value === state &&
+                currentEnabled.value && view.isEnabled && view.isAttachedToWindow &&
+                view.isShown && view.hasWindowFocus() &&
+                lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                state.durationActionAvailable
+            fun maximum() = state.selectionDurationWheelLimitExactSeconds(currentExportLimit.value)
+            fun commitInput(seconds: Double): Boolean = runRangeDurationAction(
+                requestedSeconds = seconds,
+                maximumSeconds = maximum(),
+                ready = actionReady(),
+                begin = state::beginSelectionDurationEdit,
+                commit = { state.setSelectionDurationFromAction(it, maximum()); view.setDurationSeconds(state.selectionDurationExactSeconds) },
+                end = state::endSelectionDurationEdit,
+            )
+            fun stepInput(forward: Boolean) = commitInput(
+                state.selectionDurationExactSeconds + if (forward) 1.0 else -1.0,
+            )
+            view.setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) false else when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_RIGHT -> stepInput(true)
+                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT -> stepInput(false)
+                    else -> false
+                }
+            }
+            view.accessibilityDelegate = object : View.AccessibilityDelegate() {
+                override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                    super.onInitializeAccessibilityNodeInfo(host, info)
+                    info.className = android.widget.SeekBar::class.java.name
+                    val max = maximum().coerceAtLeast(0.0).toFloat()
+                    val min = minOf(0.05f, max)
+                    info.rangeInfo = AccessibilityNodeInfo.RangeInfo.obtain(
+                        AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,
+                        min, max, state.selectionDurationExactSeconds.toFloat().coerceIn(min, max),
+                    )
+                    if (actionReady()) {
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD)
+                    }
+                }
+                override fun performAccessibilityAction(host: View, action: Int, arguments: Bundle?): Boolean =
+                    when (action) {
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id -> commitInput(
+                            (arguments?.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, Float.NaN)
+                                ?: Float.NaN).toDouble(),
+                        )
+                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> stepInput(true)
+                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> stepInput(false)
+                        else -> super.performAccessibilityAction(host, action, arguments)
+                    }
+            }
+        },
+        onRelease = { view ->
+            lease[0] = false
+            view.setOnKeyListener(null)
+            view.accessibilityDelegate = null
+            view.clearFocus()
+            view.onInteractionStart = null
+            view.onDurationChanged = null
+            view.onInteractionEnd = null
+            state.endSelectionDurationEdit()
         },
         modifier = modifier,
     )
@@ -1150,6 +1472,7 @@ private fun RangeExportTimeline(
     onTargetBoundsInRoot: (Rect) -> Unit,
 ) {
     val density = LocalDensity.current
+    val currentInteractionEnabled = rememberUpdatedState(interactionEnabled)
     val timelineTop = 42.dp
     val timelineHeight = 146.dp
     val horizontalInset = 12.dp
@@ -1179,30 +1502,38 @@ private fun RangeExportTimeline(
                 .pointerInput(state.durationSeconds, timelineWidthPx, interactionEnabled) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = true)
-                        if (!interactionEnabled) return@awaitEachGesture
+                        val gesture = state.inputGesture(
+                            interactionAllowed = { currentInteractionEnabled.value },
+                            onCancel = { stillCurrent -> if (stillCurrent) state.pausePreview() },
+                        )
                         val downSeconds = secondsFor(down.position.x + insetPx)
                         val target = state.lastTarget
-                        state.beginBoundaryScrub(target)
+                        if (!gesture.perform { state.beginBoundaryScrub(target) }) return@awaitEachGesture
                         try {
-                            state.updateBoundaryScrub(target, downSeconds)
-                            var pressed = true
-                            while (pressed) {
+                            if (!gesture.perform { state.updateBoundaryScrub(target, downSeconds) }) {
+                                return@awaitEachGesture
+                            }
+                            while (true) {
                                 val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                pressed = change.pressed
-                                if (pressed) {
-                                    change.consume()
-                                    state.updateBoundaryScrub(
-                                        target,
-                                        secondsFor(change.position.x + insetPx),
-                                    )
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed) {
+                                    rangePointerReleaseWasNormal(change, gesture::cancel)
+                                    break
                                 }
+                                if (!gesture.perform {
+                                        change.consume()
+                                        state.updateBoundaryScrub(
+                                            target,
+                                            secondsFor(change.position.x + insetPx),
+                                        )
+                                    }
+                                ) break
                             }
                         } catch (cancelled: CancellationException) {
-                            state.pausePreview()
+                            gesture.cancel()
                             throw cancelled
                         } finally {
-                            state.endBoundaryScrub()
+                            gesture.finish(state::endBoundaryScrub)
                         }
                     }
                 },
@@ -1269,6 +1600,7 @@ private fun RangeExportTimeline(
         RangeTimelineBar(
             target = RangeEditTarget.START,
             state = state,
+            interactionEnabled = interactionEnabled,
             xPx = { xFor(state.startSeconds) },
             topPx = timelineTopPx,
             heightPx = timelineHeightPx,
@@ -1279,6 +1611,7 @@ private fun RangeExportTimeline(
         RangeTimelineBar(
             target = RangeEditTarget.END,
             state = state,
+            interactionEnabled = interactionEnabled,
             xPx = { xFor(state.endSeconds) },
             topPx = timelineTopPx,
             heightPx = timelineHeightPx,
@@ -1380,6 +1713,7 @@ internal fun RangeTimelineMarkerVisual(
 private fun RangeTimelineBar(
     target: RangeEditTarget,
     state: RangeExportEditorState,
+    interactionEnabled: Boolean,
     xPx: () -> Float,
     topPx: Float,
     heightPx: Float,
@@ -1390,50 +1724,143 @@ private fun RangeTimelineBar(
     val density = LocalDensity.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
     val active = state.lastTarget == target
-
-    val interactionEnabled = visualAlpha >= 0.90f
+    val currentInteractionEnabled = rememberUpdatedState(interactionEnabled)
+    val view = LocalView.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val lease = remember(state, target, view, lifecycle) { booleanArrayOf(true) }
+    val keyOwner = remember(lease) { RangeEndpointKeyOwner() }
+    DisposableEffect(lease, keyOwner) {
+        onDispose {
+            lease[0] = false
+            keyOwner.clear()
+        }
+    }
+    fun actionReady(): Boolean = lease[0] && currentInteractionEnabled.value &&
+        view.isAttachedToWindow && view.isShown && view.hasWindowFocus() &&
+        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && state.durationActionAvailable
+    fun actionGesture(): RangeInputGesture = state.inputGesture(
+        interactionAllowed = ::actionReady,
+        // Discrete input owns no scrub or audio cleanup, particularly after a newer wheel edit.
+        onCancel = {},
+    )
+    fun selectOrAdjust(requestedSeconds: Double?, gesture: RangeInputGesture = actionGesture()): Boolean =
+        state.editEndpointFromAction(target, requestedSeconds, gesture)
+    val label = stringResource(
+        if (target == RangeEditTarget.START) R.string.range_start_accessibility
+        else R.string.range_end_accessibility,
+    )
+    val earlierLabel = stringResource(R.string.range_endpoint_earlier)
+    val laterLabel = stringResource(R.string.range_endpoint_later)
+    val limits = rangeEndpointLimits(state.durationSeconds, target)
+    val actionEnabled = interactionEnabled && state.durationActionAvailable && limits != null
+    val endpointActions = Modifier
+        .semantics {
+            contentDescription = label
+            stateDescription = formatRangeTimeInput(state.targetSeconds(target).toDouble())
+            selected = active
+            if (!actionEnabled) disabled()
+            if (limits != null) {
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    state.targetSeconds(target).coerceIn(limits),
+                    limits,
+                )
+            }
+            onClick { selectOrAdjust(null) }
+            setProgress { seconds -> selectOrAdjust(seconds.toDouble()) }
+            customActions = listOf(
+                CustomAccessibilityAction(earlierLabel) {
+                    selectOrAdjust(state.targetSeconds(target).toDouble() - 1.0)
+                },
+                CustomAccessibilityAction(laterLabel) {
+                    selectOrAdjust(state.targetSeconds(target).toDouble() + 1.0)
+                },
+            )
+        }
+        .onFocusChanged { focus ->
+            if (focus.isFocused) selectOrAdjust(null) else keyOwner.clear()
+        }
+        .onKeyEvent { event ->
+            val requested = when (event.key) {
+                Key.DirectionLeft, Key.DirectionDown -> state.targetSeconds(target).toDouble() - 1.0
+                Key.DirectionRight, Key.DirectionUp -> state.targetSeconds(target).toDouble() + 1.0
+                Key.MoveHome -> rangeEndpointLimits(state.durationSeconds, target)?.start?.toDouble()
+                    ?: return@onKeyEvent false
+                Key.MoveEnd -> rangeEndpointLimits(state.durationSeconds, target)?.endInclusive?.toDouble()
+                    ?: return@onKeyEvent false
+                Key.Enter, Key.NumPadEnter, Key.Spacebar -> null
+                else -> return@onKeyEvent false
+            }
+            val keyCode = event.nativeKeyEvent.keyCode
+            when (event.type) {
+                KeyEventType.KeyDown -> {
+                    val gesture = keyOwner.keyDown(keyCode, event.nativeKeyEvent.repeatCount, ::actionGesture)
+                    if (gesture != null) selectOrAdjust(requested, gesture)
+                    true
+                }
+                KeyEventType.KeyUp -> {
+                    keyOwner.keyUp(keyCode)
+                    true
+                }
+                else -> false
+            }
+        }
+        .focusable(actionEnabled)
 
     val dragModifier = if (interactionEnabled) {
         Modifier.pointerInput(target, state.durationSeconds, timelineWidthPx, touchSlop) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                down.consume()
-                state.selectTarget(target)
+                val gesture = state.inputGesture(
+                    // Native wheel DOWN takes ownership before Compose redraws this modifier.
+                    interactionAllowed = { currentInteractionEnabled.value },
+                    onCancel = { stillCurrent -> if (stillCurrent) state.pausePreview() },
+                )
+                if (!gesture.perform {
+                        down.consume()
+                        state.selectTarget(target)
+                    }
+                ) return@awaitEachGesture
                 val origin = when (target) {
                     RangeEditTarget.START -> state.startSeconds
                     RangeEditTarget.END -> state.endSeconds
                 }
                 val markerCenterAtDown = xPx()
                 var dragging = false
-                var gestureCancelled = false
                 try {
                     while (true) {
                         val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        val deltaX = rangeTimelineDragDeltaPx(
-                            initialMarkerCenterPx = markerCenterAtDown,
-                            currentMarkerCenterPx = xPx(),
-                            downLocalX = down.position.x,
-                            currentLocalX = change.position.x,
-                        )
-                        if (!dragging && abs(deltaX) > touchSlop) {
-                            dragging = true
-                            state.beginBoundaryScrub(target)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed) {
+                            rangePointerReleaseWasNormal(change, gesture::cancel)
+                            break
                         }
-                        change.consume()
-                        if (dragging) {
-                            val requested = origin + deltaX / timelineWidthPx * state.durationSeconds
-                            state.updateBoundaryScrub(target, requested)
-                        }
+                        if (!gesture.perform {
+                                val deltaX = rangeTimelineDragDeltaPx(
+                                    initialMarkerCenterPx = markerCenterAtDown,
+                                    currentMarkerCenterPx = xPx(),
+                                    downLocalX = down.position.x,
+                                    currentLocalX = change.position.x,
+                                )
+                                if (!dragging && abs(deltaX) > touchSlop) {
+                                    dragging = true
+                                    state.beginBoundaryScrub(target)
+                                }
+                                change.consume()
+                                if (dragging) {
+                                    val requested = origin + deltaX / timelineWidthPx * state.durationSeconds
+                                    state.updateBoundaryScrub(target, requested)
+                                }
+                            }
+                        ) break
                     }
                 } catch (cancelled: CancellationException) {
-                    gestureCancelled = true
-                    state.pausePreview()
+                    gesture.cancel()
                     throw cancelled
                 } finally {
-                    if (dragging) state.endBoundaryScrub()
-                    else if (!gestureCancelled) state.beginBoundaryEdit(target)
+                    gesture.finish {
+                        if (dragging) state.endBoundaryScrub()
+                        else state.beginBoundaryEdit(target)
+                    }
                 }
             }
         }
@@ -1461,7 +1888,7 @@ private fun RangeTimelineBar(
             visualAlpha = visualAlpha,
             modifier = Modifier.fillMaxSize(),
         )
-        Box(Modifier.fillMaxSize().then(dragModifier))
+        Box(Modifier.fillMaxSize().then(endpointActions).then(dragModifier))
     }
 }
 
@@ -1512,13 +1939,14 @@ private fun SpringFineAdjust(
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val currentEnabled = rememberUpdatedState(enabled && state.snapshotReady)
     SpringFineSeekControl(
         enabled = enabled && state.snapshotReady,
         isPlaying = state.isPlaying,
         durationSeconds = state.durationSeconds,
         interactionKey = state.lastTarget,
         onTogglePlayback = {
-            if (state.snapshotReady) state.togglePreview()
+            if (currentEnabled.value && state.durationActionAvailable) state.togglePreview()
         },
         onInteractionStart = {},
         onBeginFineAdjust = state::beginFineAdjust,
@@ -1526,6 +1954,12 @@ private fun SpringFineAdjust(
         onUpdateFineAdjustShuttle = state::updateFineAdjustShuttle,
         onEndFineAdjust = state::endFineAdjust,
         onCancelFineAdjust = state::pausePreview,
+        createInputGesture = { onCancel ->
+            state.inputGesture(
+                interactionAllowed = { currentEnabled.value },
+                onCancel = onCancel,
+            )
+        },
         modifier = modifier,
     )
 }
@@ -1543,28 +1977,37 @@ internal fun SpringFineSeekControl(
     onUpdateFineAdjustShuttle: (Float, Float) -> Unit,
     onEndFineAdjust: () -> Unit,
     onCancelFineAdjust: () -> Unit,
+    createInputGesture: (((Boolean) -> Unit) -> RangeInputGesture)? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val view = LocalView.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
-    var dragging by remember { mutableStateOf(false) }
+    var dragSession by remember { mutableStateOf<FineSeekInputSession?>(null) }
+    val dragging = dragSession != null
     var horizontalPull by remember { mutableFloatStateOf(0f) }
     var rawVerticalPull by remember { mutableFloatStateOf(0f) }
-    val commitAccumulator = remember { FineAdjustCommitAccumulator() }
+    val pointerOwner = remember { arrayOfNulls<FineSeekInputSession>(1) }
+    val idleDurationOwner = remember { RangeDurationWheelInteraction() }
+    val currentEnabled = rememberUpdatedState(enabled)
+    val currentCreateInputGesture = rememberUpdatedState(createInputGesture)
+    val currentOnCancelFineAdjust = rememberUpdatedState(onCancelFineAdjust)
 
     LaunchedEffect(enabled) {
-        if (!enabled) {
-            dragging = false
-            horizontalPull = 0f
-            rawVerticalPull = 0f
-            onCancelFineAdjust()
+        if (!currentEnabled.value) {
+            val owner = pointerOwner[0]
+            if (owner != null) owner.cancel()
+            else if (currentCreateInputGesture.value == null) currentOnCancelFineAdjust.value()
+            if (pointerOwner[0] == null && dragSession == null) {
+                horizontalPull = 0f
+                rawVerticalPull = 0f
+            }
         }
     }
 
-    LaunchedEffect(dragging) {
-        if (dragging) return@LaunchedEffect
+    LaunchedEffect(dragSession) {
+        if (dragSession != null) return@LaunchedEffect
         val startX = horizontalPull
         val startY = rawVerticalPull
         if (abs(startX) < 0.0001f && abs(startY) < 0.0001f) {
@@ -1576,8 +2019,9 @@ internal fun SpringFineSeekControl(
         val durationNanos = 210_000_000L
         val strength = 3.4f
         val denominator = cosh(strength) - 1f
-        while (!dragging) {
+        while (dragSession == null) {
             val frameNanos = withFrameNanos { it }
+            if (dragSession != null) return@LaunchedEffect
             val t = ((frameNanos - startNanos).toFloat() / durationNanos)
                 .coerceIn(0f, 1f)
             val remaining = (cosh(strength * (1f - t)) - 1f) / denominator
@@ -1591,15 +2035,18 @@ internal fun SpringFineSeekControl(
         }
     }
 
-    LaunchedEffect(dragging) {
-        if (!dragging) return@LaunchedEffect
+    LaunchedEffect(dragSession) {
+        val session = dragSession ?: return@LaunchedEffect
         var lastFrameNanos = 0L
-        commitAccumulator.reset()
-        while (dragging) {
+        while (dragSession === session) {
             withFrameNanos { frameNanos ->
+                if (dragSession !== session) return@withFrameNanos
                 val previous = lastFrameNanos
                 lastFrameNanos = frameNanos
-                if (previous == 0L) return@withFrameNanos
+                if (previous == 0L) {
+                    session.perform {}
+                    return@withFrameNanos
+                }
                 val elapsedNanos = (frameNanos - previous).coerceAtMost(50_000_000L)
                 val dtSeconds = elapsedNanos / 1_000_000_000f
                 val liveHorizontalPull = horizontalPull
@@ -1609,7 +2056,7 @@ internal fun SpringFineSeekControl(
                     liveY,
                     durationSeconds,
                 )
-                commitAccumulator.add(
+                session.frame(
                     deltaSeconds = rangeFineTuneDeltaSeconds(
                         horizontalPull = rangeFineTuneSeekPull(liveHorizontalPull),
                         verticalPull = liveY,
@@ -1617,19 +2064,9 @@ internal fun SpringFineSeekControl(
                         dtSeconds = dtSeconds,
                     ),
                     elapsedNanos = elapsedNanos,
-                )
-                if (commitAccumulator.elapsedNanos >= RANGE_FINE_TUNE_STATE_UPDATE_NANOS) {
-                    val deltaSeconds = commitAccumulator.takeDelta()
-                    if (deltaSeconds != 0f) {
-                        onFineAdjust(deltaSeconds, 0.04f)
-                    }
-                }
-                // Keep Compose commits coalesced, but let audio follow the exact integrated
-                // display-rate jog target. This removes the old ~30 Hz source-position stairs
-                // without recomposing the timeline every frame.
-                onUpdateFineAdjustShuttle(
-                    shuttleRate,
-                    commitAccumulator.deltaSeconds,
+                    onCommit = { delta -> onFineAdjust(delta, 0.04f) },
+                    // Audio follows this session's uncommitted display-rate motion.
+                    onShuttle = { pendingDelta -> onUpdateFineAdjustShuttle(shuttleRate, pendingDelta) },
                 )
             }
         }
@@ -1638,7 +2075,44 @@ internal fun SpringFineSeekControl(
     val gestureModifier = if (enabled) {
         Modifier.pointerInput(interactionKey, touchSlop) {
             awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
+                val rangeOwnsPointerTap = currentCreateInputGesture.value != null
+                val down = awaitFirstDown(
+                    requireUnconsumed = false,
+                    pass = if (rangeOwnsPointerTap) PointerEventPass.Initial else PointerEventPass.Main,
+                )
+                // Initial dispatch is parent-first. Consume even rejected Range DOWN before the
+                // child clickable's Main pass, so physical taps have exactly one terminal owner.
+                if (rangeOwnsPointerTap) down.consume()
+                pointerOwner[0]?.cancel()
+                val session = FineSeekInputSession(
+                    createInputGesture = { onCancel ->
+                        currentCreateInputGesture.value?.invoke(onCancel) ?: RangeInputGesture(
+                            interactionAllowed = { currentEnabled.value },
+                            durationInteraction = { idleDurationOwner },
+                            onCancel = onCancel,
+                        )
+                    },
+                    onCancel = { cancelledSession, stillCurrent ->
+                        val ownsPointer = pointerOwner[0] === cancelledSession
+                        val ownsDrag = dragSession === cancelledSession
+                        if (ownsPointer) pointerOwner[0] = null
+                        if (ownsDrag) dragSession = null
+                        // A late callback may retire only its own local state. The wheel has
+                        // already paused the old audio; never pause a newer owner's preview.
+                        // Library's child clickable owns ordinary taps and consumes their UP.
+                        // This parent may cancel audio only after it took the fine-seek drag.
+                        cancelFineSeekOwnedAudio(
+                            ownsPointerTap = rangeOwnsPointerTap && ownsPointer,
+                            ownsDrag = ownsDrag,
+                            stillCurrent = stillCurrent,
+                            onCancelAudio = currentOnCancelFineAdjust.value,
+                        )
+                    },
+                )
+                pointerOwner[0] = session
+                if (!session.perform {}) return@awaitEachGesture
+                // Range taps finish through this DOWN's generation. The child clickable remains
+                // the keyboard/accessibility entrypoint; Library keeps its existing pointer taps.
                 val edgePadding = 10.dp.toPx()
                 val puckRadius = RANGE_FINE_TUNE_PUCK_RADIUS_DP.dp.toPx()
                 val visualHorizontalTravel = (size.width * 0.5f - edgePadding - puckRadius)
@@ -1649,15 +2123,20 @@ internal fun SpringFineSeekControl(
                 val startPuckX = size.width * 0.5f + horizontalPull * visualHorizontalTravel
                 val startPuckY = size.height * 0.5f +
                     rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull) * visualVerticalTravel
+                val hitRadius = RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp.toPx()
+                val hitSize = (RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp * 2f).roundToPx()
+                val hitBaseCenterX = ((size.width - hitSize) * 0.5f).roundToInt() + hitSize * 0.5f
+                val hitBaseCenterY = ((size.height - hitSize) * 0.5f).roundToInt() + hitSize * 0.5f
                 val startedOnPuck = rangeFineTunePuckContains(
                     pointerX = down.position.x,
                     pointerY = down.position.y,
                     puckX = startPuckX,
                     puckY = startPuckY,
-                    radius = RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP.dp.toPx(),
+                    radius = hitRadius,
                 )
                 var fineAdjustStarted = false
                 var dragStartRawVertical = rawVerticalPull
+                var releasedNormally = false
 
                 fun startFineAdjust(pointerX: Float) {
                     if (fineAdjustStarted) return
@@ -1668,7 +2147,7 @@ internal fun SpringFineSeekControl(
                         width = size.width.toFloat(),
                         horizontalTravel = visualHorizontalTravel,
                     )
-                    dragging = true
+                    dragSession = session
                     fineAdjustStarted = true
                     onBeginFineAdjust(
                         rangeFineTuneShuttleRate(
@@ -1679,54 +2158,86 @@ internal fun SpringFineSeekControl(
                     )
                 }
 
-                if (!startedOnPuck) {
-                    startFineAdjust(down.position.x)
-                    down.consume()
-                }
-
                 try {
+                    if (rangeOwnsPointerTap) {
+                        // Skip this DOWN's later passes: its consumption is ours, not a later
+                        // competing input. Continuations keep the existing Main-pass ordering.
+                        awaitPointerEvent(PointerEventPass.Final)
+                    }
+                    if (!startedOnPuck && !session.perform {
+                            startFineAdjust(down.position.x)
+                            down.consume()
+                        }
+                    ) return@awaitEachGesture
                     while (true) {
                         val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-
-                        if (!fineAdjustStarted && rangeFineTuneMovementExceedsSlop(
-                                deltaX = change.position.x - down.position.x,
-                                deltaY = change.position.y - down.position.y,
-                                touchSlop = touchSlop,
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change != null && rangeOwnsPointerTap) {
+                            // Keep the original clickable's live offset square and sticky
+                            // out-of-bounds/consumption cancellation, including spring return.
+                            session.observePointerTap(
+                                insideBounds = fineSeekPointerTapInsideBounds(
+                                    pointerX = change.position.x,
+                                    pointerY = change.position.y,
+                                    puckX = hitBaseCenterX + (horizontalPull * visualHorizontalTravel).roundToInt(),
+                                    puckY = hitBaseCenterY +
+                                        (rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull) * visualVerticalTravel).roundToInt(),
+                                    halfSize = hitSize * 0.5f,
+                                ),
+                                consumed = change.isConsumed,
                             )
-                        ) {
-                            startFineAdjust(change.position.x)
                         }
-
-                        if (fineAdjustStarted) {
-                            horizontalPull = rangeFineTuneHorizontalTouchPull(
-                                pointerX = change.position.x,
-                                width = size.width.toFloat(),
-                                horizontalTravel = visualHorizontalTravel,
-                            )
-                            rawVerticalPull = rangeFineTuneVerticalDragPull(
-                                startRawVertical = dragStartRawVertical,
-                                dragDeltaY = change.position.y - down.position.y,
-                                verticalTravel = verticalInputTravel,
-                            )
-                            change.consume()
+                        if (change == null || !change.pressed) {
+                            releasedNormally = rangePointerReleaseWasNormal(change, session::cancel)
+                            if (rangeOwnsPointerTap) change?.consume()
+                            break
                         }
+                        if (!session.perform {
+                                if (!fineAdjustStarted && rangeFineTuneMovementExceedsSlop(
+                                        deltaX = change.position.x - down.position.x,
+                                        deltaY = change.position.y - down.position.y,
+                                        touchSlop = touchSlop,
+                                    )
+                                ) {
+                                    startFineAdjust(change.position.x)
+                                }
+                                if (fineAdjustStarted) {
+                                    horizontalPull = rangeFineTuneHorizontalTouchPull(
+                                        pointerX = change.position.x,
+                                        width = size.width.toFloat(),
+                                        horizontalTravel = visualHorizontalTravel,
+                                    )
+                                    rawVerticalPull = rangeFineTuneVerticalDragPull(
+                                        startRawVertical = dragStartRawVertical,
+                                        dragDeltaY = change.position.y - down.position.y,
+                                        verticalTravel = verticalInputTravel,
+                                    )
+                                    change.consume()
+                                }
+                            }
+                        ) break
                     }
                 } catch (cancelled: CancellationException) {
-                    fineAdjustStarted = false
-                    dragging = false
-                    commitAccumulator.reset()
-                    onCancelFineAdjust()
+                    session.cancel()
                     throw cancelled
                 } finally {
-                    if (fineAdjustStarted) {
-                        val finalDeltaSeconds = commitAccumulator.takeDelta()
-                        if (finalDeltaSeconds != 0f) {
-                            onFineAdjust(finalDeltaSeconds, 0.04f)
+                    try {
+                        when {
+                            !releasedNormally -> session.cancel()
+                            fineAdjustStarted -> session.finishFineAdjust(
+                                onCommit = { delta -> onFineAdjust(delta, 0.04f) },
+                                onEnd = {
+                                    if (dragSession === session) dragSession = null
+                                    onEndFineAdjust()
+                                },
+                            )
+                            rangeOwnsPointerTap && startedOnPuck ->
+                                session.finishPointerTap(onTogglePlayback)
+                            else -> session.finish {}
                         }
-                        dragging = false
-                        onEndFineAdjust()
+                    } finally {
+                        if (dragSession === session) dragSession = null
+                        if (pointerOwner[0] === session) pointerOwner[0] = null
                     }
                 }
             }
@@ -1905,7 +2416,7 @@ private fun RangeExportControls(
     onExport: () -> Unit,
 ) {
     val chrome = appChrome()
-    val exportEnabled = !loading && state.snapshotReady && canExport
+    val exportEnabled = !loading && state.snapshotReady && !state.selectionDurationEditing && canExport
     val exportContainerColor = if (exportEnabled) MaterialTheme.colorScheme.primary else chrome.raised
     val exportContentColor = if (exportEnabled) MaterialTheme.colorScheme.onPrimary else chrome.muted
     Surface(
@@ -1968,7 +2479,13 @@ private fun RangeExportControls(
                 }
             }
             Surface(
-                onClick = onExport,
+                onClick = {
+                    // Native wheel input can begin before this enabled state redraws.
+                    val selectedDuration = state.selectionDurationExactSeconds
+                    if (!state.selectionDurationEditing && selectedDuration.isFinite() && selectedDuration > 0.0) {
+                        onExport()
+                    }
+                },
                 enabled = exportEnabled,
                 shape = RoundedCornerShape(20.dp),
                 color = exportContainerColor,

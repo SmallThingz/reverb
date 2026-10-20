@@ -6,6 +6,8 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -13,32 +15,59 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class RecordingOpenActivity : ComponentActivity() {
+    private lateinit var resultDelivery: RecordingOpenResultDelivery<Intent>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val sourceIntent = intent
-        lifecycleScope.launch {
-            val openIntent = withContext(Dispatchers.IO) {
-                runCatching { buildVerifiedOpenIntent(this@RecordingOpenActivity, sourceIntent) }.getOrNull()
-            }
-            if (openIntent != null) {
-                try {
-                    startActivity(openIntent)
-                } catch (_: ActivityNotFoundException) {
-                    returnToReverbWithFailure(getString(R.string.no_app_available))
-                } catch (_: RuntimeException) {
+        resultDelivery = RecordingOpenResultDelivery(
+            navigationAllowed = ::navigationAllowed,
+            deliver = { openIntent ->
+                if (openIntent != null) {
+                    try {
+                        startActivity(openIntent)
+                    } catch (_: ActivityNotFoundException) {
+                        returnToReverbWithFailure(getString(R.string.no_app_available))
+                    } catch (_: RuntimeException) {
+                        returnToReverbWithFailure(getString(R.string.recording_unavailable))
+                    }
+                } else {
                     returnToReverbWithFailure(getString(R.string.recording_unavailable))
                 }
-            } else {
-                returnToReverbWithFailure(getString(R.string.recording_unavailable))
+            },
+            reportUndeliveredFailure = {
+                AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+            },
+            finish = ::finish,
+        )
+        lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> resultDelivery.foregroundChanged()
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_DESTROY -> resultDelivery.retire()
+                else -> Unit
             }
-            finish()
+        })
+        lifecycleScope.launch {
+            val openIntent = withContext(Dispatchers.IO) {
+                runCatching { buildVerifiedOpenIntent(applicationContext, sourceIntent) }.getOrNull()
+            }
+            resultDelivery.complete(openIntent)
         }
     }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::resultDelivery.isInitialized) resultDelivery.foregroundChanged()
+    }
+
+    private fun navigationAllowed(): Boolean = !isFinishing && !isDestroyed &&
+        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && window.decorView.hasWindowFocus()
 
     private fun returnToReverbWithFailure(message: String) {
         AppFeedbackCenter.post(message, FeedbackTone.ERROR)
         // This activity is only a notification trampoline and has no feedback host of its own.
-        // Bring the app forward so the queued error is visible instead of finishing to nowhere.
+        // Return only while the original foreground request still owns navigation.
+        if (!navigationAllowed()) return
         runCatching {
             startActivity(
                 Intent(this, MainActivity::class.java).apply {

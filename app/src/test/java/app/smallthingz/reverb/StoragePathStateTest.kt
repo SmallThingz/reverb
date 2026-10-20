@@ -57,7 +57,7 @@ class StoragePathStateTest {
                 directoryId = root.absolutePath,
                 fileIdentity = targetIdentity,
             )
-            assertEquals(null, openVerifiedFileInputStream(recording))
+            assertEquals(null, openVerifiedFileInputStream(recording, RecordingReadCleanup.Propagate))
         } finally {
             root.deleteRecursively()
         }

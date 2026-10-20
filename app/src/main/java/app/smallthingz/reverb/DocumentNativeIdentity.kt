@@ -102,8 +102,12 @@ internal fun readDocumentCatalogObservation(
     if (!preferNative && metadataIdentity.isNotBlank()) {
         return@runCatching ProviderCatalogObservation(before.displayName, metadataIdentity)
     }
+    val cleanup = optionalRecordingProbeCleanup(context, "Recording identity descriptor cleanup")
     val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching null
-    descriptor.use { opened ->
+    cleanup.use(
+        owner = descriptor,
+        release = { it.close() },
+    ) { opened ->
         val native = documentNativeIdentity(uri.toString(), opened.fileDescriptor) ?: return@use null
         if (before.sizeBytes != null && before.sizeBytes != native.sizeBytes) return@use null
         if (before != queryDocumentIdentityMetadata(context, uri) ||

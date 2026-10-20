@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.AtomicFile
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -163,6 +164,7 @@ internal data class RecordingIncidentReplayOwners(
     val exactIncidents: List<RecordingIncident> = emptyList(),
     val appProcessPid: Int = 0,
     val appProcessStartedAtMillis: Long = -1L,
+    val pendingAppProcesses: List<AppProcessMarker> = emptyList(),
 )
 
 /** Missing owner proof never authorizes pruning; the caller supplies only a complete snapshot. */
@@ -184,7 +186,11 @@ internal fun retainRecordingIncidentDeletions(
                 incident.occurredAtMillis >= session.captureArmedAtMillis
             }
         }
-        RecordingIncidentKind.UNEXPECTED_ERROR -> owners.appProcessPid > 0 &&
+        RecordingIncidentKind.UNEXPECTED_ERROR -> owners.pendingAppProcesses.any { marker ->
+            (incident.pid <= 0 || incident.pid == marker.pid) &&
+                (incident.processStartedAtMillis <= 0L ||
+                    incident.processStartedAtMillis == marker.processStartedAtMillis)
+        } || owners.appProcessPid > 0 &&
             (incident.pid <= 0 || incident.pid == owners.appProcessPid) && when {
                 incident.pid <= 0 -> incident.occurredAtMillis >= owners.appProcessStartedAtMillis
                 incident.exitReason != ApplicationExitInfo.REASON_UNKNOWN ->
@@ -311,6 +317,11 @@ internal fun recordingIncidentReferenceMatches(
 ): Boolean {
     if (candidate.kind != reference.kind) return false
     if (recordingIncidentsShareCaptureSession(candidate, reference)) return true
+    if (candidate.kind == RecordingIncidentKind.UNEXPECTED_ERROR &&
+        ((candidate.pid > 0 && reference.pid > 0 && candidate.pid != reference.pid) ||
+            (candidate.processStartedAtMillis > 0L && reference.processStartedAtMillis > 0L &&
+                candidate.processStartedAtMillis != reference.processStartedAtMillis))
+    ) return false
 
     // Exact interruption timestamp is retained only as a legacy identity fallback. Once both
     // records carry capture-session identity, a session mismatch is authoritative even when two
@@ -326,17 +337,28 @@ internal fun recordingIncidentReferenceMatches(
 internal fun exitTimestampBelongsToPriorProcess(
     exitTimestampMillis: Long,
     captureArmedAtMillis: Long,
-    currentProcessStartedAtMillis: Long,
-): Boolean = exitTimestampMillis >= captureArmedAtMillis &&
-    (currentProcessStartedAtMillis <= 0L || exitTimestampMillis <= currentProcessStartedAtMillis)
+    endedByMillis: Long,
+): Boolean = endedByMillis > 0L && exitTimestampMillis >= captureArmedAtMillis &&
+    exitTimestampMillis <= endedByMillis
+
+// Int.MIN_VALUE is the history format's explicit absent-status sentinel. Android status 0
+// is still an observed exit, including when its reason is UNKNOWN and description is null.
+internal fun recordingIncidentHasObservedExitEvidence(incident: RecordingIncident): Boolean =
+    incident.exitReason != ApplicationExitInfo.REASON_UNKNOWN || incident.exitStatus != Int.MIN_VALUE
 
 internal fun mergeRecordingIncidentEvidence(
     existing: RecordingIncident,
     incoming: RecordingIncident,
+    incomingExitObserved: Boolean = false,
 ): RecordingIncident {
-    val incomingHasExitEvidence = incoming.exitReason != ApplicationExitInfo.REASON_UNKNOWN
-    val existingHasExitEvidence = existing.exitReason != ApplicationExitInfo.REASON_UNKNOWN
-    val base = if (incomingHasExitEvidence && !existingHasExitEvidence) incoming else existing
+    val incomingHasKnownReason = incoming.exitReason != ApplicationExitInfo.REASON_UNKNOWN
+    val existingHasKnownReason = existing.exitReason != ApplicationExitInfo.REASON_UNKNOWN
+    val incomingHasExitEvidence = incomingExitObserved || recordingIncidentHasObservedExitEvidence(incoming)
+    val existingHasExitEvidence = recordingIncidentHasObservedExitEvidence(existing)
+    val useIncoming = incomingHasKnownReason && !existingHasKnownReason ||
+        incomingHasExitEvidence && !existingHasExitEvidence
+    val base = if (useIncoming) incoming else existing
+    val baseHasExitEvidence = if (useIncoming) incomingHasExitEvidence else existingHasExitEvidence
     return base.copy(
         // Android process death can occur after capture already stopped. Preserve the earliest
         // observed interruption boundary while enriching it with later process-exit evidence.
@@ -345,14 +367,69 @@ internal fun mergeRecordingIncidentEvidence(
             ?: incoming.resumedAtMillis,
         acknowledgedAtMillis = existing.acknowledgedAtMillis.takeIf { it > 0L || existing.deleted }
             ?: incoming.acknowledgedAtMillis,
-        description = base.description ?: existing.description ?: incoming.description,
+        // An observed null description is resolved evidence too. Never revive a provisional
+        // "evidence pending" description on this merge or after a history codec round-trip.
+        description = if (baseHasExitEvidence) base.description
+            else base.description ?: existing.description ?: incoming.description,
     )
 }
 
-private data class AppProcessMarker(
+internal data class AppProcessMarker(
     val pid: Int,
     val processStartedAtMillis: Long,
 )
+
+internal data class PendingAppProcessExit(
+    val marker: AppProcessMarker,
+    val endedByMillis: Long,
+)
+
+internal data class AppProcessRecoveryState(
+    val current: AppProcessMarker,
+    val pending: List<PendingAppProcessExit> = emptyList(),
+)
+
+internal fun appExitTimestampMatches(owner: PendingAppProcessExit, pid: Int, timestamp: Long): Boolean =
+    pid == owner.marker.pid && timestamp >= owner.marker.processStartedAtMillis &&
+        timestamp <= owner.endedByMillis
+
+/** Optional Android evidence must not make readable history unavailable during an IPC outage. */
+internal fun <T> queryOptionalAppExitEvidence(query: () -> T?): T? = try {
+    query()
+} catch (_: Exception) {
+    null
+}
+
+/** Publish ownership before replacing the current marker; retire only classified durable evidence. */
+internal fun recoverAppProcessExits(
+    previous: AppProcessRecoveryState?,
+    current: AppProcessMarker,
+    writeState: (AppProcessRecoveryState) -> Unit,
+    findExit: (PendingAppProcessExit) -> RecordingIncident?,
+    publishIncident: (RecordingIncident) -> Unit,
+): AppProcessRecoveryState {
+    val pending = previous?.pending.orEmpty().toMutableList()
+    if (previous != null && previous.current != current) {
+        val owner = PendingAppProcessExit(previous.current, current.processStartedAtMillis)
+        if (owner !in pending) pending += owner
+    }
+    val state = AppProcessRecoveryState(current, pending.toList())
+    if (state != previous) writeState(state)
+    val inspected = pending.take(8)
+    val unresolved = mutableListOf<PendingAppProcessExit>()
+    inspected.forEach { owner ->
+        val exit = findExit(owner)
+        if (exit == null) unresolved += owner
+        else if (unexpectedAppExitShouldCreateIncident(exit.exitReason, exit.exitStatus)) {
+            publishIncident(exit)
+        }
+    }
+    // Rotate only the bounded inspected prefix, so an unavailable old record cannot starve others.
+    val remaining = pending.drop(inspected.size) + unresolved
+    val updated = state.copy(pending = remaining)
+    if (updated != state) writeState(updated)
+    return updated
+}
 
 internal fun unexpectedAppExitShouldCreateIncident(reason: Int, status: Int): Boolean = when (reason) {
     ApplicationExitInfo.REASON_CRASH,
@@ -370,6 +447,7 @@ internal fun unexpectedProcessExitAlreadyRecorded(
     pid: Int,
     exitTimestampMillis: Long,
     toleranceMillis: Long = 10_000L,
+    processStartedAtMillis: Long = -1L,
 ): Boolean {
     val tolerance = toleranceMillis.coerceAtLeast(0L)
     val lowerBound = (exitTimestampMillis - tolerance).coerceAtLeast(0L)
@@ -381,6 +459,8 @@ internal fun unexpectedProcessExitAlreadyRecorded(
     return incidents.any { incident ->
         incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR &&
             incident.pid == pid &&
+            (processStartedAtMillis <= 0L || incident.processStartedAtMillis <= 0L ||
+                incident.processStartedAtMillis == processStartedAtMillis) &&
             incident.description?.startsWith("Uncaught exception on ") == true &&
             incident.occurredAtMillis in lowerBound..upperBound
     }
@@ -390,28 +470,90 @@ internal fun confirmAlreadyRecordedAppExit(
     incidents: List<RecordingIncident>,
     pid: Int,
     exitTimestampMillis: Long,
+    processStartedAtMillis: Long = -1L,
     confirmHistory: (List<RecordingIncident>) -> Unit,
 ): Boolean {
-    if (!unexpectedProcessExitAlreadyRecorded(incidents, pid, exitTimestampMillis)) return false
+    if (!unexpectedProcessExitAlreadyRecorded(
+            incidents, pid, exitTimestampMillis, processStartedAtMillis = processStartedAtMillis,
+        )) return false
     // Visible history may come from a previous process whose publication barrier failed.
     // The old process marker remains its recovery owner until this proof succeeds.
     confirmHistory(incidents)
     return true
 }
 
-private data class ActiveRecordingSessionMarker(
+internal data class ActiveRecordingSessionMarker(
     val armed: Boolean,
     val pid: Int,
     val processStartElapsedRealtimeMillis: Long,
     val armedAtMillis: Long,
     val armedElapsedRealtimeMillis: Long,
     val packageLastUpdateTimeMillis: Long,
+    // Optional public Settings.Global.BOOT_COUNT; -1 also represents deployed legacy markers.
+    val bootCount: Int = -1,
 )
 
-private data class PendingRecordingSession(
+internal fun readOptionalRecordingBootCount(readCount: () -> Int): Int = try {
+    readCount().takeIf { it >= 0 } ?: -1
+} catch (_: Exception) {
+    // Boot metadata improves recovery evidence; its absence must never block normal capture.
+    -1
+}
+
+internal data class PendingRecordingSession(
     val marker: ActiveRecordingSessionMarker,
     val resumedAtMillis: Long = 0L,
+    // Zero is a legacy owner whose first known-dead boundary was never persisted.
+    val endedByMillis: Long = 0L,
 )
+
+internal fun recordingSessionProcessStartedAtMillis(marker: ActiveRecordingSessionMarker): Long {
+    val elapsedBeforeArmed = marker.armedElapsedRealtimeMillis - marker.processStartElapsedRealtimeMillis
+    return if (elapsedBeforeArmed >= 0L && elapsedBeforeArmed <= marker.armedAtMillis) {
+        marker.armedAtMillis - elapsedBeforeArmed
+    } else {
+        -1L
+    }
+}
+
+internal fun appendPendingRecordingSession(
+    existing: List<PendingRecordingSession>,
+    marker: ActiveRecordingSessionMarker,
+    endedByMillis: Long,
+): List<PendingRecordingSession> {
+    if (existing.any { session ->
+            session.marker.pid == marker.pid &&
+                session.marker.processStartElapsedRealtimeMillis == marker.processStartElapsedRealtimeMillis &&
+                session.marker.armedAtMillis == marker.armedAtMillis
+        }
+    ) return existing // Never replace an earlier bound, including an unknown legacy bound.
+    if (!pendingIncidentQueueCanAppend(existing.size)) {
+        throw IOException("Pending recording incident queue is full; refusing to discard interruption evidence")
+    }
+    if (endedByMillis <= 0L) throw IOException("Missing pending capture process-exit boundary")
+    return existing + PendingRecordingSession(marker = marker, endedByMillis = endedByMillis)
+}
+
+internal fun pendingCaptureExitTimestampMatches(
+    owner: PendingRecordingSession,
+    pid: Int,
+    timestamp: Long,
+): Boolean = owner.marker.pid == pid && exitTimestampBelongsToPriorProcess(
+    exitTimestampMillis = timestamp,
+    captureArmedAtMillis = owner.marker.armedAtMillis,
+    endedByMillis = owner.endedByMillis,
+)
+
+internal fun publishPendingRecordingSession(
+    existing: List<PendingRecordingSession>,
+    marker: ActiveRecordingSessionMarker,
+    endedByMillis: Long,
+    publish: (List<PendingRecordingSession>) -> Unit,
+) {
+    // Confirm an existing owner too, including after an uncertain publication. The caller may
+    // retire the active marker only after this complete queue publication returns successfully.
+    publish(appendPendingRecordingSession(existing, marker, endedByMillis))
+}
 
 private data class PendingProcessIncidentRetry(
     val occurredAtMillis: Long,
@@ -440,6 +582,28 @@ internal enum class RecordingExitDisposition {
 
 internal fun recordingExitDisposition(reason: Int?): RecordingExitDisposition =
     if (reason == null) RecordingExitDisposition.PENDING else RecordingExitDisposition.INCIDENT
+
+/** Every observed exit, including UNKNOWN, must be durable before its pending owner retires. */
+internal fun resolvePendingCaptureExitEvidence(
+    pending: List<PendingRecordingSession>,
+    findIncident: (PendingRecordingSession) -> RecordingIncident?,
+    publishObservedIncident: (RecordingIncident) -> Unit,
+    writeRemaining: (List<PendingRecordingSession>) -> Unit,
+) {
+    val remaining = ArrayList<PendingRecordingSession>(pending.size)
+    var resolvedAny = false
+    pending.forEach { owner ->
+        val incident = findIncident(owner)
+        when (recordingExitDisposition(incident?.exitReason)) {
+            RecordingExitDisposition.PENDING -> remaining += owner
+            RecordingExitDisposition.INCIDENT -> {
+                publishObservedIncident(requireNotNull(incident))
+                resolvedAny = true
+            }
+        }
+    }
+    if (resolvedAny) writeRemaining(remaining)
+}
 
 internal enum class CaptureSessionStartDisposition { NEW_SESSION, CONTINUE_SESSION, RESOLVE_INTERRUPTED_SESSION }
 
@@ -599,8 +763,8 @@ internal object RecordingIncidentStore {
     private const val SESSION_MAGIC = 0x52495331 // RIS1
     private const val PROCESS_MAGIC = 0x52495032 // RIP2
     private const val HISTORY_MAGIC = 0x52494831 // RIH1
-    private const val SESSION_FORMAT_VERSION = 2
-    private const val PROCESS_FORMAT_VERSION = 1
+    private const val SESSION_FORMAT_VERSION = 3
+    private const val PROCESS_FORMAT_VERSION = 2
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val PREVIOUS_HISTORY_FORMAT_VERSION = 2
     private const val HISTORY_FORMAT_VERSION = 3
@@ -611,7 +775,7 @@ internal object RecordingIncidentStore {
     private const val PENDING_SESSION_FILE_NAME = "recording-incident-pending.bin"
     private const val HISTORY_FILE_NAME = "recording-incidents.bin"
     private const val PENDING_MAGIC = 0x52495031 // RIP1
-    private const val PENDING_FORMAT_VERSION = 1
+    private const val PENDING_FORMAT_VERSION = 3
 
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
@@ -620,6 +784,9 @@ internal object RecordingIncidentStore {
     private val pendingCaptureInterruptionRetries = mutableListOf<PendingProcessIncidentRetry>()
     private val historyPublication = IncidentHistoryPublication()
     private var lastUnexpectedErrorAtMillis = 0L
+    private val currentAppProcess by lazy {
+        AppProcessMarker(Process.myPid(), currentProcessStartedAtWallClockMillis())
+    }
 
     fun recordUnexpectedErrorInBackground(context: Context, source: String, error: Throwable) {
         val appContext = context.applicationContext
@@ -656,52 +823,49 @@ internal object RecordingIncidentStore {
                 occurredAtMillis = occurredAtMillis,
                 kind = RecordingIncidentKind.UNEXPECTED_ERROR,
                 pid = Process.myPid(),
-                processStartedAtMillis = currentProcessStartedAtWallClockMillis(),
+                processStartedAtMillis = currentAppProcess.processStartedAtMillis,
                 description = description,
             ),
         )
     }
 
     @Synchronized
-    fun recoverUnexpectedProcessExitAndMarkCurrent(context: Context) {
+    fun recoverUnexpectedProcessExitAndMarkCurrent(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val appContext = context.applicationContext
-        val currentMarker = AppProcessMarker(
-            pid = Process.myPid(),
-            processStartedAtMillis = currentProcessStartedAtWallClockMillis(),
-        )
         val file = AtomicFile(File(appContext.noBackupFilesDir, PROCESS_FILE_NAME))
-        val previous = readProcessMarker(file)
-        if (previous != null && previous != currentMarker && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            historicalUnexpectedAppExit(appContext, previous)?.let { exit ->
-                val existing = readHistory(historyFile(appContext))
-                if (!confirmAlreadyRecordedAppExit(existing, previous.pid, exit.timestamp) {
-                        writeHistory(historyFile(appContext), it)
-                    }
-                ) {
-                    val description = exit.description
-                        ?.trim()
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.take(MAX_DESCRIPTION_CHARS)
-                        ?: "Previous app process ended unexpectedly"
-                    appendIncident(
-                        appContext,
-                        RecordingIncident(
-                            occurredAtMillis = exit.timestamp.coerceAtLeast(previous.processStartedAtMillis),
-                            kind = RecordingIncidentKind.UNEXPECTED_ERROR,
-                            exitReason = exit.reason,
-                            exitStatus = exit.status,
-                            pid = exit.pid,
-                            importance = exit.importance,
-                            pssKb = exit.pss,
-                            rssKb = exit.rss,
-                            processStartedAtMillis = previous.processStartedAtMillis,
-                            description = description,
-                        ),
+        val recovered = recoverAppProcessExits(
+            previous = readProcessState(file),
+            current = currentAppProcess,
+            writeState = { writeProcessState(file, it) },
+            findExit = { owner ->
+                historicalAppExit(appContext, owner)?.let { exit ->
+                    RecordingIncident(
+                        occurredAtMillis = exit.timestamp,
+                        kind = RecordingIncidentKind.UNEXPECTED_ERROR,
+                        exitReason = exit.reason,
+                        exitStatus = exit.status,
+                        pid = exit.pid,
+                        importance = exit.importance,
+                        pssKb = exit.pss,
+                        rssKb = exit.rss,
+                        processStartedAtMillis = owner.marker.processStartedAtMillis,
+                        description = exit.description?.trim()?.takeIf { it.isNotEmpty() }
+                            ?.take(MAX_DESCRIPTION_CHARS) ?: "Previous app process ended unexpectedly",
                     )
                 }
-            }
-        }
-        writeProcessMarker(file, currentMarker)
+            },
+            publishIncident = { incident ->
+                val existing = readHistory(historyFile(appContext))
+                if (!confirmAlreadyRecordedAppExit(
+                        existing, incident.pid, incident.occurredAtMillis, incident.processStartedAtMillis,
+                    ) {
+                        writeHistory(historyFile(appContext), it)
+                    }
+                ) appendIncident(appContext, incident)
+            },
+        )
+        return recovered.pending.isNotEmpty()
     }
 
     @Synchronized
@@ -718,21 +882,17 @@ internal object RecordingIncidentStore {
             deleteAtomicDurablyIfPresent(markerFile)
             return
         }
+        val bootCount = currentBootCount(appContext)
         val currentElapsed = SystemClock.elapsedRealtime()
-        if (marker.armedElapsedRealtimeMillis > currentElapsed) {
-            // elapsedRealtime resets only across a device restart. Capture was durably armed,
-            // so a reboot is itself an interruption even though ApplicationExitInfo may be gone.
-            appendIncident(
-                appContext,
-                incidentFromDeviceRestart(
-                    marker = marker,
-                    currentWallClockMillis = System.currentTimeMillis(),
-                    currentElapsedRealtimeMillis = currentElapsed,
-                ),
+        if (recoverDeviceRestartedSession(
+                marker = marker,
+                currentBootCount = bootCount,
+                currentWallClockMillis = System.currentTimeMillis(),
+                currentElapsedRealtimeMillis = currentElapsed,
+                publishIncident = { appendIncident(appContext, it) },
+                retireMarker = { deleteAtomicDurablyIfPresent(markerFile) },
             )
-            deleteAtomicDurablyIfPresent(markerFile)
-            return
-        }
+        ) return
 
         if (markerBelongsToCurrentProcess(marker)) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
@@ -816,6 +976,7 @@ internal object RecordingIncidentStore {
                 armedAtMillis = resumedAtMillis,
                 armedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
                 packageLastUpdateTimeMillis = packageLastUpdateTime(appContext),
+                bootCount = currentBootCount(appContext),
             ),
         )
         completePendingDowntime(appContext, resumedAtMillis)
@@ -954,6 +1115,7 @@ internal object RecordingIncidentStore {
         // so retry the complete prior-session recovery here too; otherwise one transient startup
         // failure can leave an armed previous-process marker invisible until capture starts again.
         recoverPriorSessionIfNeeded(appContext)
+        recoverUnexpectedProcessExitAndMarkCurrent(appContext)
         val incidents = readHistory(historyFile(appContext)).filterNot { it.deleted }
         // Only a complete authoritative history read ends the failure episode. A successful
         // internal read/write during still-failing recovery must not reset its wake-up budget.
@@ -1172,17 +1334,9 @@ internal object RecordingIncidentStore {
     ) {
         val file = pendingSessionFile(context)
         val existing = readPendingSessions(file)
-        if (existing.any { sameSession(it.marker, marker) }) {
-            // Recovery must not retire the old armed marker on merely visible pending evidence.
-            writePendingSessions(file, existing)
-            return
+        publishPendingRecordingSession(existing, marker, currentAppProcess.processStartedAtMillis) {
+            writePendingSessions(file, it)
         }
-        if (!pendingIncidentQueueCanAppend(existing.size)) {
-            throw IOException(
-                "Pending recording incident queue is full; refusing to discard interruption evidence",
-            )
-        }
-        writePendingSessions(file, existing + PendingRecordingSession(marker))
     }
 
     private fun resolvePendingSessions(context: Context) {
@@ -1194,31 +1348,18 @@ internal object RecordingIncidentStore {
             return
         }
 
-        val remaining = ArrayList<PendingRecordingSession>(pending.size)
-        var resolvedAny = false
-        pending.forEach { pendingSession ->
-            val marker = pendingSession.marker
-            val exit = historicalExit(context, marker)
-            when (recordingExitDisposition(exit?.reason)) {
-                RecordingExitDisposition.PENDING -> {
-                    remaining += pendingSession
+        resolvePendingCaptureExitEvidence(
+            pending = pending,
+            findIncident = { owner ->
+                historicalExit(context, owner)?.let { exit ->
+                    incidentFromExit(owner.marker, exit, owner.resumedAtMillis)
                 }
-                RecordingExitDisposition.INCIDENT -> {
-                    appendIncident(
-                        context,
-                        incidentFromExit(
-                            marker = marker,
-                            exit = requireNotNull(exit),
-                            resumedAtMillis = pendingSession.resumedAtMillis,
-                        ),
-                    )
-                    resolvedAny = true
-                }
-            }
-        }
-        if (resolvedAny || remaining.size != pending.size) {
-            writePendingSessions(file, remaining)
-        }
+            },
+            publishObservedIncident = { incident ->
+                appendIncident(context, incident, incomingExitObserved = true)
+            },
+            writeRemaining = { writePendingSessions(file, it) },
+        )
     }
 
     private fun notePendingSessionsResumed(context: Context, resumedAtMillis: Long) {
@@ -1235,51 +1376,61 @@ internal object RecordingIncidentStore {
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private fun historicalUnexpectedAppExit(
+    private fun historicalAppExit(
         context: Context,
-        marker: AppProcessMarker,
+        owner: PendingAppProcessExit,
     ): ApplicationExitInfo? {
+        val marker = owner.marker
         if (marker.pid <= 0 || marker.processStartedAtMillis <= 0L) return null
-        val manager = context.getSystemService(ActivityManager::class.java) ?: return null
-        val currentStartedAtMillis = currentProcessStartedAtWallClockMillis()
-        return manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
-            .asSequence()
-            .filter { info ->
-                info.pid == marker.pid &&
-                    info.timestamp >= marker.processStartedAtMillis &&
-                    (currentStartedAtMillis <= 0L || info.timestamp <= currentStartedAtMillis) &&
-                    unexpectedAppExitShouldCreateIncident(info.reason, info.status)
-            }
-            .minByOrNull(ApplicationExitInfo::getTimestamp)
+        return queryOptionalAppExitEvidence {
+            context.getSystemService(ActivityManager::class.java)
+                ?.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
+                ?.asSequence()
+                ?.filter { info -> appExitTimestampMatches(owner, info.pid, info.timestamp) }
+                ?.minByOrNull(ApplicationExitInfo::getTimestamp)
+        }
     }
 
     private fun historicalExit(
         context: Context,
-        marker: ActiveRecordingSessionMarker,
+        owner: PendingRecordingSession,
     ): ApplicationExitInfo? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || owner.endedByMillis <= 0L) return null
         val manager = context.getSystemService(ActivityManager::class.java) ?: return null
-        val currentProcessStartedAtMillis = currentProcessStartedAtWallClockMillis()
         return runCatching {
-            manager.getHistoricalProcessExitReasons(context.packageName, marker.pid, 32)
+            manager.getHistoricalProcessExitReasons(context.packageName, owner.marker.pid, 32)
                 .asSequence()
                 .filter { info ->
-                    info.pid == marker.pid && exitTimestampBelongsToPriorProcess(
-                        exitTimestampMillis = info.timestamp,
-                        captureArmedAtMillis = marker.armedAtMillis,
-                        currentProcessStartedAtMillis = currentProcessStartedAtMillis,
-                    )
+                    pendingCaptureExitTimestampMatches(owner, info.pid, info.timestamp)
                 }
                 .minByOrNull(ApplicationExitInfo::getTimestamp)
         }.getOrNull()
     }
 
-    private fun sameSession(
-        left: ActiveRecordingSessionMarker,
-        right: ActiveRecordingSessionMarker,
-    ): Boolean = left.pid == right.pid &&
-        left.processStartElapsedRealtimeMillis == right.processStartElapsedRealtimeMillis &&
-        left.armedAtMillis == right.armedAtMillis
+    internal fun recoverDeviceRestartedSession(
+        marker: ActiveRecordingSessionMarker,
+        currentBootCount: Int,
+        currentWallClockMillis: Long,
+        currentElapsedRealtimeMillis: Long,
+        publishIncident: (RecordingIncident) -> Unit,
+        retireMarker: () -> Unit,
+    ): Boolean {
+        if (!marker.armed) return false
+        val restarted = if (marker.bootCount >= 0 && currentBootCount >= 0) {
+            marker.bootCount != currentBootCount
+        } else {
+            // Legacy/unavailable metadata retains the existing positive uptime-reset evidence.
+            // A wall-clock change alone is never proof of a device restart.
+            marker.armedElapsedRealtimeMillis > currentElapsedRealtimeMillis
+        }
+        if (!restarted) return false
+        publishIncident(incidentFromDeviceRestart(
+            marker, currentWallClockMillis, currentElapsedRealtimeMillis,
+        ))
+        // Keep the exact active owner retryable until history publication is durably acknowledged.
+        retireMarker()
+        return true
+    }
 
     private fun incidentFromDeviceRestart(
         marker: ActiveRecordingSessionMarker,
@@ -1305,20 +1456,10 @@ internal object RecordingIncidentStore {
         kind = RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
         exitReason = ApplicationExitInfo.REASON_UNKNOWN,
         pid = marker.pid,
-        processStartedAtMillis = processStartedAtWallClockMillis(marker),
+        processStartedAtMillis = recordingSessionProcessStartedAtMillis(marker),
         captureArmedAtMillis = marker.armedAtMillis,
         description = description,
     )
-
-    private fun processStartedAtWallClockMillis(marker: ActiveRecordingSessionMarker): Long {
-        val elapsedBeforeArmed =
-            marker.armedElapsedRealtimeMillis - marker.processStartElapsedRealtimeMillis
-        return if (elapsedBeforeArmed >= 0L && elapsedBeforeArmed <= marker.armedAtMillis) {
-            marker.armedAtMillis - elapsedBeforeArmed
-        } else {
-            -1L
-        }
-    }
 
     private fun currentProcessStartedAtWallClockMillis(): Long {
         val elapsedSinceStart = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
@@ -1332,7 +1473,7 @@ internal object RecordingIncidentStore {
         exit: ApplicationExitInfo,
         resumedAtMillis: Long,
     ): RecordingIncident {
-        val processStartedAtMillis = processStartedAtWallClockMillis(marker)
+        val processStartedAtMillis = recordingSessionProcessStartedAtMillis(marker)
         val description = exit.description
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
@@ -1371,19 +1512,24 @@ internal object RecordingIncidentStore {
             // durable owners before pruning; a failed read is not proof that an owner is absent.
             val active = readSession(sessionFile(context))?.takeIf { it.armed }
             val pending = readPendingSessions(pendingSessionFile(context))
-            val process = readProcessMarker(AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)))
+            val process = readProcessState(AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)))
             RecordingIncidentReplayOwners(
                 captureSessions = (pending.map { it.marker } + listOfNotNull(active)).map { marker ->
                     incidentWithoutExitEvidence(marker, marker.armedAtMillis)
                 },
                 exactIncidents = (pendingCaptureInterruptionRetries + pendingServiceStopIncidentRetries)
                     .mapNotNull { it.incident },
-                appProcessPid = process?.pid ?: 0,
-                appProcessStartedAtMillis = process?.processStartedAtMillis ?: -1L,
+                appProcessPid = process?.current?.pid ?: 0,
+                appProcessStartedAtMillis = process?.current?.processStartedAtMillis ?: -1L,
+                pendingAppProcesses = process?.pending.orEmpty().map { it.marker },
             )
     }
 
-    private fun appendIncident(context: Context, incident: RecordingIncident) {
+    private fun appendIncident(
+        context: Context,
+        incident: RecordingIncident,
+        incomingExitObserved: Boolean = false,
+    ) {
         val file = historyFile(context)
         val previous = readHistory(file)
         val existing = historyRetainingReplayableDeletions(context, previous, incident)
@@ -1397,7 +1543,7 @@ internal object RecordingIncidentStore {
         val index = sessionIndex.takeIf { it >= 0 } ?: exactIndex
         val updated = if (index >= 0) {
             existing.toMutableList().apply {
-                this[index] = mergeRecordingIncidentEvidence(this[index], incident)
+                this[index] = mergeRecordingIncidentEvidence(this[index], incident, incomingExitObserved)
             }.sortedBy { it.occurredAtMillis }
         } else {
             appendRecordingIncidentPreservingDeletions(existing, incident, MAX_INCIDENTS)
@@ -1421,6 +1567,10 @@ internal object RecordingIncidentStore {
         context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
     }.getOrDefault(0L)
 
+    private fun currentBootCount(context: Context): Int = readOptionalRecordingBootCount {
+        Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
+    }
+
     private fun sessionFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, SESSION_FILE_NAME))
     private fun pendingSessionFile(context: Context) =
         AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
@@ -1430,58 +1580,100 @@ internal object RecordingIncidentStore {
         deleteIncidentAtomicStateDurably(file.baseFile, removePresent = file::delete)
     }
 
-    private fun readProcessMarker(file: AtomicFile): AppProcessMarker? =
-        readAtomic(file, "app process marker") { input ->
-            requireFileHeader(input, PROCESS_MAGIC, PROCESS_FORMAT_VERSION, "app process marker")
-            val pid = input.readInt()
-            val processStartedAtMillis = input.readLong()
-            if (pid <= 0 || processStartedAtMillis <= 0L) {
+    private fun readProcessState(file: AtomicFile): AppProcessRecoveryState? =
+        readAtomic(file, "app process state", ::readProcessStatePayload)
+
+    internal fun readProcessStatePayload(input: DataInputStream): AppProcessRecoveryState {
+        if (input.readInt() != PROCESS_MAGIC) throw IOException("Invalid app process state magic")
+        val version = input.readUnsignedByte()
+        if (version != 1 && version != PROCESS_FORMAT_VERSION) {
+            throw IOException("Unsupported app process state version $version")
+        }
+        fun readMarker(): AppProcessMarker {
+            val marker = AppProcessMarker(input.readInt(), input.readLong())
+            if (marker.pid <= 0 || marker.processStartedAtMillis <= 0L) {
                 throw IOException("Invalid app process marker")
             }
-            AppProcessMarker(pid = pid, processStartedAtMillis = processStartedAtMillis)
+            return marker
         }
+        val current = readMarker()
+        if (version == 1) return AppProcessRecoveryState(current)
+        val count = input.readInt()
+        // Each owner needs 20 payload bytes. Never allocate from an unchecked serialized count.
+        if (count < 0 || count > input.available() / 20) throw IOException("Invalid pending app process count")
+        val pending = buildList {
+            repeat(count) {
+                val marker = readMarker()
+                val endedByMillis = input.readLong()
+                if (endedByMillis <= 0L) throw IOException("Invalid app process exit boundary")
+                add(PendingAppProcessExit(marker, endedByMillis))
+            }
+        }
+        return AppProcessRecoveryState(current, pending)
+    }
 
-    private fun writeProcessMarker(file: AtomicFile, marker: AppProcessMarker) {
-        writeAtomic(file) { output ->
-            output.writeInt(PROCESS_MAGIC)
-            output.writeByte(PROCESS_FORMAT_VERSION)
-            output.writeInt(marker.pid)
-            output.writeLong(marker.processStartedAtMillis)
+    private fun writeProcessState(file: AtomicFile, state: AppProcessRecoveryState) {
+        writeAtomic(file) { output -> writeProcessStatePayload(output, state) }
+    }
+
+    internal fun writeProcessStatePayload(output: DataOutputStream, state: AppProcessRecoveryState) {
+        output.writeInt(PROCESS_MAGIC)
+        output.writeByte(PROCESS_FORMAT_VERSION)
+        output.writeInt(state.current.pid)
+        output.writeLong(state.current.processStartedAtMillis)
+        output.writeInt(state.pending.size)
+        state.pending.forEach { owner ->
+            output.writeInt(owner.marker.pid)
+            output.writeLong(owner.marker.processStartedAtMillis)
+            output.writeLong(owner.endedByMillis)
         }
     }
 
     private fun readSession(file: AtomicFile): ActiveRecordingSessionMarker? =
-        readAtomic(file, "recording session") { input ->
-            requireFileHeader(input, SESSION_MAGIC, SESSION_FORMAT_VERSION, "recording session")
-            readSessionMarker(input)
+        readAtomic(file, "recording session", ::readSessionPayload)
+
+    internal fun readSessionPayload(input: DataInputStream): ActiveRecordingSessionMarker {
+        if (input.readInt() != SESSION_MAGIC) throw IOException("Invalid recording session magic")
+        val version = input.readUnsignedByte()
+        if (version != 2 && version != SESSION_FORMAT_VERSION) {
+            throw IOException("Unsupported recording session version $version")
         }
+        return readSessionMarker(input, hasBootCount = version >= 3)
+    }
 
     private fun writeSession(file: AtomicFile, marker: ActiveRecordingSessionMarker) {
-        writeAtomic(file) { output ->
-            output.writeInt(SESSION_MAGIC)
-            output.writeByte(SESSION_FORMAT_VERSION)
-            writeSessionMarker(output, marker)
-        }
+        writeAtomic(file) { output -> writeSessionPayload(output, marker) }
+    }
+
+    internal fun writeSessionPayload(output: DataOutputStream, marker: ActiveRecordingSessionMarker) {
+        output.writeInt(SESSION_MAGIC)
+        output.writeByte(SESSION_FORMAT_VERSION)
+        writeSessionMarker(output, marker)
     }
 
     private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> =
-        readAtomic(file, "pending recording incidents") { input ->
-            requireFileHeader(input, PENDING_MAGIC, PENDING_FORMAT_VERSION, "pending recording incidents")
-            val count = input.readUnsignedShort()
-            if (count > MAX_PENDING_INCIDENT_SESSIONS) {
-                throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_INCIDENT_SESSIONS")
+        readAtomic(file, "pending recording incidents", ::readPendingSessionsPayload) ?: emptyList()
+
+    internal fun readPendingSessionsPayload(input: DataInputStream): List<PendingRecordingSession> {
+        if (input.readInt() != PENDING_MAGIC) throw IOException("Invalid pending recording incidents magic")
+        val version = input.readUnsignedByte()
+        if (version !in 1..PENDING_FORMAT_VERSION) {
+            throw IOException("Unsupported pending recording incidents version $version")
+        }
+        val count = input.readUnsignedShort()
+        if (count > MAX_PENDING_INCIDENT_SESSIONS) {
+            throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_INCIDENT_SESSIONS")
+        }
+        return buildList(count) {
+            repeat(count) {
+                val marker = readSessionMarker(input, hasBootCount = version >= 3)
+                val resumedAtMillis = input.readLong()
+                val endedByMillis = if (version == 1) 0L else input.readLong()
+                if (endedByMillis < 0L) throw IOException("Invalid pending capture process-exit boundary")
+                add(PendingRecordingSession(marker, resumedAtMillis, endedByMillis))
             }
-            buildList(count) {
-                repeat(count) {
-                    add(
-                        PendingRecordingSession(
-                            marker = readSessionMarker(input),
-                            resumedAtMillis = input.readLong(),
-                        ),
-                    )
-                }
-            }
-        } ?: emptyList()
+        }
+    }
 
     private fun writePendingSessions(
         file: AtomicFile,
@@ -1491,32 +1683,45 @@ internal object RecordingIncidentStore {
             deleteAtomicDurablyIfPresent(file)
             return
         }
+        validatePendingSessions(sessions)
+        writeAtomic(file) { output -> writePendingSessionsPayload(output, sessions) }
+    }
+
+    internal fun writePendingSessionsPayload(
+        output: DataOutputStream,
+        sessions: List<PendingRecordingSession>,
+    ) {
+        validatePendingSessions(sessions)
+        output.writeInt(PENDING_MAGIC)
+        output.writeByte(PENDING_FORMAT_VERSION)
+        output.writeShort(sessions.size)
+        sessions.forEach { session ->
+            writeSessionMarker(output, session.marker)
+            output.writeLong(session.resumedAtMillis)
+            output.writeLong(session.endedByMillis)
+        }
+    }
+
+    private fun validatePendingSessions(sessions: List<PendingRecordingSession>) {
         if (sessions.size > MAX_PENDING_INCIDENT_SESSIONS) {
             throw IOException(
                 "Pending recording incident count ${sessions.size} exceeds $MAX_PENDING_INCIDENT_SESSIONS",
             )
         }
-        writeAtomic(file) { output ->
-            output.writeInt(PENDING_MAGIC)
-            output.writeByte(PENDING_FORMAT_VERSION)
-            output.writeShort(sessions.size)
-            sessions.forEach { session ->
-                writeSessionMarker(output, session.marker)
-                output.writeLong(session.resumedAtMillis)
-            }
-        }
+        if (sessions.any { it.endedByMillis < 0L }) throw IOException("Invalid pending capture process-exit boundary")
     }
 
-    private fun readSessionMarker(input: DataInputStream) = ActiveRecordingSessionMarker(
+    private fun readSessionMarker(input: DataInputStream, hasBootCount: Boolean) = ActiveRecordingSessionMarker(
         armed = input.readBoolean(),
         pid = input.readInt(),
         processStartElapsedRealtimeMillis = input.readLong(),
         armedAtMillis = input.readLong(),
         armedElapsedRealtimeMillis = input.readLong(),
         packageLastUpdateTimeMillis = input.readLong(),
+        bootCount = if (hasBootCount) input.readInt() else -1,
     ).also { marker ->
         if (marker.pid <= 0 || marker.processStartElapsedRealtimeMillis < 0L ||
-            marker.armedAtMillis <= 0L || marker.armedElapsedRealtimeMillis < 0L
+            marker.armedAtMillis <= 0L || marker.armedElapsedRealtimeMillis < 0L || marker.bootCount < -1
         ) {
             throw IOException("Invalid recording session marker")
         }
@@ -1532,6 +1737,7 @@ internal object RecordingIncidentStore {
         output.writeLong(marker.armedAtMillis)
         output.writeLong(marker.armedElapsedRealtimeMillis)
         output.writeLong(marker.packageLastUpdateTimeMillis)
+        output.writeInt(marker.bootCount)
     }
 
     private fun readHistory(file: AtomicFile): List<RecordingIncident> {
@@ -1683,17 +1889,6 @@ internal object RecordingIncidentStore {
         } catch (error: RuntimeException) {
             throw IOException("Unable to decode $label", error)
         }
-    }
-
-    private fun requireFileHeader(
-        input: DataInputStream,
-        expectedMagic: Int,
-        expectedVersion: Int,
-        label: String,
-    ) {
-        if (input.readInt() != expectedMagic) throw IOException("Invalid $label magic")
-        val version = input.readUnsignedByte()
-        if (version != expectedVersion) throw IOException("Unsupported $label version $version")
     }
 
     private inline fun writeAtomic(

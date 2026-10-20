@@ -26,7 +26,7 @@ internal fun writeConvertedRecordingCopy(
     require(validFlacCompression(level))
     require(startMillis >= 0 && (endMillis == null || endMillis > startMillis))
     if (!recordingHasStableTrimIdentity(recording)) throw IOException("Recording identity is unavailable")
-    return withRecordingWavChannelIdentityGuard(context, recording) { channel, sourceCurrent ->
+    return withRecordingWavChannelIdentityGuard(context, recording, RecordingReadCleanup.Propagate) { channel, sourceCurrent ->
         val isFlac = channelHasFlac(channel)
         val layout = if (isFlac) readFlacInfo(channel).pcmLayout else readWavPcmLayout(channel)
         if (format == ExportFormat.FLAC && layout.sampleFormat == PcmSampleFormat.PCM_FLOAT) {
@@ -54,7 +54,7 @@ internal fun writeConvertedRecordingCopy(
                     } else writer.write(bytes, offset, count)
                 }
                 if (isFlac) {
-                    FlacPcmDecoder(channel).use { decoder ->
+                    FlacPcmDecoder(channel, RecordingReadCleanup.Propagate).use { decoder ->
                         val digest = MessageDigest.getInstance("MD5")
                         decoder.readFrames(first, frames) { bytes, offset, count ->
                             digest.update(bytes, offset, count)

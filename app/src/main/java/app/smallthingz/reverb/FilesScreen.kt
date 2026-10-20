@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import java.util.Date
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.foundation.BorderStroke
@@ -60,9 +60,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -76,6 +78,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -88,6 +91,23 @@ internal fun isLibraryDismissEdge(x: Float, width: Float): Boolean {
     if (!x.isFinite() || !width.isFinite() || width <= 0f) return false
     val edgeWidth = width * 0.13f
     return x <= edgeWidth || x >= width - edgeWidth
+}
+
+internal fun finishLibraryExpandedBack(
+    owner: InlinePlaybackRowOwner?,
+    isCurrentOwner: (InlinePlaybackRowOwner) -> Boolean,
+    isMutationActive: (String) -> Boolean,
+    collapse: () -> Unit,
+): Boolean {
+    owner ?: return false
+    return finishInlineBackForCurrentRow(
+        owner = owner,
+        isCurrentOwner = isCurrentOwner,
+        trimSaving = isMutationActive(owner.recordingId),
+        trimMode = false,
+        leaveTrim = {},
+        collapse = collapse,
+    )
 }
 
 private sealed class ListItem {
@@ -206,6 +226,18 @@ internal class RenameResultReceiver(
     }
 }
 
+/** A completed delete removes its selected object, never a freshly observed replacement. */
+internal fun recordingsAfterForegroundDeletion(
+    recordings: List<RecordingEntity>,
+    successfullyDeleted: Collection<RecordingEntity>,
+): List<RecordingEntity> {
+    if (successfullyDeleted.isEmpty()) return recordings
+    val deletedById = successfullyDeleted.associateBy { it.id }
+    return recordings.filterNot { current ->
+        deletedById[current.id]?.let { requested -> sameRecordingActionTarget(requested, current) } == true
+    }
+}
+
 internal fun releaseCompletedForegroundDeletionTargets(
     pendingDeletions: MutableMap<String, RecordingEntity>,
     attempted: Collection<RecordingEntity>,
@@ -262,6 +294,9 @@ fun FilesScreen(
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val hostView = LocalView.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val accessibilityManager = LocalAccessibilityManager.current
     val edgeDismissDistancePx = with(density) { 64.dp.toPx() }
     val chrome = appChrome()
     val topBarNoiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
@@ -284,12 +319,14 @@ fun FilesScreen(
     var renameRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var infoRecording by remember { mutableStateOf<RecordingEntity?>(null) }
-    var expandedRecordingId by remember { mutableStateOf<String?>(null) }
+    var expandedRecordingOwner by remember { mutableStateOf<InlinePlaybackRowOwner?>(null) }
     var trimRequestRecordingId by remember { mutableStateOf<String?>(null) }
     var undoNotice by remember { mutableStateOf<LibraryUndoNotice?>(null) }
     val deletionJob = remember { arrayOfNulls<Job>(1) }
+    val backgroundDeletionReceipt = remember { arrayOfNulls<Deferred<RecordingDeletionBatchResult>>(1) }
     val shareJob = remember { arrayOfNulls<Job>(1) }
     val shareGeneration = remember { intArrayOf(0) }
+    val shareDelivery = remember { arrayOfNulls<RecordingOpenResultDelivery<Intent>>(1) }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
     val undoVisibilityCallback = androidx.compose.runtime.rememberUpdatedState(onUndoVisibleChange)
     val refreshQueue = remember(scope) { LibraryRefreshQueue(scope) { activeState.value } }
@@ -299,6 +336,32 @@ fun FilesScreen(
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
         AppFeedbackCenter.post(message, tone)
+    }
+
+    fun navigationAllowed(): Boolean = activeState.value &&
+        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+        hostView.isAttachedToWindow && hostView.isShown && hostView.hasWindowFocus()
+
+    fun retireShareRequest() {
+        shareGeneration[0]++
+        shareJob[0]?.cancel()
+        shareJob[0] = null
+        val retired = shareDelivery[0]
+        shareDelivery[0] = null
+        retired?.retire()
+    }
+
+    DisposableEffect(hostView, lifecycleOwner) {
+        val observer = hostView.viewTreeObserver
+        val listener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focused ->
+            if (focused) shareDelivery[0]?.foregroundChanged()
+        }
+        observer.addOnWindowFocusChangeListener(listener)
+        onDispose {
+            val currentObserver = if (observer.isAlive) observer else hostView.viewTreeObserver
+            if (currentObserver.isAlive) currentObserver.removeOnWindowFocusChangeListener(listener)
+            retireShareRequest()
+        }
     }
 
     fun clearUndoNotice(window: Long? = null) {
@@ -313,7 +376,9 @@ fun FilesScreen(
     }
 
     fun setExpandedRecording(id: String?) {
-        expandedRecordingId = id
+        if (expandedRecordingOwner?.recordingId != id) {
+            expandedRecordingOwner = id?.let(::InlinePlaybackRowOwner)
+        }
         if (id == null) trimRequestRecordingId = null
         onExpandedRecordingActiveChange(id != null)
     }
@@ -362,7 +427,7 @@ fun FilesScreen(
         }
         if (infoRecording == null) showInfoDialog = false
 
-        val retainedExpandedId = retainId(expandedRecordingId)
+        val retainedExpandedId = retainId(expandedRecordingOwner?.recordingId)
         setExpandedRecording(retainedExpandedId)
         trimRequestRecordingId = retainId(trimRequestRecordingId)?.takeIf { it == retainedExpandedId }
     }
@@ -379,6 +444,11 @@ fun FilesScreen(
         refreshQueue.request {
             if (!refreshGeneration.isCurrent(generation)) return@request
             try {
+                // A refresh admitted before handoff may otherwise miss the new repository job.
+                // Only this exact settled batch may use this scan to recover an unknown result.
+                val backgroundRevision = deletionState.backgroundCommitRevision
+                val backgroundReceipt = backgroundDeletionReceipt[0]
+                backgroundReceipt?.join()
                 val stored = RecordingRepository.refresh(context)
                 if (!refreshGeneration.isCurrent(generation)) return@request
                 val previousById = recordings.associateBy { it.id }
@@ -391,8 +461,14 @@ fun FilesScreen(
                     // deleteInBackground owns failure reporting through the process feedback
                     // queue before refresh can return. Refresh only reconciles the optimistic
                     // Library transaction; do not render a second local error card for it.
-                    pendingDeletions.clear()
-                    deletionState.reconcileNoPendingTargets()
+                    if (backgroundRevision != null && backgroundReceipt != null &&
+                        backgroundDeletionReceipt[0] === backgroundReceipt
+                    ) {
+                        deletionState.completeBackgroundCommit(backgroundRevision) {
+                            pendingDeletions.clear()
+                            backgroundDeletionReceipt[0] = null
+                        }
+                    }
                 } else {
                     var pendingTargetInvalidated = false
                     pendingDeletions.keys.toList().forEach { id ->
@@ -471,9 +547,7 @@ fun FilesScreen(
             // launched by the previous visible session so it cannot mutate retained UI state
             // after close or leave a spinner owned by an obsolete generation stuck on reopen.
             refreshGeneration.invalidate()
-            shareGeneration[0]++
-            shareJob[0]?.cancel()
-            shareJob[0] = null
+            retireShareRequest()
             contextMenuRecordingId = null
             selectedIds.clear()
             syncSelectionActive()
@@ -517,7 +591,7 @@ fun FilesScreen(
         val generation = refreshGeneration.invalidate()
         var deleted = 0
         var failed = false
-        val deletedIds = mutableSetOf<String>()
+        val deletedTargets = mutableListOf<RecordingEntity>()
         // Once the undo window has closed, the user's delete is committed. Keep both the physical
         // identity-bound batch and its terminal optimistic-state reconciliation alive through
         // panel/lifecycle disposal. A cancelled owner must not leave a completed attempt hidden in
@@ -528,14 +602,14 @@ fun FilesScreen(
             pending.zip(result.outcomes).forEach { (recording, didDelete) ->
                 if (didDelete) {
                     deleted++
-                    deletedIds += recording.id
+                    deletedTargets += recording
                 }
             }
             // Remove successful rows before releasing the optimistic suppression. Failed exact
             // targets then become visible again immediately, while successful deletes cannot
             // flicker back during a cancelled/unavailable authoritative refresh. Identity-check
             // pending entries so a newer reused ID could never be cleared by this older batch.
-            recordings = recordings.filterNot { it.id in deletedIds }
+            recordings = recordingsAfterForegroundDeletion(recordings, deletedTargets)
             releaseCompletedForegroundDeletionTargets(pendingDeletions, pending)
         }
         val deletePhaseFailed = deletionBatchFailed(pending.size, deleted, failed)
@@ -586,14 +660,42 @@ fun FilesScreen(
     }
 
     fun commitPendingDeletionsInBackground() {
-        if (!deletionState.handoffToBackground(pendingDeletions.isNotEmpty())) return
+        val revision = deletionState.handoffToBackground(pendingDeletions.isNotEmpty()) ?: return
+        // A scan admitted before handoff cannot restore pre-delete rows after receipt settlement.
+        refreshGeneration.invalidate()
         deletionJob[0]?.cancel()
         deletionJob[0] = null
         val pending = pendingDeletions.values.toList()
-        RecordingRepository.deleteInBackground(context, pending)
+        val receipt = RecordingRepository.deleteInBackground(context, pending)
+        backgroundDeletionReceipt[0] = receipt
+        // The retained Library scope survives panel close. Actual disposal only cancels this
+        // waiter: the process-owned receipt and its failure feedback continue independently.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val result = try {
+                receipt.await()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // No per-record outcomes were delivered. Keep optimistic protection until an
+                // authoritative refresh after this receipt settles; repository owns feedback.
+                return@launch
+            }
+            if (backgroundDeletionReceipt[0] !== receipt) return@launch
+            if (settleCompletedBackgroundDeletion(
+                    state = deletionState,
+                    revision = revision,
+                    attempted = pending,
+                    result = result,
+                    pending = pendingDeletions,
+                    recordings = recordings,
+                    publishRecordings = { recordings = it },
+                )
+            ) {
+                backgroundDeletionReceipt[0] = null
+            }
+        }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, active) {
         // LifecycleRegistry synchronously catches a newly added observer up to the current
         // state. Ignore that synthetic/catch-up ON_RESUME: LaunchedEffect(active) owns the
@@ -601,6 +703,8 @@ fun FilesScreen(
         // happen after addObserver returns and still refresh immediately.
         var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) retireShareRequest()
+            if (event == Lifecycle.Event.ON_RESUME) shareDelivery[0]?.foregroundChanged()
             if (active && observerInstalled && event == Lifecycle.Event.ON_RESUME) {
                 refresh(showSpinner = false)
             }
@@ -643,7 +747,7 @@ fun FilesScreen(
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
         if (targets.isEmpty()) return
         val undoWindow = deletionState.extendUndoWindow() ?: return
-        if (targets.any { it.id == expandedRecordingId }) {
+        if (targets.any { it.id == expandedRecordingOwner?.recordingId }) {
             setExpandedRecording(null)
         }
         targets.forEach { pendingDeletions[it.id] = it }
@@ -657,18 +761,12 @@ fun FilesScreen(
         undoNotice = LibraryUndoNotice(message, undoWindow)
         deletionJob[0]?.cancel()
         deletionJob[0] = scope.launch {
-            delay(4_500L)
-            if (!deletionState.beginForegroundCommit(undoWindow)) return@launch
-            clearUndoNotice(undoWindow)
-            // Close the undo transaction before any physical delete begins. A stale
-            // FeedbackCard callback may still be dispatched for one frame after notice clears.
-            // Mark foreground ownership before dropping the undo Job reference so ON_STOP/panel
-            // disposal cannot enqueue the same identity-bound delete concurrently.
-            deletionJob[0] = null
-            try {
+            runLibraryUndoDeadline(deletionState, undoWindow, accessibilityManager) {
+                clearUndoNotice(undoWindow)
+                // The deadline owns foreground commit before the notice/job is cleared, so
+                // stale Undo and lifecycle handoff cannot take the same batch.
+                deletionJob[0] = null
                 finalizeDeletions()
-            } finally {
-                deletionState.completeForegroundCommit()
             }
         }
     }
@@ -697,22 +795,44 @@ fun FilesScreen(
             if (targets.size == 1) R.string.share_recording_title
             else R.string.share_recordings_title,
         )
-        val generation = ++shareGeneration[0]
-        shareJob[0]?.cancel()
+        retireShareRequest()
+        val generation = shareGeneration[0]
+        fun reportShareFailure() {
+            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+            if (navigationAllowed()) refresh(showSpinner = false)
+        }
+        lateinit var delivery: RecordingOpenResultDelivery<Intent>
+        delivery = RecordingOpenResultDelivery(
+            navigationAllowed = { generation == shareGeneration[0] && navigationAllowed() },
+            deliver = { shareIntent ->
+                if (shareIntent == null) {
+                    reportShareFailure()
+                } else {
+                    try {
+                        context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+                    } catch (_: RuntimeException) {
+                        reportShareFailure()
+                    }
+                }
+            },
+            reportUndeliveredFailure = ::reportShareFailure,
+            finish = {
+                if (shareDelivery[0] === delivery) shareDelivery[0] = null
+            },
+        )
+        shareDelivery[0] = delivery
         shareJob[0] = scope.launch {
             try {
-                val shareIntent = withContext(Dispatchers.IO) {
-                    buildShareRecordingsIntent(context, targets)
+                val shareIntent = try {
+                    withContext(Dispatchers.IO) {
+                        buildShareRecordingsIntent(context, targets)
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: RuntimeException) {
+                    null
                 }
-                if (generation != shareGeneration[0] || !activeState.value) return@launch
-                context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: ActivityNotFoundException) {
-                showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
-            } catch (_: RuntimeException) {
-                showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
-                refresh(showSpinner = false)
+                delivery.complete(shareIntent)
             } finally {
                 if (generation == shareGeneration[0]) shareJob[0] = null
             }
@@ -724,8 +844,8 @@ fun FilesScreen(
         derivedStateOf { selectedIds.keys.any { it in activeMutationRecordingIds } }
     }
     LaunchedEffect(selectionActive) { onSelectionActiveChange(selectionActive) }
-    LaunchedEffect(expandedRecordingId) {
-        onExpandedRecordingActiveChange(expandedRecordingId != null)
+    LaunchedEffect(expandedRecordingOwner?.recordingId) {
+        onExpandedRecordingActiveChange(expandedRecordingOwner?.recordingId != null)
     }
     DisposableEffect(Unit) {
         onDispose {
@@ -735,6 +855,20 @@ fun FilesScreen(
             onSelectionActiveChange(false)
             onExpandedRecordingActiveChange(false)
         }
+    }
+    // Keep this unkeyed handler before the lazy rows. Their later registered inline
+    // handlers own visible trim/player Back (including predictive motion); if scrolling
+    // disposes that row, this screen-level fallback still owns the expanded recording.
+    // It never re-registers on A -> B -> A, so it cannot jump ahead of a retained row.
+    BackHandler(enabled = active && expandedRecordingOwner != null && !selectionActive) {
+        val owner = expandedRecordingOwner
+        finishLibraryExpandedBack(
+            owner = owner,
+            isCurrentOwner = { activeState.value && selectedIds.isEmpty() && expandedRecordingOwner === it },
+            // A committed trim outlives its row; read the live reservation, not collected UI state.
+            isMutationActive = recordingMutations::isActive,
+            collapse = { setExpandedRecording(null) },
+        )
     }
     val selectionBackMotion = rememberPredictiveBackMotion(
         enabled = active && selectionActive,
@@ -935,17 +1069,22 @@ fun FilesScreen(
                                         isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
                                         screenActive = active,
+                                        playbackOwner = expandedRecordingOwner?.takeIf { it.recordingId == recording.id },
+                                        isCurrentPlaybackOwner = { owner ->
+                                            activeState.value && expandedRecordingOwner === owner
+                                        },
                                         menuExpanded = contextMenuRecordingId == recording.id,
-                                        expanded = expandedRecordingId == recording.id,
+                                        expanded = expandedRecordingOwner?.recordingId == recording.id,
                                         trimRequested = trimRequestRecordingId == recording.id,
                                         externallyBusy = recording.id in activeMutationRecordingIds,
+                                        deleteEnabled = deletionState.acceptsDeletions,
                                         onClick = {
                                             contextMenuRecordingId = null
                                             if (selectionActive) {
                                                 toggleSelection(recording)
                                             } else {
                                                 setExpandedRecording(
-                                                    if (expandedRecordingId == recording.id) null else recording.id,
+                                                    if (expandedRecordingOwner?.recordingId == recording.id) null else recording.id,
                                                 )
                                             }
                                         },
@@ -1021,16 +1160,24 @@ fun FilesScreen(
                                             }
                                         },
                                         onPlaybackFailed = {
-                                            setExpandedRecording(null)
-                                            try {
-                                                context.startActivity(RecordingOpenActivity.intentFor(context, recording))
-                                            } catch (_: RuntimeException) {
-                                                showPassiveNotice(
-                                                    resources.getString(R.string.recording_unavailable),
-                                                    FeedbackTone.ERROR,
-                                                )
-                                                refresh(showSpinner = false)
-                                            }
+                                            finishInlinePlaybackFailure(
+                                                retireFailedPlayer = {
+                                                    val current = expandedRecordingOwner?.recordingId == recording.id
+                                                    if (current) setExpandedRecording(null)
+                                                    current
+                                                },
+                                                navigationAllowed = ::navigationAllowed,
+                                                openRecording = {
+                                                    context.startActivity(RecordingOpenActivity.intentFor(context, recording))
+                                                },
+                                                reportUnavailable = {
+                                                    showPassiveNotice(
+                                                        resources.getString(R.string.recording_unavailable),
+                                                        FeedbackTone.ERROR,
+                                                    )
+                                                    if (navigationAllowed()) refresh(showSpinner = false)
+                                                },
+                                            )
                                         },
                                     )
                                 }
@@ -1167,10 +1314,13 @@ private fun RecordingItem(
     isSelected: Boolean,
     selectionActive: Boolean,
     screenActive: Boolean,
+    playbackOwner: InlinePlaybackRowOwner?,
+    isCurrentPlaybackOwner: (InlinePlaybackRowOwner) -> Boolean,
     menuExpanded: Boolean,
     expanded: Boolean,
     trimRequested: Boolean,
     externallyBusy: Boolean,
+    deleteEnabled: Boolean,
     onClick: () -> Unit,
     onIconLongClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1207,7 +1357,9 @@ private fun RecordingItem(
                 RecordingInlinePlayer(
                     recording = item.recording,
                     trimRequested = trimRequested,
-                    screenActive = screenActive,
+                    screenActive = screenActive && expanded,
+                    playbackOwner = playbackOwner,
+                    isCurrentPlaybackOwner = isCurrentPlaybackOwner,
                     onTrimRequestConsumed = onTrimRequestConsumed,
                     onTrimSaved = onTrimSaved,
                     onTrimStateUncertain = onTrimStateUncertain,
@@ -1255,7 +1407,7 @@ private fun RecordingItem(
             )
             DropdownMenuItem(
                 modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-                enabled = !operationBusy,
+                enabled = !operationBusy && deleteEnabled,
                 text = { Text(stringResource(R.string.delete_recording), color = MaterialTheme.colorScheme.error) },
                 onClick = onDelete,
                 leadingIcon = {

@@ -11,6 +11,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,6 +64,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -71,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
@@ -300,7 +304,7 @@ fun SettingsScreen(
     active: Boolean = true,
     isPanelActive: () -> Boolean = { active },
     onBack: () -> Unit = {},
-    onThemeChanged: (AppThemeMode) -> Unit = {},
+    onThemeChanged: (AppThemeMode?) -> Unit = {},
     focusRetentionBuffer: ReverbService.BufferSlot? = null,
 ) {
     val context = LocalContext.current
@@ -320,6 +324,16 @@ fun SettingsScreen(
     var settingsPersisting by remember { mutableStateOf(false) }
     var settingsHydrated by remember { mutableStateOf(false) }
     var settingsInteractionReady by remember(active) { mutableStateOf(false) }
+    val directoryPicker = rememberSaveable(
+        saver = listSaver<SettingsDirectoryPickerState, Any>(
+            save = { it.save() },
+            restore = { SettingsDirectoryPickerState.restore(it) },
+        ),
+    ) { SettingsDirectoryPickerState(active) }
+    DisposableEffect(active) {
+        directoryPicker.setPanelActive(active)
+        onDispose { directoryPicker.setPanelActive(false) }
+    }
 
     var service by remember { mutableStateOf<ReverbService?>(null) }
 
@@ -328,8 +342,28 @@ fun SettingsScreen(
     val outputSelectionRevision = remember { longArrayOf(0L) }
     val savePanelOwner = remember(active) { Any() }
     val savePanelOwnerState = androidx.compose.runtime.rememberUpdatedState(savePanelOwner)
-    val quickTileEditorState = remember { QuickSettingsTilesEditorState() }
+    val notificationDurationInteraction = remember { NotificationDurationInteractionState() }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
+    val inputReadyState = androidx.compose.runtime.rememberUpdatedState(
+        active && settingsHydrated && settingsInteractionReady,
+    )
+    val panelActiveState = androidx.compose.runtime.rememberUpdatedState(isPanelActive)
+    val quickTileEditorState = rememberSaveable(
+        saver = listSaver<QuickSettingsTilesEditorState, Any>(
+            save = { it.save(activeState.value && panelActiveState.value()) },
+            restore = QuickSettingsTilesEditorState::restore,
+        ),
+    ) { QuickSettingsTilesEditorState() }
+    DisposableEffect(active, settingsHydrated, settingsInteractionReady, quickTileEditorState.mutationInProgress) {
+        if (!active) quickTileEditorState.closeEditor()
+        else quickTileEditorState.restorePendingDraft(settingsHydrated && settingsInteractionReady)
+        onDispose { }
+    }
+
+    // Retained controls must not edit stale pixels while their fresh snapshot is loading.
+    // An accepted save may still coexist with a newer draft, so persistence is not a gate.
+    fun settingsInputReady(): Boolean = inputReadyState.value && settingsInteractionReady &&
+        savePanelOwnerState.value === savePanelOwner && panelActiveState.value() && scope.isActive
 
     // Selected values
     var selectedFormat by remember { mutableStateOf(ExportFormat.WAV) }
@@ -466,25 +500,54 @@ fun SettingsScreen(
         silenceGate = encodeSilenceGate(selectedSilence),
     )
 
+    fun currentSettingsDraft(snapshot: SettingsSnapshot) = SettingsUiDraft(
+        snapshot = snapshot,
+        oneShotTimeText = oneShotRetentionTimeText,
+        oneShotSizeText = oneShotRetentionSizeText,
+        loopingTimeText = loopingRetentionTimeText,
+        loopingSizeText = loopingRetentionSizeText,
+    )
+
+    val draftRestoration = rememberSaveable(
+        saver = listSaver<SettingsDraftRestoration, Any>(
+            save = {
+                it.save(
+                    panelActive = activeState.value && panelActiveState.value(),
+                    hydrated = settingsHydrated,
+                    persisting = settingsPersisting,
+                    baseline = originalSnapshot,
+                    currentDraft = { currentSettingsDraft(currentSettingsSnapshot()) },
+                )
+            },
+            restore = SettingsDraftRestoration::restore,
+        ),
+    ) { SettingsDraftRestoration() }
+    DisposableEffect(active) {
+        if (!active) draftRestoration.discard()
+        onDispose { }
+    }
+
     fun recomputeUnsavedState() {
-        val invalidRetentionInput = when (activeRetentionMode) {
-            RetentionMode.TIME ->
-                parseRetentionTimeSeconds(oneShotRetentionTimeText) == null ||
-                    parseRetentionTimeSeconds(loopingRetentionTimeText) == null
-            RetentionMode.SIZE ->
-                parseRetentionSizeMib(oneShotRetentionSizeText)?.takeIf { it >= 0.0 } == null ||
-                    parseRetentionSizeMib(loopingRetentionSizeText)?.takeIf { it >= 0.0 } == null
-        }
-        hasUnsavedChanges = settingsSnapshotHasUnsavedChanges(
-            durableSnapshot = originalSnapshot,
-            currentSnapshot = currentSnapshot,
-            invalidRetentionInput = invalidRetentionInput,
-        )
+        hasUnsavedChanges = currentSettingsDraft(currentSnapshot).hasUnsavedChanges(originalSnapshot)
     }
 
     fun pushUndoState() {
         settingsEditRevision[0]++
         recomputeUnsavedState()
+    }
+
+    fun applyPendingDirectorySelection() {
+        if (!isPanelActive() || !scope.isActive || savePanelOwnerState.value !== savePanelOwner) return
+        // Hydration can finish before the readiness value reaches the next composition. This
+        // accepted picker result needs the complete baseline, not a rendered control callback.
+        val selected = directoryPicker.takePendingResult(
+            hydrated = settingsHydrated && settingsInteractionReady,
+        ) ?: return
+        selectedExportTreeUri = Uri.parse(selected)
+        refreshExportDirectoryUi()
+        currentSnapshot = currentSettingsSnapshot()
+        pushUndoState()
+        refreshMoveRecordingsAvailability()
     }
 
     fun refreshRetentionFields(preserveActiveInputs: Boolean = false) {
@@ -548,7 +611,7 @@ fun SettingsScreen(
     }
     BackHandler(enabled = active && quickTileEditorState.editorOpen) { quickTileEditorState.closeEditor() }
 
-    fun featureOwnerReady(): Boolean = isPanelActive() && settingsInteractionReady &&
+    fun featureOwnerReady(): Boolean = settingsInputReady() &&
         !settingsPersisting && scope.isActive &&
         settingsLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
         settingsView.isAttachedToWindow
@@ -567,6 +630,7 @@ fun SettingsScreen(
     fun tileDraftAdmission(): Long? = tileDraftRevision()?.takeIf { settingsView.hasWindowFocus() }
 
     fun activateRetentionMode(mode: RetentionMode) {
+        if (!settingsInputReady()) return
         val change = settingsRetentionModeChange(activeRetentionMode, mode) ?: return
         // onValueChange keeps the active backing value current. Switching modes only
         // changes presentation; it must never reparse the rounded display string or erase drafts.
@@ -576,6 +640,8 @@ fun SettingsScreen(
 
     fun restorePreviousSettings() {
         if (!hasUnsavedChanges) return
+        draftRestoration.discard()
+        directoryPicker.retire()
         settingsEditRevision[0]++
         val prev = originalSnapshot
         calibration.cancel(clearMeasurement = true)
@@ -655,7 +721,7 @@ fun SettingsScreen(
         }
     }
 
-    fun currentSaveAdmission(): SettingsSaveAdmission? = if (quickTileEditorState.editorOpen) null else settingsSaveAdmission(
+    fun currentSaveAdmission(): SettingsSaveAdmission? = if (!settingsInputReady() || quickTileEditorState.editorOpen || notificationDurationInteraction.pending) null else settingsSaveAdmission(
         active = isPanelActive() && settingsLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
             settingsView.isAttachedToWindow && settingsView.hasWindowFocus(),
         ownerActive = scope.isActive,
@@ -838,10 +904,10 @@ fun SettingsScreen(
         // disposal may cancel only the UI tail. A successful durable commit must still reach the
         // surviving recorder (or stopped tile fallback) before this section can terminate.
         val persisted = runDurableUiBooleanAttempt {
-            withContext(NonCancellable) {
+            processSettingsCommitBarrier.runAcceptedSave {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
-                    SilenceGatePreferences.withSettingsTransaction(context, submittedSilenceRaw) {
+                    val settingsCommitted = SilenceGatePreferences.withSettingsTransaction(context, submittedSilenceRaw) {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
@@ -856,6 +922,10 @@ fun SettingsScreen(
                         invalidateCachedOneShotFull = invalidateCachedOneShotFull,
                         coordinatedOneShotFullSnapshot = oneShotFullRollback?.rawValue,
                     )
+
+                    // A replacement can sample SharedPreferences' attempted value during commit.
+                    // Retain the authoritative pre-write theme even if this first save rolls back.
+                    processCommittedTheme.initializeBaseline(getConfiguredThemeMode(context))
 
                     var transactionCommitted = false
                     try {
@@ -899,6 +969,10 @@ fun SettingsScreen(
                         }
                     }
                     }
+                    // Publish the exact durable value before releasing transaction ordering.
+                    // Replacement Activities observe this independently of the old UI tail.
+                    if (settingsCommitted) processCommittedTheme.publishCommitted(submittedSnapshot.themeMode)
+                    settingsCommitted
                 }
                 }
                 if (committed) applyCommittedSettingsToRuntime(transactionService)
@@ -909,8 +983,6 @@ fun SettingsScreen(
             AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
             return false
         }
-        onThemeChanged(selectedTheme)
-
         val editedWhileSaving = settingsEditedDuringPersistence(
             submittedRevision = submittedEditRevision,
             currentRevision = settingsEditRevision[0],
@@ -936,6 +1008,11 @@ fun SettingsScreen(
             currentSnapshot = durableSnapshot
             hasUnsavedChanges = false
         }
+        if (savePanelOwnerState.value === savePanelOwner && panelActiveState.value() &&
+            scope.isActive && selectedTheme == durableSnapshot.themeMode
+        ) {
+            onThemeChanged(null)
+        }
         val outputLimit = exportDurationLimitExactSeconds(
             committedOutputFormat, codec, sampleRate, channelMode.channelCount, sampleFormat,
         ).toInt().coerceAtMost(86_400)
@@ -951,7 +1028,8 @@ fun SettingsScreen(
 
     suspend fun bindUiFromPreferences(): Boolean {
         val hydrationEditRevision = settingsEditRevision[0]
-        val initial = withContext(Dispatchers.IO) {
+        val initial = processSettingsCommitBarrier.readSettled {
+            withContext(Dispatchers.IO) {
             withRetentionPersistenceLock {
             SettingsInitialConfiguration(
                 format = getConfiguredOutputFormat(context),
@@ -970,69 +1048,106 @@ fun SettingsScreen(
                 silence = SilenceGatePreferences.read(context),
             )
             }
+            }
         }
-        if (!settingsHydrationMayApply(hydrationEditRevision, settingsEditRevision[0])) return false
-        val configuredThemeMode = initial.themeMode
-        val retention = initial.retention
-        val configuredMode = retention.mode
-        val configuredOneShotTime = retention.oneShotSeconds
-            .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
-        val configuredLoopingTime = retention.loopingSeconds
-            .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
-        val storedOneShotSizeBytes = retention.oneShotSizeBytes
-        val storedLoopingSizeBytes = retention.loopingSizeBytes
-        val configuredSampleFormatVal = initial.sampleFormat
-        val configuredRouteVal = initial.route
-        val configuredSourceVal = initial.source
-        val configuredChannelModeVal = initial.channelMode
-        val configuredRateVal = initial.sampleRate
-        val configuredExportTreeUriVal = initial.exportTreeUri
+        val hydration = draftRestoration.hydrate(hydrationEditRevision, settingsEditRevision[0]) {
+            val configuredThemeMode = initial.themeMode
+            val retention = initial.retention
+            val configuredMode = retention.mode
+            val configuredOneShotTime = retention.oneShotSeconds
+                .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            val configuredLoopingTime = retention.loopingSeconds
+                .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            val storedOneShotSizeBytes = retention.oneShotSizeBytes
+            val storedLoopingSizeBytes = retention.loopingSizeBytes
+            val configuredSampleFormatVal = initial.sampleFormat
+            val configuredRouteVal = initial.route
+            val configuredSourceVal = initial.source
+            val configuredChannelModeVal = initial.channelMode
+            val configuredRateVal = initial.sampleRate
+            val configuredExportTreeUriVal = initial.exportTreeUri
 
-        activeRetentionMode = configuredMode
-        oneShotRetentionTimeSecondsValue = configuredOneShotTime
-        oneShotRetentionSizeBytesValue = storedOneShotSizeBytes
-        loopingRetentionTimeSecondsValue = configuredLoopingTime
-        loopingRetentionSizeBytesValue = storedLoopingSizeBytes
-        selectedExportTreeUri = configuredExportTreeUriVal
+            activeRetentionMode = configuredMode
+            oneShotRetentionTimeSecondsValue = configuredOneShotTime
+            oneShotRetentionSizeBytesValue = storedOneShotSizeBytes
+            loopingRetentionTimeSecondsValue = configuredLoopingTime
+            loopingRetentionSizeBytesValue = storedLoopingSizeBytes
+            selectedExportTreeUri = configuredExportTreeUriVal
 
-        calibration.cancel(clearMeasurement = true)
-        outputSelectionRevision[0]++
-        selectedFormat = initial.format
-        selectedFlacCompression = initial.flacCompression
-        selectedQuickSaveEnabled = initial.quickSaveEnabled
-        selectedQuickSaveSeconds = initial.quickSaveSeconds
-        selectedSilence = initial.silence.config
-        originalSilenceRaw = initial.silence.raw
-        calibrationResetRevision++
-        selectedTheme = configuredThemeMode
-        availableRouteModes = supportedInputRouteModes(context)
-        selectedRoute = configuredRouteVal.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
+            calibration.cancel(clearMeasurement = true)
+            outputSelectionRevision[0]++
+            selectedFormat = initial.format
+            selectedFlacCompression = initial.flacCompression
+            selectedQuickSaveEnabled = initial.quickSaveEnabled
+            selectedQuickSaveSeconds = initial.quickSaveSeconds
+            selectedSilence = initial.silence.config
+            originalSilenceRaw = initial.silence.raw
+            calibrationResetRevision++
+            selectedTheme = configuredThemeMode
+            availableRouteModes = supportedInputRouteModes(context)
+            selectedRoute = configuredRouteVal.takeIf { it in availableRouteModes } ?: availableRouteModes.first()
 
-        selectedSampleFormat = configuredSampleFormatVal
+            selectedSampleFormat = configuredSampleFormatVal
 
-        refreshSourceModes(
-            preferredSource = configuredSourceVal,
-            preferredChannelMode = configuredChannelModeVal,
-            preferredRate = configuredRateVal,
-        )
-        refreshRetentionFields()
-        refreshExportDirectoryUi()
-        refreshBatteryOptimizationUi()
+            refreshSourceModes(
+                preferredSource = configuredSourceVal,
+                preferredChannelMode = configuredChannelModeVal,
+                preferredRate = configuredRateVal,
+            )
+            refreshRetentionFields()
+            refreshExportDirectoryUi()
+            refreshBatteryOptimizationUi()
 
-        currentSnapshot = currentSettingsSnapshot(initial.wakeLockEnabled)
-        originalSnapshot = currentSnapshot
-        hasUnsavedChanges = false
+            currentSettingsDraft(currentSettingsSnapshot(initial.wakeLockEnabled))
+        } ?: return false
+        originalSnapshot = hydration.baseline
+        if (hydration.restored) {
+            val draft = hydration.displayed
+            val values = draft.snapshot
+            selectedTheme = values.themeMode
+            activeRetentionMode = values.retentionMode
+            oneShotRetentionTimeSecondsValue = values.oneShotRetentionTime
+            oneShotRetentionSizeBytesValue = values.oneShotRetentionSizeBytes
+            loopingRetentionTimeSecondsValue = values.loopingRetentionTime
+            loopingRetentionSizeBytesValue = values.loopingRetentionSizeBytes
+            selectedFormat = values.format ?: ExportFormat.WAV
+            selectedFlacCompression = values.flacCompression
+            selectedQuickSaveEnabled = values.quickSaveEnabled
+            selectedQuickSaveSeconds = values.quickSaveSeconds
+            selectedSilence = decodeSilenceGate(values.silenceGate)
+            selectedSampleFormat = values.sampleFormat
+            selectedRoute = values.route ?: InputRouteMode.AUTO
+            selectedExportTreeUri = values.exportDirectoryUri?.let(Uri::parse)
+            refreshSourceModes(values.source, values.channelMode, values.sampleRate)
+            oneShotRetentionTimeText = draft.oneShotTimeText
+            oneShotRetentionSizeText = draft.oneShotSizeText
+            loopingRetentionTimeText = draft.loopingTimeText
+            loopingRetentionSizeText = draft.loopingSizeText
+            refreshRetentionFields(preserveActiveInputs = true)
+            refreshExportDirectoryUi()
+            // A restored explicit output edit remains newer than later save normalization.
+            outputSelectionRevision[0]++
+        }
+        currentSnapshot = currentSettingsSnapshot(hydration.displayed.snapshot.wakeLockEnabled)
+        recomputeUnsavedState()
+        onThemeChanged(hydration.themePreview)
         settingsHydrated = true
         settingsInteractionReady = true
+        applyPendingDirectorySelection()
         return true
     }
 
     val exportDirectoryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
-        if (treeUri == null) return@rememberLauncherForActivityResult
+        if (!isPanelActive()) directoryPicker.setPanelActive(false)
+        if (treeUri == null || !directoryPicker.acceptsResult) {
+            directoryPicker.receiveResult(null)
+            return@rememberLauncherForActivityResult
+        }
         val canonicalTree = canonicalDocumentTreeId(treeUri.toString())?.let(Uri::parse)
         if (canonicalTree == null) {
+            directoryPicker.receiveResult(null)
             AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
@@ -1043,14 +1158,12 @@ fun SettingsScreen(
             )
         }.isSuccess
         if (!permissionTaken) {
+            directoryPicker.receiveResult(null)
             AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
             return@rememberLauncherForActivityResult
         }
-        selectedExportTreeUri = canonicalTree
-        exportPathText = describeOutputDirectory(context, canonicalTree)
-        currentSnapshot = currentSettingsSnapshot()
-        pushUndoState()
-        refreshMoveRecordingsAvailability()
+        directoryPicker.receiveResult(canonicalTree.toString())
+        applyPendingDirectorySelection()
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1155,13 +1268,14 @@ fun SettingsScreen(
     }
 
     fun reviewBatteryOptimization() {
+        if (!settingsInputReady()) return
         if (!openBatteryOptimizationReview(context)) {
             AppFeedbackCenter.post(resources.getString(R.string.no_app_available), FeedbackTone.ERROR)
         }
     }
 
     fun moveExistingRecordings() {
-        if (settingsPersisting) return
+        if (!settingsInputReady() || settingsPersisting) return
         val moveTargetTreeUri = selectedExportTreeUri
         val appContext = context.applicationContext
         val appResources = appContext.resources
@@ -1230,16 +1344,35 @@ fun SettingsScreen(
         keyboardController?.hide()
     }
 
+    LaunchedEffect(active, settingsInteractionReady) {
+        if (!active || !settingsInteractionReady) releaseInputFocus()
+    }
+
     LaunchedEffect(active, settingsPersisting) {
         if (!active && !settingsPersisting) {
             // A save transaction owns the edited values until it completes. If it succeeds,
             // hasUnsavedChanges becomes false; if it fails, this reruns and restores the last
             // durable snapshot instead of leaving hidden retained UI with uncommitted values.
             if (hasUnsavedChanges) restorePreviousSettings()
-            releaseInputFocus()
+            onThemeChanged(null)
+            // Focus was released when this panel became inactive. A delayed save completion
+            // must not clear focus now owned by another visible surface.
         }
     }
     LaunchedEffect(active, settingsPersisting) {
+        // A reopened activation may inherit a draft owned by an accepted save. Once that
+        // save ends, keep the draft and release this activation's readiness cell; an old
+        // save callback still holds the retired cell and must not decide input ownership.
+        if (settingsRetainedDraftMayReleaseInteraction(
+                active = active,
+                hydrated = settingsHydrated,
+                persisting = settingsPersisting,
+                hasUnsavedChanges = hasUnsavedChanges,
+            )
+        ) {
+            settingsInteractionReady = true
+            return@LaunchedEffect
+        }
         if (settingsShouldRehydrate(active, settingsPersisting, hasUnsavedChanges)) {
             settingsInteractionReady = false
             var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
@@ -1297,8 +1430,12 @@ fun SettingsScreen(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(settingsInteractionReady) {
-                if (!settingsInteractionReady) {
+            .focusProperties {
+                onEnter = { if (!settingsInputReady()) cancelFocusChange() }
+            }
+            .focusGroup()
+            .pointerInput(active, settingsInteractionReady) {
+                if (!settingsInputReady()) {
                     awaitPointerEventScope {
                         while (true) {
                             awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
@@ -1306,7 +1443,7 @@ fun SettingsScreen(
                     }
                 }
             }
-            .semantics { if (!settingsInteractionReady) hideFromAccessibility() },
+            .semantics { if (!settingsInputReady()) hideFromAccessibility() },
         containerColor = Color.Transparent,
         topBar = {
             CenterAlignedTopAppBar(
@@ -1322,6 +1459,7 @@ fun SettingsScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
+                        if (!settingsInputReady()) return@IconButton
                         if (quickTileEditorState.editorOpen) {
                             quickTileEditorState.closeEditor()
                         } else if (calibration.running) {
@@ -1344,15 +1482,24 @@ fun SettingsScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            if (!hasUnsavedChanges || settingsPersisting || calibration.running || quickTileEditorState.editorOpen) return@IconButton
+                            if (!settingsInputReady() || !hasUnsavedChanges || settingsPersisting || calibration.running || quickTileEditorState.editorOpen || notificationDurationInteraction.pending) return@IconButton
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                if (persistSettings()) {
-                                    releaseInputFocus()
-                                    onBack()
-                                }
+                                runSettingsSaveContinuation(
+                                    submittedOwner = savePanelOwner,
+                                    persistSettings = ::persistSettings,
+                                    currentVisibleOwner = {
+                                        savePanelOwnerState.value.takeIf {
+                                            activeState.value && panelActiveState.value() && scope.isActive
+                                        }
+                                    },
+                                    onSaved = {
+                                        releaseInputFocus()
+                                        onBack()
+                                    },
+                                )
                             }
                         },
-                        enabled = hasUnsavedChanges && !settingsPersisting && !calibration.running && !quickTileEditorState.editorOpen,
+                        enabled = hasUnsavedChanges && !settingsPersisting && !calibration.running && !quickTileEditorState.editorOpen && !notificationDurationInteraction.pending,
                     ) {
                         Icon(
                             imageVector = AppIcons.check,
@@ -1403,7 +1550,8 @@ fun SettingsScreen(
                         SettingsSegmentedControl(
                             items = AppThemeMode.entries,
                             selected = selectedTheme,
-                            onSelected = { theme ->
+                            onSelected = edit@{ theme ->
+                                if (!settingsInputReady()) return@edit
                                 if (theme != selectedTheme) {
                                     selectedTheme = theme
                                     onThemeChanged(theme)
@@ -1439,7 +1587,7 @@ fun SettingsScreen(
             item(key = "retention") {
                 RetentionSection(
                     activeMode = activeRetentionMode,
-                    focusBuffer = focusRetentionBuffer,
+                    focusBuffer = focusRetentionBuffer.takeIf { settingsInputReady() },
                     oneShotTimeText = oneShotRetentionTimeText,
                     oneShotSizeText = oneShotRetentionSizeText,
                     loopingTimeText = loopingRetentionTimeText,
@@ -1453,26 +1601,30 @@ fun SettingsScreen(
                     oneShotComputedTimeSeconds = oneShotComputedTimeSeconds,
                     loopingComputedTimeSeconds = loopingComputedTimeSeconds,
                     onModeSelected = ::activateRetentionMode,
-                    onOneShotTimeChange = { value ->
+                    onOneShotTimeChange = edit@{ value ->
+                        if (!settingsInputReady()) return@edit
                         oneShotRetentionTimeText = value
                         oneShotRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { oneShotRetentionTimeSecondsValue = it }
                         finishSettingsEdit()
                     },
-                    onOneShotSizeChange = { value ->
+                    onOneShotSizeChange = edit@{ value ->
+                        if (!settingsInputReady()) return@edit
                         oneShotRetentionSizeText = value
                         oneShotRetentionSizeError = null
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
                             ?.let { oneShotRetentionSizeBytesValue = rawMegabytesToBytes(it) }
                         finishSettingsEdit()
                     },
-                    onLoopingTimeChange = { value ->
+                    onLoopingTimeChange = edit@{ value ->
+                        if (!settingsInputReady()) return@edit
                         loopingRetentionTimeText = value
                         loopingRetentionTimeError = null
                         parseRetentionTimeSeconds(value)?.let { loopingRetentionTimeSecondsValue = it }
                         finishSettingsEdit()
                     },
-                    onLoopingSizeChange = { value ->
+                    onLoopingSizeChange = edit@{ value ->
+                        if (!settingsInputReady()) return@edit
                         loopingRetentionSizeText = value
                         loopingRetentionSizeError = null
                         parseRetentionSizeMib(value)?.takeIf { it >= 0.0 }
@@ -1499,7 +1651,8 @@ fun SettingsScreen(
                                 selectedValue = selectedChannelMode,
                                 options = availableChannelModes,
                                 optionLabel = { resources.getString(it.labelRes) },
-                                onOptionSelected = { channelMode ->
+                                onOptionSelected = edit@{ channelMode ->
+                                    if (!settingsInputReady()) return@edit
                                     selectedChannelMode = channelMode
                                     refreshSampleRates(selectedSampleRate)
                                     finishSettingsEdit()
@@ -1519,7 +1672,8 @@ fun SettingsScreen(
                                         selectedValue = selectedSampleFormat,
                                         options = PcmSampleFormat.entries,
                                         optionLabel = { resources.getString(it.labelRes) },
-                                        onOptionSelected = { sampleFormat ->
+                                        onOptionSelected = edit@{ sampleFormat ->
+                                            if (!settingsInputReady()) return@edit
                                             selectedSampleFormat = sampleFormat
                                             refreshSourceModes(
                                                 preferredSource = selectedSource,
@@ -1538,7 +1692,8 @@ fun SettingsScreen(
                                         selectedValue = selectedSampleRate,
                                         options = availableSampleRates,
                                         optionLabel = ::sampleRateLabel,
-                                        onOptionSelected = { sampleRate ->
+                                        onOptionSelected = edit@{ sampleRate ->
+                                            if (!settingsInputReady()) return@edit
                                             selectedSampleRate = sampleRate
                                             finishSettingsEdit()
                                         },
@@ -1564,7 +1719,8 @@ fun SettingsScreen(
                                         selectedValue = selectedSource,
                                         options = availableSourceModes,
                                         optionLabel = { resources.getString(it.labelRes) },
-                                        onOptionSelected = { source ->
+                                        onOptionSelected = edit@{ source ->
+                                            if (!settingsInputReady()) return@edit
                                             selectedSource = source
                                             refreshChannelModes(selectedChannelMode, selectedSampleRate)
                                             finishSettingsEdit()
@@ -1579,7 +1735,8 @@ fun SettingsScreen(
                                         selectedValue = selectedRoute,
                                         options = availableRouteModes,
                                         optionLabel = { resources.getString(it.labelRes) },
-                                        onOptionSelected = { route ->
+                                        onOptionSelected = edit@{ route ->
+                                            if (!settingsInputReady()) return@edit
                                             selectedRoute = route
                                             refreshSourceModes(
                                                 preferredSource = selectedSource,
@@ -1656,6 +1813,7 @@ fun SettingsScreen(
                             onEnabledChange = { if (featureInputReady()) { selectedQuickSaveEnabled = it; finishSettingsEdit() } },
                             onSecondsChange = { selectedQuickSaveSeconds = it; finishSettingsEdit() },
                             interactionReady = settingsInteractionReady && !settingsPersisting,
+                            interactionState = notificationDurationInteraction,
                             editRevision = settingsEditRevision[0],
                             readEditRevision = {
                                 if (featureInputReady() && selectedQuickSaveEnabled)
@@ -1707,6 +1865,8 @@ fun SettingsScreen(
                             val storageActionShape = RoundedCornerShape(14.dp)
                             Surface(
                                 onClick = {
+                                    if (!settingsInputReady()) return@Surface
+                                    directoryPicker.retire()
                                     selectedExportTreeUri = null
                                     refreshExportDirectoryUi()
                                     refreshMoveRecordingsAvailability()
@@ -1727,7 +1887,16 @@ fun SettingsScreen(
                             }
                         }
                         Surface(
-                            onClick = { exportDirectoryLauncher.launch(selectedExportTreeUri) },
+                            onClick = {
+                                if (settingsInputReady() && directoryPicker.beginRequest()) {
+                                    try {
+                                        exportDirectoryLauncher.launch(selectedExportTreeUri)
+                                    } catch (_: RuntimeException) {
+                                        directoryPicker.receiveResult(null)
+                                        AppFeedbackCenter.post(resources.getString(R.string.cant_access_folder), FeedbackTone.ERROR)
+                                    }
+                                }
+                            },
                             modifier = Modifier.size(48.dp),
                             shape = RoundedCornerShape(14.dp),
                             color = chrome.raised,
@@ -1763,13 +1932,16 @@ fun SettingsScreen(
                     ReliabilityRow(
                         title = stringResource(R.string.wake_lock_label),
                         summary = stringResource(R.string.wake_lock_summary),
-                        trailing = {
+                        checked = currentSnapshot.wakeLockEnabled,
+                        onCheckedChange = edit@{ enabled ->
+                            if (!settingsInputReady()) return@edit
+                            currentSnapshot = currentSettingsSnapshot(enabled)
+                            pushUndoState()
+                        },
+                        trailing = { interactionSource ->
                             ReverbSwitch(
                                 checked = currentSnapshot.wakeLockEnabled,
-                                onCheckedChange = { enabled ->
-                                    currentSnapshot = currentSettingsSnapshot(enabled)
-                                    pushUndoState()
-                                },
+                                interactionSource = interactionSource,
                             )
                         },
                     )
@@ -1783,11 +1955,10 @@ fun SettingsScreen(
 @Composable
 private fun ReverbSwitch(
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    interactionSource: MutableInteractionSource,
 ) {
     val colors = MaterialTheme.colorScheme
     val chrome = appChrome()
-    val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val pressedOverlayAlpha by animateFloatAsState(
         targetValue = if (pressed) 0.12f else 0f,
@@ -1807,15 +1978,7 @@ private fun ReverbSwitch(
     )
 
     Box(
-        modifier = Modifier
-            .size(48.dp)
-            .toggleable(
-                value = checked,
-                interactionSource = interactionSource,
-                indication = null,
-                role = Role.Switch,
-                onValueChange = onCheckedChange,
-            ),
+        modifier = Modifier.size(48.dp),
         contentAlignment = Alignment.Center,
     ) {
         val trackShape = RoundedCornerShape(13.dp)
@@ -1850,9 +2013,12 @@ private fun ReverbSwitch(
 private fun ReliabilityRow(
     title: String,
     summary: String,
-    trailing: @Composable () -> Unit,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    trailing: @Composable (MutableInteractionSource) -> Unit,
 ) {
     val chrome = appChrome()
+    val interactionSource = remember { MutableInteractionSource() }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1862,7 +2028,15 @@ private fun ReliabilityRow(
         border = BorderStroke(1.dp, chrome.border),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .toggleable(
+                    value = checked,
+                    interactionSource = interactionSource,
+                    indication = null,
+                    role = Role.Switch,
+                    onValueChange = onCheckedChange,
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
@@ -1882,7 +2056,7 @@ private fun ReliabilityRow(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
-            trailing()
+            trailing(interactionSource)
         }
     }
 }

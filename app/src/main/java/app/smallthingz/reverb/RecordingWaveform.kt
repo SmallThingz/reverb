@@ -160,10 +160,14 @@ internal class RecordingPcm16MonoReader internal constructor(
     }
 
     companion object {
-        fun open(context: Context, recording: RecordingEntity): RecordingPcm16MonoReader {
+        fun open(
+            context: Context,
+            recording: RecordingEntity,
+            cleanup: RecordingReadCleanup,
+        ): RecordingPcm16MonoReader {
             return when (recording.storageType) {
                 RecordingStorageType.FILE -> {
-                    val input = openVerifiedFileInputStream(recording)
+                    val input = openVerifiedFileInputStream(recording, cleanup)
                         ?: throw IOException("Recording changed on disk")
                     try {
                         val validateRead = {
@@ -182,12 +186,10 @@ internal class RecordingPcm16MonoReader internal constructor(
                             validateRead = validateRead,
                             closeAction = input::close,
                             layout = layout,
-                            flac = if (channelHasFlac(input.channel)) FlacPcmDecoder(input.channel) else null,
+                            flac = if (channelHasFlac(input.channel)) FlacPcmDecoder(input.channel, cleanup) else null,
                         )
                     } catch (error: Throwable) {
-                        throw requireNotNull(
-                            closePreservingPrimaryFailure(error) { input.close() },
-                        )
+                        throw cleanup.closeAfterFailure(error) { input.close() }
                     }
                 }
                 RecordingStorageType.DOCUMENT,
@@ -205,7 +207,7 @@ internal class RecordingPcm16MonoReader internal constructor(
                     }
                     val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
                         ?: throw IOException("Unable to open recording for reading")
-                    val input = openChildOrCloseOwner(descriptor) { opened ->
+                    val input = cleanup.open(descriptor) { opened ->
                         ParcelFileDescriptor.AutoCloseInputStream(opened)
                     }
                     try {
@@ -232,11 +234,10 @@ internal class RecordingPcm16MonoReader internal constructor(
                             validateRead = validateRead,
                             closeAction = input::close,
                             layout = layout,
-                            flac = if (channelHasFlac(input.channel)) FlacPcmDecoder(input.channel) else null,
+                            flac = if (channelHasFlac(input.channel)) FlacPcmDecoder(input.channel, cleanup) else null,
                         )
                     } catch (error: Throwable) {
-                        closePreservingPrimaryFailure(error) { input.close() }
-                        throw error
+                        throw cleanup.closeAfterFailure(error) { input.close() }
                     }
                 }
             }
@@ -329,12 +330,13 @@ internal fun readWavPcm16MonoRange(
 internal fun <T> withRecordingWavChannelIdentityGuard(
     context: Context,
     recording: RecordingEntity,
+    cleanup: RecordingReadCleanup,
     block: (FileChannel, sourceStillCurrent: () -> Boolean) -> T,
 ): T = when (recording.storageType) {
     RecordingStorageType.FILE -> {
-        val input = openVerifiedFileInputStream(recording)
+        val input = openVerifiedFileInputStream(recording, cleanup)
             ?: throw IOException("Recording changed on disk")
-        input.use { source ->
+        cleanup.use(input, release = { it.close() }) { source ->
             val sourceStillCurrent = {
                 fileReadIdentityRemainsCurrent(
                     expectedIdentity = recording.fileIdentity,
@@ -359,10 +361,10 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
         val uri = recording.id.toUri()
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
             ?: throw IOException("Unable to open recording for reading")
-        val input = openChildOrCloseOwner(descriptor) { opened ->
+        val input = cleanup.open(descriptor) { opened ->
             ParcelFileDescriptor.AutoCloseInputStream(opened)
         }
-        input.use { source ->
+        cleanup.use(input, release = { it.close() }) { source ->
             val sourceStillCurrent = {
                 recordingContentIdentityMatches(context, recording) &&
                     providerDescriptorMatchesIdentity(recording.fileIdentity, source.fd)
@@ -378,8 +380,9 @@ internal fun <T> withRecordingWavChannelIdentityGuard(
 internal fun <T> withRecordingWavChannel(
     context: Context,
     recording: RecordingEntity,
+    cleanup: RecordingReadCleanup,
     block: (FileChannel) -> T,
-): T = withRecordingWavChannelIdentityGuard(context, recording) { channel, sourceStillCurrent ->
+): T = withRecordingWavChannelIdentityGuard(context, recording, cleanup) { channel, sourceStillCurrent ->
     val result = block(channel)
     if (!sourceStillCurrent()) throw IOException("Recording changed while reading")
     result
@@ -473,10 +476,11 @@ internal fun readRecordingWaveformEnvelopeProgressive(
     context: Context,
     recording: RecordingEntity,
     pass: RangeWaveformPass,
+    cleanup: RecordingReadCleanup,
     onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
-): FloatArray = withRecordingWavChannel(context, recording) { channel ->
+): FloatArray = withRecordingWavChannel(context, recording, cleanup) { channel ->
     if (channelHasFlac(channel)) {
-        FlacPcmDecoder(channel).use { decoder ->
+        cleanup.use(FlacPcmDecoder(channel, cleanup), release = { it.close() }) { decoder ->
             samplePcmWaveformEnvelopeProgressive(decoder.info.pcmLayout, pass, { first, frames, scratch ->
                 var position = 0
                 decoder.readFrames(first, frames.toLong()) { bytes, offset, count ->

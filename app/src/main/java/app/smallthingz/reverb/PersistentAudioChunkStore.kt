@@ -233,6 +233,9 @@ internal class PersistentAudioChunkStore internal constructor(
     private val chunks = ArrayDeque<ChunkRecord>()
     private val liveChunkIds = HashSet<UInt>()
     private val retiredById = HashMap<UInt, ChunkRecord>()
+    // Only unleased retirees are eligible. Keep this subset at ownership transitions so
+    // each maintenance pass does not rescan all the retirees pinned by a history lease.
+    private val eligibleRetiredById = LinkedHashMap<UInt, ChunkRecord>()
     private val retiredDeletionClaims = HashMap<UInt, PendingRetiredDeletionClaim>()
     private val retirementTombstoneDurabilityPending = HashSet<UInt>()
     private val retirementTombstoneRemovalDurabilityPending = HashSet<UInt>()
@@ -303,6 +306,13 @@ internal class PersistentAudioChunkStore internal constructor(
 
     fun interface Consumer {
         fun consume(array: ByteArray, offset: Int, count: Int): Int
+    }
+
+    /** Select the Service's cleanup policy before a history probe can trigger recovery. */
+    @Synchronized
+    fun enableDeferredRetentionCleanup() {
+        check(!closed) { "PersistentAudioChunkStore is closed" }
+        deferredRetentionCleanup = true
     }
 
     @Synchronized
@@ -682,7 +692,7 @@ internal class PersistentAudioChunkStore internal constructor(
             val frameCount = endFrame - startFrame
             if (frameCount <= 0L) continue
 
-            record.refCount++
+            acquireRecordLocked(record)
             val selectedSegmentDuration = frameCount.toDouble() / record.sampleRate.toDouble()
             segments += Segment(
                 record = record,
@@ -797,8 +807,8 @@ internal class PersistentAudioChunkStore internal constructor(
     fun performRetentionMaintenanceStep(): RetentionMaintenanceStep {
         ensureLoadedLocked()
         if (deferredRetentionCleanup) {
-            retiredById.values.firstOrNull { it.refCount == 0 }?.let { record ->
-                val progressed = tryDeleteRetiredRecordLocked(record)
+            eligibleRetiredById.values.firstOrNull()?.let { record ->
+                val progressed = tryDeleteRetiredRecordLocked(record, failOnCleanupError = true)
                 return RetentionMaintenanceStep(progressed, retentionMaintenanceNeededLocked(), !progressed)
             }
         }
@@ -902,7 +912,7 @@ internal class PersistentAudioChunkStore internal constructor(
                     recordFailure(error)
                 }
                 try {
-                    retryRetirementTombstoneRemovalDurabilityLocked()
+                    retryRetirementTombstoneRemovalDurabilityLocked(force = true)
                 } catch (error: Exception) {
                     recordFailure(error)
                 }
@@ -974,7 +984,7 @@ internal class PersistentAudioChunkStore internal constructor(
                     val childFrames = lastFrame - firstFrame
                     if (childFrames <= 0L) continue
 
-                    segment.record.refCount++
+                    acquireRecordLocked(segment.record)
                     val absoluteStartFrame = segment.startFrame + firstFrame
                     val childDuration = childFrames.toDouble() / rate.toDouble()
                     selected += segment.copy(
@@ -1595,7 +1605,10 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
-    private fun deleteRetirementTombstoneLocked(id: UInt): Boolean = runCatching {
+    private fun deleteRetirementTombstoneLocked(
+        id: UInt,
+        failOnCleanupError: Boolean = false,
+    ): Boolean = try {
         val marker = retirementTombstoneFile(id)
         if (Files.deleteIfExists(marker.toPath())) {
             // The namespace mutation is visible before its parent directory is durable. Keep an
@@ -1606,7 +1619,9 @@ internal class PersistentAudioChunkStore internal constructor(
         retirementTombstoneRemovalDurabilityPending.remove(id)
         retirementTombstoneDurabilityPending.remove(id)
         true
-    }.getOrDefault(false)
+    } catch (error: Exception) {
+        retiredCleanupFailed(error, failOnCleanupError)
+    }
 
     private fun deleteChunkFileDurablyLocked(file: File): Boolean = runCatching {
         Files.deleteIfExists(file.toPath())
@@ -1628,6 +1643,7 @@ internal class PersistentAudioChunkStore internal constructor(
         file: File,
         reason: String,
         syncDirectory: Boolean = true,
+        failOnCleanupError: Boolean = false,
     ): ClaimedChunkPath? {
         val claim = File(chunksDirectory, ".reverb-$reason-${UUID.randomUUID()}.pending")
         var moved = false
@@ -1644,24 +1660,31 @@ internal class PersistentAudioChunkStore internal constructor(
                 )
             }
             return ClaimedChunkPath(claim, durabilityFailure)
-        } catch (_: AtomicMoveNotSupportedException) {
+        } catch (error: AtomicMoveNotSupportedException) {
+            if (failOnCleanupError) throw error
             return null
         } catch (error: Exception) {
-            if (moved) throw error
+            if (moved || failOnCleanupError) throw error
             return null
         }
     }
 
-    private fun deleteClaimedChunkDurablyLocked(claim: File): Boolean = runCatching {
+    private fun deleteClaimedChunkDurablyLocked(
+        claim: File,
+        failOnCleanupError: Boolean = false,
+    ): Boolean = try {
         Files.deleteIfExists(claim.toPath())
         forceDirectoryDurable(chunksDirectory)
         true
-    }.getOrDefault(false)
+    } catch (error: Exception) {
+        retiredCleanupFailed(error, failOnCleanupError)
+    }
 
     private fun moveClaimedChunkToPreservedLocked(
         claim: File,
         originalName: String,
         reason: String,
+        failOnCleanupError: Boolean = false,
     ): Boolean {
         ensureQuarantineDirectoryDurableLocked()
         val target = File(
@@ -1673,8 +1696,8 @@ internal class PersistentAudioChunkStore internal constructor(
             forceDirectoryDurable(chunksDirectory)
             forceDirectoryDurable(quarantineDirectory)
             return true
-        } catch (_: AtomicMoveNotSupportedException) {
-            return false
+        } catch (error: AtomicMoveNotSupportedException) {
+            return retiredCleanupFailed(error, failOnCleanupError)
         } catch (error: Exception) {
             val uncertain = IOException(
                 "Unable to durably preserve claimed chunk: ${claim.absolutePath}",
@@ -1753,7 +1776,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 ) {
                     if (deferredRetentionCleanup) {
                         record.pendingDelete = true
-                        retiredById[id] = record
+                        rememberRetiredRecordLocked(record)
                         return@forEachOrderedStartupRead
                     }
                     val beforeIdentity = resolveFileIdentity(file)
@@ -1808,7 +1831,7 @@ internal class PersistentAudioChunkStore internal constructor(
         if (deferredRetentionCleanup) {
             if (!sameFileObjectAcrossRename(identity, resolveFileIdentity(file))) return false
             val retired = record.copy(file = File(chunksDirectory, record.id.toString()), pendingDelete = true)
-            retiredById[record.id] = retired
+            rememberRetiredRecordLocked(retired)
             retiredDeletionClaims[record.id] = PendingRetiredDeletionClaim(file, identity)
             // Full header/payload verification is still mandatory in the one-unit worker.
             // Keep the journal now, and never let this claim enter the live timeline.
@@ -2348,7 +2371,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun retentionMaintenanceNeededLocked(): Boolean =
         deferredRetentionCleanup && ((retentionValue > 0L && retentionExceededLocked()) ||
-            retiredById.values.any { it.refCount == 0 })
+            eligibleRetiredById.isNotEmpty())
 
     private fun markRetentionMaintenancePendingLocked() {
         val needed = retentionValue > 0L && retentionExceededLocked()
@@ -2381,7 +2404,7 @@ internal class PersistentAudioChunkStore internal constructor(
         val dropBytes = loopingDropBytesLocked(oldest)
         if (dropBytes <= 0L) return false
         if (dropBytes >= oldest.payloadBytes) {
-            removeFirstChunkForRetentionLocked()
+            removeFirstChunkForRetentionLocked(failOnCleanupError = true)
             return true
         }
         if (oldest.refCount > 0) {
@@ -2404,13 +2427,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 chunkPayloadBytes = newest.payloadBytes,
                 frameBytes = newest.frameBytes,
             )
-            RetentionMode.TIME -> oneShotRetainedChunkBytesForTime(
-                retentionSeconds = retentionValue,
-                retainedDurationBeforeChunk = (retainedDurationSeconds - newest.durationSeconds).coerceAtLeast(0.0),
-                chunkSampleFrames = newest.sampleFrames,
-                sampleRate = newest.sampleRate,
-                frameBytes = newest.frameBytes,
-            )
+            RetentionMode.TIME -> retainedTimeBoundaryBytesLocked(newest)
         }
         if (keepBytes >= newest.payloadBytes) return false
         if (keepBytes > 0L) {
@@ -2420,7 +2437,7 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             truncateFinalizedChunkLocked(newest, keepBytes)
         } else {
-            removeNewestChunkAndRetireLocked(newest)
+            removeNewestChunkAndRetireLocked(newest, failOnCleanupError = true)
         }
         lastWriteAtMillis = chunks.lastOrNull()?.let { currentNewest ->
             currentNewest.createdAtMillis + (currentNewest.durationSeconds * 1000.0).toLong()
@@ -2700,17 +2717,32 @@ internal class PersistentAudioChunkStore internal constructor(
             chunkPayloadBytes = record.payloadBytes,
             frameBytes = record.frameBytes,
         )
-        RetentionMode.TIME -> loopingDropChunkBytesForTime(
-            excessSeconds = (retainedDurationSeconds - retentionValue.toDouble()).coerceAtLeast(0.0),
-            chunkSampleFrames = record.sampleFrames,
-            sampleRate = record.sampleRate,
-            frameBytes = record.frameBytes,
-        )
+        RetentionMode.TIME -> record.payloadBytes - retainedTimeBoundaryBytesLocked(record)
     }
+
+    private fun retainedTimeBoundaryBytesLocked(record: ChunkRecord): Long = oneShotRetainedChunkBytesForTime(
+        retentionSeconds = retentionValue,
+        retainedDurationBeforeChunk = (retainedDurationSeconds - record.durationSeconds).coerceAtLeast(0.0),
+        chunkSampleFrames = record.sampleFrames,
+        sampleRate = record.sampleRate,
+        frameBytes = record.frameBytes,
+    )
 
     private fun retentionExceededLocked(): Boolean = when (retentionMode) {
         RetentionMode.SIZE -> totalPayloadBytesLocked() > retentionValue
-        RetentionMode.TIME -> totalDurationSecondsLocked() > retentionValue.toDouble()
+        RetentionMode.TIME -> {
+            val boundary = if (overwriteOldest) chunks.peekFirst() else chunks.peekLast()
+            when {
+                boundary == null -> false
+                // An empty active tail must still be finalized before an over-limit older
+                // timeline can be trimmed. It has no frames to use for the boundary decision.
+                boundary.payloadBytes == 0L -> totalDurationSecondsLocked() > retentionValue.toDouble()
+                // Batch accumulation and whole-chunk removal can leave a sub-frame residual.
+                // Admission and mutation must agree on which actual boundary frames fit, using
+                // the existing frame-rounding tolerance rather than an unrelated duration epsilon.
+                else -> retainedTimeBoundaryBytesLocked(boundary) < boundary.payloadBytes
+            }
+        }
     }
 
     private fun retentionCleanupWillRetireChunkLocked(): Boolean {
@@ -2738,13 +2770,13 @@ internal class PersistentAudioChunkStore internal constructor(
         )
     }
 
-    private fun removeFirstChunkForRetentionLocked(): ChunkRecord {
+    private fun removeFirstChunkForRetentionLocked(failOnCleanupError: Boolean = false): ChunkRecord {
         val record = chunks.first()
         requireFinalizedChunkPayloadIntegrityLocked(record)
-        return removeFirstChunkAndRetireLocked()
+        return removeFirstChunkAndRetireLocked(failOnCleanupError)
     }
 
-    private fun removeFirstChunkAndRetireLocked(): ChunkRecord {
+    private fun removeFirstChunkAndRetireLocked(failOnCleanupError: Boolean = false): ChunkRecord {
         val record = chunks.first()
         // A leased ACTIVE chunk must not later be mistaken for changed/uncertain audio.
         // Seal its exact payload before durable retirement, without invalidating the lease.
@@ -2765,12 +2797,17 @@ internal class PersistentAudioChunkStore internal constructor(
         val closeFailure = sealFailure?.also { first -> rawCloseFailure?.let(first::addSuppressed) } ?: rawCloseFailure
         val removed = removeFirstChunkLocked()
         check(removed === record) { "Unexpected chunk retirement ordering" }
-        retirePreparedRecordLocked(record, tombstoneDurable = durabilityFailure == null)
+        retirePreparedRecordLocked(
+            record, tombstoneDurable = durabilityFailure == null, failOnCleanupError = failOnCleanupError,
+        )
         retirementFailureLocked(record, durabilityFailure, closeFailure)?.let { throw it }
         return record
     }
 
-    private fun removeNewestChunkAndRetireLocked(record: ChunkRecord): Boolean {
+    private fun removeNewestChunkAndRetireLocked(
+        record: ChunkRecord,
+        failOnCleanupError: Boolean = false,
+    ): Boolean {
         // Both retention callers retire the newest suffix. Do not search the whole timeline
         // twice for each tail chunk while holding the capture-store monitor.
         if (chunks.peekLast() !== record) return false
@@ -2790,7 +2827,9 @@ internal class PersistentAudioChunkStore internal constructor(
             closeFailure?.let { throw it }
             return false
         }
-        retirePreparedRecordLocked(record, tombstoneDurable = durabilityFailure == null)
+        retirePreparedRecordLocked(
+            record, tombstoneDurable = durabilityFailure == null, failOnCleanupError = failOnCleanupError,
+        )
         retirementFailureLocked(record, durabilityFailure, closeFailure)?.let { throw it }
         return true
     }
@@ -2813,24 +2852,45 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
-    private fun retirePreparedRecordLocked(record: ChunkRecord, tombstoneDurable: Boolean) {
+    private fun retirePreparedRecordLocked(
+        record: ChunkRecord,
+        tombstoneDurable: Boolean,
+        failOnCleanupError: Boolean = false,
+    ) {
         record.pendingDelete = true
         if (!tombstoneDurable) {
             retirementTombstoneDurabilityPending += record.id
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
             return
         }
         retirementTombstoneDurabilityPending.remove(record.id)
         if (record.refCount <= 0) {
-            tryDeleteRetiredRecordLocked(record)
+            tryDeleteRetiredRecordLocked(record, failOnCleanupError)
         } else {
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
         }
+    }
+
+    private fun rememberRetiredRecordLocked(record: ChunkRecord) {
+        retiredById[record.id] = record
+        if (record.refCount == 0) {
+            eligibleRetiredById[record.id] = record
+        } else {
+            eligibleRetiredById.remove(record.id)
+        }
+    }
+
+    private fun acquireRecordLocked(record: ChunkRecord) {
+        eligibleRetiredById.remove(record.id)
+        record.refCount++
     }
 
     private fun releaseRecordLocked(record: ChunkRecord) {
         check(record.refCount > 0) { "Chunk refCount underflow for ${record.id}" }
         record.refCount--
+        if (record.refCount == 0 && retiredById[record.id] === record) {
+            eligibleRetiredById[record.id] = record
+        }
         if (terminalStorageFailure != null) return
         if (record.refCount == 0 && record.pendingDelete && (!deferredRetentionCleanup || closed)) {
             tryDeleteRetiredRecordLocked(record)
@@ -2852,134 +2912,168 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
-    private fun tryDeleteRetiredRecordLocked(record: ChunkRecord): Boolean {
+    /** Maintenance errors are terminal for its scheduler generation; caller-owned cleanup retains its policy. */
+    private fun tryDeleteRetiredRecordLocked(
+        record: ChunkRecord,
+        failOnCleanupError: Boolean = false,
+    ): Boolean = try {
+        val complete = deleteRetiredRecordLocked(record, failOnCleanupError)
+        if (!complete && failOnCleanupError) throw IOException("Unable to complete retired chunk cleanup: ${record.id}")
+        complete
+    } catch (error: Exception) {
+        rememberRetiredRecordLocked(record)
+        throw error
+    }
+
+    private fun retiredCleanupFailed(error: Exception, failOnCleanupError: Boolean): Boolean {
+        if (failOnCleanupError) throw error
+        return false
+    }
+
+    private fun deleteRetiredRecordLocked(record: ChunkRecord, failOnCleanupError: Boolean): Boolean {
         // Lease release and close can enter without ensureLoadedLocked(), including after close.
         retryRecoveryPreservationCommitLocked()
         if (record.id in retirementTombstoneDurabilityPending) {
-            val markerDurable = runCatching {
+            val markerDurable = try {
                 forceDirectoryDurable(retiredDirectory)
                 true
-            }.getOrDefault(false)
+            } catch (error: Exception) {
+                retiredCleanupFailed(error, failOnCleanupError)
+            }
             if (!markerDurable) {
-                retiredById[record.id] = record
+                rememberRetiredRecordLocked(record)
                 return false
             }
             retirementTombstoneDurabilityPending.remove(record.id)
         }
 
         retiredDeletionClaims[record.id]?.let { pendingClaim ->
-            val claimDurable = runCatching {
+            val claimDurable = try {
                 forceDirectoryDurable(chunksDirectory)
                 true
-            }.getOrDefault(false)
+            } catch (error: Exception) {
+                retiredCleanupFailed(error, failOnCleanupError)
+            }
             if (!claimDurable) {
-                retiredById[record.id] = record
+                rememberRetiredRecordLocked(record)
                 return false
             }
-            return finishRetiredDeletionClaimLocked(record, pendingClaim)
+            return finishRetiredDeletionClaimLocked(record, pendingClaim, failOnCleanupError)
         }
 
         when (storagePathState(record.file)) {
             StoragePathState.MISSING -> {
-                val absenceDurable = runCatching {
+                val absenceDurable = try {
                     forceDirectoryDurable(chunksDirectory)
                     true
-                }.getOrDefault(false)
+                } catch (error: Exception) {
+                    retiredCleanupFailed(error, failOnCleanupError)
+                }
                 if (!absenceDurable) {
-                    retiredById[record.id] = record
+                    rememberRetiredRecordLocked(record)
                     return false
                 }
-                return finishRetiredRecordMarkerLocked(record)
+                return finishRetiredRecordMarkerLocked(record, failOnCleanupError)
             }
             StoragePathState.UNAVAILABLE -> {
-                retiredById[record.id] = record
-                return false
+                rememberRetiredRecordLocked(record)
+                return retiredCleanupFailed(IOException("Unable to inspect retired chunk ${record.id}"), failOnCleanupError)
             }
             StoragePathState.PRESENT -> Unit
         }
         if (!record.file.isFile) {
-            retiredById[record.id] = record
-            return false
+            rememberRetiredRecordLocked(record)
+            return retiredCleanupFailed(IOException("Retired chunk is not a regular file: ${record.id}"), failOnCleanupError)
         }
 
         val verifiedIdentity = try {
             verifiedRetiredChunkIdentityLocked(record)
-        } catch (_: IOException) {
-            retiredById[record.id] = record
-            return false
-        } catch (_: SecurityException) {
-            retiredById[record.id] = record
-            return false
+        } catch (error: IOException) {
+            rememberRetiredRecordLocked(record)
+            return retiredCleanupFailed(error, failOnCleanupError)
+        } catch (error: SecurityException) {
+            rememberRetiredRecordLocked(record)
+            return retiredCleanupFailed(error, failOnCleanupError)
         }
         if (verifiedIdentity == null) {
-            return preserveChangedRetiredChunkLocked(record)
+            return preserveChangedRetiredChunkLocked(record, failOnCleanupError)
         }
-        val claimed = claimChunkPathForDeletionLocked(record.file, "retired-delete") ?: run {
-            retiredById[record.id] = record
+        val claimed = claimChunkPathForDeletionLocked(
+            record.file, "retired-delete", failOnCleanupError = failOnCleanupError,
+        ) ?: run {
+            rememberRetiredRecordLocked(record)
             return false
         }
         val pendingClaim = PendingRetiredDeletionClaim(
             file = claimed.file,
             expectedIdentity = verifiedIdentity,
         )
+        // Own the claimed path before any verification/unlink/barrier can fail. A retry must
+        // finish this exact claim rather than mistake the absent numeric path for completed cleanup.
+        retiredDeletionClaims[record.id] = pendingClaim
         if (claimed.durabilityFailure != null) {
-            retiredDeletionClaims[record.id] = pendingClaim
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
             throw claimed.durabilityFailure
         }
-        return finishRetiredDeletionClaimLocked(record, pendingClaim)
+        return finishRetiredDeletionClaimLocked(record, pendingClaim, failOnCleanupError)
     }
 
     private fun finishRetiredDeletionClaimLocked(
         record: ChunkRecord,
         pendingClaim: PendingRetiredDeletionClaim,
+        failOnCleanupError: Boolean = false,
     ): Boolean {
         val claim = pendingClaim.file
         when (storagePathState(claim)) {
             StoragePathState.MISSING -> {
-                val absenceDurable = runCatching {
+                val absenceDurable = try {
                     forceDirectoryDurable(chunksDirectory)
                     true
-                }.getOrDefault(false)
+                } catch (error: Exception) {
+                    retiredCleanupFailed(error, failOnCleanupError)
+                }
                 if (!absenceDurable) {
-                    retiredById[record.id] = record
+                    rememberRetiredRecordLocked(record)
                     return false
                 }
                 retiredDeletionClaims.remove(record.id)
-                return finishRetiredRecordMarkerLocked(record)
+                return finishRetiredRecordMarkerLocked(record, failOnCleanupError)
             }
             StoragePathState.UNAVAILABLE -> {
-                retiredById[record.id] = record
-                return false
+                rememberRetiredRecordLocked(record)
+                return retiredCleanupFailed(IOException("Unable to inspect retired chunk ${record.id}"), failOnCleanupError)
             }
             StoragePathState.PRESENT -> Unit
         }
 
         val claimedIdentity = try {
             verifiedRetiredChunkIdentityLocked(record, claim)
-        } catch (_: IOException) {
+        } catch (error: IOException) {
+            if (failOnCleanupError) throw error
             null
-        } catch (_: SecurityException) {
+        } catch (error: SecurityException) {
+            if (failOnCleanupError) throw error
             null
         }
         val removedSafely = if (
             claimedIdentity != null &&
             sameFileObjectAcrossRename(pendingClaim.expectedIdentity, claimedIdentity)
         ) {
-            deleteClaimedChunkDurablyLocked(claim)
+            deleteClaimedChunkDurablyLocked(claim, failOnCleanupError)
         } else {
             moveClaimedChunkToPreservedLocked(
                 claim = claim,
                 originalName = record.file.name,
                 reason = "retired-delete-race",
+                failOnCleanupError = failOnCleanupError,
             )
         }
         if (!removedSafely) {
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
             return false
         }
         retiredDeletionClaims.remove(record.id)
-        return finishRetiredRecordMarkerLocked(record)
+        return finishRetiredRecordMarkerLocked(record, failOnCleanupError)
     }
 
     private fun verifiedRetiredChunkIdentityLocked(
@@ -3018,46 +3112,50 @@ internal class PersistentAudioChunkStore internal constructor(
         return afterIdentity
     }
 
-    private fun preserveChangedRetiredChunkLocked(record: ChunkRecord): Boolean {
+    private fun preserveChangedRetiredChunkLocked(record: ChunkRecord, failOnCleanupError: Boolean): Boolean {
         val preserved = try {
             preserveUnrecognizedChunkLocked(record.file, "retired-changed")
             true
         } catch (error: Exception) {
-            retiredById[record.id] = record
-            if (rootDirectoryDurabilityPending || pendingRecoveryPreservationCommit != null) throw error
+            rememberRetiredRecordLocked(record)
+            if (failOnCleanupError || rootDirectoryDurabilityPending || pendingRecoveryPreservationCommit != null) throw error
             false
         }
         if (!preserved) {
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
             return false
         }
-        return finishRetiredRecordMarkerLocked(record)
+        return finishRetiredRecordMarkerLocked(record, failOnCleanupError)
     }
 
-    private fun finishRetiredRecordMarkerLocked(record: ChunkRecord): Boolean {
-        val markerDeletedDurably = deleteRetirementTombstoneLocked(record.id)
+    private fun finishRetiredRecordMarkerLocked(record: ChunkRecord, failOnCleanupError: Boolean): Boolean {
+        val markerDeletedDurably = deleteRetirementTombstoneLocked(record.id, failOnCleanupError)
         if (markerDeletedDurably) {
             retiredById.remove(record.id)
+            eligibleRetiredById.remove(record.id)
         } else {
             // The PCM is already durably absent, but the marker-removal barrier is not. Keep
             // owning this retired id so checkpoint/close retries the marker cleanup and chunk-id
             // reuse cannot race an old tombstone that may reappear after a crash.
-            retiredById[record.id] = record
+            rememberRetiredRecordLocked(record)
         }
         return markerDeletedDurably
     }
 
     private fun retryRetiredDeletesLocked(force: Boolean = false) {
         if (deferredRetentionCleanup && !force) return
-        val retry = retiredById.values.filter { it.refCount == 0 }
+        val retry = eligibleRetiredById.values.toList()
         for (record in retry) {
             tryDeleteRetiredRecordLocked(record)
         }
     }
 
-    private fun retryRetirementTombstoneRemovalDurabilityLocked() {
+    private fun retryRetirementTombstoneRemovalDurabilityLocked(force: Boolean = false) {
         val pending = retirementTombstoneRemovalDurabilityPending.toList()
         for (id in pending) {
+            // A failed worker still owns this retired id. Service failure sealing/checkpoint
+            // must not retry its removal; unrelated stale-id barriers and terminal close remain mandatory.
+            if (deferredRetentionCleanup && !force && retiredById.containsKey(id)) continue
             if (!deleteRetirementTombstoneLocked(id)) {
                 throw IOException("Unable to persist retirement marker removal for chunk id $id")
             }

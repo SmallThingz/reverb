@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -239,5 +241,183 @@ class NotificationDurationBindingTest {
         assertFalse(target.selectBuffer(ReverbService.BufferSlot.ONE_SHOT))
         assertEquals(ReverbService.BufferSlot.LOOPING, target.buffer)
         assertEquals(editRevision, target.editRevision)
+    }
+
+    @Test fun admittedNativeEditLocksSaveBeforeRenderThroughCommitAndDisplayReset() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        var parentSeconds = 30
+        var parentOwner = 7L
+        binding.update(parentSeconds, 300, enabled = true, owner = parentOwner)
+        binding.beginInteraction(parentOwner)
+        // Both Save callbacks read this same holder, without waiting for Compose to redraw.
+        assertTrue(interaction.pending)
+        binding.select(45)
+        assertEquals(30, parentSeconds)
+        assertTrue(interaction.pending)
+        assertEquals(45, binding.finishInteraction(parentOwner, { seconds ->
+            assertTrue(interaction.pending)
+            parentSeconds = seconds
+            NotificationDurationCommit(seconds, ++parentOwner)
+        }, resetDisplay = { canonicalSeconds ->
+            assertTrue(interaction.pending)
+            assertEquals(45, canonicalSeconds)
+            assertEquals(parentSeconds, canonicalSeconds)
+        }))
+        assertFalse(interaction.pending)
+        assertEquals(45, parentSeconds)
+    }
+
+    @Test fun unchangedNativeSelectionStillReleasesSaveAfterDisplayReset() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        binding.update(30, 300, enabled = true, owner = 7L)
+        binding.beginInteraction(7L)
+        // Native publishDurationIfChanged emits no select call for an unchanged gesture.
+        assertTrue(interaction.pending)
+        assertNull(binding.finishInteraction(7L, {
+            throw AssertionError("Unchanged interaction must not edit the draft")
+        }, resetDisplay = { seconds ->
+            assertTrue(interaction.pending)
+            assertEquals(30, seconds)
+        }))
+        assertFalse(interaction.pending)
+    }
+
+    @Test fun invalidatedOrDisabledNativeSettleKeepsSaveLockedUntilPixelsReset() {
+        for (disable in listOf(false, true)) {
+            val interaction = NotificationDurationInteractionState()
+            val binding = NotificationDurationBinding(interaction)
+            binding.update(30, 300, enabled = true, owner = 7L)
+            binding.beginInteraction(7L)
+            binding.select(45)
+            val currentOwner = if (disable) 7L else 8L
+            val currentSeconds = if (disable) 30 else 60
+            binding.update(currentSeconds, 300, enabled = !disable, owner = currentOwner)
+            assertTrue(interaction.pending)
+            assertNull(binding.finishInteraction(currentOwner, {
+                throw AssertionError("Superseded or disabled native edit must not commit")
+            }, resetDisplay = { seconds ->
+                assertTrue(interaction.pending)
+                assertEquals(currentSeconds, seconds)
+            }))
+            assertFalse(interaction.pending)
+        }
+    }
+
+    @Test fun pausedNativeOwnerRejectsDelayedSelectionWithoutEarlySaveUnlock() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        binding.update(30, 300, enabled = true, owner = 7L)
+        binding.beginInteraction(7L)
+        binding.invalidateInteraction() // Production ON_PAUSE/ON_STOP callback.
+        assertTrue(interaction.pending)
+        assertNull(binding.commitInput(31, 7L))
+        binding.select(45)
+        assertNull(binding.finishInteraction(7L))
+        assertEquals(30, binding.seconds)
+        assertFalse(interaction.pending)
+    }
+
+    @Test fun retiredBindingAndItsLateTerminalCannotReleaseNewWheelOwner() {
+        val interaction = NotificationDurationInteractionState()
+        val oldBinding = NotificationDurationBinding(interaction)
+        val newBinding = NotificationDurationBinding(interaction)
+        oldBinding.update(30, 300, enabled = true, owner = 7L)
+        oldBinding.beginInteraction(7L)
+        oldBinding.select(45)
+        newBinding.update(60, 300, enabled = true, owner = 8L)
+        newBinding.beginInteraction(8L)
+        newBinding.select(90)
+        oldBinding.release()
+        assertTrue(interaction.pending)
+        assertNull(oldBinding.finishInteraction(7L))
+        oldBinding.release()
+        assertTrue(interaction.pending)
+        assertEquals(90, newBinding.finishInteraction(8L))
+        assertFalse(interaction.pending)
+    }
+
+    @Test fun terminalCommitCannotReleaseAnInteractionStartedDuringItsCallback() {
+        val interaction = NotificationDurationInteractionState()
+        val completing = NotificationDurationBinding(interaction)
+        val newer = NotificationDurationBinding(interaction)
+        completing.update(30, 300, enabled = true, owner = 7L)
+        newer.update(60, 300, enabled = true, owner = 9L)
+        completing.beginInteraction(7L)
+        completing.select(45)
+        assertEquals(45, completing.finishInteraction(7L, { seconds ->
+            newer.beginInteraction(9L)
+            newer.select(90)
+            NotificationDurationCommit(seconds, 8L)
+        }, resetDisplay = { assertTrue(interaction.pending) }))
+        assertTrue(interaction.pending)
+        completing.release()
+        assertTrue(interaction.pending)
+        assertEquals(90, newer.finishInteraction(9L))
+        assertFalse(interaction.pending)
+    }
+
+    @Test fun failedTerminalCommitResetsPixelsAndReleasesOnlyItsSaveToken() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        binding.update(30, 300, enabled = true, owner = 7L)
+        binding.beginInteraction(7L)
+        binding.select(45)
+        val expected = IllegalStateException("Draft callback failed")
+        val resetFailure = IllegalArgumentException("Display reset failed")
+        assertSame(expected, assertThrows(IllegalStateException::class.java) {
+            binding.finishInteraction(7L, { throw expected }, resetDisplay = { seconds ->
+                assertTrue(interaction.pending)
+                assertEquals(30, seconds)
+                throw resetFailure
+            })
+        })
+        assertEquals(listOf(resetFailure), expected.suppressed.toList())
+        assertFalse(interaction.pending)
+        assertNull(binding.finishInteraction(7L))
+    }
+
+    @Test fun rejectedNativeBeginRetainsSaveLockButImmediateDiscreteEditsDoNot() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        binding.update(30, 300, enabled = true, owner = 7L)
+        binding.beginInteraction(null)
+        // The native View still moves even though this draft owner cannot commit its result.
+        assertTrue(interaction.pending)
+        assertNull(binding.commitInput(31, 7L))
+        binding.select(45)
+        assertNull(binding.finishInteraction(7L))
+        assertFalse(interaction.pending)
+        // Keyboard and accessibility use this immediate production commit adapter.
+        assertEquals(31, binding.commitInput(31, 7L))
+        assertFalse(interaction.pending)
+        assertEquals(32, binding.commitInput(32, 7L))
+        assertFalse(interaction.pending)
+        binding.beginInteraction(7L)
+        assertTrue(interaction.pending)
+        binding.release() // View release/disposal removes its pixels and its only token.
+        assertFalse(interaction.pending)
+    }
+
+    @Test fun replacementNativeBeginWithUnrenderedOwnerKeepsSaveLocked() {
+        val interaction = NotificationDurationInteractionState()
+        val binding = NotificationDurationBinding(interaction)
+        binding.update(30, 300, enabled = true, owner = 7L)
+        binding.beginInteraction(7L)
+        binding.select(45)
+        // Another Settings edit advances live ownership before AndroidView has redrawn.
+        // A second DOWN stops the old snap and starts a new visual gesture immediately.
+        binding.beginInteraction(8L)
+        assertTrue(interaction.pending)
+        binding.select(90)
+        assertNull(binding.finishInteraction(8L, {
+            throw AssertionError("Unrendered owner must not accept the native selection")
+        }, resetDisplay = { seconds ->
+            assertTrue(interaction.pending)
+            assertEquals(30, seconds)
+        }))
+        assertFalse(interaction.pending)
+        assertEquals(30, binding.seconds)
     }
 }

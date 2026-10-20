@@ -88,6 +88,12 @@ internal fun quickSaveTileClass(slot: Int): Class<out QuickSaveTileService> = wh
     else -> throw IllegalArgumentException("Invalid quick-save tile slot")
 }
 
+/** The original definition stays pinned across editor recreation and cannot target a reused slot. */
+internal fun quickSaveTileDefinitionIsCurrent(
+    expected: QuickSaveTileOption?,
+    current: List<QuickSaveTileOption>,
+): Boolean = expected == null || current.find { it.slot == expected.slot } == expected
+
 internal object QuickSaveTileOptions {
     private val lock = Any()
     private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -256,7 +262,7 @@ internal object QuickSaveTileOptions {
         val current = read(context)
         val slot = expected?.slot ?: (0 until QUICK_SAVE_TILE_COUNT).firstOrNull { id -> current.none { it.slot == id } }
             ?: throw IOException(context.getString(R.string.tile_limit))
-        if (expected != null && current.find { it.slot == slot } != expected) {
+        if (!quickSaveTileDefinitionIsCurrent(expected, current)) {
             throw IOException(context.getString(R.string.tile_changed))
         }
         val next = QuickSaveTileOption(slot, UUID.randomUUID().toString().replace("-", ""), buffer, amount, unit)

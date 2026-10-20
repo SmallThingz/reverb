@@ -82,7 +82,10 @@ class RangeExportAudioOwnershipTest {
     @Test
     fun shuttleFallsBackWhenPreferredTrackCreationFails() {
         val attempts = mutableListOf<Int>()
-        val (created, sampleRate) = createShuttleWithSampleRateFallback(4_096) { rate ->
+        val cleanupFailures = mutableListOf<Throwable>()
+        val (created, sampleRate) = createShuttleWithSampleRateFallback(
+            4_096, { cleanupFailures += it },
+        ) { rate, _ ->
             attempts += rate
             if (rate == 96_000) throw IOException("96 kHz track rejected")
             "track"
@@ -91,12 +94,14 @@ class RangeExportAudioOwnershipTest {
         assertEquals("track", created)
         assertEquals(48_000, sampleRate)
         assertEquals(listOf(96_000, 48_000), attempts)
+        assertTrue(cleanupFailures.isEmpty())
     }
 
     @Test
     fun shuttleFallbackFailureRetainsPreferredFailure() {
+        val cleanupFailures = mutableListOf<Throwable>()
         val failure = org.junit.Assert.assertThrows(IOException::class.java) {
-            createShuttleWithSampleRateFallback<Unit>(4_096) { rate ->
+            createShuttleWithSampleRateFallback<Unit>(4_096, { cleanupFailures += it }) { rate, _ ->
                 throw IOException("$rate rejected")
             }
         }
@@ -104,6 +109,7 @@ class RangeExportAudioOwnershipTest {
         assertEquals("48000 rejected", failure.message)
         assertEquals(1, failure.suppressed.size)
         assertEquals("96000 rejected", failure.suppressed.single().message)
+        assertTrue(cleanupFailures.isEmpty())
     }
 
     @Test

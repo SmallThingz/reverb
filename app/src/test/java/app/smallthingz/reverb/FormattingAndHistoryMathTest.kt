@@ -2097,6 +2097,10 @@ class FormattingAndHistoryMathTest {
             serviceDestroying: Boolean = false,
             listeningIntentEnabled: Boolean = false,
             recorderState: Int = ReverbService.STATE_READY,
+            captureInitializationPending: Boolean = false,
+            foregroundStartBlocked: Boolean = false,
+            foregroundServiceTimedOut: Boolean = false,
+            persistenceFailureBlocked: Boolean = false,
             exportActive: Boolean = false,
             bufferClearActive: Boolean = false,
             settingsRuntimeActive: Boolean = false,
@@ -2105,6 +2109,10 @@ class FormattingAndHistoryMathTest {
             serviceDestroying = serviceDestroying,
             listeningIntentEnabled = listeningIntentEnabled,
             recorderState = recorderState,
+            captureInitializationPending = captureInitializationPending,
+            foregroundStartBlocked = foregroundStartBlocked,
+            foregroundServiceTimedOut = foregroundServiceTimedOut,
+            persistenceFailureBlocked = persistenceFailureBlocked,
             exportActive = exportActive,
             bufferClearActive = bufferClearActive,
             settingsRuntimeActive = settingsRuntimeActive,
@@ -2113,7 +2121,10 @@ class FormattingAndHistoryMathTest {
 
         assertTrue(mayStop())
         assertFalse(mayStop(serviceDestroying = true))
-        assertFalse(mayStop(listeningIntentEnabled = true))
+        assertFalse(mayStop(listeningIntentEnabled = true, recorderState = ReverbService.STATE_LISTENING))
+        assertFalse(mayStop(listeningIntentEnabled = true, captureInitializationPending = true))
+        assertTrue(mayStop(listeningIntentEnabled = true, recorderState = ReverbService.STATE_PAUSED,
+            persistenceFailureBlocked = true))
         assertFalse(mayStop(recorderState = ReverbService.STATE_LISTENING))
         assertFalse(mayStop(exportActive = true))
         assertFalse(mayStop(bufferClearActive = true))

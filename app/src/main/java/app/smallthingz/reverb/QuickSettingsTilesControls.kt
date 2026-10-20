@@ -178,6 +178,27 @@ internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?)
         return true
     }
 
+    /** Only values cross Activity recreation; each replacement gets new edit/gesture ownership. */
+    internal fun saveDraft(): List<Any> = listOf(
+        1, buffer.storageCode.toInt(), seconds,
+        existing?.let { encodeQuickSaveTileOptions(listOf(it)) }.orEmpty(),
+    )
+
+    companion object {
+        internal fun restoreDraft(saved: List<Any>): QuickSettingsTileEditorTarget? = runCatching {
+            require(saved.size == 4 && saved[0] == 1)
+            val buffer = requireNotNull(ReverbService.BufferSlot.fromStorageCode(saved[1] as Int))
+            val seconds = saved[2] as Int
+            require(seconds in 1..86_400 && quickTileRepresentableSeconds(seconds) == seconds)
+            val existing = (saved[3] as String).takeIf { it.isNotEmpty() }
+                ?.let { decodeQuickSaveTileOptions(it).single() }
+            QuickSettingsTileEditorTarget(existing).also {
+                it.buffer = buffer
+                it.seconds = seconds
+            }
+        }.getOrNull()
+    }
+
     internal fun wheelOwner(parentRevision: Long): Long {
         val current = parentRevision to editRevision
         if (lastWheelOwner != current) {
@@ -199,19 +220,45 @@ internal class QuickSettingsTileDeleteTarget(val option: QuickSaveTileOption, va
         currentOption == option && sheetReady && mutationAvailable
 }
 
-internal class QuickSettingsTilesEditorState {
+internal class QuickSettingsTilesEditorState private constructor(restored: QuickSettingsTileEditorTarget?) {
+    constructor() : this(null)
+
+    private var pendingDraft by mutableStateOf(restored)
     internal var target by mutableStateOf<QuickSettingsTileEditorTarget?>(null)
     internal var deleting by mutableStateOf<QuickSettingsTileDeleteTarget?>(null)
     internal var deletingBusy by mutableStateOf(false)
     internal var pinning by mutableStateOf<Any?>(null)
     val mutationInProgress: Boolean get() = target?.busy == true || deletingBusy
-    val editorOpen: Boolean get() = target != null || deleting != null || mutationInProgress
+    val editorOpen: Boolean get() = pendingDraft != null || target != null || deleting != null || mutationInProgress
 
     fun closeEditor(): Boolean {
         if (mutationInProgress) return false
+        pendingDraft = null
         target = null
         deleting = null
         return true
+    }
+
+    /** A pending restore survives another rotation, but never restores an accepted mutation. */
+    fun save(panelActive: Boolean): List<Any> {
+        if (!panelActive || mutationInProgress || deleting != null || pinning != null) return emptyList()
+        return (target ?: pendingDraft)?.saveDraft().orEmpty()
+    }
+
+    /** Called only after the replacement Settings owner finishes its fresh parent hydration. */
+    fun restorePendingDraft(parentReady: Boolean): Boolean {
+        if (!parentReady) return false
+        val restored = pendingDraft ?: return false
+        pendingDraft = null
+        if (target != null || deleting != null || pinning != null || mutationInProgress) return false
+        target = restored
+        return true
+    }
+
+    companion object {
+        fun restore(saved: List<Any>) = QuickSettingsTilesEditorState(
+            QuickSettingsTileEditorTarget.restoreDraft(saved),
+        )
     }
 }
 
@@ -386,6 +433,7 @@ private fun QuickTileInlineEditor(
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
     val capacityLoad = remember { TileCapacityLoad() }
+    val durationInteraction = remember { NotificationDurationInteractionState() }
     var message by remember { mutableStateOf<String?>(null) }
     var shortened by remember { mutableStateOf<TileCapacity?>(null) }
     var capacityRetry by remember { mutableLongStateOf(0L) }
@@ -411,8 +459,9 @@ private fun QuickTileInlineEditor(
             }
         }
     }
-    fun close() { if (!target.busy && owner.target === target) owner.target = null }
+    fun close() { if (!target.busy && owner.target === target) owner.closeEditor() }
     fun save() {
+        if (durationInteraction.pending) return
         val revision = admission() ?: return
         if (target.busy || capacityLoad.ready(revision) == null) return
         val buffer = target.buffer
@@ -499,13 +548,13 @@ private fun QuickTileInlineEditor(
                         } else null
                     }, enabled = enabled && capacityReady, editRevision = target.wheelOwner(editRevision), readEditRevision = {
                         admission()?.takeIf { attached && !target.busy && capacityLoad.ready(it)?.maximumSeconds?.let(::quickTileRepresentableSeconds) == maximum }?.let(target::wheelOwner)
-                    }, stepDuration = ::quickTileStepSeconds)
+                    }, interactionState = durationInteraction, stepDuration = ::quickTileStepSeconds)
                     if (target.seconds > maximum) TileStatus(stringResource(R.string.tiles_ui_reduce_duration, formatDurationInput(target.seconds)))
                 }
             }
             message?.let { TileStatus(it) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = ::save, enabled = enabled && capacityReady && capacity?.maximumSeconds?.let { it >= target.seconds } == true) {
+                TextButton(onClick = ::save, enabled = enabled && !durationInteraction.pending && capacityReady && capacity?.maximumSeconds?.let { it >= target.seconds } == true) {
                     Text(stringResource(if (shortened == null) R.string.tiles_ui_save else R.string.tiles_ui_save_anyway))
                 }
             }
