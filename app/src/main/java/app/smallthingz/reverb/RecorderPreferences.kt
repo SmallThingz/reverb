@@ -382,6 +382,8 @@ fun isOnboardingPending(context: Context): Boolean =
 
 private val ONBOARDING_TRANSACTION_PREFERENCE_KEYS = listOf(
     PrefKey.ONBOARDING_SHOWN,
+    PrefKey.OUTPUT_FORMAT,
+    PrefKey.SILENCE_GATE,
     PrefKey.RETENTION_MODE,
     PrefKey.ONE_SHOT_RETENTION_SECONDS,
     PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
@@ -398,10 +400,12 @@ internal fun onboardingPreferenceRollbackSnapshot(
     }
 
 @SuppressLint("UseKtx") // commit() Boolean is required by the retention transaction.
-fun finishOnboarding(
+internal fun finishOnboarding(
     context: Context,
     oneShotEnabled: Boolean,
     loopingEnabled: Boolean,
+    originalAudio: OnboardingAudioSelection,
+    selectedAudio: OnboardingAudioSelection,
 ): Boolean {
     if (!oneShotEnabled && !loopingEnabled) return false
     return withRetentionPersistenceLock {
@@ -442,30 +446,49 @@ fun finishOnboarding(
                 },
             )
         }
-        val prefs = getRecorderPreferences(context)
-        val rollbackPreferences = onboardingPreferenceRollbackSnapshot(prefs.all)
-        persistRetentionTransaction(
-            writeNewRecovery = { writeRetentionRecoveryConfiguration(context, updated) },
-            commitNewPreferences = {
-                prefs.edit()
-                    .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
-                    .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
-                    .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
-                    .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
-                    .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
-                    .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
-                    .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
-                    .commit()
-            },
-            restoreRecovery = { writeRetentionRecoveryConfiguration(context, current) },
-            restorePreferences = {
-                val editor = prefs.edit()
-                rollbackPreferences.forEach { (key, snapshot) ->
-                    editor.restoreDurablePreferenceValue(key, snapshot)
-                }
-                editor.commit()
-            },
-        )
+        SilenceGatePreferences.withOnboardingTransaction(context) { currentSilence ->
+            val audio = resolveOnboardingAudioSelection(
+                original = originalAudio,
+                selected = selectedAudio,
+                currentFormat = getConfiguredOutputFormat(context),
+                currentSilence = currentSilence.config,
+                sampleFormat = configuredSampleFormat,
+            ) ?: return@withOnboardingTransaction false
+            if (!isCodecSupported(
+                    audio.outputFormat,
+                    getConfiguredOutputCodec(context),
+                    getConfiguredSampleRate(context),
+                    configuredChannelMode,
+                )
+            ) return@withOnboardingTransaction false
+            val encodedSilence = encodeSilenceGate(audio.silenceConfig)
+            val prefs = getRecorderPreferences(context)
+            val rollbackPreferences = onboardingPreferenceRollbackSnapshot(prefs.all)
+            persistRetentionTransaction(
+                writeNewRecovery = { writeRetentionRecoveryConfiguration(context, updated) },
+                commitNewPreferences = {
+                    prefs.edit()
+                        .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
+                        .putInt(PrefKey.OUTPUT_FORMAT, audio.outputFormat.storageCode.toInt())
+                        .putString(PrefKey.SILENCE_GATE, encodedSilence)
+                        .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
+                        .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
+                        .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
+                        .putLong(PrefKey.RETENTION_SECONDS, updated.loopingSeconds)
+                        .putLong(PrefKey.AUDIO_MEMORY_SIZE, updated.loopingSizeBytes)
+                        .putString(PrefKey.RETENTION_CONFIG_DIGEST, retentionConfigurationDigest(updated))
+                        .commit()
+                },
+                restoreRecovery = { writeRetentionRecoveryConfiguration(context, current) },
+                restorePreferences = {
+                    val editor = prefs.edit()
+                    rollbackPreferences.forEach { (key, snapshot) ->
+                        editor.restoreDurablePreferenceValue(key, snapshot)
+                    }
+                    editor.commit()
+                },
+            )
+        }
     }
 }
 

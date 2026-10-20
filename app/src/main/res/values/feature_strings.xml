@@ -74,7 +74,7 @@
     <string name="tiles_ui_add">Add to Quick Settings</string>
     <string name="tiles_ui_add_failed">Could not add the tile. Try again from Quick Settings.</string>
     <string name="tiles_ui_added">Added to Quick Settings.</string>
-    <string name="tiles_ui_apply_first">Apply or undo your audio and retention changes before editing tiles.</string>
+    <string name="tiles_ui_apply_first">Save or undo audio and retention changes first.</string>
     <string name="tiles_ui_create">New quick-save tile</string>
     <string name="tiles_ui_delete">Delete tile</string>
     <string name="tiles_ui_delete_confirmation">Delete this shortcut and disable its Quick Settings tile?</string>

@@ -50,7 +50,7 @@
     <string name="move_recordings">既存を移動</string>
     <string name="move_recordings_none">移動する録音がありません。</string>
     <string name="wake_lock_label">CPU を起動状態に保つ</string>
-    <string name="wake_lock_summary">ライブバッファ中に部分 Wake Lock を保持します。生存性は高いですが電池消費も増えます。</string>
+    <string name="wake_lock_summary">通常は推奨しません。バッテリー消費が増えます。</string>
     <string name="audio_input_init_failed">マイクを開始できませんでした。</string>
     <string name="custom_memory_size_invalid">有効な数値を入力してください。</string>
     <string name="permission_required">権限が必要です</string>

@@ -48,7 +48,7 @@
     <string name="move_recordings">Sposta esistenti</string>
     <string name="move_recordings_none">Nessuna registrazione da spostare.</string>
     <string name="wake_lock_label">Mantieni la CPU attiva</string>
-    <string name="wake_lock_summary">Mantiene un wakelock parziale durante il buffer dal vivo. Massima sopravvivenza, massimo costo della batteria.</string>
+    <string name="wake_lock_summary">Generalmente sconsigliato. Consuma più batteria.</string>
     <string name="audio_input_init_failed">Impossibile avviare il microfono.</string>
     <string name="custom_memory_size_invalid">Inserisci un numero valido.</string>
     <string name="permission_required">Autorizzazione richiesta</string>

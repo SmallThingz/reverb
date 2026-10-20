@@ -50,13 +50,20 @@ internal suspend inline fun continuePredictiveBackCommit(
     onBack()
 }
 
+internal class PredictiveBackGestureCallbacks(
+    val onBack: () -> Unit,
+    val onFinished: () -> Unit,
+)
+
 @Composable
 internal fun rememberPredictiveBackMotion(
     enabled: Boolean,
+    onGestureStarted: (() -> PredictiveBackGestureCallbacks)? = null,
     onBack: () -> Unit,
 ): PredictiveBackMotionState {
     val state = remember { PredictiveBackMotionState() }
     val currentOnBack by rememberUpdatedState(onBack)
+    val currentOnGestureStarted by rememberUpdatedState(onGestureStarted)
 
     LaunchedEffect(enabled) {
         if (enabled) {
@@ -72,49 +79,57 @@ internal fun rememberPredictiveBackMotion(
     }
 
     PredictiveBackHandler(enabled = enabled) { events ->
-        state.commitCompleted = false
-        state.progress.snapTo(0f)
-        state.gestureActive = true
-        var committed = false
+        var gestureCallbacks: PredictiveBackGestureCallbacks? = null
         try {
-            events.collect { event ->
-                state.swipeEdge = event.swipeEdge
-                state.progress.snapTo(event.progress.coerceIn(0f, 1f))
+            // Optional owners pin their navigation before any suspended progress work.
+            gestureCallbacks = currentOnGestureStarted?.invoke()
+            state.commitCompleted = false
+            state.progress.snapTo(0f)
+            state.gestureActive = true
+            var committed = false
+            try {
+                events.collect { event ->
+                    state.swipeEdge = event.swipeEdge
+                    state.progress.snapTo(event.progress.coerceIn(0f, 1f))
+                }
+                // Gesture completion is only the decision boundary. Continue from the exact release
+                // point to the visual terminal before mutating navigation state; resetting to zero here
+                // makes every retained destination visibly snap back open before its normal close runs.
+                continuePredictiveBackCommit(
+                    currentProgress = state.progress.value,
+                    animateToEnd = { durationMillis ->
+                        if (durationMillis == 0) {
+                            state.progress.snapTo(1f)
+                        } else {
+                            state.progress.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(
+                                    durationMillis = durationMillis,
+                                    easing = FastOutSlowInEasing,
+                                ),
+                            )
+                        }
+                    },
+                    onBack = {
+                        committed = true
+                        state.commitCompleted = true
+                        val commit = gestureCallbacks?.onBack ?: currentOnBack
+                        commit()
+                    },
+                )
+            } catch (cancelled: CancellationException) {
+                if (!currentCoroutineContext().isActive) throw cancelled
+                state.progress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+                )
+            } finally {
+                if (!committed) state.commitCompleted = false
+                state.gestureActive = false
+                state.swipeEdge = BackEventCompat.EDGE_NONE
             }
-            // Gesture completion is only the decision boundary. Continue from the exact release
-            // point to the visual terminal before mutating navigation state; resetting to zero here
-            // makes every retained destination visibly snap back open before its normal close runs.
-            continuePredictiveBackCommit(
-                currentProgress = state.progress.value,
-                animateToEnd = { durationMillis ->
-                    if (durationMillis == 0) {
-                        state.progress.snapTo(1f)
-                    } else {
-                        state.progress.animateTo(
-                            targetValue = 1f,
-                            animationSpec = tween(
-                                durationMillis = durationMillis,
-                                easing = FastOutSlowInEasing,
-                            ),
-                        )
-                    }
-                },
-                onBack = {
-                    committed = true
-                    state.commitCompleted = true
-                    currentOnBack()
-                },
-            )
-        } catch (cancelled: CancellationException) {
-            if (!currentCoroutineContext().isActive) throw cancelled
-            state.progress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
-            )
         } finally {
-            if (!committed) state.commitCompleted = false
-            state.gestureActive = false
-            state.swipeEdge = BackEventCompat.EDGE_NONE
+            gestureCallbacks?.onFinished?.invoke()
         }
     }
 

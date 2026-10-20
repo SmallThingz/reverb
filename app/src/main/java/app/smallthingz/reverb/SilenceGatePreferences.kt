@@ -21,6 +21,20 @@ internal object SilenceGatePreferences {
         SilenceGatePreferenceSnapshot(raw, decodeSilenceGate(raw))
     }
 
+    fun readForOnboarding(context: Context): OnboardingSilenceConfiguration = synchronized(lock) {
+        decodeOnboardingSilence(getRecorderPreferences(context).all)
+    }
+
+    /** Finish owns the fresh curve and its commit/rollback under the same lock as Settings. */
+    fun withOnboardingTransaction(
+        context: Context,
+        block: (OnboardingSilenceConfiguration) -> Boolean,
+    ): Boolean = synchronized(lock) {
+        val committed = block(readForOnboarding(context))
+        if (committed) mutableRevision.value += 1
+        committed
+    }
+
     /**
      * Joins silence into Settings' existing all-or-rollback preference transaction.
      * The caller runs on IO under the retention gate; the block owns the whole commit/rollback

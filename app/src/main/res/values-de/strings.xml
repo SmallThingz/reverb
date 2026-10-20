@@ -50,7 +50,7 @@
     <string name="move_recordings">Vorhandene verschieben</string>
     <string name="move_recordings_none">Keine Aufnahmen zum Verschieben.</string>
     <string name="wake_lock_label">CPU wach halten</string>
-    <string name="wake_lock_summary">Hält während des Live-Puffers einen partiellen Wake Lock. Höchste Stabilität, höchster Akkuverbrauch.</string>
+    <string name="wake_lock_summary">Generell nicht empfohlen. Verbraucht mehr Akku.</string>
     <string name="audio_input_init_failed">Mikrofon konnte nicht gestartet werden.</string>
     <string name="custom_memory_size_invalid">Gültige Zahl eingeben.</string>
     <string name="permission_required">Berechtigung erforderlich</string>

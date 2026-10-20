@@ -50,7 +50,7 @@
     <string name="move_recordings">Mevcut kayıtları taşı</string>
     <string name="move_recordings_none">Taşınacak kayıt yok.</string>
     <string name="wake_lock_label">CPU uyanık kalsın</string>
-    <string name="wake_lock_summary">Canlı arabelleğe alma sırasında kısmi uyandırma kilidi tutar. En yüksek dayanıklılık, en yüksek pil maliyeti.</string>
+    <string name="wake_lock_summary">Genellikle önerilmez. Pil tüketimini artırır.</string>
     <string name="audio_input_init_failed">Mikrofon başlatılamadı.</string>
     <string name="custom_memory_size_invalid">Geçerli bir sayı girin.</string>
     <string name="permission_required">İzin gerekli</string>

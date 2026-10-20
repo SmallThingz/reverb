@@ -50,7 +50,7 @@
     <string name="move_recordings">Déplacer l’existant</string>
     <string name="move_recordings_none">Aucun enregistrement à déplacer.</string>
     <string name="wake_lock_label">Garder le CPU éveillé</string>
-    <string name="wake_lock_summary">Maintient un wake lock partiel pendant le tampon en direct. Survie maximale, batterie maximale.</string>
+    <string name="wake_lock_summary">Généralement déconseillé. Consomme plus de batterie.</string>
     <string name="audio_input_init_failed">Impossible de démarrer le microphone.</string>
     <string name="custom_memory_size_invalid">Entrez un nombre valide.</string>
     <string name="permission_required">Autorisation requise</string>

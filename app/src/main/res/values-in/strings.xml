@@ -50,7 +50,7 @@
     <string name="move_recordings">Pindahkan rekaman yang ada</string>
     <string name="move_recordings_none">Tidak ada rekaman untuk dipindahkan.</string>
     <string name="wake_lock_label">Jaga CPU tetap aktif</string>
-    <string name="wake_lock_summary">Menahan wake lock parsial saat buffering langsung. Kelangsungan hidup tertinggi, biaya baterai tertinggi.</string>
+    <string name="wake_lock_summary">Umumnya tidak disarankan. Lebih boros baterai.</string>
     <string name="audio_input_init_failed">Mikrofon tidak dapat dimulai.</string>
     <string name="custom_memory_size_invalid">Masukkan angka yang valid.</string>
     <string name="permission_required">Izin diperlukan</string>

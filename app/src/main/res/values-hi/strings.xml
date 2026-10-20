@@ -50,7 +50,7 @@
     <string name="move_recordings">मौजूदा रिकॉर्डिंग्स ले जाएँ</string>
     <string name="move_recordings_none">ले जाने के लिए कोई रिकॉर्डिंग नहीं है।</string>
     <string name="wake_lock_label">CPU जागृत रखें</string>
-    <string name="wake_lock_summary">लाइव बफ़रिंग के दौरान आंशिक wake lock रखता है। सबसे अधिक टिकाऊ, सबसे अधिक बैटरी खर्च।</string>
+    <string name="wake_lock_summary">आमतौर पर अनुशंसित नहीं है। बैटरी की खपत बढ़ती है।</string>
     <string name="audio_input_init_failed">माइक्रोफ़ोन शुरू नहीं किया जा सका।</string>
     <string name="custom_memory_size_invalid">एक मान्य संख्या दर्ज करें।</string>
     <string name="permission_required">अनुमति आवश्यक</string>

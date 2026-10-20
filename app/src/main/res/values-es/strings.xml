@@ -50,7 +50,7 @@
     <string name="move_recordings">Mover existentes</string>
     <string name="move_recordings_none">No hay grabaciones para mover.</string>
     <string name="wake_lock_label">Mantener CPU activa</string>
-    <string name="wake_lock_summary">Mantiene un wake lock parcial durante el búfer en vivo. Máxima supervivencia, mayor consumo.</string>
+    <string name="wake_lock_summary">Generalmente no se recomienda. Consume más batería.</string>
     <string name="audio_input_init_failed">No se pudo iniciar el micrófono.</string>
     <string name="custom_memory_size_invalid">Introduce un número válido.</string>
     <string name="permission_required">Permiso requerido</string>

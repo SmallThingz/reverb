@@ -50,7 +50,7 @@
     <string name="move_recordings">نقل التسجيلات الموجودة</string>
     <string name="move_recordings_none">لا توجد تسجيلات لنقلها.</string>
     <string name="wake_lock_label">إبقاء المعالج مستيقظًا</string>
-    <string name="wake_lock_summary">يحافظ على wake lock جزئي أثناء التخزين الحي. أعلى بقاء وأعلى استهلاك للبطارية.</string>
+    <string name="wake_lock_summary">لا يُنصح به عادةً. يستهلك المزيد من البطارية.</string>
     <string name="audio_input_init_failed">تعذر تشغيل الميكروفون.</string>
     <string name="custom_memory_size_invalid">أدخل رقمًا صالحًا.</string>
     <string name="permission_required">إذن مطلوب</string>

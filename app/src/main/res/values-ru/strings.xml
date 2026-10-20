@@ -50,7 +50,7 @@
     <string name="move_recordings">Переместить существующие</string>
     <string name="move_recordings_none">Нет записей для перемещения.</string>
     <string name="wake_lock_label">Не давать CPU заснуть</string>
-    <string name="wake_lock_summary">Удерживать частичную блокировку пробуждения во время живого буфера. Максимальная живучесть, максимальный расход батареи.</string>
+    <string name="wake_lock_summary">Обычно не рекомендуется. Увеличивает расход батареи.</string>
     <string name="audio_input_init_failed">Не удалось запустить микрофон.</string>
     <string name="custom_memory_size_invalid">Введите корректное число.</string>
     <string name="permission_required">Требуется разрешение</string>

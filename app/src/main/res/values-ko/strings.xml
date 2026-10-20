@@ -50,7 +50,7 @@
     <string name="move_recordings">기존 녹음 이동</string>
     <string name="move_recordings_none">이동할 녹음이 없습니다.</string>
     <string name="wake_lock_label">CPU 깨우기 유지</string>
-    <string name="wake_lock_summary">실시간 버퍼링 동안 부분 웨이크 락을 유지합니다. 생존성은 가장 높지만 배터리 소모도 가장 큽니다.</string>
+    <string name="wake_lock_summary">일반적으로 권장하지 않습니다. 배터리 소모가 늘어납니다.</string>
     <string name="audio_input_init_failed">마이크를 시작할 수 없습니다.</string>
     <string name="custom_memory_size_invalid">유효한 숫자를 입력하세요.</string>
     <string name="permission_required">권한 필요</string>

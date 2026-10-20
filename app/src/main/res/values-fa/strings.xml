@@ -50,7 +50,7 @@
     <string name="move_recordings">انتقال ضبط‌های موجود</string>
     <string name="move_recordings_none">ضبطی برای انتقال وجود ندارد.</string>
     <string name="wake_lock_label">بیدار نگه داشتن CPU</string>
-    <string name="wake_lock_summary">در زمان بافر زنده یک wake lock جزئی نگه می‌دارد. بیشترین پایداری و بیشترین مصرف باتری.</string>
+    <string name="wake_lock_summary">معمولاً توصیه نمی‌شود. مصرف باتری را افزایش می‌دهد.</string>
     <string name="audio_input_init_failed">راه‌اندازی میکروفن ممکن نشد.</string>
     <string name="custom_memory_size_invalid">یک عدد معتبر وارد کنید.</string>
     <string name="permission_required">مجوز لازم است</string>

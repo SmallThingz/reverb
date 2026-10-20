@@ -508,9 +508,8 @@ private fun QuickTileInlineEditor(
     val capacityReady = capacityLoad.ready(editRevision) != null
     Surface(shape = RoundedCornerShape(20.dp), color = chrome.field, border = BorderStroke(1.dp, chrome.border)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.tiles_ui_create),
-                    Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = ::close, enabled = !target.busy) { Icon(AppIcons.close, stringResource(R.string.cancel)) }
             }
             BufferSelector(

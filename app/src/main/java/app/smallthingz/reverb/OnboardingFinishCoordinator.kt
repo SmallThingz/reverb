@@ -16,6 +16,21 @@ internal fun onboardingPendingForUi(
     OnboardingFinishState.SUCCEEDED -> false
 }
 
+/** A runtime handoff failure cannot undo an already accepted durable preference commit. */
+internal fun commitOnboardingAndReloadRuntime(
+    commit: () -> Boolean,
+    reloadRuntime: () -> Unit,
+    onRuntimeFailure: () -> Unit,
+): Boolean {
+    if (!commit()) return false
+    try {
+        reloadRuntime()
+    } catch (_: Exception) {
+        runCatching(onRuntimeFailure)
+    }
+    return true
+}
+
 internal class OnboardingFinishCoordinator(
     private val submitAttempt: (suspend () -> Boolean, (Boolean) -> Unit) -> Unit =
         ::submitCommittedDurableUiBooleanAttempt,
