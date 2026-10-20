@@ -247,11 +247,6 @@ internal fun SkipSilenceSettings(
                         TextButton(onClick = onCancelCalibration) { Text(stringResource(R.string.cancel)) }
                     }
                 }
-                Text(
-                    text = stringResource(R.string.silence_calibration_hint),
-                    color = chrome.muted,
-                    style = MaterialTheme.typography.bodySmall,
-                )
                 if (calibrating && !holdingCalibration) {
                     Text(
                         text = stringResource(R.string.silence_sampling),

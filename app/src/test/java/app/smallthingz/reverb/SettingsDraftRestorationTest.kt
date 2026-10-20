@@ -242,7 +242,7 @@ class SettingsDraftRestorationTest {
         val cases = listOf(
             emptyList(),
             valid.dropLast(1),
-            valid.toMutableList().apply { this[0] = 2 },
+            valid.toMutableList().apply { this[0] = 99 },
             valid.toMutableList().apply { this[1] = 999 },
         )
         for (saved in cases) {

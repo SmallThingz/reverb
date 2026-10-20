@@ -20,7 +20,7 @@ internal data class SettingsUiDraft(
 
     // Primitive saveable values keep byte counts exact and enum identity independent of labels.
     fun save(): List<Any> = listOf(
-        1,
+        2,
         snapshot.themeMode.storageCode.toInt(),
         snapshot.retentionMode.storageCode.toInt(),
         snapshot.oneShotRetentionTime,
@@ -44,6 +44,7 @@ internal data class SettingsUiDraft(
         oneShotSizeText,
         loopingTimeText,
         loopingSizeText,
+        snapshot.silenceHistogram.orEmpty(),
     )
 
     companion object {
@@ -56,7 +57,7 @@ internal data class SettingsUiDraft(
         )
 
         fun restore(saved: List<Any>): SettingsUiDraft? = runCatching {
-            require(saved.size == 24 && saved[0] == 1)
+            require((saved.size == 24 && saved[0] == 1) || (saved.size == 25 && saved[0] == 2))
             fun <T> nullableCode(index: Int, decode: (Int) -> T?): T? {
                 val code = saved[index] as Int
                 return if (code == -1) null else requireNotNull(decode(code))
@@ -84,6 +85,8 @@ internal data class SettingsUiDraft(
                     quickSaveEnabled = saved[17] as Boolean,
                     quickSaveSeconds = saved[18] as Int,
                     silenceGate = saved[19] as String,
+                    silenceHistogram = if (saved[0] == 2) (saved[24] as? String)
+                        ?.takeIf { decodeSilenceCalibrationHistogram(it) != null } else null,
                 ),
                 oneShotTimeText = saved[20] as String,
                 oneShotSizeText = saved[21] as String,

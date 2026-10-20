@@ -31,7 +31,7 @@ internal class SettingsSilenceCalibration(
     private val view: View,
     private val lifecycle: Lifecycle,
     private val readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
-    private val onCalibrated: (SilenceGateConfig) -> Unit,
+    private val onCalibrated: (SilenceGateConfig, SilenceCalibrationHistogram) -> Unit,
 ) {
     var running by mutableStateOf(false)
         private set
@@ -88,7 +88,8 @@ internal class SettingsSilenceCalibration(
                 // suspension. Undo, input changes and Back revoke ownership before recomposition.
                 if (isCurrent()) {
                     measured = result
-                    onCalibrated(config.copy(points = result.points))
+                    onCalibrated(config.copy(points = result.points),
+                        SilenceCalibrationHistogram(input, result.sampleRate, result.peaks.toList()))
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -153,7 +154,7 @@ internal class SettingsSilenceCalibration(
 @Composable
 internal fun rememberSettingsSilenceCalibration(
     readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
-    onCalibrated: (SilenceGateConfig) -> Unit,
+    onCalibrated: (SilenceGateConfig, SilenceCalibrationHistogram) -> Unit,
 ): SettingsSilenceCalibration {
     val context = LocalContext.current
     val view = LocalView.current
@@ -164,7 +165,7 @@ internal fun rememberSettingsSilenceCalibration(
     val controller = remember(context, view, lifecycle, scope) {
         SettingsSilenceCalibration(context, scope, view, lifecycle,
             readOwner = { config, input -> latestOwner.value(config, input) },
-            onCalibrated = { latestResult.value(it) })
+            onCalibrated = { config, histogram -> latestResult.value(config, histogram) })
     }
     DisposableEffect(controller, view, lifecycle) {
         var tree: ViewTreeObserver? = null

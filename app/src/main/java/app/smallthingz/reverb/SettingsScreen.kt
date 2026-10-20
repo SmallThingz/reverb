@@ -135,6 +135,7 @@ data class SettingsSnapshot(
     val quickSaveEnabled: Boolean = true,
     val quickSaveSeconds: Int = DEFAULT_QUICK_SAVE_SECONDS,
     val silenceGate: String = encodeSilenceGate(SilenceGateConfig()),
+    val silenceHistogram: String? = null,
 )
 
 private data class SettingsInitialConfiguration(
@@ -152,6 +153,7 @@ private data class SettingsInitialConfiguration(
     val quickSaveEnabled: Boolean,
     val quickSaveSeconds: Int,
     val silence: SilenceGatePreferenceSnapshot,
+    val silenceHistogram: String?,
 )
 
 private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
@@ -167,6 +169,7 @@ private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
     PrefKey.QUICK_SAVE_ENABLED,
     PrefKey.QUICK_SAVE_SECONDS,
     PrefKey.SILENCE_GATE,
+    PrefKey.SILENCE_CALIBRATION_HISTOGRAM,
     PrefKey.PCM_SAMPLE_FORMAT,
     PrefKey.AUDIO_SOURCE,
     PrefKey.CHANNEL_MODE,
@@ -371,6 +374,10 @@ fun SettingsScreen(
     var selectedQuickSaveEnabled by remember { mutableStateOf(true) }
     var selectedQuickSaveSeconds by remember { mutableIntStateOf(DEFAULT_QUICK_SAVE_SECONDS) }
     var selectedSilence by remember { mutableStateOf(SilenceGateConfig()) }
+    var selectedSilenceHistogram by remember { mutableStateOf<String?>(null) }
+    val silenceHistogram = remember(selectedSilenceHistogram) {
+        decodeSilenceCalibrationHistogram(selectedSilenceHistogram)
+    }
     var originalSilenceRaw by remember { mutableStateOf<String?>(null) }
     var calibrationResetRevision by remember { mutableIntStateOf(0) }
     var selectedTheme by remember { mutableStateOf(AppThemeMode.SYSTEM) }
@@ -498,6 +505,7 @@ fun SettingsScreen(
         quickSaveEnabled = selectedQuickSaveEnabled,
         quickSaveSeconds = selectedQuickSaveSeconds,
         silenceGate = encodeSilenceGate(selectedSilence),
+        silenceHistogram = selectedSilenceHistogram,
     )
 
     fun currentSettingsDraft(snapshot: SettingsSnapshot) = SettingsUiDraft(
@@ -601,7 +609,12 @@ fun SettingsScreen(
                 originalSnapshot.silenceCalibrationInput() == input
             ) settingsEditRevision[0] to calibrationResetRevision else null
         },
-        onCalibrated = { config -> selectedSilence = config; finishSettingsEdit() },
+        onCalibrated = { config, histogram ->
+            val encodedHistogram = encodeSilenceCalibrationHistogram(histogram)
+            selectedSilence = config
+            selectedSilenceHistogram = encodedHistogram
+            finishSettingsEdit()
+        },
     )
     LaunchedEffect(active, settingsInteractionReady, settingsPersisting,
         settingsEditRevision[0], calibrationResetRevision) { calibration.cancel() }
@@ -651,6 +664,7 @@ fun SettingsScreen(
         selectedQuickSaveEnabled = prev.quickSaveEnabled
         selectedQuickSaveSeconds = prev.quickSaveSeconds
         selectedSilence = decodeSilenceGate(prev.silenceGate)
+        selectedSilenceHistogram = prev.silenceHistogram
         calibrationResetRevision++
         oneShotRetentionTimeError = null
         oneShotRetentionSizeError = null
@@ -884,6 +898,7 @@ fun SettingsScreen(
             .putBoolean(PrefKey.QUICK_SAVE_ENABLED, submittedSnapshot.quickSaveEnabled)
             .putInt(PrefKey.QUICK_SAVE_SECONDS, submittedSnapshot.quickSaveSeconds)
             .putString(PrefKey.SILENCE_GATE, submittedSnapshot.silenceGate)
+            .putString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM.name, submittedSnapshot.silenceHistogram)
             .putInt(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.storageCode.toInt())
             .putInt(PrefKey.AUDIO_SOURCE, source.storageCode.toInt())
             .putInt(PrefKey.CHANNEL_MODE, channelMode.storageCode.toInt())
@@ -1046,6 +1061,9 @@ fun SettingsScreen(
                 quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
                 quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
                 silence = SilenceGatePreferences.read(context),
+                silenceHistogram = getRecorderPreferences(context)
+                    .safeString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM)
+                    .takeIf { decodeSilenceCalibrationHistogram(it) != null },
             )
             }
             }
@@ -1081,6 +1099,7 @@ fun SettingsScreen(
             selectedQuickSaveEnabled = initial.quickSaveEnabled
             selectedQuickSaveSeconds = initial.quickSaveSeconds
             selectedSilence = initial.silence.config
+            selectedSilenceHistogram = initial.silenceHistogram
             originalSilenceRaw = initial.silence.raw
             calibrationResetRevision++
             selectedTheme = configuredThemeMode
@@ -1115,6 +1134,7 @@ fun SettingsScreen(
             selectedQuickSaveEnabled = values.quickSaveEnabled
             selectedQuickSaveSeconds = values.quickSaveSeconds
             selectedSilence = decodeSilenceGate(values.silenceGate)
+            selectedSilenceHistogram = values.silenceHistogram
             selectedSampleFormat = values.sampleFormat
             selectedRoute = values.route ?: InputRouteMode.AUTO
             selectedExportTreeUri = values.exportDirectoryUri?.let(Uri::parse)
@@ -1772,6 +1792,13 @@ fun SettingsScreen(
                         }
                         val renderedSilence = selectedSilence
                         val renderedSilenceRevision = settingsEditRevision[0]
+                        val currentSilenceCalibrationInput = SilenceCalibrationInput(
+                            sampleRate = selectedSampleRate,
+                            sampleFormat = selectedSampleFormat,
+                            channelMode = selectedChannelMode,
+                            source = selectedSource,
+                            route = selectedRoute,
+                        )
                         SkipSilenceSettings(
                             config = renderedSilence,
                             onConfigChange = {
@@ -1795,8 +1822,8 @@ fun SettingsScreen(
                             onCancelCalibration = { calibration.cancel() },
                             enabled = settingsInteractionReady && !settingsPersisting,
                             maximumHz = minOf(SILENCE_MAX_HZ, selectedSampleRate / 2),
-                            sampledPeaks = calibration.measured?.peaks,
-                            calibrationAllowed = originalSnapshot.silenceCalibrationInput() == currentSettingsSnapshot().silenceCalibrationInput(),
+                            sampledPeaks = silenceHistogram?.peaksFor(currentSilenceCalibrationInput),
+                            calibrationAllowed = originalSnapshot.silenceCalibrationInput() == currentSilenceCalibrationInput,
                             calibrating = calibration.running,
                             holdingCalibration = calibration.holding,
                             calibrationProgress = calibration.progress,

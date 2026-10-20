@@ -211,42 +211,8 @@ fun AboutDialog(onDismiss: () -> Unit = {}) {
                             tone = FeedbackTone.ERROR,
                         )
                     }
-                    Spacer(Modifier.height(18.dp))
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        AboutFeature(
-                            title = stringResource(R.string.about_output_compression_title),
-                            description = stringResource(R.string.about_output_compression_description),
-                        )
-                        AboutFeature(
-                            title = stringResource(R.string.about_skip_silence_title),
-                            description = stringResource(R.string.about_skip_silence_description),
-                        )
-                        AboutFeature(
-                            title = stringResource(R.string.about_quick_save_tiles_title),
-                            description = stringResource(R.string.about_quick_save_tiles_description),
-                        )
-                    }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun AboutFeature(title: String, description: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

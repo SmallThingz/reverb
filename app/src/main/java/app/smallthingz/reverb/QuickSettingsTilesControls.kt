@@ -162,10 +162,10 @@ private fun requestQuickTile(context: Context, option: QuickSaveTileOption, resu
 }
 
 /** Drafts and accepted mutations belong to the Settings screen, not a recycled lazy item. */
-internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?) {
-    internal var buffer by mutableStateOf(existing?.buffer ?: ReverbService.BufferSlot.LOOPING)
+internal class QuickSettingsTileEditorTarget {
+    internal var buffer by mutableStateOf(ReverbService.BufferSlot.LOOPING)
         private set
-    internal var seconds by mutableIntStateOf(existing?.seconds ?: DEFAULT_QUICK_SAVE_SECONDS)
+    internal var seconds by mutableIntStateOf(DEFAULT_QUICK_SAVE_SECONDS)
     internal var busy by mutableStateOf(false)
     internal var editRevision by mutableLongStateOf(0L)
     private var lastWheelOwner: Pair<Long, Long>? = null
@@ -181,7 +181,7 @@ internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?)
     /** Only values cross Activity recreation; each replacement gets new edit/gesture ownership. */
     internal fun saveDraft(): List<Any> = listOf(
         1, buffer.storageCode.toInt(), seconds,
-        existing?.let { encodeQuickSaveTileOptions(listOf(it)) }.orEmpty(),
+        "", // Keep the creation-draft format compatible with previously saved state.
     )
 
     companion object {
@@ -190,9 +190,10 @@ internal class QuickSettingsTileEditorTarget(val existing: QuickSaveTileOption?)
             val buffer = requireNotNull(ReverbService.BufferSlot.fromStorageCode(saved[1] as Int))
             val seconds = saved[2] as Int
             require(seconds in 1..86_400 && quickTileRepresentableSeconds(seconds) == seconds)
-            val existing = (saved[3] as String).takeIf { it.isNotEmpty() }
-                ?.let { decodeQuickSaveTileOptions(it).single() }
-            QuickSettingsTileEditorTarget(existing).also {
+            // Older versions saved edits of existing definitions here. Never restore one as a
+            // new tile or reintroduce an editing action after an update/recreation.
+            require(saved[3] == "")
+            QuickSettingsTileEditorTarget().also {
                 it.buffer = buffer
                 it.seconds = seconds
             }
@@ -289,10 +290,9 @@ internal fun QuickSettingsTilesControls(
     LaunchedEffect(active, interactionReady) {
         if (active && interactionReady) QuickSaveTileOptions.refresh(context)
     }
-    fun open(option: QuickSaveTileOption?) {
+    fun openCreation() {
         if (!interactive || !inputReady() || failure != null || editorState.editorOpen) return
-        if (option != null && QuickSaveTileOptions.options.value?.find { it.slot == option.slot } != option) return
-        editorState.target = QuickSettingsTileEditorTarget(option)
+        editorState.target = QuickSettingsTileEditorTarget()
     }
     fun add(option: QuickSaveTileOption) {
         if (!interactive || !inputReady() || editorState.editorOpen || QuickSaveTileOptions.error.value != null) return
@@ -314,7 +314,7 @@ internal fun QuickSettingsTilesControls(
                 val items = options.orEmpty()
                 for ((index, option) in items.withIndex()) key(option.slot, option.revision) {
                     val enabled = interactive && !editorState.editorOpen && failure == null
-                    Surface(onClick = { open(option) }, enabled = enabled, color = chrome.field,
+                    Surface(color = chrome.field,
                         modifier = Modifier.settingsAudioDivider(top = index > 0)) {
                         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically) {
@@ -341,7 +341,7 @@ internal fun QuickSettingsTilesControls(
                 }
                 if (options == null && failure == null) TileStatus(stringResource(R.string.tiles_ui_loading), Modifier.padding(16.dp))
                 if (failure == null && options != null && items.size < QUICK_SAVE_TILE_COUNT) {
-                    TextButton(onClick = { open(null) }, enabled = interactive && !editorState.editorOpen && durationSubmissionAllowed,
+                    TextButton(onClick = ::openCreation, enabled = interactive && !editorState.editorOpen && durationSubmissionAllowed,
                         modifier = Modifier.fillMaxWidth().settingsAudioDivider(top = items.isNotEmpty())) {
                         Icon(Icons.Rounded.Add, null, Modifier.size(20.dp))
                         Text(stringResource(R.string.tiles_ui_create), Modifier.padding(start = 8.dp))
@@ -490,7 +490,7 @@ private fun QuickTileInlineEditor(
                         }
                         else -> {
                             val (amount, unit) = quickTileAmountAndUnit(seconds)
-                            withContext(Dispatchers.IO) { QuickSaveTileOptions.save(context.applicationContext, target.existing, buffer, amount, unit) }
+                            withContext(Dispatchers.IO) { QuickSaveTileOptions.create(context.applicationContext, buffer, amount, unit) }
                             if (owner.target === target) owner.target = null
                             AppFeedbackCenter.post(context.getString(R.string.tiles_ui_saved))
                         }
@@ -509,7 +509,7 @@ private fun QuickTileInlineEditor(
     Surface(shape = RoundedCornerShape(20.dp), color = chrome.field, border = BorderStroke(1.dp, chrome.border)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(if (target.existing == null) R.string.tiles_ui_create else R.string.tiles_ui_edit),
+                Text(stringResource(R.string.tiles_ui_create),
                     Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 IconButton(onClick = ::close, enabled = !target.busy) { Icon(AppIcons.close, stringResource(R.string.cancel)) }
             }

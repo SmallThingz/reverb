@@ -66,7 +66,7 @@ class NotificationDurationBindingTest {
 
     @Test fun canonicalTileDurationAndOwnRevisionStaySynchronizedWithoutRecomposition() {
         val binding = NotificationDurationBinding()
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         target.seconds = 999
         fun owner() = target.wheelOwner(7L)
         val apply: (Int) -> NotificationDurationCommit? = { seconds ->
@@ -184,7 +184,7 @@ class NotificationDurationBindingTest {
     }
 
     @Test fun tileWheelTracksBothParentAndLocalDraftRevisions() {
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         val binding = NotificationDurationBinding()
         val originalOwner = target.wheelOwner(7L)
         binding.update(30, 300, enabled = true, owner = originalOwner)
@@ -208,7 +208,7 @@ class NotificationDurationBindingTest {
     }
 
     @Test fun selectedTileBufferTapRetainsWheelOwnership() {
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         val wheelOwner = target.wheelOwner(7L)
 
         assertFalse(target.selectBuffer(target.buffer))
@@ -216,7 +216,7 @@ class NotificationDurationBindingTest {
     }
 
     @Test fun rapidTileBufferRoundTripInvalidatesTheOriginalWheelInteraction() {
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         val originalBuffer = target.buffer
         val binding = NotificationDurationBinding()
         val originalOwner = target.wheelOwner(7L)
@@ -234,7 +234,7 @@ class NotificationDurationBindingTest {
     }
 
     @Test fun tileSaveRejectsBufferChangeAndRetainsDraft() {
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         val editRevision = target.editRevision
         target.busy = true
 

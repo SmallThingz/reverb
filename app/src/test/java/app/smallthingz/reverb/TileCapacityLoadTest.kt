@@ -10,7 +10,7 @@ import org.junit.Test
 class TileCapacityLoadTest {
     @Test fun bufferRoundTripsUseOneSnapshotWithoutRemovingTheWheelOrReloadingLimits() {
         val load = TileCapacityLoad()
-        val target = QuickSettingsTileEditorTarget(null)
+        val target = QuickSettingsTileEditorTarget()
         val snapshot = TileCapacities(3_600, loopingSeconds = 300.0, oneShotSeconds = 90.0)
         val request = load.begin(7L)!!
         assertTrue(load.finish(request, 7L, snapshot))

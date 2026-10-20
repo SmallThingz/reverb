@@ -13,8 +13,8 @@ class QuickSettingsTileEditorRestorationTest {
         2, "a".repeat(32), ReverbService.BufferSlot.LOOPING, 2, QuickSaveUnit.MINUTES,
     )
 
-    private fun draft(existing: QuickSaveTileOption? = null) = QuickSettingsTilesEditorState().also { state ->
-        state.target = QuickSettingsTileEditorTarget(existing).also { target ->
+    private fun draft() = QuickSettingsTilesEditorState().also { state ->
+        state.target = QuickSettingsTileEditorTarget().also { target ->
             target.selectBuffer(ReverbService.BufferSlot.ONE_SHOT)
             target.seconds = 180
             target.editRevision++
@@ -35,7 +35,6 @@ class QuickSettingsTileEditorRestorationTest {
         assertTrue(replacement.restorePendingDraft(parentReady = true))
         val target = replacement.target!!
         assertNotSame(original.target, target)
-        assertNull(target.existing)
         assertEquals(ReverbService.BufferSlot.ONE_SHOT, target.buffer)
         assertEquals(180, target.seconds)
         assertEquals(0L, target.editRevision)
@@ -46,40 +45,26 @@ class QuickSettingsTileEditorRestorationTest {
         assertFalse(replacement.restorePendingDraft(parentReady = true))
     }
 
-    @Test fun existingDraftKeepsOriginalIdentitySeparateFromDirtyBufferAndDuration() {
-        val expected = option()
-        val replacement = QuickSettingsTilesEditorState.restore(draft(expected).save(panelActive = true))
-        assertTrue(replacement.restorePendingDraft(parentReady = true))
-        val target = replacement.target!!
-        assertEquals(expected, target.existing)
-        assertEquals(ReverbService.BufferSlot.LOOPING, target.existing!!.buffer)
-        assertEquals(120, requireNotNull(target.existing).seconds)
-        assertEquals(ReverbService.BufferSlot.ONE_SHOT, target.buffer)
-        assertEquals(180, target.seconds)
-
-        // Later buffer switches remain local edits and never retarget the pinned definition.
-        assertTrue(target.selectBuffer(ReverbService.BufferSlot.LOOPING))
-        assertTrue(target.selectBuffer(ReverbService.BufferSlot.ONE_SHOT))
-        assertEquals(expected, target.existing)
-        assertEquals(180, target.seconds)
-    }
-
-    @Test fun restoredExistingDefinitionCannotSaveAgainstDeletionChangeOrReusedSlot() {
-        val expected = option()
-        val replacement = QuickSettingsTilesEditorState.restore(draft(expected).save(panelActive = true))
-        replacement.restorePendingDraft(parentReady = true)
-        val pinned = replacement.target!!.existing
-        assertTrue(quickSaveTileDefinitionIsCurrent(pinned, listOf(expected)))
-        assertFalse(quickSaveTileDefinitionIsCurrent(pinned, emptyList()))
-        assertFalse(quickSaveTileDefinitionIsCurrent(pinned, listOf(expected.copy(amount = 3))))
-        assertFalse(quickSaveTileDefinitionIsCurrent(pinned, listOf(expected.copy(revision = "b".repeat(32)))))
-        assertTrue(quickSaveTileDefinitionIsCurrent(null, listOf(expected)))
+    @Test fun legacyExistingTileEditNeverRestoresOrBecomesADuplicateCreation() {
+        // This is the previous version's real saved edit shape, including dirty buffer/duration
+        // values separate from its original persisted identity.
+        val saved = listOf(1, ReverbService.BufferSlot.ONE_SHOT.storageCode.toInt(), 180,
+            encodeQuickSaveTileOptions(listOf(option())))
+        val replacement = QuickSettingsTilesEditorState.restore(saved)
+        assertFalse(replacement.editorOpen)
+        assertFalse(replacement.restorePendingDraft(parentReady = false))
+        assertFalse(replacement.restorePendingDraft(parentReady = true))
+        assertNull(replacement.target)
+        assertEquals(emptyList<Any>(), replacement.save(panelActive = true))
+        val next = QuickSettingsTilesEditorState.restore(replacement.save(panelActive = true))
+        assertFalse(next.editorOpen)
+        assertFalse(next.restorePendingDraft(parentReady = true))
     }
 
     @Test fun delayedRestorationCannotReplaceANewerEditor() {
-        val waiting = QuickSettingsTilesEditorState.restore(draft(option()).save(panelActive = true))
+        val waiting = QuickSettingsTilesEditorState.restore(draft().save(panelActive = true))
         assertFalse(waiting.restorePendingDraft(parentReady = false))
-        val newer = QuickSettingsTileEditorTarget(null).also { it.seconds = 45 }
+        val newer = QuickSettingsTileEditorTarget().also { it.seconds = 45 }
         waiting.target = newer
         assertFalse(waiting.restorePendingDraft(parentReady = true))
         assertSame(newer, waiting.target)
@@ -123,7 +108,7 @@ class QuickSettingsTileEditorRestorationTest {
     }
 
     @Test fun acceptedMutationIsNotRestoredOrCancelledByDraftCleanup() {
-        val original = draft(option())
+        val original = draft()
         val target = original.target!!
         target.busy = true
         assertFalse(original.closeEditor())
@@ -167,7 +152,7 @@ class QuickSettingsTileEditorRestorationTest {
     }
 
     @Test fun malformedSavedDraftFallsBackToNoEditorWithoutReinterpretingIdentity() {
-        val valid = draft(option()).save(panelActive = true)
+        val valid = draft().save(panelActive = true)
         val invalid = listOf(
             emptyList(),
             valid.dropLast(1),
