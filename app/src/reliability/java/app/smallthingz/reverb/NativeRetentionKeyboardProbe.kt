@@ -26,7 +26,7 @@ import java.io.File
  * target a freshly observed unique editable node. Hardware keys come only from the sole external
  * coordinator's literal stage table, while the real IME is independently visible.
  *
- * No InputConnection is created here, no keyboard/focus mode is forced, no IME/accessibility
+ * No InputConnection is created here, no keyboard/focus mode is forced, no user IME/accessibility
  * setting is changed, and no production settings, capture, permissions, or files are accessed.
  * Focused captures are evidence, not a cursor-blink pixel oracle. Existing six static cases remain
  * a separate selector. This does not qualify soft-key composition or other IME implementations.
@@ -50,12 +50,15 @@ internal fun verifyNativeRetentionKeyboardParity(
             "other IMEs", "production persistence", "cursor animation pixel/frame equality")))
     var host: NativeParityActivity? = null
     var mounted: AutoCloseableRetentionKeyboardField? = null
+    var interactiveWindows: NativeParityInteractiveWindows? = null
     var failure: Throwable? = null
     var completed = 0
     try {
         writeRetentionKeyboardEvidence(directory, result, null)
+        val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { interactiveWindows = it }
         val activity = launchNativeParityActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        windowScope.recordHost(instrumentation, activity)
         val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
             .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
         val referenceCallbacks = mutableMapOf<RetentionMode, List<String>>()
@@ -161,6 +164,7 @@ internal fun verifyNativeRetentionKeyboardParity(
         cleanup { mounted?.let { field -> nativeParityOnMain(instrumentation) { field.close() } } }
         mounted = null
         cleanup { host?.let { activity -> nativeParityOnMain(instrumentation) { activity.finish() } } }
+        cleanup { interactiveWindows?.close() }
         result.put("completed_flows", completed).put("passed", failure == null && completed == 4)
         var evidenceWritten = false
         try {
@@ -321,7 +325,7 @@ private class RetentionKeyboardGuard(
     private fun <T> withTarget(block: (AccessibilityNodeInfo, AccessibilityWindowInfo, JSONObject?) -> T): T {
         requireNativeParityHost(instrumentation, host)
         val windows = instrumentation.uiAutomation.windows
-        check(windows.isNotEmpty()) { "No actual accessible windows; no service configuration fallback" }
+        check(windows.isNotEmpty()) { "No actual accessible windows after explicit test-service setup" }
         val roots = mutableListOf<AccessibilityNodeInfo>()
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         try {

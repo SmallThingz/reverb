@@ -40,6 +40,7 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
             "Popup Back dispatch", "Frame-perfect animation timing", "Live incident store", "Clipboard")))
     publishIncidentInteraction(directory, result)
     var host: NativeParityActivity? = null
+    var interactiveWindows: NativeParityInteractiveWindows? = null
     var board: IncidentsParityBoard? = null
     var trace: IncidentInteractionTrace? = null
     var currentRun: JSONObject? = null
@@ -48,8 +49,10 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
     val pictures = LinkedHashMap<String, File>()
     var comparisonsPassed = false
     try {
+        val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { interactiveWindows = it }
         val activity = launchNativeParityActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        windowScope.recordHost(instrumentation, activity)
         val content = nativeParityOnMain(instrumentation) {
             IncidentsParityBoard(activity, dark = true, scene = IncidentParityScene.POPULATED, interactive = true)
         }.also { board = it }
@@ -162,6 +165,7 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
             release { nativeParityOnMain(instrumentation) { activity.fixtureRoot.removeAllViews() } }
             release { nativeParityOnMain(instrumentation) { activity.finish() } }
         }
+        release { interactiveWindows?.close() }
         result.put("passed", comparisonsPassed && failure == null)
         failure?.let { result.put("failure", it.stackTraceToString()) }
         var written = false

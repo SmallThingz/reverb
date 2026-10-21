@@ -270,13 +270,25 @@ private fun runFineLeafGesture(instrumentation: Instrumentation, host: NativePar
                     previous.getJSONArray("point").getDouble(1) == point.y.toDouble() &&
                     previous.getJSONArray("raw_point").getDouble(0) == motion.rawX.toDouble() &&
                     previous.getJSONArray("raw_point").getDouble(1) == motion.rawY.toDouble() && render.scroll() > 0
+                // Compose delivers ACTION_CANCEL through processCancel(), then returns a false
+                // dispatch result. Accept that return only when this admitted drag synchronously
+                // gains exactly its cancel callback; an absent or duplicate cancel still fails.
+                val referenceCancel = render.label == "compose" && scenario == FineLeafScenario.DRAG_CANCEL &&
+                    action == MotionEvent.ACTION_CANCEL && previous != null &&
+                    previous.getInt("action") == MotionEvent.ACTION_MOVE && previous.getBoolean("handled") &&
+                    render.criticalCallbackNames() == listOf("interaction_start", "begin")
                 render.inputs.put(JSONObject().put("action", action).put("uptime_ms", now)
                     .put("point", JSONArray(listOf(point.x, point.y)))
                     .put("raw_point", JSONArray(listOf(motion.rawX, motion.rawY)))
                     .put("stationary_reference_move", stationaryReferenceMove).put("scroll_before", render.scroll()))
                 val handled = render.root.dispatchTouchEvent(motion)
-                render.inputs.getJSONObject(render.inputs.length() - 1).put("handled", handled).put("scroll_after_dispatch", render.scroll())
-                check(handled || stationaryReferenceMove) { "Current own fixture did not admit the expected pointer stream" }
+                val referenceCancelDelivered = referenceCancel &&
+                    render.criticalCallbackNames() == listOf("interaction_start", "begin", "cancel")
+                render.inputs.getJSONObject(render.inputs.length() - 1).put("handled", handled)
+                    .put("reference_cancel_delivered", referenceCancelDelivered).put("scroll_after_dispatch", render.scroll())
+                check(handled || stationaryReferenceMove || referenceCancelDelivered) {
+                    "Current own fixture did not admit the expected pointer stream"
+                }
             } finally { motion.recycle() }
         }
     }
@@ -455,6 +467,8 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
         Rect(point[0] - origin[0], point[1] - origin[1], point[0] - origin[0] + fine.width, point[1] - origin[1] + fine.height)
     }
     fun scroll() = sourceScroll?.value ?: checkNotNull(nativeScroll).value
+    fun criticalCallbackNames(): List<String> =
+        (0 until trace.critical.length()).map { trace.critical.getJSONObject(it).getString("name") }
     fun snapshot(phase: String): JSONObject {
         checkCurrent()
         val bounds = leafBounds()
