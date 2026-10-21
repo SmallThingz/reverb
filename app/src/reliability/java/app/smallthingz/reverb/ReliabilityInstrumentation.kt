@@ -11,10 +11,12 @@ import java.io.File
 /** Standalone runner: no production/test framework dependency and a separate installed package. */
 class ReliabilityInstrumentation : Instrumentation() {
     private var requestedTest: String? = null
+    private var keyboardSessionNonce: String? = null
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         requestedTest = arguments?.getString("test")
+        keyboardSessionNonce = arguments?.getString("keyboard_session_nonce")
         start()
     }
 
@@ -32,7 +34,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
                 "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
-                "native_library_parity", "native_range_parity", "native_content_restoration",
+                "native_library_parity", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
@@ -51,6 +53,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_parity") {
                 executed++
                 verifyNativeLibraryParity(this, report)
+            } else if (requestedTest == "native_legacy_state_parity") {
+                executed++
+                verifyNativeLegacySavedStateParity(this, report)
             } else if (requestedTest == "native_content_restoration") {
                 executed++
                 verifyNativeContentRestoration(this, report)
@@ -81,6 +86,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_switch_motion") {
                 executed++
                 verifyNativeSwitchObservedMotion(this, report)
+            } else if (requestedTest == "native_icon_clip_parity") {
+                executed++
+                verifyNativeIconClipParity(this, report)
             } else if (requestedTest == "native_icon_parity") {
                 executed++
                 verifyNativeIconParity(this, report)

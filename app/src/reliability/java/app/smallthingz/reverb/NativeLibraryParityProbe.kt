@@ -13,6 +13,7 @@ import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -331,6 +332,8 @@ private class LibraryParityBoard(
                     LocalResources provides context.resources, LocalDensity provides density,
                     LocalLayoutDirection provides if (dark) LayoutDirection.Rtl else LayoutDirection.Ltr,
                     LocalLifecycleOwner provides sourceLifecycle,
+                    // The configuration Context is not the Activity dispatcher owner.
+                    LocalOnBackPressedDispatcherOwner provides host,
                 ) {
                     MaterialTheme(colorScheme = colors, typography = typography) {
                         ReleasedLibraryFilesScreen(

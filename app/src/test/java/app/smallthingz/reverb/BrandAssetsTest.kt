@@ -89,7 +89,7 @@ class BrandAssetsTest {
             assertEquals("@drawable/ic_launcher_$name", inset.a("drawable"))
             for (edge in listOf("Left", "Top", "Right", "Bottom")) assertEquals("0dp", inset.a("inset$edge"))
         }
-        val inApp = file("app/src/main/java/app/smallthingz/reverb/ReverbBrandMark.kt").readText()
+        val inApp = file("app/src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt").readText()
         assertTrue(inApp.contains("painterResource(R.drawable.ic_launcher_foreground)"))
         assertFalse(inApp.contains(".offset("))
         assertFalse(inApp.contains("translationX"))

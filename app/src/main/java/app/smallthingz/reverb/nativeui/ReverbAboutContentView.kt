@@ -547,9 +547,11 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
     private val sourceClick = onClick
     fun invokeSourceClick(): Boolean { sourceClick(); return true }
     private val icon = AboutGithubGlyph(context, appearance.palette.ink)
-    val title = aboutParagraph(context, appearance, appearance.titleSmall, appearance.palette.ink)
+    val title = aboutParagraph(context, appearance, appearance.titleSmall,
+        reverbAboutRepositoryTitleColor(appearance.palette, appearance.titleSmall))
     val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
-    private val indication = ReverbRowIndication.install(this, appearance.palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this,
+        reverbAboutRepositoryContentColor(appearance.palette), ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
@@ -571,10 +573,11 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
     fun setAppearance(value: AboutContentAppearance) {
         appearance = value
         icon.setColor(value.palette.ink)
-        title.setTypography(value.titleSmall, value.density, value.fontResolver); title.setTextColor(value.palette.ink)
+        title.setTypography(value.titleSmall, value.density, value.fontResolver)
+        title.setTextColor(reverbAboutRepositoryTitleColor(value.palette, value.titleSmall))
         label.setTypography(value.bodySmall, value.density, value.fontResolver); label.setTextColor(value.palette.muted)
         title.setText(context.resources.getString(R.string.github_repo))
-        indication.updateColor(value.palette.ink); requestLayout()
+        indication.updateColor(reverbAboutRepositoryContentColor(value.palette)); requestLayout()
     }
     private fun dp(value: Float) = (value * appearance.density.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

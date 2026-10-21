@@ -368,6 +368,10 @@ private fun verifyNativeRestoredValues(): JSONObject {
     navigation.closeAbout(); navigation.closeIncidents(); navigation.closeLibrary()
     check(navigation.settingsBackEnabled && !navigation.homeGesturesEnabled)
     navigation.closeSettings()
+    // Closing the restored Incidents flag does not complete its retained exit motion.
+    check(!navigation.homeGesturesEnabled && navigation.incidentsOverlayVisible &&
+        navigation.settingsBufferTargetCode == -1)
+    navigation.bindIncidentsOverlayVisibility(false)
     check(navigation.homeGesturesEnabled && navigation.settingsBufferTargetCode == -1)
 
     val themes = ArrayList<AppThemeMode?>()

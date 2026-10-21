@@ -7,7 +7,11 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.Choreographer
+import android.view.Display
 import android.view.View
+import android.view.ViewTreeObserver
+import android.view.inspector.WindowInspector
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
@@ -49,6 +53,8 @@ import app.smallthingz.reverb.nativeui.ReverbRangeExportContent
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -77,6 +83,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
     val preferencesBefore = rangePreferenceDigest(context)
     var host: NativeParityActivity? = null
     var board: RangeParityBoard? = null
+    var hostTrace: RangeHostTrace? = null
     var signal: RangeParitySignal? = null
     var failure: Throwable? = null
     var completed = 0
@@ -86,9 +93,13 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
         result.put("signal", signal.receipt())
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
+        val trace = RangeHostTrace(instrumentation, activity)
+        hostTrace = trace
+        trace.mark("initial-draw")
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        trace.awaitInitialReady()
         for (dark in listOf(false, true)) for (compact in listOf(false, true)) {
-            requireNativeParityHost(instrumentation, activity)
+            trace.guard("case-start dark=$dark compact=$compact")
             // Distinct parent leases; the fixture owns their close, neither renderer does.
             val referenceSnapshot = signal.snapshot()
             val nativeSnapshot = try { signal.snapshot() } catch (error: Throwable) {
@@ -97,6 +108,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
             }
             val current = try {
                 nativeParityOnMain(instrumentation) {
+                    trace.markOnMain("construct-board dark=$dark compact=$compact")
                     RangeParityBoard(activity, dark, compact, referenceSnapshot, nativeSnapshot)
                 }
             } catch (error: Throwable) {
@@ -109,7 +121,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
             try {
                 for (reference in listOf(true, false)) {
                     nativeParityOnMain(instrumentation) { current.show(reference) }
-                    awaitRangeReady(instrumentation, activity, current, reference)
+                    awaitRangeReady(instrumentation, activity, current, reference, trace)
                 }
                 fun captureStep(step: String) {
                     val entry = JSONObject().put("name", current.name + "-" + step).put("passed", false)
@@ -120,6 +132,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
                     try {
                         repeat(4) { pass ->
                             val reference = pass % 2 == 0
+                            trace.mark("${current.name}-$step-capture-$pass")
                             images += captureNativeParityContent(instrumentation, activity) { current.show(reference) }
                             val suffix = listOf("compose", "native", "compose-repeat", "native-repeat")[pass]
                             saveNativeParityBitmap(directory, entry.getString("name") + "-" + suffix + ".png", images.last())
@@ -148,13 +161,13 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
                 if (!compact) {
                     val actions = JSONArray()
                     for (reference in listOf(true, false)) {
-                        requireNativeParityHost(instrumentation, activity)
+                        trace.guard("${current.name}-duration-action reference=$reference")
                         nativeParityOnMain(instrumentation) { current.show(reference) }
                         awaitNativeParityDraw(instrumentation, current.content(reference))
                         val action = nativeParityOnMain(instrumentation) { current.resizeWithWheel(reference, 3f) }
                         actions.put(action)
                         check(action.getBoolean("accepted")) { "Existing duration action rejected: $action" }
-                        awaitRangeReady(instrumentation, activity, current, reference)
+                        awaitRangeReady(instrumentation, activity, current, reference, trace)
                     }
                     result.put(current.name + "-duration_actions", actions)
                     captureStep("duration-3s")
@@ -170,16 +183,26 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
                         else if (closeFailure == null) closeFailure = error else closeFailure.addSuppressed(error)
                     }
                 }
+                try { result.put("host_lifecycle_trace", trace.snapshot()) }
+                catch (error: Throwable) {
+                    if (caseFailure != null) caseFailure.addSuppressed(error)
+                    else if (closeFailure == null) closeFailure = error else closeFailure.addSuppressed(error)
+                }
                 writeRangeEvidence(directory, result, caseFailure ?: closeFailure)
                 if (caseFailure == null) closeFailure?.let { throw it }
             }
         }
         check(completed == 6 && mismatches == 0) { "Range mismatch: $mismatches/$completed" }
-    } catch (error: Throwable) { failure = error }
+    } catch (error: Throwable) {
+        failure = error
+        try { hostTrace?.recordFailure(error) } catch (traceError: Throwable) { error.addSuppressed(traceError) }
+    }
     finally {
         fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
             if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         } }
+        release { hostTrace?.close() }
+        release { hostTrace?.let { result.put("host_lifecycle_trace", it.snapshot()) } }
         release { nativeParityOnMain(instrumentation) { board?.close() } }
         release { nativeParityOnMain(instrumentation) { host?.fixtureRoot?.removeAllViews() } }
         release { nativeParityOnMain(instrumentation) { host?.finish() } }
@@ -441,12 +464,12 @@ private class RangeParityBoard(
 }
 
 private fun awaitRangeReady(instrumentation: Instrumentation, host: NativeParityActivity,
-    board: RangeParityBoard, reference: Boolean) {
+    board: RangeParityBoard, reference: Boolean, trace: RangeHostTrace) {
     val deadline = SystemClock.uptimeMillis() + 15_000
     var completeAt: Long? = null
     var finalFrames = 0
     while (SystemClock.uptimeMillis() < deadline) {
-        requireNativeParityHost(instrumentation, host)
+        trace.guard("${board.name}-range-ready reference=$reference")
         val ready = nativeParityOnMain(instrumentation) { board.ready(reference) }
         if (ready) {
             if (completeAt == null) completeAt = SystemClock.uptimeMillis()
@@ -460,6 +483,114 @@ private fun awaitRangeReady(instrumentation: Instrumentation, host: NativeParity
     }
     error("Range did not complete actual snapshot construction/opening within15s; no partial-state pass")
 }
+/** Initial launch readiness only; a later lost-focus guard never waits or reclaims focus. */
+private class RangeHostTrace(
+    private val instrumentation: Instrumentation,
+    private val host: NativeParityActivity,
+) : AutoCloseable {
+    private val samples = JSONArray()
+    private var phase = "launched"
+    private var closed = false
+    private var initialReadinessAttempted = false
+    private var focusObserved = false
+    private var focusLostAfterObservation = false
+    private val observer = nativeParityOnMain(instrumentation) { host.fixtureRoot.viewTreeObserver }
+    private val listener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
+        recordOnMain("window-focus-callback", callbackFocus = focused)
+    }
+
+    init {
+        nativeParityOnMain(instrumentation) {
+            observer.addOnWindowFocusChangeListener(listener)
+            try { recordOnMain("observer-attached") }
+            catch (error: Throwable) {
+                observer.removeOnWindowFocusChangeListener(listener)
+                throw error
+            }
+        }
+    }
+
+    fun mark(value: String) = nativeParityOnMain(instrumentation) { markOnMain(value) }
+    fun markOnMain(value: String) {
+        phase = value
+        recordOnMain("phase")
+    }
+    fun snapshot(): JSONArray = nativeParityOnMain(instrumentation) { JSONArray(samples.toString()) }
+    fun recordFailure(error: Throwable) = nativeParityOnMain(instrumentation) {
+        recordOnMain("failure").put("error", error.toString())
+    }
+    fun guard(value: String) {
+        mark(value)
+        try { requireNativeParityHost(instrumentation, host) }
+        catch (error: Throwable) {
+            try { recordFailure(error) } catch (traceError: Throwable) { error.addSuppressed(traceError) }
+            throw error
+        }
+    }
+
+    fun awaitInitialReady() {
+        check(!initialReadinessAttempted) { "Initial readiness may only be observed once" }
+        initialReadinessAttempted = true
+        mark("initial-window-readiness")
+        repeat(30) { frame ->
+            val ready = nativeParityOnMain(instrumentation) {
+                val sample = recordOnMain("initial-readiness-sample").put("frame", frame)
+                val root = host.fixtureRoot
+                val decor = host.window.decorView
+                check(!closed && !focusLostAfterObservation && !host.isFinishing &&
+                    root.isAttachedToWindow && root.isShown && root.display?.displayId == Display.DEFAULT_DISPLAY) {
+                    "New Range QA host lost its attached visible physical0 identity: $sample"
+                }
+                check(decor.context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+                decor in WindowInspector.getGlobalWindowViews() && decor.isAttachedToWindow &&
+                    decor.isShown && decor.display?.displayId == Display.DEFAULT_DISPLAY &&
+                    decor.hasWindowFocus() && host.hasWindowFocus()
+            }
+            if (ready) {
+                guard("initial-window-ready")
+                return
+            }
+            awaitFrame()
+        }
+        error("New Range QA Window did not become focused on physical0 within30 frames; no focus requested")
+    }
+
+    private fun awaitFrame() {
+        val done = CountDownLatch(1)
+        val callback = Choreographer.FrameCallback { done.countDown() }
+        nativeParityOnMain(instrumentation) { Choreographer.getInstance().postFrameCallback(callback) }
+        try { check(done.await(5, TimeUnit.SECONDS)) { "Range initial-readiness frame timed out" } }
+        finally { nativeParityOnMain(instrumentation) { Choreographer.getInstance().removeFrameCallback(callback) } }
+    }
+
+    private fun recordOnMain(event: String, callbackFocus: Boolean? = null): JSONObject {
+        val root = host.fixtureRoot
+        val decor = host.window.decorView
+        val focused = callbackFocus ?: host.hasWindowFocus()
+        if (focused) focusObserved = true else if (focusObserved) focusLostAfterObservation = true
+        return JSONObject().put("event", event).put("phase", phase)
+            .put("uptime_ms", SystemClock.uptimeMillis()).put("elapsed_nanos", SystemClock.elapsedRealtimeNanos())
+            .put("lifecycle", host.lifecycle.currentState.name).put("finishing", host.isFinishing)
+            .put("activity_focused", host.hasWindowFocus()).put("root_focused", root.hasWindowFocus())
+            .put("root_attached", root.isAttachedToWindow).put("root_shown", root.isShown)
+            .put("root_display", root.display?.displayId ?: JSONObject.NULL)
+            .put("decor_focused", decor.hasWindowFocus()).put("decor_attached", decor.isAttachedToWindow)
+            .put("decor_shown", decor.isShown).put("decor_display", decor.display?.displayId ?: JSONObject.NULL)
+            .put("decor_identity", System.identityHashCode(decor))
+            .put("decor_registered", decor in WindowInspector.getGlobalWindowViews())
+            .put("focus_ever_observed", focusObserved).put("focus_lost_after_observation", focusLostAfterObservation)
+            .put("callback_focus", callbackFocus ?: JSONObject.NULL).also { samples.put(it) }
+    }
+
+    override fun close() = nativeParityOnMain(instrumentation) {
+        if (!closed) {
+            closed = true
+            try { recordOnMain("observer-removed") }
+            finally { if (observer.isAlive) observer.removeOnWindowFocusChangeListener(listener) }
+        }
+    }
+}
+
 private fun rangeDescendants(view: View): Sequence<View> = sequence {
     yield(view)
     if (view is ViewGroup) repeat(view.childCount) { yieldAll(rangeDescendants(view.getChildAt(it))) }

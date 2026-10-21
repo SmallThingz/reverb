@@ -131,6 +131,10 @@ private class SegmentCell<T>(
     override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
 
     init {
+        // Released Text only clips actual overflow; glyph ink may exceed its measured advance.
+        // The segment outline below remains the source RoundedCornerShape clip.
+        clipChildren=false
+        clipToPadding=false
         setWillNotDraw(false)
         fill.color=background.value.toArgb()
         isClickable=true;isFocusable=true

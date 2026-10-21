@@ -21,24 +21,24 @@ allprojects {
         if (parityOnly) {
             def oracleCheck = tasks.register('verifyNativeParityOracle') {
                 def settingsSource = file('src/main/java/app/smallthingz/reverb/SettingsScreen.kt')
-                def chromeSource = file('src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt')
-                def iconsSource = file('src/main/java/app/smallthingz/reverb/AppIcons.kt')
+                def chromeSource = file('src/reliability/java/app/smallthingz/reverb/AppSurfaceStyle.kt')
+                def iconsSource = file('src/reliability/java/app/smallthingz/reverb/AppIcons.kt')
                 def aboutOracleSources = [
-                    'src/main/java/app/smallthingz/reverb/AboutDialog.kt': '882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b',
+                    'src/reliability/java/app/smallthingz/reverb/AboutDialog.kt': '882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b',
                     'src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt': 'fc977cc4f385def455abe021faf4635a87b6df85cd95de4885a8a1a128fd4d24',
-                    'src/main/java/app/smallthingz/reverb/ReverbBrandMark.kt': 'c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e',
-                    'src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt': '6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187',
+                    'src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt': 'c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e',
+                    'src/reliability/java/app/smallthingz/reverb/AppSurfaceStyle.kt': '6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187',
                     'src/main/java/app/smallthingz/reverb/AppFeedback.kt': 'dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518',
-                    'src/main/java/app/smallthingz/reverb/AppIcons.kt': 'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273',
+                    'src/reliability/java/app/smallthingz/reverb/AppIcons.kt': 'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273',
                 ]
                 inputs.files(aboutOracleSources.keySet().collect { file(it) })
                 // Generated normal-Home oracle keeps released leaf bodies; only explicit
                 // service-presence seams and QA symbol names differ (generator/provenance retained).
                 def homeOracleSources = [
                     'src/reliability/java/app/smallthingz/reverb/ReleasedHomeFixtureOracle.kt': '5acd675302d79e1aad10f5ec603fce7d631b164834c7cd9e0773bfdc5ab5b5c1',
-                    'src/main/java/app/smallthingz/reverb/AppTopBar.kt': '99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670',
+                    'src/reliability/java/app/smallthingz/reverb/AppTopBar.kt': '99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670',
                     'src/main/java/app/smallthingz/reverb/AudioBlobView.kt': '85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8',
-                    'src/main/java/app/smallthingz/reverb/ReverbTheme.kt': 'a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1',
+                    'src/reliability/java/app/smallthingz/reverb/ReverbTheme.kt': 'a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1',
                 ]
                 inputs.files(homeOracleSources.keySet().collect { file(it) })
                 // Full release Main/Library entries are mechanically renamed, never reconstructed.
@@ -59,8 +59,74 @@ allprojects {
                 def onboardingScreenOracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt')
                 inputs.file(onboardingScreenOracle)
                 inputs.files(settingsSource, chromeSource, iconsSource)
+
+                // Mechanical native-entry split: renderer source is QA-only, release bytes pinned.
+                def releasedMainOracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt')
+                def extractedMainPanelPolicy = file('src/main/java/app/smallthingz/reverb/MainPanelPolicy.kt')
+                inputs.files(releasedMainOracle, extractedMainPanelPolicy)
+                // Finite mechanical split: reconstruct original bytes from actual compiled files.
+                def splitSourceMapFile = rootProject.file('scripts/native-renderer-source-map.json')
+                def splitSourceMap = new groovy.json.JsonSlurper().parse(splitSourceMapFile)
+                inputs.file(splitSourceMapFile)
+                inputs.files(splitSourceMap.outputs_sha256.keySet().collect { file(it) })
                 doLast {
-                    def source = settingsSource.getText('UTF-8')
+                    def splitSha256 = { byte[] bytes ->
+                        java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+                    }
+                    if (splitSha256(splitSourceMapFile.bytes) != 'a377a490ed1c3efc0f84bbc8bbc69e21e1e21ec6dc979bdd4c591e356f4e4005') {
+                        throw new GradleException('Native renderer split manifest changed')
+                    }
+                    def splitActualBytes = [:]
+                    splitSourceMap.outputs_sha256.each { relative, expected ->
+                        def bytes = file(relative).bytes
+                        if (splitSha256(bytes) != expected) {
+                            throw new GradleException('Native renderer split output changed: ' + relative)
+                        }
+                        splitActualBytes[relative] = bytes
+                    }
+                    def normalizedSplitBytes = [:]
+                    def readSplitBytes = { relative ->
+                        if (!normalizedSplitBytes.containsKey(relative)) {
+                            byte[] bytes = splitActualBytes.containsKey(relative) ?
+                                splitActualBytes[relative] : file(relative).bytes
+                            def replacements = splitSourceMap.normalizations[relative] ?: []
+                            if (!replacements.isEmpty()) {
+                                def text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                                replacements.each { replacement ->
+                                    if (text.count(replacement.from as String) != (replacement.count as int)) {
+                                        throw new GradleException('Native split visibility seam changed: ' + relative)
+                                    }
+                                    text = text.replace(replacement.from as String, replacement.to as String)
+                                }
+                                bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                            }
+                            normalizedSplitBytes[relative] = bytes
+                        }
+                        normalizedSplitBytes[relative]
+                    }
+                    def originalSplitBytes = [:]
+                    splitSourceMap.original_sources.each { original, definition ->
+                        def stream = new java.io.ByteArrayOutputStream()
+                        definition.parts.each { part ->
+                            byte[] bytes = readSplitBytes(part.file)
+                            int start = part.start as int
+                            int length = part.length as int
+                            if (start < 0 || length < 0 || start > bytes.length - length) {
+                                throw new GradleException('Native split span outside source: ' + original)
+                            }
+                            stream.write(bytes, start, length)
+                        }
+                        byte[] reconstructed = stream.toByteArray()
+                        if (splitSha256(reconstructed) != definition.sha256) {
+                            throw new GradleException('Native split no longer reconstructs original: ' + original)
+                        }
+                        originalSplitBytes[original] = reconstructed
+                    }
+                    def releasedOracleBytes = { relative ->
+                        originalSplitBytes.containsKey(relative) ?
+                            originalSplitBytes[relative] : file(relative).bytes
+                    }
+                    def source = new String(releasedOracleBytes('src/main/java/app/smallthingz/reverb/SettingsScreen.kt'), 'UTF-8')
                     def start = source.indexOf('@Composable\ninternal fun SettingsAudioGroup(')
                     def end = source.indexOf('@Composable\nprivate fun <T> SettingsDropdown(', start)
                     if (start < 0 || end <= start) {
@@ -69,22 +135,35 @@ allprojects {
                     def sha256 = { byte[] bytes ->
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
                     }
+
+                    if (sha256(releasedMainOracle.bytes) != 'beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090' ||
+                        sha256(extractedMainPanelPolicy.bytes) != '4091efe78b45a42b4532c361b21de89c18cf9f4b1d1af9bf04bdf396949c4582') {
+                        throw new GradleException('Released Main oracle/helper split changed')
+                    }
+                    def reconstructedReleasedMain = releasedMainOracle.getText('UTF-8')
+                        .replaceAll('\\bReleasedMainActivityOracle\\b', 'MainActivity')
+                        .replaceAll('\\breleasedMainOraclePanelRevealProgress\\b', 'panelRevealProgress')
+                        .replaceAll('\\breleasedMainOracleShouldCommitPanelReveal\\b', 'shouldCommitPanelReveal')
+                        .replaceAll('\\breleasedMainOracleShouldComposeMainPanel\\b', 'shouldComposeMainPanel')
+                    if (sha256(reconstructedReleasedMain.getBytes('UTF-8')) != '700410262137f40c16c327cc040b64f53de05ceebd8b14b9dd4d18f48cde5c15') {
+                        throw new GradleException('Main oracle no longer reconstructs exact released v0.1.2 source')
+                    }
                     aboutOracleSources.each { relative, expected ->
-                        if (sha256(file(relative).bytes) != expected) {
+                        if (sha256(releasedOracleBytes(relative)) != expected) {
                             throw new GradleException('Released About oracle changed: ' + relative)
                         }
                     }
                     homeOracleSources.each { relative, expected ->
-                        if (sha256(file(relative).bytes) != expected) {
+                        if (sha256(releasedOracleBytes(relative)) != expected) {
                             throw new GradleException('Released Home oracle changed: ' + relative)
                         }
                     }
                     screenOracleSources.each { relative, expected ->
-                        if (sha256(file(relative).bytes) != expected) {
+                        if (sha256(releasedOracleBytes(relative)) != expected) {
                             throw new GradleException('Released Main/Range/Library oracle changed: ' + relative)
                         }
                     }
-                    def rangeText = rangeRendererSource.getText('UTF-8')
+                    def rangeText = new String(releasedOracleBytes('src/main/java/app/smallthingz/reverb/RangeExportEditor.kt'), 'UTF-8')
                     def rangeStart = rangeText.indexOf('@Composable\ninternal fun RangeExportHomeContent(')
                     def fineSeekStart = rangeText.indexOf('internal fun SpringFineSeekControl(')
                     if (rangeStart < 0 || fineSeekStart < rangeStart ||
@@ -94,7 +173,7 @@ allprojects {
                             'd9cbc224692db6c34fcca6c516f074b65621945e2d46a5cc7aebf531857f9a7e') {
                         throw new GradleException('Released range/FineSeek render suffix changed')
                     }
-                    def normalizedPlayer = inlinePlayerSource.getText('UTF-8')
+                    def normalizedPlayer = new String(releasedOracleBytes('src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt'), 'UTF-8')
                         .replace('internal data class InlinePlayerMediaSource(', 'private data class InlinePlayerMediaSource(')
                         .replace('internal fun openInlinePlayerMediaSource(', 'private fun openInlinePlayerMediaSource(')
                     if (sha256(normalizedPlayer.getBytes('UTF-8')) !=

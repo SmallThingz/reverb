@@ -1,0 +1,694 @@
+{
+  "format": 1,
+  "purpose": "Exact source reconstruction for the finite native-renderer cutover",
+  "outputs_sha256": {
+    "src/main/java/app/smallthingz/reverb/AppFeedback.kt": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
+    "src/main/java/app/smallthingz/reverb/CaptureScreen.kt": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
+    "src/main/java/app/smallthingz/reverb/FilesScreen.kt": "f73be342e5ecf7585ef9fd697b3aa3a232831ddceb5cdd4812872b8b906dee68",
+    "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": "08b827a9566af730fae1519005de8d48142d6551cfa0aa98aa0760215d6f242c",
+    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
+    "src/main/java/app/smallthingz/reverb/IncidentsScreen.kt": "a2827638f5aab388d473a31d51f437a04c143bace15c3b57b24cfb3583ba6b2b",
+    "src/main/java/app/smallthingz/reverb/MainPanelPolicy.kt": "4091efe78b45a42b4532c361b21de89c18cf9f4b1d1af9bf04bdf396949c4582",
+    "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
+    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
+    "src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt": "b2d348e73fa9b173c63384c0b62ec7bc8ad5691477cc4090c6d8fbe84ecf8f4c",
+    "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
+    "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
+    "src/main/java/app/smallthingz/reverb/RecordingCard.kt": "0c003f5fbe655ae9e42ea1a6fc013e072707f2e172c80e483d186f535b2d9d76",
+    "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": "a699f2eb0c0b654ed28078f7519905067e7a81801ba642a07dffe49e5915f2eb",
+    "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": "eb48558734376d19fae5dc271ba987574a91a4df64ea489fbd710961518f42a1",
+    "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
+    "src/reliability/java/app/smallthingz/reverb/AboutDialog.kt": "882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b",
+    "src/reliability/java/app/smallthingz/reverb/AppFeedbackRenderer.kt": "db835fd8b84090cce2f84af0aef69d573a698d8cb73121c3087c2d8f9ae7150c",
+    "src/reliability/java/app/smallthingz/reverb/AppIcons.kt": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+    "src/reliability/java/app/smallthingz/reverb/AppSurfaceStyle.kt": "6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187",
+    "src/reliability/java/app/smallthingz/reverb/AppTopBar.kt": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+    "src/reliability/java/app/smallthingz/reverb/BatteryOptimizationUi.kt": "b27eefd79ac7a8c25a40cc3ca4beea9eb52d051a0dcbfe703729f50137e65153",
+    "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt": "0bf912d0759ec78331eff2acd35e2356639b69bdaee6555f4562ead4b01b7ea2",
+    "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt": "2e8bd369cf290d3d7653c788a615c872f8ee63e15ca3465b49aa5e2b11599656",
+    "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt": "ef96f9cfeda3c074f0437ed1ce6edd9438b671fc63a350ded23bb9b9b09720ad",
+    "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt": "87cd2836da36b454ded58146d80ad9ad580d3a8a94e3c91d380064f4c2c7baa2",
+    "src/reliability/java/app/smallthingz/reverb/IncidentsScreenRenderers.kt": "14aa05d813ea29785d946e71259df0c3ecfdadb68696b2c60a0118c63610ca00",
+    "src/reliability/java/app/smallthingz/reverb/NotificationSaveSettingsRenderer.kt": "6570029a18a5ae3998a6ea37ea34eac718478cff4935aee73d2ec26bf229df2f",
+    "src/reliability/java/app/smallthingz/reverb/OutputCompressionSettings.kt": "a37ec6bb8ad6c4fb62d21526872164b6c225687dce96d19949f6083fe9c65f2b",
+    "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt": "6d21af5ef8590d4b6a948aa878b70dc8f9aa4633fc515d8c54d05f8596be8b2b",
+    "src/reliability/java/app/smallthingz/reverb/QuickSettingsTilesControlsRenderer.kt": "d360f38ecc3866ccd7bf05c28ede8832bf125c2bb014bf3d1c1f0f9475bdca93",
+    "src/reliability/java/app/smallthingz/reverb/RecordingCardRenderer.kt": "dec31d685d5b1702d67267a3e9f25771c9b6352414d213196d70316affdc8a9e",
+    "src/reliability/java/app/smallthingz/reverb/RecordingInlinePlayerRenderer.kt": "6691437b6401fb765aa7d0f6d0f42a77edd5dc771c8466028b9c15cbf2a6c352",
+    "src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt": "beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090",
+    "src/reliability/java/app/smallthingz/reverb/ReleasedProgressiveWaveformRenderers.kt": "a4a0aaf7cfbc454ee6cd7c8502a989025b8accc8652f5836fad786d006bff24d",
+    "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt": "19cef23bb9c6bc36871c63fb2d9651879afbfa2ee4dd96a98ab407b4f27de9a2",
+    "src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt": "c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e",
+    "src/reliability/java/app/smallthingz/reverb/ReverbSheet.kt": "779692a1a2dff21a57dbff75ab12d3db10d3d688bc1058bbac95aeb97c5c6e3f",
+    "src/reliability/java/app/smallthingz/reverb/ReverbTheme.kt": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
+    "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt": "98b1f17c83d87ebb11f233196801cf3522c74f9cfd6e7a10cc5bd6a66344f2f8",
+    "src/reliability/java/app/smallthingz/reverb/SettingsSilenceCalibrationRenderer.kt": "da93c545f0bc42f57cb92f4a4f46398e101aea21826a81febd4d1597dd25dea4",
+    "src/reliability/java/app/smallthingz/reverb/SkipSilenceSettings.kt": "07a678ccb30aebd9f7196ef88df3534b975a8ed3bb62b658f0ab0a01eef47f39"
+  },
+  "normalizations": {
+    "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": [
+      {
+        "from": "internal fun formatRetentionMinutesEstimate(",
+        "to": "private fun formatRetentionMinutesEstimate(",
+        "count": 1
+      },
+      {
+        "from": "internal fun bytesToMegabytes(",
+        "to": "private fun bytesToMegabytes(",
+        "count": 1
+      }
+    ]
+  },
+  "original_sources": {
+    "src/main/java/app/smallthingz/reverb/FilesScreen.kt": {
+      "sha256": "25fd8e042560fbcc15ac5b9b409a893e2670ae2d1fbcb390c5f91ae45da1d0c5",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt",
+          "start": 0,
+          "length": 4047
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/FilesScreen.kt",
+          "start": 161,
+          "length": 6086
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt",
+          "start": 4047,
+          "length": 61527
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/RecordingCard.kt": {
+      "sha256": "85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingCardRenderer.kt",
+          "start": 0,
+          "length": 2386
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/RecordingCard.kt",
+          "start": 32,
+          "length": 80
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingCardRenderer.kt",
+          "start": 2386,
+          "length": 11601
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": {
+      "sha256": "51fbad74e0027adee055ec1a52abb03286e501604fbe531b99b45d1ca4be8627",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingInlinePlayerRenderer.kt",
+          "start": 0,
+          "length": 3993
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingInlinePlayerRenderer.kt",
+          "start": 3993,
+          "length": 119
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt",
+          "start": 259,
+          "length": 13001
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingInlinePlayerRenderer.kt",
+          "start": 4112,
+          "length": 53617
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": {
+      "sha256": "4b762ca9f4b6e6f33ba9c1c098f89666ec43c5e59ab1cc9f9bb642474da3465d",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/NotificationSaveSettingsRenderer.kt",
+          "start": 0,
+          "length": 1480
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/NotificationSaveSettingsRenderer.kt",
+          "start": 1480,
+          "length": 8166
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt",
+          "start": 161,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt",
+          "start": 162,
+          "length": 5235
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": {
+      "sha256": "318f2a35b64803c127cf14d80d03186a3687b35798ab8b16f9f5bbe7bd6ac003",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/QuickSettingsTilesControlsRenderer.kt",
+          "start": 0,
+          "length": 2421
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt",
+          "start": 263,
+          "length": 6068
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/QuickSettingsTilesControlsRenderer.kt",
+          "start": 2421,
+          "length": 19097
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
+      "sha256": "dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AppFeedbackRenderer.kt",
+          "start": 0,
+          "length": 2193
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/AppFeedback.kt",
+          "start": 386,
+          "length": 3324
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AppFeedbackRenderer.kt",
+          "start": 2193,
+          "length": 4344
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/CaptureScreen.kt": {
+      "sha256": "540dd0b36f12c236af081b162c773a5a65af4082cd9622cc0f300ba81a7e9b70",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt",
+          "start": 0,
+          "length": 5103
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/CaptureScreen.kt",
+          "start": 709,
+          "length": 11342
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt",
+          "start": 5103,
+          "length": 75024
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/CaptureScreen.kt",
+          "start": 12051,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/CaptureScreen.kt",
+          "start": 12052,
+          "length": 10235
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsScreen.kt": {
+      "sha256": "eca9e02c6f9f7fa54c01ab0501bad5a80024289125b9946d979637080ed88c8c",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsScreenRenderers.kt",
+          "start": 0,
+          "length": 2222
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsScreen.kt",
+          "start": 253,
+          "length": 9130
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsScreenRenderers.kt",
+          "start": 2222,
+          "length": 11282
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": {
+      "sha256": "bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt",
+          "start": 0,
+          "length": 5334
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+          "start": 236,
+          "length": 1123
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt",
+          "start": 5334,
+          "length": 562
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+          "start": 1359,
+          "length": 2389
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt",
+          "start": 5896,
+          "length": 85
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+          "start": 3748,
+          "length": 2348
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt",
+          "start": 5981,
+          "length": 104119
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+          "start": 6096,
+          "length": 1652
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": {
+      "sha256": "74d0a90c2e5e37f7163d5bdf92dff8e48f728007775b39079fbc9cbb09fb8296",
+      "parts": [
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 0,
+          "length": 31
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 32,
+          "length": 95
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt",
+          "start": 32,
+          "length": 90
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 127,
+          "length": 140
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt",
+          "start": 122,
+          "length": 96
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 267,
+          "length": 186
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 454,
+          "length": 2047
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt",
+          "start": 219,
+          "length": 316
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 2501,
+          "length": 0
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": {
+      "sha256": "743b8a3f095f5ec429c16c891710a2816d1ae799bc1168f94fcdeaa463463733",
+      "parts": [
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 0,
+          "length": 31
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 32,
+          "length": 41
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 73,
+          "length": 55
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 73,
+          "length": 50
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 128,
+          "length": 194
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 123,
+          "length": 190
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 363,
+          "length": 149
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 313,
+          "length": 41
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 512,
+          "length": 89
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 354,
+          "length": 30
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 601,
+          "length": 107
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 385,
+          "length": 1177
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt",
+          "start": 709,
+          "length": 4610
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+          "start": 1562,
+          "length": 446
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": {
+      "sha256": "fc977cc4f385def455abe021faf4635a87b6df85cd95de4885a8a1a128fd4d24",
+      "parts": [
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 0,
+          "length": 31
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 32,
+          "length": 41
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
+          "start": 73,
+          "length": 55
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 73,
+          "length": 50
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
+          "start": 128,
+          "length": 194
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 123,
+          "length": 138
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
+          "start": 363,
+          "length": 94
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 261,
+          "length": 41
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
+          "start": 457,
+          "length": 172
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 302,
+          "length": 30
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 333,
+          "length": 1119
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
+          "start": 630,
+          "length": 3523
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 1452,
+          "length": 609
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
+      "sha256": "e8b1bd04f7d0d1afb04b2e6565af4e4a856497269b62c4deec382c673510d9bf",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt",
+          "start": 0,
+          "length": 5085
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt",
+          "start": 621,
+          "length": 3000
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt",
+          "start": 5085,
+          "length": 628
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt",
+          "start": 3621,
+          "length": 32557
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt",
+          "start": 5713,
+          "length": 64314
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt": {
+      "sha256": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedProgressiveWaveformRenderers.kt",
+          "start": 0,
+          "length": 1225
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt",
+          "start": 220,
+          "length": 1616
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedProgressiveWaveformRenderers.kt",
+          "start": 1440,
+          "length": 11590
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt",
+          "start": 1836,
+          "length": 287
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReleasedProgressiveWaveformRenderers.kt",
+          "start": 13030,
+          "length": 5873
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": {
+      "sha256": "7bc9749bb6329a738d825a224b7406c6d584e52c67e1ce8a3631e527ac20edf8",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsSilenceCalibrationRenderer.kt",
+          "start": 0,
+          "length": 1009
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt",
+          "start": 533,
+          "length": 5465
+        },
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SettingsSilenceCalibrationRenderer.kt",
+          "start": 1009,
+          "length": 2372
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/AboutDialog.kt": {
+      "sha256": "882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AboutDialog.kt",
+          "start": 0,
+          "length": 9620
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/OutputCompressionSettings.kt": {
+      "sha256": "a37ec6bb8ad6c4fb62d21526872164b6c225687dce96d19949f6083fe9c65f2b",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/OutputCompressionSettings.kt",
+          "start": 0,
+          "length": 4573
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/AppTopBar.kt": {
+      "sha256": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AppTopBar.kt",
+          "start": 0,
+          "length": 3963
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/ReverbTheme.kt": {
+      "sha256": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReverbTheme.kt",
+          "start": 0,
+          "length": 3630
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt": {
+      "sha256": "6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AppSurfaceStyle.kt",
+          "start": 0,
+          "length": 2650
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/BatteryOptimizationUi.kt": {
+      "sha256": "b27eefd79ac7a8c25a40cc3ca4beea9eb52d051a0dcbfe703729f50137e65153",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/BatteryOptimizationUi.kt",
+          "start": 0,
+          "length": 2571
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/ReverbSheet.kt": {
+      "sha256": "779692a1a2dff21a57dbff75ab12d3db10d3d688bc1058bbac95aeb97c5c6e3f",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReverbSheet.kt",
+          "start": 0,
+          "length": 4528
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/ReverbBrandMark.kt": {
+      "sha256": "c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt",
+          "start": 0,
+          "length": 1107
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/SkipSilenceSettings.kt": {
+      "sha256": "07a678ccb30aebd9f7196ef88df3534b975a8ed3bb62b658f0ab0a01eef47f39",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/SkipSilenceSettings.kt",
+          "start": 0,
+          "length": 14489
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/AppIcons.kt": {
+      "sha256": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+      "parts": [
+        {
+          "file": "src/reliability/java/app/smallthingz/reverb/AppIcons.kt",
+          "start": 0,
+          "length": 5109
+        }
+      ]
+    }
+  }
+}

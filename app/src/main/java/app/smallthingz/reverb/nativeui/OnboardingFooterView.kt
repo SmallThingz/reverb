@@ -272,6 +272,13 @@ private class FooterButton(
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
     private val content = object : ViewGroup(context) {
         private val softwareClip = Path()
+        init {
+            // TextStringSimpleNode clips only actual layout overflow. A glyph's ink can extend
+            // past its measured advance (for example the final k in Back); preserve that ink
+            // inside the existing button capsule instead of clipping at the label View bounds.
+            clipChildren = false
+            clipToPadding = false
+        }
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
             val radius = min(w, h) / 2f
