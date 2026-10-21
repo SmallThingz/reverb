@@ -8,12 +8,14 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
@@ -88,10 +90,12 @@ internal fun verifyNativeLibraryParity(instrumentation: Instrumentation, report:
         val entry = JSONObject().put("name", name).put("passed", false)
         cases.put(entry)
         val images = mutableListOf<Bitmap>()
+        val focus = JSONArray().also { entry.put("focus", it) }
         var failure: Throwable? = null
         try {
             repeat(4) { pass ->
                 images += captureNativeParityContent(instrumentation, activity) { current.show(pass % 2 == 0) }
+                focus.put(nativeParityOnMain(instrumentation) { current.focusEvidence(pass % 2 == 0) })
                 saveNativeParityBitmap(directory, "$name-${listOf("compose", "native", "compose-repeat", "native-repeat")[pass]}.png", images.last())
             }
             val difference = compareNativeParityPixels(images[0], images[1])
@@ -355,6 +359,7 @@ internal class LibraryParityBoard(
         ReverbPalette.resolve(context, dark))
     private val referenceHost = FrameLayout(context)
     private val reference = ComposeView(context)
+    private val nativeHost = LibraryNativeFocusRoot(context)
     private val compositionContext: ComposeViewContext
     private val sourceLifecycle = LibraryFixtureLifecycle()
     private val nativeLifecycle = LibraryFixtureLifecycle()
@@ -424,10 +429,12 @@ internal class LibraryParityBoard(
                 null, host.fixtureRoot, noNested, {}, {})
             native = content // Own it before attachment, whose callbacks can fail.
             content.layoutDirection = referenceHost.layoutDirection
-            host.fixtureRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
+            nativeHost.layoutDirection = referenceHost.layoutDirection
+            nativeHost.addView(content, FrameLayout.LayoutParams(-1, -1))
+            host.fixtureRoot.addView(nativeHost, FrameLayout.LayoutParams(-1, -1))
         }
         referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
-        native?.visibility = if (compose) View.GONE else View.VISIBLE
+        nativeHost.visibility = if (compose) View.GONE else View.VISIBLE
         return if (compose) reference else checkNotNull(native)
     }
     fun awaitInitial(instrumentation: Instrumentation) {
@@ -824,6 +831,16 @@ internal class LibraryParityBoard(
         .put("source_width", reference.width).put("source_height", reference.height)
         .put("native_width", native?.width).put("native_height", native?.height)
         .put("fixture_ids", JSONArray(records.map { it.id }))
+    fun focusEvidence(compose: Boolean): JSONObject = JSONObject()
+        .put("renderer", if (compose) "compose" else "native")
+        .put("touch_mode", host.fixtureRoot.isInTouchMode)
+        .put("source_focus_owner_installed", !compose)
+        .put("focused_descriptions", JSONArray(if (compose) sourceNodes(merged = true)
+            .filter { it.config.getOrNull(SemanticsProperties.Focused) == true }
+            .flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+        else nativeHost.findFocus()?.let { focused ->
+            libraryViews(focused).mapNotNull { it.contentDescription?.toString() }
+        }.orEmpty()))
     override fun close() {
         if (closed) return
         closed = true
@@ -832,6 +849,7 @@ internal class LibraryParityBoard(
             if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         } }
         release { native?.close() }
+        release { nativeHost.close() }
         release { nativeScope?.cancel() }
         release { reference.disposeComposition() }
         release { nativeLifecycle.close() }
@@ -839,6 +857,42 @@ internal class LibraryParityBoard(
         release { host.fixtureRoot.removeAllViews() }
         failure?.let { throw it }
     }
+}
+
+/** The same focus-owner hooks as NativeActivityContentView, without an Activity or data owner. */
+private class LibraryNativeFocusRoot(context: Context) : FrameLayout(context), AutoCloseable {
+    private var focus: NativeSourceFocusPolicy? = null
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+        defaultFocusHighlightEnabled = false
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        clipChildren = false
+        clipToPadding = false
+        focus = NativeSourceFocusPolicy(this,
+            takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
+            clearOwnerFocus = { super.clearFocus() })
+    }
+    override fun focusableViewAvailable(view: View) {
+        if (focus?.reportsAvailability(view) != false) super.focusableViewAvailable(view)
+    }
+    override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean =
+        focus?.requestFocus(direction, previouslyFocusedRect) ?: super.requestFocus(direction, previouslyFocusedRect)
+    override fun requestChildFocus(child: View, focused: View) {
+        super.requestChildFocus(child, focused)
+        focus?.childFocused(focused)
+    }
+    override fun clearChildFocus(child: View) {
+        super.clearChildFocus(child)
+        focus?.childCleared(child)
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        if (focus?.hasPendingInvalidation == true) false else super.dispatchKeyEvent(event)
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        focus?.beforeMeasure()
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+    override fun close() { focus?.close() }
 }
 
 private fun libraryViews(root: View): List<View> = buildList {

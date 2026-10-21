@@ -3,8 +3,8 @@ package app.smallthingz.reverb.nativeui
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.RectF
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import app.smallthingz.reverb.NativeClickPhaseHost
@@ -15,6 +15,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,9 +101,12 @@ internal class ReverbLibraryRecordingRow(
         outerSizeMotion?.frame(time, scale)
         if (selectionWasRunning) selectionMotion?.value?.let(::setFrame)
         expansionViewport.publishAlpha()
-        if (previousExpansionSize != expansionMotion.measuredSize || previousOuterSize != outerSizeMotion?.value) {
-            requestLayout()
+        if (previousExpansionSize != expansionMotion.measuredSize) {
+            // Invalidate the View whose measured height changed. Invalidating only this row would
+            // let the column/surface reuse the viewport's cached zero-height enter measurement.
+            expansionViewport.requestLayout()
         }
+        if (previousOuterSize != outerSizeMotion?.value) requestLayout()
         if (expansionMotion.exitCompleted && !exitPosted) {
             exitPosted = true
             val identity = row?.recordingId
@@ -535,64 +539,84 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
 private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironment) : RecordingRowInputTarget(context) {
     private var environment = initial
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val disc = RectF()
     private var icon = ReverbIconDrawable(ReverbIcon.AudioFile, initial.textDensity.density, initial.palette.ink)
     private var discColor = initial.palette.raised
     private var iconColor = initial.palette.ink
     private var content: View? = null
+    // Source: a separate 44dp Box clipped to RoundedCornerShape(22.dp), then a rectangular
+    // background. Drawing a rounded rect directly uses different translucent edge coverage.
+    private val disc = object : ViewGroup(context) {
+        init {
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+            setWillNotDraw(false)
+            clipToOutline = true
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height,
+                        minOf(22f * environment.textDensity.density, minOf(view.width, view.height) / 2f))
+                }
+            }
+        }
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+            content?.measure(MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredWidth), MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredHeight), MeasureSpec.EXACTLY))
+        }
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            val iconWidth = minOf(dp(24), width)
+            val iconHeight = minOf(dp(24), height)
+            val iconX = ((width - iconWidth) / 2f).roundToInt()
+            val iconY = ((height - iconHeight) / 2f).roundToInt()
+            icon.setBounds(iconX, iconY, iconX + iconWidth, iconY + iconHeight)
+            content?.let { child ->
+                val childX = ((width - child.measuredWidth) / 2f).roundToInt()
+                val childY = ((height - child.measuredHeight) / 2f).roundToInt()
+                child.layout(childX, childY, childX + child.measuredWidth, childY + child.measuredHeight)
+            }
+        }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            paint.color = discColor
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            if (content == null) {
+                icon.layoutDirection = layoutDirection
+                icon.draw(canvas)
+            }
+        }
+    }
     override fun semanticChildren(): List<View> = listOfNotNull(content)
     fun setContent(view: View?) {
         if (content === view) return
-        content?.let(::removeView)
+        content?.let(disc::removeView)
         content = view
-        view?.let(::addView)
-        requestLayout(); invalidate()
+        view?.let(disc::addView)
+        disc.requestLayout(); disc.invalidate()
     }
-    init { setWillNotDraw(false) }
+    init { addView(disc) }
     fun setColors(background: Int, tint: Int) {
         discColor = background; iconColor = tint
-        paint.color = background; icon.setTint(tint); invalidate()
+        paint.color = background; icon.setTint(tint); disc.invalidate()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
         val densityChanged = environment.textDensity.density != value.textDensity.density
         environment = value
         if (densityChanged) icon = ReverbIconDrawable(ReverbIcon.AudioFile, value.textDensity.density, iconColor)
-        requestLayout()
+        disc.invalidateOutline(); disc.requestLayout(); disc.invalidate()
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         setMeasuredDimension(resolveSize(dp(72), widthMeasureSpec), resolveSize(dp(68), heightMeasureSpec))
-        content?.measure(MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredWidth), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredHeight), MeasureSpec.EXACTLY))
+        disc.measure(MeasureSpec.makeMeasureSpec(minOf(dp(44), measuredWidth), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(minOf(dp(44), measuredHeight), MeasureSpec.EXACTLY))
         measureRole()
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val discWidth = minOf(dp(44), width)
-        val discHeight = minOf(dp(44), height)
+        val discWidth = disc.measuredWidth
+        val discHeight = disc.measuredHeight
         val x = ((width - discWidth) / 2f).roundToInt()
         val y = ((height - discHeight) / 2f).roundToInt()
-        disc.set(x.toFloat(), y.toFloat(), (x + discWidth).toFloat(), (y + discHeight).toFloat())
-        val iconWidth = minOf(dp(24), discWidth)
-        val iconHeight = minOf(dp(24), discHeight)
-        val iconX = x + ((discWidth - iconWidth) / 2f).roundToInt()
-        val iconY = y + ((discHeight - iconHeight) / 2f).roundToInt()
-        icon.setBounds(iconX, iconY, iconX + iconWidth, iconY + iconHeight)
-        content?.let { child ->
-            val childX = x + ((discWidth - child.measuredWidth) / 2f).roundToInt()
-            val childY = y + ((discHeight - child.measuredHeight) / 2f).roundToInt()
-            child.layout(childX, childY, childX + child.measuredWidth, childY + child.measuredHeight)
-        }
+        disc.layout(x, y, x + discWidth, y + discHeight)
         layoutRole()
-    }
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        paint.color = discColor
-        val radius = minOf(22f * environment.textDensity.density, minOf(disc.width(), disc.height()) / 2f)
-        canvas.drawRoundRect(disc, radius, radius, paint)
-        if (content == null) {
-            icon.layoutDirection = layoutDirection
-            icon.draw(canvas)
-        }
     }
 }
 
