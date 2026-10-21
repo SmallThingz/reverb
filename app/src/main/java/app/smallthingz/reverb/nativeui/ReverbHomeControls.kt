@@ -183,23 +183,23 @@ internal class ReverbHomeControls(
 /** Shared exact click/ripple ownership on an existing control; no themed platform Button. */
 private abstract class HomeClickable(
     context: Context,
-    protected var environment: ReverbViewEnvironment,
+    protected var currentEnvironment: ReverbViewEnvironment,
     private val nativeRoot: () -> View?,
     private val radiusDp: Float?,
 ) : ViewGroup(context), NativeClickPhaseHost {
     protected var action: () -> Unit = {}
-    protected val indication = ReverbRowIndication.install(this, environment.palette.ink,
+    protected val indication = ReverbRowIndication.install(this, currentEnvironment.palette.ink,
         ValueAnimator::getDurationScale)
     private val key = Any()
     private val input = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = nativeRoot()
-        override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
+        override val minimumTouchWidthPx get() = 48f * currentEnvironment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun interestedParent(event: MotionEvent) = false // Cluster is outside swipe Box.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
         override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
-            width.toFloat(), height.toFloat(), environment.textDensity.density,
-            radiusDp ?: min(width, height) / (2f * environment.textDensity.density),
+            width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
+            radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
         ).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
     }, ReverbRowIndicationSink(indication) { x, y, target -> target.set(x, y) })
@@ -210,14 +210,14 @@ private abstract class HomeClickable(
         return object : NativeViewPointerHitLayout {
             override val placed get() = isAttachedToWindow && visibility == VISIBLE
             override val size get() = Size(width.toFloat(), height.toFloat())
-            override val minimumTouchTarget get() = Size(48f * environment.textDensity.density,
-                48f * environment.textDensity.density)
+            override val minimumTouchTarget get() = Size(48f * currentEnvironment.textDensity.density,
+                48f * currentEnvironment.textDensity.density)
             override val nodes = listOf(node)
             override val childrenInHitOrder = emptyList<NativeViewPointerHitLayout>()
             override fun screenToLocal(screen: Offset) = coordinates.coordinates(this@HomeClickable).local(screen)
             override fun withinLayerBounds(local: Offset) = reverbGroupGeometry(
-                width.toFloat(), height.toFloat(), environment.textDensity.density,
-                radiusDp ?: min(width, height) / (2f * environment.textDensity.density),
+                width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
+                radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
             ).contains(local.x, local.y)
         }
     }
@@ -231,7 +231,7 @@ private abstract class HomeClickable(
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                val radius = radiusDp?.let { it * environment.textDensity.density }
+                val radius = radiusDp?.let { it * currentEnvironment.textDensity.density }
                     ?: (min(width, height) / 2f)
                 outline.setRoundRect(0, 0, width, height, min(radius, min(width, height) / 2f))
             }
@@ -252,7 +252,7 @@ private abstract class HomeClickable(
     }
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        indication.onMeasured(w, h, environment.textDensity.density)
+        indication.onMeasured(w, h, currentEnvironment.textDensity.density)
         invalidateOutline()
     }
     override fun onTouchEvent(event: MotionEvent) = input.touch(event)
@@ -269,13 +269,13 @@ private abstract class HomeClickable(
     }
 }
 
-private class HomeBufferSegment(context: Context, environment: ReverbViewEnvironment,
-    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, environment, root, 16f) {
-    private val glyph = HomeGlyph(context, environment, ReverbIcon.OneShot)
-    private val label = environment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
+private class HomeBufferSegment(context: Context, currentEnvironment: ReverbViewEnvironment,
+    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root, 16f) {
+    private val glyph = HomeGlyph(context, currentEnvironment, ReverbIcon.OneShot)
+    private val label = currentEnvironment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundMotion = colorMotion(Color.Transparent)
-    private val foregroundMotion = colorMotion(Color(environment.palette.muted))
+    private val foregroundMotion = colorMotion(Color(currentEnvironment.palette.muted))
     private var initialized = false
     private var selection = false
     private var recording = false
@@ -301,14 +301,14 @@ private class HomeBufferSegment(context: Context, environment: ReverbViewEnviron
         updateTargets()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
-        environment = value
+        currentEnvironment = value
         value.bindParagraphStyle(label, ReverbTextRole.LABEL_LARGE)
         glyph.setEnvironment(value)
         updateTargets()
         invalidateOutline(); requestLayout()
     }
     private fun updateTargets() {
-        val p = environment.palette
+        val p = currentEnvironment.palette
         val background = Color(when {
             selection && recording -> p.primary
             filled && selection -> p.tertiary
@@ -344,10 +344,10 @@ private class HomeBufferSegment(context: Context, environment: ReverbViewEnviron
         super.onDetachedFromWindow()
     }
     override fun onDraw(canvas: Canvas) {
-        val radius = min(16f * environment.textDensity.density, min(width, height) / 2f)
+        val radius = min(16f * currentEnvironment.textDensity.density, min(width, height) / 2f)
         canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, fill)
     }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
+    private fun dp(value: Int) = (value * currentEnvironment.textDensity.density).roundToInt()
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         val maxHeight = MeasureSpec.getSize(h)
@@ -380,9 +380,9 @@ private class HomeBufferSegment(context: Context, environment: ReverbViewEnviron
         tween<Color>(160), { AnimationVector4D(0f, 0f, 0f, 0f) })
 }
 
-private class HomeAction(context: Context, environment: ReverbViewEnvironment,
-    root: () -> View?, icon: ReverbIcon, description: Int) : HomeClickable(context, environment, root, null) {
-    private val glyph = HomeGlyph(context, environment, icon)
+private class HomeAction(context: Context, currentEnvironment: ReverbViewEnvironment,
+    root: () -> View?, icon: ReverbIcon, description: Int) : HomeClickable(context, currentEnvironment, root, null) {
+    private val glyph = HomeGlyph(context, currentEnvironment, icon)
     private var flip = ReverbHomeFlipFrame()
     private var destructive = false
     init {
@@ -397,10 +397,10 @@ private class HomeAction(context: Context, environment: ReverbViewEnvironment,
         apply()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
-        environment = value; glyph.setEnvironment(value); apply(); requestLayout()
+        currentEnvironment = value; glyph.setEnvironment(value); apply(); requestLayout()
     }
     private fun apply() {
-        val p = environment.palette
+        val p = currentEnvironment.palette
         glyph.setTint(if (!isEnabled) reverbColorWithAlpha(p.muted, .28f)
             else if (destructive) p.error else p.ink)
         // IconButton's inherited LocalContentColor controls the ripple, not the explicit glyph tint.
@@ -409,9 +409,9 @@ private class HomeAction(context: Context, environment: ReverbViewEnvironment,
         glyph.pivotX = glyph.width * flip.pivotFractionX
         glyph.pivotY = glyph.height * .5f
         glyph.scaleY = flip.depthScale
-        glyph.cameraDistance = 24f * environment.textDensity.density * resources.displayMetrics.densityDpi
+        glyph.cameraDistance = 24f * currentEnvironment.textDensity.density * resources.displayMetrics.densityDpi
     }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
+    private fun dp(value: Int) = (value * currentEnvironment.textDensity.density).roundToInt()
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
         setMeasuredDimension(width, height)
