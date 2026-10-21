@@ -82,7 +82,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
     check(recordingMutations.activeIds.value.isEmpty())
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489")
-        .put("scope", "One Light/LTR menu/Info, Rename raw-newline draft and valid rename, consecutive Delete/Undo, real Undo expiry per renderer; QA-only FILE catalog")
+        .put("scope", "One Light/LTR menu/Info, Rename raw-newline draft and valid rename, consecutive Delete/Undo, real Undo expiry per renderer; QA-owned MediaStore catalog")
         .put("limits", "Semantic/View actions, not physical keyboard/IME or full MediaPlayer playback; no Share, Trim, import, permissions or production store")
         .put("passed", false)
     val cases = JSONArray()
@@ -648,6 +648,7 @@ private class TransactionFixtures(
     private val owned = ArrayList<Owned>()
     private val manifest = JSONObject().put("renderer", renderer).put("package", context.packageName)
         .put("fixtures", JSONArray())
+    private var creationAttempts = 0
     private var admitted = false
     private var closed = false
     fun admit() {
@@ -667,18 +668,20 @@ private class TransactionFixtures(
         check(admitted && owned.isEmpty() && !closed)
         for (index in 0..1) {
             val displayName = "Library transaction ${if (index == 0) "A" else "B"}.wav"
-            check(!File(directory, displayName).exists())
-            val created = createLocalStagingFile(directory, displayName, StagingOutputKind.COPY)
-            val file = created.file
-            val entry = JSONObject().put("path", file.absolutePath).put("complete", false)
-                .put("staging_creation_identity", created.identity).put("expected_final_name", displayName)
+            val started = 1_792_497_600_000L - index * 60_000L
+            // A provider insert may succeed before the factory throws; never call that empty.
+            manifest.put("creation_attempts", ++creationAttempts)
+            save()
+            val target = createOutputTarget(context, displayName, "audio/wav", started, StagingOutputKind.COPY)
+            val entry = JSONObject().put("id", target.id).put("uri", target.uri?.toString()).put("complete", false)
+                .put("storage_type", target.storageType.name).put("directory_id", target.directoryId)
+                .put("staging_name", target.stagingDisplayName).put("staging_creation_identity", target.stagingIdentity)
+                .put("expected_final_name", displayName)
             manifest.getJSONArray("fixtures").put(entry)
             save() // Creation authority precedes every later assertion/write.
-            check(file.canonicalFile.parentFile == directory.canonicalFile)
-            val started = 1_792_497_600_000L - index * 60_000L
-            val target = RecordingOutputTarget(file.absolutePath, displayName, "audio/wav",
-                RecordingStorageType.FILE, directory.absolutePath, started, file = file,
-                staging = true, stagingDisplayName = file.name, stagingIdentity = created.identity)
+            check(target.storageType == RecordingStorageType.MEDIASTORE && target.staging)
+            check(target.uri?.toString() == target.id && target.directoryId == MEDIA_STORE_DIRECTORY_ID)
+            check(target.stagingIdentity.isNotBlank())
             val frames = 24_000 + index * 8_000
             val pcm = ByteArray(frames * 2)
             for (sample in 0 until frames) {
@@ -688,24 +691,27 @@ private class TransactionFixtures(
             }
             val writer = WavAudioFileWriter(context, target, 8_000, 1)
             writer.use { it.write(pcm, 0, pcm.size) }
-            check(file.setLastModified(started))
             val verified = verifyWavOutputTargetAndDigest(context, target, writer.totalFileBytesWritten,
                 writer.expectedHeaderBytes, writer.payloadOffsetBytes, writer.totalSampleBytesWritten, writer.payloadSha256)
-            entry.put("verified_staging_identity", verified.fileKey).put("verified_bytes", verified.digest.byteCount)
+            val wavSha = verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) }
+            entry.put("verified_staging_identity", verified.providerIdentity).put("verified_bytes", verified.digest.byteCount)
+                .put("verified_wav_sha256", wavSha)
             save()
             val published = finalizeOutputTarget(context, target, verified)
-            entry.put("published_path", published.id).put("published_identity", published.publishedIdentity)
+            entry.put("published_id", published.id).put("published_uri", published.uri?.toString())
+                .put("published_identity", published.publishedIdentity)
             save()
-            val publishedFile = checkNotNull(published.file)
-            check(published.storageType == RecordingStorageType.FILE && !published.staging)
-            check(publishedFile.canonicalFile.parentFile == directory.canonicalFile && publishedFile.name == displayName)
-            check(resolveFileIdentity(publishedFile) == published.publishedIdentity)
+            check(published.storageType == RecordingStorageType.MEDIASTORE && !published.staging)
+            check(published.id == target.id && published.uri == target.uri && published.directoryId == target.directoryId)
+            check(published.displayName == displayName && published.publishedIdentity.isNotBlank())
+            check(sameProviderObjectAcrossMutation(target.stagingIdentity, published.publishedIdentity))
             val raw = buildRecordingEntity(context, published, frames * 1_000L / 8_000L,
                 "PCM", writer.totalFileBytesWritten)
-            val authority = Owned(raw, transactionDigest(publishedFile.readBytes()), transactionDigest(pcm),
+            val authority = Owned(raw, wavSha, transactionDigest(pcm),
                 writer.payloadOffsetBytes.toInt(), entry)
-            owned += authority // Retain exact file authority before catalog registration.
-            entry.put("complete", true).put("path", raw.id).put("identity", raw.fileIdentity)
+            owned += authority // Retain the factory-returned URI authority before catalog registration.
+            verify(authority)
+            entry.put("complete", true).put("id", raw.id).put("identity", raw.fileIdentity)
                 .put("wav_sha256", authority.wavSha).put("pcm_sha256", authority.pcmSha)
                 .put("payload_offset", authority.payloadOffset).put("bytes", raw.sizeBytes)
             save()
@@ -717,14 +723,13 @@ private class TransactionFixtures(
     fun records(): List<RecordingEntity> = owned.filterNot { it.deleted }.map { it.recording }
     private fun known() = runBlocking { withTimeout(15_000L) { RecordingRepository.listKnown(context) } }
     private fun verify(authority: Owned, recording: RecordingEntity = authority.recording) {
-        check(recording.storageType == RecordingStorageType.FILE)
-        val file = File(recording.id)
-        check(file.canonicalFile.parentFile == directory.canonicalFile && file.isFile)
-        check(resolveFileIdentity(file) == recording.fileIdentity)
-        val bytes = file.readBytes()
+        check(recording.storageType == RecordingStorageType.MEDIASTORE && recording.directoryId == MEDIA_STORE_DIRECTORY_ID)
+        check(recording.id == authority.recording.id)
+        check(recordingDestructiveIdentityMatches(context, recording))
+        val bytes = checkNotNull(openRecordingInputStream(context, recording)).use { it.readBytes() }
         check(bytes.size.toLong() == recording.sizeBytes && transactionDigest(bytes) == authority.wavSha)
         check(transactionDigest(bytes.copyOfRange(authority.payloadOffset, bytes.size)) == authority.pcmSha)
-        check(resolveFileIdentity(file) == recording.fileIdentity) { "Owned fixture changed during content read" }
+        check(recordingDestructiveIdentityMatches(context, recording)) { "Owned fixture changed during content read" }
     }
     fun requireUnchanged() {
         val expected = records()
@@ -738,14 +743,13 @@ private class TransactionFixtures(
     }
     fun acceptRename(original: RecordingEntity, expectedName: String): RecordingEntity {
         val authority = owned.single { !it.deleted && it.recording.id == original.id }
-        val expectedPath = File(directory, expectedName).absolutePath
         val current = known()
-        check(current.none { it.id == original.id } && !File(original.id).exists())
-        val renamed = current.single { it.id == expectedPath && it.displayName == expectedName }
-        check(sameFileObjectAcrossRename(original.fileIdentity, renamed.fileIdentity))
+        val renamed = current.single { it.id == original.id && it.displayName == expectedName }
+        check(sameProviderObjectAcrossMutation(original.fileIdentity, renamed.fileIdentity))
         verify(authority, renamed)
         authority.recording = renamed
-        authority.manifest.put("rename_from", original.id).put("path", renamed.id)
+        authority.manifest.put("rename_from", original.displayName).put("rename_from_identity", original.fileIdentity)
+            .put("renamed_name", renamed.displayName).put("id", renamed.id)
             .put("identity", renamed.fileIdentity).put("same_object_pcm_preserved", true)
         save()
         requireUnchanged()
@@ -753,13 +757,14 @@ private class TransactionFixtures(
     }
     fun isDeleted(records: List<RecordingEntity>): Boolean {
         val current = known()
-        return records.all { recording -> !File(recording.id).exists() && current.none { it.id == recording.id } }
+        return records.all { recording -> recordingAssetState(context, recording) == RecordingAssetState.MISSING &&
+            current.none { it.id == recording.id } }
     }
     fun acceptDeleted(records: List<RecordingEntity>) {
         val current = known()
         for (recording in records) {
             val authority = owned.single { !it.deleted && it.recording.id == recording.id }
-            check(!File(recording.id).exists() && current.none { it.id == recording.id })
+            check(recordingAssetState(context, recording) == RecordingAssetState.MISSING && current.none { it.id == recording.id })
             authority.deleted = true
             authority.manifest.put("deleted_by_real_undo_expiry", true)
         }
@@ -777,21 +782,30 @@ private class TransactionFixtures(
         for (authority in owned.asReversed()) cleanup {
             if (!authority.deleted) {
                 val recording = authority.recording
-                if (!File(recording.id).exists()) {
+                val state = recordingAssetState(context, recording)
+                if (state == RecordingAssetState.MISSING) {
                     // A delivered delete may have completed before an earlier assertion failed.
                     // Record the terminal absence; never replace the earlier failed test result.
                     check(known().none { it.id == recording.id })
                     authority.manifest.put("absent_at_cleanup", true)
                 } else {
+                    check(state == RecordingAssetState.PRESENT) { "Owned fixture availability is unknown; preserved" }
                     verify(authority)
                     check(runBlocking { withTimeout(15_000L) { RecordingRepository.delete(context, recording) } })
+                    check(recordingAssetState(context, recording) == RecordingAssetState.MISSING)
+                    check(known().none { it.id == recording.id })
                     authority.manifest.put("deleted_by_cleanup", true)
                 }
+                authority.deleted = true
             }
         }
         if (admitted) cleanup {
             check(known().isEmpty())
             check(directory.listFiles()?.isEmpty() == true) { "Uncertain/incomplete QA file remains; preserved" }
+            check(creationAttempts == owned.size && manifest.getJSONArray("fixtures").length() == owned.size &&
+                owned.all { it.deleted }) {
+                "Uncertain/incomplete QA output remains; retained in creation ledger"
+            }
             manifest.put("cleanup_verified_empty", true)
         }
         primary?.let { manifest.put("cleanup_error", android.util.Log.getStackTraceString(it)) }

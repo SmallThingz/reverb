@@ -178,14 +178,17 @@ private fun requireLibraryFixtureIdentity(context: Context) {
     check(getConfiguredExportTreeUri(context) == null)
 }
 
-/** The only disk mutations are complete, identity-bound fixtures in this isolated app's legacy folder. */
+/** Complete identity-bound outputs owned by this isolated app, using the ordinary default provider. */
 private class LibraryOwnedFixtures(private val context: Context, private val evidence: File) : AutoCloseable {
     private val directory = getSavedRecordingsDirectory(context)
     private val owned = mutableListOf<RecordingEntity>()
+    private val ownedDigests = mutableMapOf<String, CopyDigest>()
+    private var creationAttempts = 0
     private val manifest = JSONObject().put("package", context.packageName).put("fixtures", JSONArray())
     private var admitted = false
     fun requireEmptyBaseline() {
         requireLibraryFixtureIdentity(context)
+        check(Build.VERSION.SDK_INT >= 29 && getConfiguredExportTreeUri(context) == null)
         val appExternal = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)?.canonicalFile
         val parent = directory.canonicalFile.parentFile
         check(parent == appExternal || directory.canonicalPath.startsWith(context.filesDir.canonicalPath + File.separator))
@@ -205,24 +208,20 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
         val durationFrames = intArrayOf(24_000, 32_000, 16_000, 20_000)
         for (index in durationFrames.indices) {
             val displayName = "Library parity ${index + 1}.wav"
-            check(!File(directory, displayName).exists()) { "Fixture name already exists" }
-            // The ordinary public output factory selects shared MediaStore on Android 10+.
-            // Use its existing FILE creation primitive explicitly in this admitted QA-only folder.
-            // Its exclusive descriptor and durable path identity provide real staging authority;
-            // a fixture must never mark an arbitrary final-name file writable by setting a flag.
-            val created = createLocalStagingFile(directory, displayName, StagingOutputKind.COPY)
-            val file = created.file
-            val entry = JSONObject().put("path", file.absolutePath).put("complete", false)
-                .put("expected_final_path", File(directory, displayName).absolutePath)
-                .put("staging_display_name", file.name).put("staging_creation_identity", created.identity)
+            val start = baseTime - if (index < 3) index * 60_000L else 86_400_000L
+            // refresh() legitimately migrates legacy FILE outputs into MediaStore. Create the
+            // fixture in its final provider from the start so its recorded URI remains authoritative.
+            manifest.put("creation_attempts", ++creationAttempts)
+            saveManifest() // The provider may create a row before its factory reports a failure.
+            val target = createOutputTarget(context, displayName, "audio/wav", start)
+            val entry = JSONObject().put("id", target.id).put("complete", false)
+                .put("requested_display_name", displayName)
+                .put("staging_display_name", target.stagingDisplayName)
+                .put("staging_creation_identity", target.stagingIdentity)
             // Retain creation authority before any later assertion or operation can fail.
             manifest.getJSONArray("fixtures").put(entry); saveManifest()
-            check(file.canonicalFile.parentFile == directory.canonicalFile)
-            val start = baseTime - if (index < 3) index * 60_000L else 86_400_000L
-            // Same metadata contract as createLocalOutputTarget; no provider/public-store route.
-            val target = RecordingOutputTarget(file.absolutePath, displayName, "audio/wav",
-                RecordingStorageType.FILE, directory.absolutePath, start, file = file, staging = true,
-                stagingDisplayName = file.name, stagingIdentity = created.identity)
+            check(target.storageType == RecordingStorageType.MEDIASTORE && target.staging && target.uri != null)
+            check(target.stagingIdentity.isNotBlank())
             val frames = durationFrames[index]
             val pcm = ByteArray(frames * 2)
             for (sample in 0 until frames) {
@@ -232,32 +231,30 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
             }
             val writer = WavAudioFileWriter(context, target, 8_000, 1)
             writer.use { it.write(pcm, 0, pcm.size) }
-            // Fix fixture dates before verification; changing metadata after verification would
-            // invalidate the exact fingerprint that owns publication.
-            check(file.setLastModified(start))
             val verified = verifyWavOutputTargetAndDigest(
                 context, target, writer.totalFileBytesWritten, writer.expectedHeaderBytes,
                 writer.payloadOffsetBytes, writer.totalSampleBytesWritten, writer.payloadSha256,
             )
-            entry.put("verified_staging_identity", verified.fileKey)
+            entry.put("verified_staging_identity", verified.providerIdentity)
                 .put("verified_bytes", verified.digest.byteCount)
+                .put("verified_wav_sha256", verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) })
             saveManifest()
             val published = finalizeOutputTarget(context, target, verified)
-            entry.put("published_path", published.id).put("published_identity", published.publishedIdentity)
+            entry.put("published_id", published.id).put("published_identity", published.publishedIdentity)
             saveManifest()
-            val publishedFile = checkNotNull(published.file)
-            check(published.storageType == RecordingStorageType.FILE && !published.staging)
-            check(publishedFile.canonicalFile.parentFile == directory.canonicalFile)
-            check(published.displayName == displayName && publishedFile.name == displayName)
-            val identity = resolveFileIdentity(publishedFile)
-            check(identity.isNotBlank() && identity == published.publishedIdentity)
+            check(published.storageType == RecordingStorageType.MEDIASTORE && !published.staging)
+            check(published.id == target.id && published.displayName == displayName)
+            val identity = published.publishedIdentity
+            check(identity.isNotBlank())
             val raw = buildRecordingEntity(context, published,
                 frames * 1000L / 8_000L, "PCM", writer.totalFileBytesWritten)
             // Track before registration so a failed catalog write still leaves exact owned cleanup.
             owned += raw
-            entry.put("complete", true).put("path", publishedFile.absolutePath)
-                .put("identity", identity).put("bytes", publishedFile.length())
-                .put("wav_sha256", libraryDigest(publishedFile.readBytes())).put("pcm_sha256", libraryDigest(pcm))
+            ownedDigests[raw.id] = verified.digest
+            entry.put("complete", true).put("id", raw.id)
+                .put("identity", identity).put("bytes", verified.digest.byteCount)
+                .put("wav_sha256", verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) })
+                .put("pcm_sha256", libraryDigest(pcm))
                 .put("sample_rate", 8_000).put("channels", 1).put("frames", frames)
                 .put("signal", "signed16 little-endian; ((sampleIndex % 64)-32)*512")
             saveManifest()
@@ -274,17 +271,28 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
     }
     override fun close() {
         var primary: Throwable? = null
+        val deleted = mutableSetOf<String>()
         for (recording in owned.asReversed()) try {
-            val file = File(recording.id)
-            check(file.canonicalFile.parentFile == directory.canonicalFile)
-            check(resolveFileIdentity(file) == recording.fileIdentity) { "Fixture identity changed; preserve it" }
+            val observed = recordingCatalogPostconditionObservation(context, recording)
+            check(observed.identityMatches && observed.displayNameMatches) { "Fixture identity changed; preserve it" }
+            val digest = checkNotNull(sha256StableRecording(context, recording))
+            val expected = ownedDigests.getValue(recording.id)
+            check(digest.byteCount == expected.byteCount && digest.sha256.contentEquals(expected.sha256)) {
+                "Fixture contents changed; preserve it"
+            }
             check(runBlocking { withTimeout(15_000L) { RecordingRepository.delete(context, recording) } })
+            check(recordingAssetState(context, recording) == RecordingAssetState.MISSING)
+            deleted += recording.id
         } catch (error: Throwable) {
             if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)
         }
         if (admitted) try {
             check(runBlocking { RecordingRepository.listKnown(context) }.isEmpty())
             check(directory.listFiles()?.isEmpty() == true) { "Incomplete or foreign fixture remains; preserved" }
+            check(creationAttempts == owned.size && manifest.getJSONArray("fixtures").length() == owned.size &&
+                deleted.size == owned.size) {
+                "Incomplete or uncertain provider fixture remains; preserve its creation ledger"
+            }
             manifest.put("cleanup_verified_empty", true)
         } catch (error: Throwable) {
             if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)

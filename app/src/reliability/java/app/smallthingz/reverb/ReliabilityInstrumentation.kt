@@ -12,11 +12,17 @@ import java.io.File
 class ReliabilityInstrumentation : Instrumentation() {
     private var requestedTest: String? = null
     private var keyboardSessionNonce: String? = null
+    private var fixtureSessionNonce: String? = null
+    private var fixtureObservationDirectory: String? = null
+    private var fixtureObservationSha256: String? = null
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         requestedTest = arguments?.getString("test")
         keyboardSessionNonce = arguments?.getString("keyboard_session_nonce")
+        fixtureSessionNonce = arguments?.getString("fixture_session_nonce")
+        fixtureObservationDirectory = arguments?.getString("fixture_observation_directory")
+        fixtureObservationSha256 = arguments?.getString("fixture_observation_sha256")
         start()
     }
 
@@ -37,10 +43,19 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_library_parity", "native_library_transactions", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
                 "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
+                "native_library_fixture_observation",
+                "native_library_fixture_cleanup",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
-            if (requestedTest == "native_fine_seek_leaf") {
+            if (requestedTest == "native_library_fixture_observation") {
+                executed++
+                observeNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce)
+            } else if (requestedTest == "native_library_fixture_cleanup") {
+                executed++
+                cleanupNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce,
+                    fixtureObservationDirectory, fixtureObservationSha256)
+            } else if (requestedTest == "native_fine_seek_leaf") {
                 executed++
                 verifyNativeFineSeekLeafParity(this, report)
             } else if (requestedTest == "native_settings_compression") {
