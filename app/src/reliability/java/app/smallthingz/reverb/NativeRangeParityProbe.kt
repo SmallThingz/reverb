@@ -280,7 +280,12 @@ private class RangeParityBoard(
     private val source = RangeMorphSourceGeometry(0f, 0f, width * .5f, height * .5f, 180 * density.density)
     private val referenceHost = FrameLayout(context)
     private val reference = ComposeView(context)
-    private val nativeHost = FrameLayout(context)
+    private val nativeHost = FrameLayout(context).apply {
+        // The released18dp inset is padding inside a full-window ComposeView, not a clip.
+        // Match NativeCaptureContentView: child shadows may extend into that inset.
+        clipChildren = false
+        clipToPadding = false
+    }
     private val composeContext: ComposeViewContext
     private val blob = AudioBlobController()
     private var referenceState: RangeExportEditorState? = null

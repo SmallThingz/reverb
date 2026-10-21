@@ -204,13 +204,25 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
         val baseTime = 1_792_497_600_000L
         val durationFrames = intArrayOf(24_000, 32_000, 16_000, 20_000)
         for (index in durationFrames.indices) {
-            val file = File(directory, "Library parity ${index + 1}.wav")
-            check(file.createNewFile()) { "Fixture name already exists" }
+            val displayName = "Library parity ${index + 1}.wav"
+            check(!File(directory, displayName).exists()) { "Fixture name already exists" }
+            // The ordinary public output factory selects shared MediaStore on Android 10+.
+            // Use its existing FILE creation primitive explicitly in this admitted QA-only folder.
+            // Its exclusive descriptor and durable path identity provide real staging authority;
+            // a fixture must never mark an arbitrary final-name file writable by setting a flag.
+            val created = createLocalStagingFile(directory, displayName, StagingOutputKind.COPY)
+            val file = created.file
             val entry = JSONObject().put("path", file.absolutePath).put("complete", false)
+                .put("expected_final_path", File(directory, displayName).absolutePath)
+                .put("staging_display_name", file.name).put("staging_creation_identity", created.identity)
+            // Retain creation authority before any later assertion or operation can fail.
             manifest.getJSONArray("fixtures").put(entry); saveManifest()
+            check(file.canonicalFile.parentFile == directory.canonicalFile)
             val start = baseTime - if (index < 3) index * 60_000L else 86_400_000L
-            val target = RecordingOutputTarget(file.absolutePath, file.name, "audio/wav",
-                RecordingStorageType.FILE, directory.absolutePath, start, file = file, staging = false)
+            // Same metadata contract as createLocalOutputTarget; no provider/public-store route.
+            val target = RecordingOutputTarget(file.absolutePath, displayName, "audio/wav",
+                RecordingStorageType.FILE, directory.absolutePath, start, file = file, staging = true,
+                stagingDisplayName = file.name, stagingIdentity = created.identity)
             val frames = durationFrames[index]
             val pcm = ByteArray(frames * 2)
             for (sample in 0 until frames) {
@@ -220,15 +232,32 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
             }
             val writer = WavAudioFileWriter(context, target, 8_000, 1)
             writer.use { it.write(pcm, 0, pcm.size) }
+            // Fix fixture dates before verification; changing metadata after verification would
+            // invalidate the exact fingerprint that owns publication.
             check(file.setLastModified(start))
-            val identity = resolveFileIdentity(file)
-            check(identity.isNotBlank())
-            val raw = buildRecordingEntity(context, target.copy(publishedIdentity = identity),
+            val verified = verifyWavOutputTargetAndDigest(
+                context, target, writer.totalFileBytesWritten, writer.expectedHeaderBytes,
+                writer.payloadOffsetBytes, writer.totalSampleBytesWritten, writer.payloadSha256,
+            )
+            entry.put("verified_staging_identity", verified.fileKey)
+                .put("verified_bytes", verified.digest.byteCount)
+            saveManifest()
+            val published = finalizeOutputTarget(context, target, verified)
+            entry.put("published_path", published.id).put("published_identity", published.publishedIdentity)
+            saveManifest()
+            val publishedFile = checkNotNull(published.file)
+            check(published.storageType == RecordingStorageType.FILE && !published.staging)
+            check(publishedFile.canonicalFile.parentFile == directory.canonicalFile)
+            check(published.displayName == displayName && publishedFile.name == displayName)
+            val identity = resolveFileIdentity(publishedFile)
+            check(identity.isNotBlank() && identity == published.publishedIdentity)
+            val raw = buildRecordingEntity(context, published,
                 frames * 1000L / 8_000L, "PCM", writer.totalFileBytesWritten)
             // Track before registration so a failed catalog write still leaves exact owned cleanup.
             owned += raw
-            entry.put("complete", true).put("identity", identity).put("bytes", file.length())
-                .put("wav_sha256", libraryDigest(file.readBytes())).put("pcm_sha256", libraryDigest(pcm))
+            entry.put("complete", true).put("path", publishedFile.absolutePath)
+                .put("identity", identity).put("bytes", publishedFile.length())
+                .put("wav_sha256", libraryDigest(publishedFile.readBytes())).put("pcm_sha256", libraryDigest(pcm))
                 .put("sample_rate", 8_000).put("channels", 1).put("frames", frames)
                 .put("signal", "signed16 little-endian; ((sampleIndex % 64)-32)*512")
             saveManifest()

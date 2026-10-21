@@ -226,6 +226,14 @@ internal class SettingsRetentionInputView(
         onRawChanged = null
     }
 
+    override fun scrollTo(x: Int, y: Int) {
+        // Released singleLine CoreTextField uses HorizontalScrollLayoutModifier: its content
+        // placement is (horizontalOffset, 0), including raw newlines. TextView's cursor-follow
+        // pre-draw otherwise adds vertical slack for that raw multiline Layout, even unfocused.
+        // Keep native horizontal scrolling; this editor has no source vertical scroll axis.
+        super.scrollTo(x, 0)
+    }
+
     private fun acceptOwnerText(raw: String) {
         if (raw != previousOwnerText) {
             previousOwnerText = raw

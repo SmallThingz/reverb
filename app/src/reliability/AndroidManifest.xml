@@ -11,7 +11,14 @@
         tools:replace="android:name,android:label">
         <activity
             android:name="app.smallthingz.reverb.MainActivity"
-            android:enabled="${reliabilityMainEnabled}" />
+            android:enabled="${reliabilityMainEnabled}"
+            android:exported="${reliabilityMainExported}"
+            tools:replace="android:exported" />
+        <activity
+            android:name="app.smallthingz.reverb.ReleasedMainActivityOracle"
+            android:enabled="${reliabilityEntryEnabled}"
+            android:exported="false"
+            android:theme="@style/Theme.Reverb.Splash" />
         <activity
             android:name="app.smallthingz.reverb.NativeParityActivity"
             android:exported="false"

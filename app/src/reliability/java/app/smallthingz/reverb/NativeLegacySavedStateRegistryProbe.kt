@@ -195,7 +195,8 @@ private fun verifyLegacyTypedRegistryRoundtrip() {
         check(target.savedStateRegistry.consumeRestoredStateForKey(Released012SavedUiKeys.ROOT_REGISTRY) == null)
         legacyParcel(target.save())
     }
-    LegacyProbeRegistry(resaved).use { inspection ->
+    // Registry consumption mutates its restored Bundle; inspect an independent Parcel copy.
+    LegacyProbeRegistry(legacyParcel(resaved)).use { inspection ->
         val residual = inspection.savedStateRegistry.restoredRoot()
         check(residual.keySet() == setOf(legacyProbeUnknown))
         check(residual.providers(legacyProbeUnknown) == listOf("keep", null, 17))

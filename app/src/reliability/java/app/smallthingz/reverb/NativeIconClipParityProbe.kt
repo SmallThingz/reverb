@@ -68,6 +68,8 @@ import org.json.JSONObject
  * Surface [63,710,954,3304], Recovery status Icon [105,2052,63,63]. Its bottom eight pixels are
  * outside the viewport. Removing text/other rows isolates the same released Icon, ScrollNode and
  * Surface draw boundaries. The full-screen oracle and its failed receipt remain unchanged.
+ * That capture's physical display uses 421 dpi (density 2.63125), as its saved activity dump
+ * records. The unrelated 1072px virtual display uses 420 dpi; it is not this fixture's source.
  *
  * Exact source primitives: MainActivity.kt900-909 Surface/Column and932-940 Icon; foundation1.11.2
  * ScrollNode/VerticalScrollableClipShape; M3 1.4.0 Icon; ui1.11.2 VectorComponent/DrawCache.
@@ -82,6 +84,7 @@ private const val CLIP_GROUP_HEIGHT = 3304
 private const val CLIP_ICON_LEFT = 42
 private const val CLIP_ICON_TOP = 1342
 private const val CLIP_ICON_SIZE = 63
+private const val CLIP_SOURCE_DENSITY_DPI = 421
 
 private data class IconClipCase(val dark: Boolean, val grouped: Boolean, val clipped: Boolean) {
     val name get() = "${if (dark) "dark" else "light"}-${if (grouped) "grouped" else "plain"}-${if (clipped) "clipped" else "whole"}"
@@ -113,9 +116,19 @@ internal fun verifyNativeIconClipParity(instrumentation: Instrumentation, report
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         requireNativeParityHost(instrumentation, activity)
         nativeParityOnMain(instrumentation) {
+            val metrics = activity.resources.displayMetrics
+            val configuration = activity.resources.configuration
+            result.put("observed_configuration", JSONObject()
+                .put("width_px", activity.fixtureRoot.width)
+                .put("height_px", activity.fixtureRoot.height)
+                .put("metrics_density_dpi", metrics.densityDpi)
+                .put("configuration_density_dpi", configuration.densityDpi)
+                .put("density", metrics.density))
             check(activity.fixtureRoot.width == 1080 && activity.fixtureRoot.height == 2400 &&
-                activity.resources.displayMetrics.density == 2.625f) {
-                "This diagnostic reproduces retained 1080x2400,420dpi source geometry; do not rescale it"
+                metrics.densityDpi == CLIP_SOURCE_DENSITY_DPI &&
+                configuration.densityDpi == CLIP_SOURCE_DENSITY_DPI &&
+                metrics.density == CLIP_SOURCE_DENSITY_DPI / 160f) {
+                "This diagnostic reproduces retained physical0 1080x2400,421dpi source geometry; do not rescale it"
             }
         }
         for (dark in listOf(false, true)) for (grouped in listOf(false, true)) for (clipped in listOf(false, true)) {

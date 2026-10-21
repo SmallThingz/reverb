@@ -175,8 +175,51 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
 
 private data class RetentionRender(val content: View, val editor: SettingsRetentionInputView?)
 
+/** QA-local String owner; the static raster/connection fixture passes no owner and is unchanged. */
+internal interface RetentionKeyboardRawOwner {
+    val raw: String
+    fun changed(value: String)
+}
+
+internal fun showRetentionKeyboardField(
+    host: NativeParityActivity,
+    typography: Typography,
+    mode: RetentionMode,
+    reference: Boolean,
+    label: String,
+    owner: RetentionKeyboardRawOwner,
+): AutoCloseableRetentionKeyboardField {
+    val render = showRetentionCase(host, typography,
+        RetentionCase("keyboard", owner.raw, mode, mode == RetentionMode.SIZE,
+            host.resources.configuration.fontScale, false), reference, owner, label)
+    return AutoCloseableRetentionKeyboardField(render.content) {
+        var failure: Throwable? = null
+        fun release(block: () -> Unit) {
+            try { block() } catch (error: Throwable) {
+                val earlier = failure
+                if (earlier == null) failure = error else if (earlier !== error) earlier.addSuppressed(error)
+            }
+        }
+        release { host.fixtureRoot.removeView(render.content) }
+        release { (render.content as? ComposeView)?.disposeComposition() }
+        release { render.editor?.releaseCallbacks() }
+        failure?.let { throw it }
+    }
+}
+
+internal class AutoCloseableRetentionKeyboardField(val content: View, private val release: () -> Unit) : AutoCloseable {
+    private var closed = false
+    override fun close() {
+        if (closed) return
+        closed = true
+        release()
+    }
+}
+
 private fun showRetentionCase(
     host: NativeParityActivity, typography: Typography, case: RetentionCase, reference: Boolean,
+    rawOwner: RetentionKeyboardRawOwner? = null,
+    label: String = "One-shot",
 ): RetentionRender {
     val config = Configuration(host.resources.configuration).apply {
         fontScale = case.scale
@@ -208,15 +251,18 @@ private fun showRetentionCase(
                 LocalDensity provides density, LocalLayoutDirection provides direction) {
                 MaterialTheme(colorScheme = colors, typography = typography) {
                     Box(Modifier.fillMaxSize()) {
-                        ReleasedRetentionEditorOracle("One-shot", case.mode, case.raw, case.raw,
-                            requestFocus = false, onTimeChange = {}, onSizeChange = {})
+                        val raw = rawOwner?.raw ?: case.raw
+                        ReleasedRetentionEditorOracle(label, case.mode, raw, raw,
+                            requestFocus = false,
+                            onTimeChange = { rawOwner?.changed(it) }, onSizeChange = { rawOwner?.changed(it) })
                     }
                 }
             }
         }
     } else FrameLayout(context).apply {
         editor = SettingsRetentionInputView(context, environment).also { input ->
-            input.bind(case.raw, case.mode, "One-shot", environment, false, { case.raw }, {})
+            input.bind(rawOwner?.raw ?: case.raw, case.mode, label, environment, false,
+                { rawOwner?.raw ?: case.raw }, { rawOwner?.changed(it) })
             addView(input, FrameLayout.LayoutParams(-1, -2, Gravity.TOP or Gravity.START))
         }
     }
@@ -239,6 +285,7 @@ private fun retentionMetrics(render: RetentionRender): JSONObject {
                 .put("visible_width", native.width).put("visible_height", native.height)
                 .put("baseline", native.baseline).put("focused", native.isFocused)
                 .put("native_layout_width", nativeLayout.width).put("native_line_count", nativeLayout.lineCount)
+                .put("native_scroll_x", native.scrollX).put("native_scroll_y", native.scrollY)
                 .put("source_expected_first_baseline", sourceLayout.firstBaseline.toDouble())
                 .put("source_expected_height", sourceLayout.size.height)
                 .put("selection_start", native.selectionStart).put("selection_end", native.selectionEnd)

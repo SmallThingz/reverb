@@ -27,10 +27,10 @@ import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
 
-private data class ScreenParityCase(val dark: Boolean, val rtl: Boolean, val scale: Float, val ready: Boolean) {
+internal data class ScreenParityCase(val dark: Boolean, val rtl: Boolean, val scale: Float, val ready: Boolean) {
     val name get() = "${if (dark) "dark" else "light"}-${if (rtl) "rtl" else "ltr"}-$scale-ready$ready"
 }
-private class ScreenParityRender(
+internal class ScreenParityRender(
     val view: View,
     val reference: Boolean,
     val save: () -> Any,
@@ -182,9 +182,10 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
     }
 }
 
-private fun showOnboardingScreen(
+internal fun showOnboardingScreen(
     host: NativeParityActivity, typography: Typography, case: ScreenParityCase, reference: Boolean,
     saved: Any?, request: () -> Unit, finish: () -> Unit,
+    mutableQaDraft: Boolean = false,
 ): ScreenParityRender {
     check(host.hasWindowFocus()) {
         val root = host.fixtureRoot
@@ -248,9 +249,18 @@ private fun showOnboardingScreen(
     } else {
         val runtime = NativeAboutWindowRuntime().apply { setStarted(true) }
         try {
-            val view = NativeOnboardingScreenView.create(context,
+            var draft = initial
+            lateinit var view: NativeOnboardingScreenView
+            fun changed(next: OnboardingPageContentState) {
+                if (mutableQaDraft) { draft = next; view.bind(next) }
+            }
+            view = NativeOnboardingScreenView.create(context,
                 ReverbViewEnvironment(density, createFontFamilyResolver(context), palette),
-                initial, host, OnboardingPageActions({ request() }, {}, {}, {}, {}), finish,
+                initial, host, OnboardingPageActions({ request() },
+                    { changed(draft.copy(oneShotEnabled = it)) },
+                    { changed(draft.copy(loopingEnabled = it)) },
+                    { changed(draft.copy(outputCompression = it)) },
+                    { changed(draft.copy(skipSilence = it)) }), finish,
                 runtime.scope, host.onBackPressedDispatcher,
                 saved as? NativeOnboardingViewportSavedState ?: NativeOnboardingViewportSavedState())
             view.layoutDirection = direction
@@ -282,7 +292,7 @@ private fun verifyOnboardingExplicitFooterFocus(render: ScreenParityRender): JSO
         .put("explicit_focus_qualification", if (touchMode) "not attempted in touch mode" else "accepted")
 }
 
-private fun invokeOnboardingSemanticClick(render: ScreenParityRender, label: String) {
+internal fun invokeOnboardingSemanticClick(render: ScreenParityRender, label: String) {
     if (render.reference) {
         val root = onboardingViewDescendants(render.view).filterIsInstance<ViewRootForTest>().single()
         val matches = root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true).filter {
@@ -301,7 +311,7 @@ private fun invokeOnboardingSemanticClick(render: ScreenParityRender, label: Str
     }
 }
 
-private fun awaitOnboardingScreenSettled(
+internal fun awaitOnboardingScreenSettled(
     instrumentation: Instrumentation, host: NativeParityActivity, render: ScreenParityRender, expected: Int,
 ) {
     var consecutive = 0

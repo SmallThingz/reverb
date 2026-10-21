@@ -3,6 +3,11 @@ allprojects {
     plugins.withId('com.android.application') {
         def parityOnly = providers.gradleProperty('reverbNativeParity')
             .map { it.toBoolean() }.getOrElse(false)
+        def nativeEntryLifecycle = providers.gradleProperty('reverbNativeEntryLifecycle')
+            .map { it.toBoolean() }.getOrElse(false)
+        if (nativeEntryLifecycle && !parityOnly) {
+            throw new GradleException('reverbNativeEntryLifecycle requires reverbNativeParity=true')
+        }
         android {
             buildTypes {
                 reliability {
@@ -13,7 +18,9 @@ allprojects {
                         reliabilityApplicationClass: parityOnly ?
                             'android.app.Application' : 'app.smallthingz.reverb.ReverbApplication',
                         reliabilityAppLabel: parityOnly ? 'Reverb native parity' : '@string/app_name',
-                        reliabilityMainEnabled: parityOnly ? 'false' : 'true',
+                        reliabilityMainEnabled: parityOnly ? nativeEntryLifecycle.toString() : 'true',
+                        reliabilityMainExported: nativeEntryLifecycle ? 'false' : 'true',
+                        reliabilityEntryEnabled: nativeEntryLifecycle.toString(),
                     ]
                 }
             }

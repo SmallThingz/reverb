@@ -62,10 +62,15 @@ import kotlin.math.roundToInt
 
 /**
  * Proposal: actual released AboutDialog versus native dialog, in the isolated QA process.
- * No production route, device input injection, AccessibilityService, browser launch, settings,
- * permissions, audio, recordings, or backend callback is used.
+ * No production route, AccessibilityService, browser launch, settings, permissions, audio,
+ * recordings or backend callback is used. Keyboard-mode entry uses only a host-coordinated
+ * explicitly physical-display-0 TAB; all other existing own-window actions remain local.
  */
-internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: StringBuilder) {
+internal fun verifyNativeAboutParity(
+    instrumentation: Instrumentation,
+    report: StringBuilder,
+    keyboardSessionNonce: String?,
+) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
@@ -73,13 +78,16 @@ internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: S
     val directory = File(context.filesDir, "native-about-parity-" + System.currentTimeMillis())
     check(directory.mkdir())
     val entries = JSONArray()
+    val keyboardRequests = JSONArray()
     val result = JSONObject()
         .put("oracle", "Unchanged released AboutDialog called directly; zero source substitutions")
         .put("comparison", "Exact ARGB; no masks/tolerance; short case constrains both own windows to240dp")
         .put("physical_input_injected", false)
+        .put("keyboard_requests", keyboardRequests)
+        .put("physical_input_scope", "Only nonce-bound host keyboard TAB on explicitly physical display0; no app-side injection")
         .put("scene_labels", "Requested palette/configuration only; actual rendered colors are retained separately")
         .put("motion_phase_qualified", false)
-        .put("limits", "Own-window synthetic dispatch and read-only semantics; actual system predictive dispatch, TalkBack and stopped/resumed Activity remain separate")
+        .put("limits", "Own-window synthetic activation and read-only semantics, plus explicitly targeted host keyboard-mode entry; actual system predictive dispatch, TalkBack and stopped/resumed Activity remain separate")
         .put("cases", entries)
     var host: NativeParityActivity? = null
     var current: AboutFixture? = null
@@ -163,7 +171,17 @@ internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: S
                 fixture.awaitSettled(settledMillis)
                 var exercised = true
                 when (scenario) {
-                    AboutInteraction.KEYBOARD_CLOSE -> fixture.keyboardClose()
+                    AboutInteraction.KEYBOARD_CLOSE -> {
+                        fixture.keyboardClose(directory, keyboardSessionNonce) { request ->
+                            keyboardRequests.put(request)
+                            if (!result.optBoolean("physical_input_injected", false)) {
+                                // A pending command can have an unknown outcome if the lane stops.
+                                result.put("physical_input_injected", JSONObject.NULL)
+                            }
+                            File(directory, "result.json").writeText(result.toString(2))
+                        }
+                        result.put("physical_input_injected", true)
+                    }
                     AboutInteraction.ORDINARY_BACK -> fixture.ordinaryBack()
                     AboutInteraction.REPEATED_BACK -> {
                         fixture.ordinaryBack()
@@ -291,11 +309,13 @@ private class AboutFixture private constructor(
     companion object {
         fun open(instrumentation: Instrumentation, host: NativeParityActivity, case: AboutCase, compose: Boolean,
                  onCreated: (AboutFixture) -> Unit): AboutFixture {
-            requireNativeParityHost(instrumentation, host)
             val fixture = AboutFixture(instrumentation, host, case, compose)
             // Preserve an opening failure's trace before openWindow can throw; cleanup stays owned.
             onCreated(fixture)
             try {
+                fixture.recordActivityHost("before-first-host-guard")
+                requireNativeParityHost(instrumentation, host)
+                fixture.recordActivityHost("after-first-host-guard")
                 fixture.openWindow()
                 return fixture
             } catch (error: Throwable) {
@@ -305,11 +325,36 @@ private class AboutFixture private constructor(
         }
     }
 
+    /** Diagnostics only: a successful first guard is observed focus, never permission to wait for reacquisition. */
+    private fun recordActivityHost(event: String) = nativeParityOnMain(instrumentation) {
+        trace.put(activityHostSnapshot(event))
+    }
+
+    private fun activityHostSnapshot(event: String): JSONObject {
+        val root = activity.fixtureRoot
+        val decor = activity.window.decorView
+        return JSONObject().put("event", event).put("uptime_ms", SystemClock.uptimeMillis())
+            .put("lifecycle", activity.lifecycle.currentState.name)
+            .put("finishing", activity.isFinishing).put("destroyed", activity.isDestroyed)
+            .put("activity_focused", activity.hasWindowFocus())
+            .put("root_focused", root.hasWindowFocus()).put("root_shown", root.isShown)
+            .put("root_attached", root.isAttachedToWindow).put("root_display", root.display?.displayId ?: JSONObject.NULL)
+            .put("decor_focused", decor.hasWindowFocus()).put("decor_shown", decor.isShown)
+            .put("decor_attached", decor.isAttachedToWindow).put("decor_display", decor.display?.displayId ?: JSONObject.NULL)
+            .put("decor_identity", System.identityHashCode(decor))
+            .put("decor_registered", decor in WindowInspector.getGlobalWindowViews())
+    }
+
     private fun openWindow() {
         lateinit var before: Set<View>
         nativeParityOnMain(instrumentation) {
-            check(!activity.isFinishing && activity.hasWindowFocus() && activity.fixtureRoot.isShown)
-            check(activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY)
+            val admission = activityHostSnapshot("open-window-guard").also(trace::put)
+            check(!activity.isFinishing && activity.hasWindowFocus() && activity.fixtureRoot.isShown) {
+                "About Activity readiness changed before its dialog opened: $admission"
+            }
+            check(activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY) {
+                "About Activity root left physical0 before its dialog opened: $admission"
+            }
             before = WindowInspector.getGlobalWindowViews().toSet()
             val configuration = Configuration(activity.resources.configuration).apply {
                 uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
@@ -585,7 +630,45 @@ private class AboutFixture private constructor(
             try { window.decorView.dispatchTouchEvent(up) } finally { up.recycle() }
         }
     }
-    fun keyboardClose() {
+    fun keyboardClose(directory: File, sessionNonce: String?, onRequest: (JSONObject) -> Unit) {
+        guard()
+        awaitNativeParityKeyboardCommand(instrumentation, directory, sessionNonce, renderer,
+            stage = "about-keyboard-mode", keyCodeName = "KEYCODE_TAB", guardedSnapshot = {
+            nativeParityOnMain(instrumentation) {
+                requireOwnWindowOnMain()
+                val decor = window.decorView
+                val bounds = closeTarget()
+                check(!bounds.isEmpty)
+                val description = activity.getString(R.string.close)
+                val targetIdentity: String
+                val targetEnabled: Boolean
+                if (compose) {
+                    val close = composeRoot().semanticsOwner.getAllSemanticsNodes(true).single {
+                        description in (it.config.getOrNull(SemanticsProperties.ContentDescription) ?: emptyList()) &&
+                            it.config.getOrNull(SemanticsActions.OnClick) != null
+                    }
+                    targetIdentity = "semantics:${close.id}"
+                    targetEnabled = close.config.getOrNull(SemanticsProperties.Disabled) == null
+                } else {
+                    val close = nativeCloseView()
+                    targetIdentity = "view:${System.identityHashCode(close)}"
+                    targetEnabled = close.isEnabled && close.isShown
+                }
+                check(targetEnabled) { "Current About Close target is not enabled/visible" }
+                JSONObject().put("display_id", checkNotNull(decor.display).displayId)
+                    .put("window_title", window.attributes.title?.toString().orEmpty())
+                    .put("decor_identity", System.identityHashCode(decor))
+                    .put("target_bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                    .put("target_identity", targetIdentity).put("scene_label", "AboutClose")
+                    .put("observed_target", JSONObject()
+                        .put("content_description", description).put("enabled", targetEnabled))
+                    .put("in_touch_mode", decor.isInTouchMode)
+            }
+        }, onRequest = onRequest, validateObservedAfter = { observed ->
+            check(observed.get("in_touch_mode").let { it is Boolean && !it }) {
+                "Host TAB completed but own About window remains in Touch mode; focus assertion is not bypassed"
+            }
+        })
         guard()
         nativeParityOnMain(instrumentation) {
             requireOwnWindowOnMain()

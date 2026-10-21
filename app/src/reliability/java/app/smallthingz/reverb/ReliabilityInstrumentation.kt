@@ -34,11 +34,21 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
                 "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
-                "native_library_parity", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity",
+                "native_library_parity", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
+                "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
-            if (requestedTest == "native_font_notifications") {
+            if (requestedTest == "native_onboarding_input_parity") {
+                executed++
+                verifyNativeOnboardingInputParity(this, report)
+            } else if (requestedTest == "native_incidents_parity") {
+                executed++
+                verifyNativeIncidentsParity(this, report)
+            } else if (requestedTest == "native_activity_lifecycle") {
+                executed++
+                verifyNativeActivityLifecycle(this, report)
+            } else if (requestedTest == "native_font_notifications") {
                 executed++
                 verifyNativeFontNotifications(this, report)
             } else if (requestedTest == "native_brand_parity") {
@@ -46,7 +56,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 verifyNativeBrandParity(this, report)
             } else if (requestedTest == "native_about_parity") {
                 executed++
-                verifyNativeAboutParity(this, report)
+                verifyNativeAboutParity(this, report, keyboardSessionNonce)
             } else if (requestedTest == "native_main_settings_parity") {
                 executed++
                 verifyNativeMainSettingsParity(this, report)
@@ -68,6 +78,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_home_input") {
                 executed++
                 verifyNativeHomeInputParity(this, report)
+            } else if (requestedTest == "native_retention_keyboard") {
+                executed++
+                verifyNativeRetentionKeyboardParity(this, report, keyboardSessionNonce)
             } else if (requestedTest == "native_retention_input_parity") {
                 executed++
                 verifyNativeRetentionInputParity(this, report)
