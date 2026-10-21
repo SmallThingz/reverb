@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.Paragraph
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
@@ -52,6 +53,8 @@ internal fun incidentMenuTextGeometry(host: NativeParityActivity, expectedWindow
                     .put("bounds_window", node.boundsInWindow.toString())
                     .put("size", "${node.size.width}x${node.size.height}")
                     .put("placed", node.layoutInfo.isPlaced)
+                // Read the existing draw cache BEFORE invoking the separate semantics reconstruction.
+                entry.put("source_draw_cache", incidentSourceDrawCache(node))
                 val parents = JSONArray().also { entry.put("semantic_ancestors", it) }
                 var parent = node.parent
                 while (parent != null) {
@@ -108,6 +111,64 @@ internal fun incidentMenuTextGeometry(host: NativeParityActivity, expectedWindow
         result.put("complete", true)
     } catch (failure: Throwable) {
         // Missing diagnostics remain explicit; the caller still repeats its unchanged strict guard.
+        result.put("failure", failure.stackTraceToString())
+    }
+    return result
+}
+
+/** Pinned Simple-node fields only; never call a cache-creating getter or traverse another owner. */
+private fun incidentSourceDrawCache(semantics: Any): JSONObject {
+    val result = JSONObject().put("complete", false)
+    fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name)
+        .apply { isAccessible = true }.get(owner)
+    try {
+        val node = checkNotNull(field(semantics, "outerSemanticsNode"))
+        result.put("node_class", node.javaClass.name).put("node_identity", System.identityHashCode(node))
+            .put("path", "current SemanticsNode.outerSemanticsNode")
+        if (node.javaClass.name != "androidx.compose.foundation.text.modifiers.TextStringSimpleNode") {
+            result.put("unavailable", "Current semantics modifier is not the pinned Simple draw node")
+            return result
+        }
+        result.put("base_style", field(node, "style")?.toString() ?: JSONObject.NULL)
+        try {
+            result.put("resolved_inherited_style", field(node, "resolvedInheritedStyle")?.toString() ?: JSONObject.NULL)
+        } catch (unavailable: Throwable) {
+            result.put("inherited_style_unavailable", unavailable.stackTraceToString())
+        }
+        val substitution = field(node, "textSubstitution")
+        val substituted = substitution != null && field(substitution, "isShowingSubstitution") == true
+        result.put("substitution_showing", substituted)
+        val cache = if (substituted) field(checkNotNull(substitution), "layoutCache") else field(node, "_layoutCache")
+        result.put("cache_path", if (substituted) "textSubstitution.layoutCache" else "_layoutCache")
+        if (cache == null) {
+            result.put("unavailable", "The current draw cache is null")
+            return result
+        }
+        result.put("cache_class", cache.javaClass.name).put("cache_identity", System.identityHashCode(cache))
+            .put("cache_style", field(cache, "style")?.toString() ?: JSONObject.NULL)
+            .put("intrinsics_layout_direction", field(cache, "intrinsicsLayoutDirection")?.toString() ?: JSONObject.NULL)
+            .put("previous_constraints", field(cache, "prevConstraints")?.toString() ?: JSONObject.NULL)
+            .put("layout_size", field(cache, "layoutSize")?.toString() ?: JSONObject.NULL)
+        val paragraph = field(cache, "paragraph") as? Paragraph
+        if (paragraph == null) {
+            result.put("unavailable", "The current cache has no Paragraph")
+            return result
+        }
+        result.put("paragraph_class", paragraph.javaClass.name)
+            .put("paragraph", incidentParagraphGeometry(paragraph.width, paragraph.height,
+                paragraph.maxIntrinsicWidth, paragraph.firstBaseline, paragraph.lastBaseline,
+                paragraph.lineCount, paragraph::getLineLeft, paragraph::getLineRight, paragraph::getLineBaseline))
+        // The intrinsic style establishes the effective resolved alignment/direction, if exposed
+        // by this exact pinned Android implementation. Failure remains diagnostic, never fallback.
+        try {
+            val intrinsics = checkNotNull(field(cache, "paragraphIntrinsics"))
+            result.put("intrinsics_class", intrinsics.javaClass.name)
+                .put("resolved_intrinsics_style", field(intrinsics, "style")?.toString() ?: JSONObject.NULL)
+        } catch (unavailable: Throwable) {
+            result.put("intrinsics_style_unavailable", unavailable.stackTraceToString())
+        }
+        result.put("complete", true)
+    } catch (failure: Throwable) {
         result.put("failure", failure.stackTraceToString())
     }
     return result
