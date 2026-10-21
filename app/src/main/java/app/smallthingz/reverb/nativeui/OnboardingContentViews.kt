@@ -4,11 +4,13 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
@@ -30,6 +32,10 @@ internal class OnboardingIconView(
     icon: ReverbIcon,
     color: Int,
 ) : View(context) {
+    private var descriptionWindow: PlainTextAccessibilityWindowScope? = null
+    private var descriptionAccessibility: PlainTextAccessibility? = null
+    private var descriptionExposure: (() -> Boolean)? = null
+    private var descriptionToken: Any? = null
     private var currentIcon = icon
     private var glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
@@ -49,6 +55,52 @@ internal class OnboardingIconView(
         invalidate()
     }
     override fun onDraw(canvas: Canvas) { glyph.draw(canvas) }
+
+    fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope, exposed: () -> Boolean): AutoCloseable {
+        val token = Any()
+        descriptionToken = token
+        descriptionExposure = exposed
+        if (descriptionWindow !== window || descriptionAccessibility == null) {
+            descriptionWindow = window
+            descriptionAccessibility = PlainTextAccessibility(this, window,
+                snapshot = { PlainTextAccessibilitySnapshot(contentDescription?.toString().orEmpty(), { null }, { null }) },
+                exposed = { descriptionExposure?.invoke() == true }, descriptionOnly = true)
+        }
+        return AutoCloseable {
+            if (descriptionToken === token) {
+                descriptionToken = null
+                descriptionWindow = null
+                descriptionAccessibility = null
+                descriptionExposure = null
+            }
+        }
+    }
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        if (contentDescription.isNullOrEmpty()) return
+        // Source Image role remains generic under a merging row; its description is separate.
+        info.className = "android.view.View"
+        info.text = null
+        info.isScreenReaderFocusable = false
+        info.isFocusable = false
+        info.isClickable = false
+        info.isEnabled = true
+        info.actionList.toList().forEach(info::removeAction)
+        info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+            else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+        descriptionAccessibility?.populate(info)
+    }
+    override fun performAccessibilityAction(action: Int, args: Bundle?): Boolean =
+        descriptionAccessibility?.performAction(action, args) ?: super.performAccessibilityAction(action, args)
+    override fun onInitializeAccessibilityEvent(event: AccessibilityEvent) {
+        super.onInitializeAccessibilityEvent(event)
+        if (!contentDescription.isNullOrEmpty()) {
+            event.className = "android.view.View"
+            event.isEnabled = true
+            event.text.clear()
+            event.contentDescription = null
+        }
+    }
 }
 
 /** The source OnboardingCard marker Surface:44dp,14dp corners, centered text or22dp icon. */
@@ -61,7 +113,7 @@ internal class OnboardingMarker(
     marker: String? = null,
 ) {
     val view = ReverbGroupLayout(context, cornerRadiusDp = 14f)
-    private val text = if (icon == null) ReverbParagraphView(context, style, density, resolver, 0).apply {
+    internal val text = if (icon == null) ReverbParagraphView(context, style, density, resolver, 0).apply {
         setText(marker.orEmpty())
     } else null
     private val glyph = icon?.let { OnboardingIconView(context, it, 0) }
@@ -89,7 +141,8 @@ internal class OnboardingMarker(
     }
     init {
         view.addRow(content, ReverbGroupLayout.LayoutParams(-1, -1))
-        view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        text?.isScreenReaderFocusable = false
     }
     fun bind(palette: ReverbPalette) {
         view.setPalette(palette.primaryContainer, android.graphics.Color.TRANSPARENT)
@@ -112,15 +165,30 @@ internal open class OnboardingCardView(
     private val trailingWidthDp: Int,
     private val trailingHeightDp: Int,
     interactions: OnboardingNativeInteractionsFactory,
-) : ViewGroup(context) {
+    accessibilityRole: NativeMergedRowRole = NativeMergedRowRole.BUTTON,
+) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
     private val title = ReverbParagraphView(context, typography.titleMedium, density, resolver, 0)
     private val body = ReverbParagraphView(context, typography.bodyMedium, density, resolver, 0)
     private val input = interactions.row(this)
+    override val nativeClickEndpoint get() = input.pointerEndpoint
     private var textHeight = 0
     private var bodyVisible = false
     private var canActivate = false
     var onActivate: (() -> Unit)? = null
-    protected var spokenText: String = ""
+    protected open val accessibilityClickLabel: CharSequence? get() = null
+    protected open val accessibilityChecked: Boolean? get() = null
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, accessibilityRole,
+        sourceState = {
+            NativeMergedRowAccessibilityState(canActivate, accessibilityChecked, accessibilityClickLabel,
+                buildList {
+                    marker.text?.let(::add)
+                    add(title)
+                    if (bodyVisible) add(body)
+                    if (!trailing.contentDescription.isNullOrEmpty()) add(trailing)
+                })
+        }, invokeSourceClick = {
+            if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false
+        })
 
     init {
         clipChildren = false
@@ -129,13 +197,17 @@ internal open class OnboardingCardView(
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         descendantFocusability = FOCUS_BLOCK_DESCENDANTS
-        listOf(marker.view, title, body, trailing).forEach {
-            it.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-            addView(it)
-        }
+        title.isScreenReaderFocusable = false
+        body.isScreenReaderFocusable = false
+        listOf(marker.view, title, body, trailing).forEach(::addView)
+        addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate = mergedRowAccessibility
         setOnClickListener { if (canActivate && isAttachedToWindow) onActivate?.invoke() }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
+
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
 
     protected fun bindCard(titleText: String, bodyText: String?, enabled: Boolean, palette: ReverbPalette) {
         input.bind(enabled, palette.ink)
@@ -149,7 +221,6 @@ internal open class OnboardingCardView(
         body.setText(bodyText.orEmpty())
         body.setTextColor(palette.muted)
         marker.bind(palette)
-        spokenText = listOfNotNull(titleText, bodyText?.takeIf(String::isNotEmpty)).joinToString("\n")
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -166,6 +237,7 @@ internal open class OnboardingCardView(
         textHeight = title.measuredHeight + if (bodyVisible) dp(2) + body.measuredHeight else 0
         val desired = padding * 2 + max(markerSize, max(trailHeight, textHeight))
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(desired, heightMeasureSpec))
+        mergedRowAccessibility.roleView.measure(exact(measuredWidth), exact(measuredHeight))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val padding = dp(16)
@@ -175,6 +247,7 @@ internal open class OnboardingCardView(
         placeStart(title, textX, textY)
         if (bodyVisible) placeStart(body, textX, textY + title.measuredHeight + dp(2))
         placeStart(trailing, width - padding - trailing.measuredWidth, ((height - trailing.measuredHeight) / 2f).roundToInt())
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
         input.measured(width, height)
     }
     private fun placeStart(child: View, start: Int, top: Int) {
@@ -209,8 +282,10 @@ internal class OnboardingBufferRow(
     interactions: OnboardingNativeInteractionsFactory,
 ) : OnboardingCardView(context, typography, density, resolver,
     OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon),
-    ReverbMaterialSwitchView(context, initialPalette), 52, 32, interactions) {
+    ReverbMaterialSwitchView(context, initialPalette), 52, 32, interactions, NativeMergedRowRole.SWITCH) {
     private var checked = false
+    override val accessibilityChecked: Boolean get() = checked
+    init { trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
     fun bind(title: String, body: String, checked: Boolean, visuallyEnabled: Boolean,
              interactionEnabled: Boolean, palette: ReverbPalette) {
         this.checked = checked
@@ -220,14 +295,6 @@ internal class OnboardingBufferRow(
         toggle.setPalette(palette)
         toggle.setState(checked, visuallyEnabled)
         bindCard(title, body, visuallyEnabled && interactionEnabled, palette)
-    }
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = android.widget.Switch::class.java.name
-        info.text = spokenText
-        info.isCheckable = true
-        info.isChecked = checked
-        if (!isEnabled) info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
     }
 }
 
@@ -239,25 +306,32 @@ internal class OnboardingAudioRow(
     resolver: FontFamily.Resolver,
     palette: ReverbPalette,
     interactions: OnboardingNativeInteractionsFactory,
-) : ViewGroup(context) {
+) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
     private val title = ReverbParagraphView(context, typography.bodyLarge, density, resolver, 0)
     private val toggle = ReverbMaterialSwitchView(context, palette)
     private val input = interactions.row(this)
+    override val nativeClickEndpoint get() = input.pointerEndpoint
     private var checked = false
     private var canActivate = false
-    private var spokenText = ""
     var onActivate: (() -> Unit)? = null
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.SWITCH,
+        sourceState = { NativeMergedRowAccessibilityState(canActivate, checked, null, listOf(title)) },
+        invokeSourceClick = { if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false })
     init {
         clipChildren = false; clipToPadding = false
         isClickable = true; isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         descendantFocusability = FOCUS_BLOCK_DESCENDANTS
-        title.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        title.isScreenReaderFocusable = false
         toggle.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        addView(title); addView(toggle)
+        addView(title); addView(toggle); addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate = mergedRowAccessibility
         setOnClickListener { if (canActivate && isAttachedToWindow) onActivate?.invoke() }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
     fun bind(text: String, checked: Boolean, visuallyEnabled: Boolean, interactionEnabled: Boolean, palette: ReverbPalette) {
         this.checked = checked
         ViewCompat.setStateDescription(this, context.getString(
@@ -266,7 +340,6 @@ internal class OnboardingAudioRow(
         input.bind(canActivate, palette.ink)
         isEnabled = canActivate
         isFocusable = canActivate
-        spokenText = text
         title.setText(text)
         title.setTextColor(if (visuallyEnabled) palette.ink else palette.muted)
         toggle.setPalette(palette)
@@ -278,6 +351,7 @@ internal class OnboardingAudioRow(
         title.measure(atMost((width - dp(14) * 2 - dp(12) - toggle.measuredWidth).coerceAtLeast(0)), unspecified())
         val desired = max(dp(64), dp(8) * 2 + max(title.measuredHeight, toggle.measuredHeight))
         setMeasuredDimension(resolveSize(width, w), resolveSize(desired, h))
+        mergedRowAccessibility.roleView.measure(exact(measuredWidth), exact(measuredHeight))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         fun place(child: View, start: Int) {
@@ -287,6 +361,7 @@ internal class OnboardingAudioRow(
         }
         place(title, dp(14))
         place(toggle, width - dp(14) - toggle.measuredWidth)
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
         input.measured(width, height)
     }
     override fun onTouchEvent(event: MotionEvent): Boolean = input.touch(event)
@@ -303,14 +378,6 @@ internal class OnboardingAudioRow(
     override fun onAttachedToWindow() { super.onAttachedToWindow(); input.attached() }
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
     override fun performClick(): Boolean = canActivate && isAttachedToWindow && super.performClick()
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = android.widget.Switch::class.java.name
-        info.text = spokenText
-        info.isCheckable = true
-        info.isChecked = checked
-        if (!isEnabled) info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
-    }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }
 

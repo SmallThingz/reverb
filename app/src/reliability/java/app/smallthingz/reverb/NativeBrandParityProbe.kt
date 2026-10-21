@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Gravity
@@ -21,6 +22,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ComposeViewContext
+import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -33,6 +36,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.smallthingz.reverb.nativeui.ReverbBrandMarkView
+import app.smallthingz.reverb.nativeui.readReverbBrandPalette
 import app.smallthingz.reverb.nativeui.reverbBrandFillBounds
 import java.io.File
 import kotlin.math.ceil
@@ -48,7 +52,7 @@ private val brandFrames = listOf(
     BrandFrame("topbar-return", 46, 46, false),
 )
 
-/** Proposal only: released composable/resource oracle; isolated Application, no production startup. */
+/** Released composable/resource oracle; isolated Application, no production startup. */
 internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
@@ -56,6 +60,7 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
     val directory = File(context.filesDir, "native-brand-parity-" + System.currentTimeMillis())
     check(directory.mkdir())
     val cases = JSONArray()
+    val resourceContexts = JSONArray()
     val result = JSONObject()
         .put("baseline_commit", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("brand_mark_sha256", "c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e")
@@ -65,6 +70,7 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
         .put("comparison", "Exact ARGB and ABAB stability; no pixel masks or tolerance")
         .put("scope", "Current-SDK resource light/night; does not simulate older Android resource branches")
         .put("sdk", Build.VERSION.SDK_INT).put("device", Build.MANUFACTURER + "/" + Build.MODEL)
+        .put("resource_contexts", resourceContexts)
         .put("cases", cases)
     var activity: NativeParityActivity? = null
     var activeBoards: BrandParityBoards? = null
@@ -79,11 +85,14 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
         requireNativeParityHost(instrumentation, host)
         val densities = listOf(context.resources.displayMetrics.densityDpi, 280).distinct()
         expected = densities.size * 2 * brandFrames.size
+        var previousTheme: Resources.Theme? = null
         for (densityDpi in densities) for (night in listOf(false, true)) {
             lateinit var boards: BrandParityBoards
             nativeParityOnMain(instrumentation) {
                 boards = BrandParityBoards(host, densityDpi, night)
                 activeBoards = boards
+                resourceContexts.put(boards.resourceEvidence(previousTheme))
+                previousTheme = boards.theme
             }
             for (frame in brandFrames) {
                 val name = densityDpi.toString() + "dpi-" + (if (night) "night-" else "day-") + frame.name
@@ -164,6 +173,7 @@ private fun writeBrandEvidence(directory: File, result: JSONObject, primary: Thr
     }
 }
 
+@OptIn(ExperimentalComposeViewContextApi::class)
 private class BrandParityBoards(private val activity: NativeParityActivity, densityDpi: Int, night: Boolean) {
     private val configuration = Configuration(activity.resources.configuration).apply {
         this.densityDpi = densityDpi
@@ -175,13 +185,23 @@ private class BrandParityBoards(private val activity: NativeParityActivity, dens
     private val boardSize = with(density) { 120.dp.roundToPx() }
     private val outside = if (night) 0xff242424.toInt() else 0xffe7e7e7.toInt()
     private var frame by mutableStateOf(brandFrames.first())
+    private val referenceHost = FrameLayout(context)
     private val reference = ComposeView(context)
     private val native = NativeBrandBoard(context)
     private val vector = ImageVector.vectorResource(theme = context.theme, res = context.resources, resId = R.drawable.ic_launcher_foreground)
+    private val referenceContext: ComposeViewContext
+    val theme: Resources.Theme get() = context.theme
 
     init {
         check(boardSize <= activity.fixtureRoot.width && boardSize <= activity.fixtureRoot.height)
+        check(context !== activity.fixtureRoot.context)
+        check(theme.resources === context.resources)
         activity.fixtureRoot.removeAllViews()
+        activity.fixtureRoot.addView(referenceHost, FrameLayout.LayoutParams(boardSize, boardSize, Gravity.CENTER))
+        // Compose 1.11 shares its root ImageVectorCache. Android Theme equality compares styles,
+        // not resource configuration, so day/night contexts can otherwise collide on Theme + ID.
+        // The attached configured host gives this board its own cache before its first composition.
+        referenceContext = ComposeViewContext(referenceHost)
         reference.setContent {
             val current = frame
             CompositionLocalProvider(
@@ -199,8 +219,12 @@ private class BrandParityBoards(private val activity: NativeParityActivity, dens
                 }
             }
         }
-        if (Build.VERSION.SDK_INT >= 29) native.isForceDarkAllowed = false
-        activity.fixtureRoot.addView(reference, FrameLayout.LayoutParams(boardSize, boardSize, Gravity.CENTER))
+        if (Build.VERSION.SDK_INT >= 29) {
+            referenceHost.isForceDarkAllowed = false
+            native.isForceDarkAllowed = false
+        }
+        reference.createComposition(referenceContext)
+        referenceHost.addView(reference, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         activity.fixtureRoot.addView(native, FrameLayout.LayoutParams(boardSize, boardSize, Gravity.CENTER))
     }
 
@@ -214,9 +238,31 @@ private class BrandParityBoards(private val activity: NativeParityActivity, dens
         reference.layoutDirection = direction
         native.layoutDirection = direction
         native.update(with(density) { next.widthDp.dp.roundToPx() }, with(density) { next.heightDp.dp.roundToPx() })
-        reference.visibility = if (compose) View.VISIBLE else View.GONE
+        referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
         native.visibility = if (compose) View.GONE else View.VISIBLE
         return if (compose) reference else native
+    }
+
+    fun resourceEvidence(previousTheme: Resources.Theme?): JSONObject {
+        val palette = readReverbBrandPalette(context)
+        val resources = context.resources
+        return JSONObject()
+            .put("requested_density_dpi", configuration.densityDpi)
+            .put("requested_night", configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+            .put("resolved_density_dpi", resources.configuration.densityDpi)
+            .put("resolved_night", resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+            .put("context_identity", System.identityHashCode(context))
+            .put("resources_identity", System.identityHashCode(resources))
+            .put("theme_identity", System.identityHashCode(theme))
+            .put("theme_hash", theme.hashCode())
+            .put("theme_uses_context_resources", theme.resources === resources)
+            .put("theme_equals_previous", previousTheme?.let { theme == it } ?: JSONObject.NULL)
+            .put("theme_identical_to_previous", previousTheme?.let { theme === it } ?: JSONObject.NULL)
+            .put("compose_context_identity", System.identityHashCode(referenceContext))
+            .put("compose_cache_scope", "Independent configured attached host per density/night board")
+            .put("launcher_background_argb", palette.background.toLong() and 0xffffffffL)
+            .put("launcher_accent_argb", palette.accent.toLong() and 0xffffffffL)
+            .put("launcher_main_argb", palette.main.toLong() and 0xffffffffL)
     }
 
     fun compareGeometry(frame: BrandFrame): JSONObject {
@@ -240,7 +286,7 @@ private class BrandParityBoards(private val activity: NativeParityActivity, dens
 
     fun dispose() {
         reference.disposeComposition()
-        activity.fixtureRoot.removeView(reference)
+        activity.fixtureRoot.removeView(referenceHost)
         activity.fixtureRoot.removeView(native)
     }
 }

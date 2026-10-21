@@ -9,7 +9,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.ScrollView
 import androidx.compose.foundation.ScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
@@ -18,8 +17,10 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -32,11 +33,20 @@ import app.smallthingz.reverb.nativeui.OnboardingPageContentState
 import app.smallthingz.reverb.nativeui.OnboardingPageContentView
 import app.smallthingz.reverb.nativeui.OnboardingPageTypography
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
+import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
+import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
+import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
+import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextRole
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -116,13 +126,20 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
         val host = launchNativeParityActivity(instrumentation)
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        val textWindow = nativeParityOnMain(instrumentation) {
+            NativeWindowTextAccessibilityOwner(host.fixtureRoot, NativeTextSemanticsClipPolicy { view ->
+                // Page is the root's direct child; its source viewport/group clips are supplied by
+                // bindPage. An unknown extra host ancestor must not acquire guessed geometry.
+                if (view === host.fixtureRoot) NativeTextSemanticsClip.Unclipped else null
+            })
+        }
         fun show(case: PageParityCase, reference: Boolean, scroll: Int): PageRender {
             // A detached page deliberately retains its owner for real pager reattachment. This
             // fixture replaces pages permanently, so close the old ownership lease explicitly.
             val old = activeRender
             activeRender = null
             old?.close()
-            return showOnboardingPageCase(host, typography, case, reference, scroll)
+            return showOnboardingPageCase(host, typography, case, reference, scroll, textWindow)
                 .also { activeRender = it }
         }
         for (case in pageParityCases()) {
@@ -260,6 +277,7 @@ private fun writeOnboardingParityEvidence(directory: File, result: JSONObject, f
 private fun showOnboardingPageCase(
     host: NativeParityActivity, typography: Typography, case: PageParityCase,
     reference: Boolean, scroll: Int,
+    textWindow: NativeWindowTextAccessibilityOwner,
 ): PageRender {
     check(host.hasWindowFocus())
     val configuration = Configuration(host.resources.configuration).apply {
@@ -322,30 +340,53 @@ private fun showOnboardingPageCase(
             ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],
             ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
         )
+        val scrollContext = AndroidUiDispatcher.Main + SupervisorJob()
+        val scrollScope = CoroutineScope(scrollContext)
         var connection: AutoCloseable? = null
-        val view = OnboardingPageContentView(context, case.page, roles, density, resolver, state, palette).apply {
-            layoutDirection = direction
-            // No test input is sent. All callbacks are confined to this fixture and do no backend work.
-            connection = connect(host, OnboardingPageActions({}, {}, {}, {}, {}))
-            addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-                override fun onLayoutChange(v: View, l: Int, t: Int, r: Int, b: Int,
-                    oldL: Int, oldT: Int, oldR: Int, oldB: Int) {
-                    removeOnLayoutChangeListener(this)
-                    restoreVerticalScrollPosition(scroll)
-                }
-            })
+        var accessibility: AutoCloseable? = null
+        fun dispose() = closeOnboardingPageResources(connection, accessibility,
+            AutoCloseable { scrollScope.cancel() })
+        try {
+            val view = OnboardingPageContentView(context, case.page, roles, density, resolver, state, palette,
+                scrollState = NativeVerticalScrollState(initial = scroll),
+                scrollFrames = checkNotNull(scrollContext[MonotonicFrameClock]),
+                scrollScope = scrollScope, scrollNested = IsolatedOnboardingNestedHost).apply {
+                layoutDirection = direction
+                // No test input is sent. All callbacks are confined to this fixture and do no backend work.
+                connection = connect(host, OnboardingPageActions({}, {}, {}, {}, {}))
+                accessibility = bindTextAccessibility(textWindow) { true }
+            }
+            PageRender(view, view::verticalScrollPosition, view::maximumVerticalScrollPosition, ::dispose)
+        } catch (error: Throwable) {
+            try { dispose() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
         }
-        PageRender(view, view::verticalScrollPosition, {
-            val viewport = onboardingViewDescendants(view).filterIsInstance<ScrollView>().single()
-            (viewport.getChildAt(0).height - viewport.height + viewport.paddingTop + viewport.paddingBottom)
-                .coerceAtLeast(0)
-        }, { connection?.close() })
     }
     host.fixtureRoot.addView(render.content, FrameLayout.LayoutParams(width, height, Gravity.TOP or Gravity.LEFT).apply {
         leftMargin = horizontal
         topMargin = vertical
     })
     return render
+}
+
+/** The isolated page has no scrollable ancestors, exactly like the released oracle fixture. */
+private object IsolatedOnboardingNestedHost : NativeVerticalNestedHost {
+    override fun preScroll(availableY: Float, source: NativeVerticalScrollSource): Float = 0f
+    override fun postScroll(consumedY: Float, availableY: Float, source: NativeVerticalScrollSource): Float = 0f
+    override suspend fun preFling(availableY: Float): Float = 0f
+    override suspend fun postFling(consumedY: Float, availableY: Float): Float = 0f
+}
+
+private fun closeOnboardingPageResources(vararg resources: AutoCloseable?) {
+    var failure: Throwable? = null
+    resources.forEach { resource ->
+        try { resource?.close() }
+        catch (error: Throwable) {
+            val previous = failure
+            if (previous == null) failure = error else previous.addSuppressed(error)
+        }
+    }
+    failure?.let { throw it }
 }
 
 internal fun onboardingViewDescendants(root: View): List<View> = buildList {

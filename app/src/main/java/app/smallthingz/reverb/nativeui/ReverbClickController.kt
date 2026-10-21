@@ -51,6 +51,8 @@ internal data class NativeClickBinding(
  * A plain native View does not know Compose's interested parent connections or Final pass.
  */
 internal interface NativeClickEnvironment {
+    /** Replacement for the source Compose root; only its Android ancestors add platform delay. */
+    val nativeInputRoot: View? get() = null
     /** Includes the released shape + touch-only minimum-target admission, not a guessed rectangle. */
     fun admitDown(event: MotionEvent): Boolean
     /** Parent gesture connection interested in this specific down; not every parent/pager blindly. */
@@ -78,6 +80,10 @@ internal class ReverbClickController(
     private var generation = 0L
     private var pointer: PointerGesture? = null
     private var ownsTouchStream = false
+    // AbstractClickableNode updates bounds.center only on pointer events, not on measure.
+    // A keyboard-first node emits (0,0); later key presses use the last integer pointer center.
+    private var pointerCenterX = 0f
+    private var pointerCenterY = 0f
     private val keys = HashMap<Int, KeyGesture>()
     private var hover: NativeStateToken? = null
     private var focus: NativeStateToken? = null
@@ -149,28 +155,43 @@ internal class ReverbClickController(
         cancelHover()
     }
 
+    /** Called for each actual pointer pass, including hover; never for layout or ACTION_CANCEL. */
+    fun pointerBounds(width: Int, height: Int) {
+        pointerCenterX = (width / 2).toFloat()
+        pointerCenterY = (height / 2).toFloat()
+    }
+
     /**
      * consumedByOther is the parent's source-equivalent Main-pass consumption, never our own DOWN.
      * Standard native interception also arrives as ACTION_CANCEL; never hide that cancellation.
      */
-    fun touch(event: MotionEvent, consumedByOther: Boolean = false): Boolean {
+    fun touch(
+        event: MotionEvent,
+        consumedByOther: Boolean = false,
+        consumeChanges: ((allPointers: Boolean) -> Unit)? = null,
+        interestedParent: Boolean? = null,
+        classification: Int = if (Build.VERSION.SDK_INT >= 29) event.classification else 0,
+    ): Boolean {
         val current = binding ?: return false
         if (!attached || !host.isAttachedToWindow) return false
+        if (event.actionMasked != MotionEvent.ACTION_CANCEL) pointerBounds(host.width, host.height)
         // Non-suspending CombinedClickable checks deep press before both normal-up and move logic.
         // It can therefore win over a consumed up; explicit ACTION_CANCEL still always cancels.
         if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_CANCEL &&
-            Build.VERSION.SDK_INT >= 29 && event.classification == MotionEvent.CLASSIFICATION_DEEP_PRESS
+            Build.VERSION.SDK_INT >= 29 && classification == MotionEvent.CLASSIFICATION_DEEP_PRESS
         ) pointer?.let(::triggerPointerLongPress)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelPointer()
                 ownsTouchStream = false
                 if (consumedByOther || event.pointerCount != 1 || !environment.admitDown(event)) return false
+                consumeChanges?.invoke(false)
                 ownsTouchStream = true
                 val gesture = PointerGesture(generation, NativePressToken(event.x, event.y), current.enabled)
                 pointer = gesture
                 if (current.enabled) {
-                    val delay = environment.interestedParent(event) || hasNativeDelayedPressAncestor()
+                    val delay = (interestedParent ?: environment.interestedParent(event)) ||
+                        hasNativeDelayedPressAncestor()
                     if (delay) {
                         val job = Runnable {
                             if (owns(gesture)) {
@@ -205,6 +226,7 @@ internal class ReverbClickController(
                     if (consumedByOther && !gesture.longTriggered) {
                         cancelPointer()
                     } else {
+                        consumeChanges?.invoke(false)
                         finishPointer(gesture)
                     }
                 }
@@ -213,7 +235,10 @@ internal class ReverbClickController(
             }
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
                 val gesture = pointer ?: return ownsTouchStream
-                if (gesture.longTriggered) return true // Source consumes all events until every pointer is up.
+                if (gesture.longTriggered) {
+                    consumeChanges?.invoke(true)
+                    return true // Source consumes all events until every pointer is up.
+                }
                 if (consumedByOther || anyPointerOutside(event)) cancelPointer()
                 return ownsTouchStream
             }
@@ -306,7 +331,7 @@ internal class ReverbClickController(
         return when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (keys.containsKey(keyCode)) return false // Do not emit repeated Press interactions.
-                val gesture = KeyGesture(generation, NativePressToken(host.width / 2f, host.height / 2f))
+                val gesture = KeyGesture(generation, NativePressToken(pointerCenterX, pointerCenterY))
                 keys[keyCode] = gesture
                 enqueue(gesture.generation) { deliverPress(gesture.press) }
                 if (current.onLongClick != null) {
@@ -337,6 +362,7 @@ internal class ReverbClickController(
 
     /** Call in addition to super.onHoverEvent; the latter emits native accessibility hover events. */
     fun hover(event: MotionEvent): Boolean {
+        if (attached && host.isAttachedToWindow) pointerBounds(host.width, host.height)
         if (!attached || binding?.enabled != true) return false
         return when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER -> {
@@ -439,7 +465,7 @@ internal class ReverbClickController(
     }
 
     private fun hasNativeDelayedPressAncestor(): Boolean {
-        var ancestor = host.parent
+        var ancestor = (environment.nativeInputRoot ?: host).parent
         while (ancestor is ViewGroup) {
             if (ancestor.shouldDelayChildPressedState()) return true
             ancestor = ancestor.parent

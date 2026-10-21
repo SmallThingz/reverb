@@ -2,15 +2,12 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.os.Build
-import android.os.Bundle
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
-import android.widget.ScrollView
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 import androidx.lifecycle.Lifecycle
@@ -57,11 +54,17 @@ internal class OnboardingPageContentView(
     resolver: FontFamily.Resolver,
     initialState: OnboardingPageContentState,
     initialPalette: ReverbPalette,
+    scrollState: NativeVerticalScrollState,
+    scrollFrames: MonotonicFrameClock,
+    scrollScope: CoroutineScope,
+    scrollNested: NativeVerticalNestedHost,
     interactions: OnboardingNativeInteractionsFactory = OnboardingNativeInteractionsFactory(),
 ) : FrameLayout(context) {
     private var state = initialState
     private var owner: ActionOwner? = null
-    private val viewport = OnboardingVerticalScrollView(context)
+    private var textAccessibility: NativePageTextAccessibilityOwner? = null
+    private val viewport = NativeVerticalViewport(context, scrollState, density, scrollFrames, scrollScope, scrollNested)
+    val sourceVerticalViewport: NativeVerticalViewport get() = viewport
     private val column = OnboardingPageColumn(context)
     private val headerIcon = OnboardingIconView(context, when (page) {
         0 -> ReverbIcon.BackgroundWarning
@@ -132,7 +135,7 @@ internal class OnboardingPageContentView(
                 silence.onActivate = { activate { it.skipSilenceChanged(!state.skipSilence) } }
             }
         }
-        viewport.addView(column, FrameLayout.LayoutParams(-1, -2))
+        viewport.setContent(column)
         addView(viewport, LayoutParams(-1, -1))
         bind(initialState, initialPalette)
     }
@@ -151,6 +154,8 @@ internal class OnboardingPageContentView(
     }
 
     fun bind(next: OnboardingPageContentState, palette: ReverbPalette) {
+        val permissionMembershipChanged = state.permissions.storageRequired != next.permissions.storageRequired ||
+            state.permissions.recoveryRequired != next.permissions.recoveryRequired
         state = next
         viewport.interactionEnabled = next.interactionEnabled
         headerIcon.bind(when (page) {
@@ -183,11 +188,27 @@ internal class OnboardingPageContentView(
             setTextColor(palette.error)
         }
         if (!next.interactionEnabled) cancelInputs()
+        if (permissionMembershipChanged) textAccessibility?.refresh()
     }
 
-    fun verticalScrollPosition(): Int = viewport.scrollY
-    /** Call after the restored page has been measured; ScrollView clamps against its current range. */
-    fun restoreVerticalScrollPosition(position: Int) { viewport.scrollTo(0, position.coerceAtLeast(0)) }
+    /** Window-owned cursor/float geometry; retained across page detach and refreshed only as needed. */
+    fun bindTextAccessibility(
+        window: NativeWindowTextAccessibilityOwner,
+        sourceExposure: (View) -> Boolean,
+    ): AutoCloseable {
+        textAccessibility?.close()
+        val connected = window.bindPage(this, viewport, sourceExposure)
+        textAccessibility = connected
+        return AutoCloseable {
+            if (textAccessibility === connected) {
+                textAccessibility = null
+                connected.close()
+            }
+        }
+    }
+
+    fun verticalScrollPosition(): Int = viewport.saveScrollPosition()
+    fun maximumVerticalScrollPosition(): Int = viewport.state.maxValue
 
     private fun activate(action: (OnboardingPageActions) -> Unit) {
         val current = owner ?: return
@@ -213,39 +234,6 @@ internal class OnboardingPageContentView(
     private class ActionOwner(val lifecycleOwner: LifecycleOwner, val actions: OnboardingPageActions) {
         lateinit var observer: LifecycleEventObserver
         var permissionLease: AutoCloseable? = null
-    }
-}
-
-/** One independent vertical viewport per page; dynamic scroll/overscroll parity is a separate check. */
-private class OnboardingVerticalScrollView(context: Context) : ScrollView(context) {
-    var interactionEnabled = true
-    init {
-        isFillViewport = false
-        isVerticalScrollBarEnabled = false
-        isHorizontalScrollBarEnabled = false
-        clipToPadding = true
-        setPadding(0, 0, 0, 0)
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-    }
-    override fun onInterceptTouchEvent(event: MotionEvent): Boolean =
-        interactionEnabled && super.onInterceptTouchEvent(event)
-    override fun onTouchEvent(event: MotionEvent): Boolean = interactionEnabled && super.onTouchEvent(event)
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean = interactionEnabled && super.onGenericMotionEvent(event)
-    override fun executeKeyEvent(event: KeyEvent): Boolean = interactionEnabled && super.executeKeyEvent(event)
-    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
-        if (!interactionEnabled && action in SCROLL_ACTIONS) return false
-        return super.performAccessibilityAction(action, arguments)
-    }
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        if (!interactionEnabled) {
-            info.isScrollable = false
-            SCROLL_ACTIONS.forEach { info.removeAction(AccessibilityNodeInfo.AccessibilityAction(it, null)) }
-        }
-    }
-    private companion object {
-        val SCROLL_ACTIONS = intArrayOf(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
-            android.R.id.accessibilityActionScrollUp, android.R.id.accessibilityActionScrollDown)
     }
 }
 

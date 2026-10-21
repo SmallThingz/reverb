@@ -16,7 +16,24 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import android.widget.ScrollView
+import android.view.ViewConfiguration
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect as ComposeRect
+import app.smallthingz.reverb.NativePagerTouchRoot
+import app.smallthingz.reverb.NativeWindowPointerCoordinates
+import app.smallthingz.reverb.NativePointerCoordinates
+import app.smallthingz.reverb.NativeViewPointerHitLayout
+import app.smallthingz.reverb.NativeViewPhasePointerNode
+import app.smallthingz.reverb.NativeClickPhaseNode
+import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import app.smallthingz.reverb.NativeVerticalPhaseBinding
+import app.smallthingz.reverb.NativeDragPointerEvent
+import app.smallthingz.reverb.NativePointerPass
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
@@ -51,19 +68,40 @@ internal data class AboutContentAppearance(
  * Entry/exit applies to this whole View, including navigation padding. requestDismiss is the
  * owner's idempotent exit request; this content never dismisses the Window prematurely.
  */
-internal class ReverbAboutContentView(
+internal class ReverbAboutContentView private constructor(
     context: Context,
     initialAppearance: AboutContentAppearance,
     private val versionName: String,
     requestDismiss: () -> Unit,
-) : ViewGroup(context) {
+    private val runtime: NativeAboutWindowRuntime,
+    private val input: AboutInputGeometry,
+) : NativePagerTouchRoot(context, input::rootToScreen, input::coordinates, input.rootHit, input::prepare) {
+    constructor(context: Context, initialAppearance: AboutContentAppearance, versionName: String,
+                requestDismiss: () -> Unit, runtime: NativeAboutWindowRuntime) :
+        this(context, initialAppearance, versionName, requestDismiss, runtime,
+            AboutInputGeometry(initialAppearance.density.density))
     private var appearance = initialAppearance
     private var navigation = Insets.NONE
     private var status = Insets.NONE
     private var linkError: String? = null
-    private val surface = AboutSurface(context, initialAppearance)
+    private val surface = AboutSurface(context, initialAppearance, runtime)
     private val content = AboutColumn(context, initialAppearance, versionName, requestDismiss, ::openRepository)
     val predictiveMotionTarget: View get() = surface
+    private var accessibilityOwner: AboutContentAccessibilityOwner? = null
+
+    fun bindWindowAccessibility(windowRoot: View) {
+        check(accessibilityOwner == null) { "About content already has its native Window cursor" }
+        content.header.close.nativeInputRoot = windowRoot
+        content.repository.row.nativeInputRoot = windowRoot
+        accessibilityOwner = AboutContentAccessibilityOwner(windowRoot, this, surface,
+            surface.clipHost, surface.viewport, content)
+    }
+
+    fun dispose() {
+        input.close()
+        accessibilityOwner?.close()
+        accessibilityOwner = null
+    }
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -71,6 +109,7 @@ internal class ReverbAboutContentView(
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         surface.setContent(content)
         addView(surface)
+        input.bind(this, surface, content)
         ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
             val nextNavigation = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
             val rawStatus = insets.getInsets(WindowInsetsCompat.Type.statusBars())
@@ -136,6 +175,7 @@ internal fun createReverbAboutContent(
     context: Context,
     appearance: AboutContentAppearance,
     requestDismiss: () -> Unit,
+    runtime: NativeAboutWindowRuntime,
 ): ReverbAboutContentView {
     val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
@@ -143,36 +183,46 @@ internal fun createReverbAboutContent(
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0)
     }
-    return ReverbAboutContentView(context, appearance, info.versionName.orEmpty(), requestDismiss)
+    return ReverbAboutContentView(context, appearance, info.versionName.orEmpty(), requestDismiss, runtime)
 }
 
 private const val ABOUT_REPOSITORY_URL = "https://github.com/SmallThingz/reverb"
 private const val ABOUT_REPOSITORY_LABEL = "SmallThingz/reverb"
 
-private class AboutSurface(context: Context, private var appearance: AboutContentAppearance) : ViewGroup(context) {
+private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeAboutWindowRuntime) : ViewGroup(context) {
     private val fill = Paint(ABOUT_PAINT_FLAGS)
     private val path = Path()
     private val bounds = RectF()
     private val radii = FloatArray(8)
     private val clipped = AboutSurfaceContentClip(context)
     private val noise = ReverbNoiseDrawable(resources)
-    private val scroll = ScrollView(context).apply {
-        isFillViewport = false
-        isVerticalScrollBarEnabled = false
-        isHorizontalScrollBarEnabled = false
-        isVerticalFadingEdgeEnabled = false
-        background = noise
-        clipToPadding = false
+    val viewport = NativeVerticalViewport(context, NativeVerticalScrollState(), appearance.density,
+        runtime.frames, runtime.scope, object : NativeVerticalNestedHost {
+            // This dialog's scroll container has no scrollable ancestor; window motion is not nested scroll.
+            override fun preScroll(availableY: Float, source: NativeVerticalScrollSource) = 0f
+            override fun postScroll(consumedY: Float, availableY: Float, source: NativeVerticalScrollSource) = 0f
+            override suspend fun preFling(availableY: Float) = 0f
+            override suspend fun postFling(consumedY: Float, availableY: Float) = 0f
+        }).apply { background = noise }
+    val clipHost: View get() = clipped
+    fun containsShape(point: Offset): Boolean {
+        val x = point.x; val y = point.y
+        if (x < 0f || y < 0f || x >= width || y >= height) return false
+        val radius = min(32f * appearance.density.density, min(width / 2f, height.toFloat()))
+        if (y <= height - radius || x in radius..(width - radius)) return true
+        val centerX = if (x < radius) radius else width - radius
+        val dx = x - centerX; val dy = y - (height - radius)
+        return dx * dx + dy * dy <= radius * radius
     }
 
     init {
         setWillNotDraw(false)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        clipped.addView(scroll, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        clipped.addView(viewport, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(clipped)
         updateColor()
     }
-    fun setContent(view: View) { scroll.addView(view, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)) }
+    fun setContent(view: View) { viewport.setContent(view) }
     fun setStatusInsets(value: Insets) { clipped.setPadding(value.left, value.top, value.right, value.bottom); requestLayout() }
     fun setAppearance(value: AboutContentAppearance) { appearance = value; updateColor(); rebuildShape(); requestLayout() }
     private fun updateColor() { fill.color = aboutTonalColor(appearance.palette.surfaceContainerHigh, appearance.palette, 6f); invalidate() }
@@ -240,11 +290,11 @@ private class AboutColumn(
     requestDismiss: () -> Unit,
     openRepository: () -> Unit,
 ) : ViewGroup(context) {
-    private val header = AboutBrandHeader(context, appearance, requestDismiss)
-    private val name = aboutParagraph(context, appearance, appearance.headlineSmall, appearance.palette.ink)
-    private val version = aboutParagraph(context, appearance, appearance.bodyMedium, appearance.palette.muted)
-    private val repository = AboutRepositoryCard(context, appearance, openRepository)
-    private val error = AboutErrorCard(context, appearance).apply { visibility = GONE }
+    val header = AboutBrandHeader(context, appearance, requestDismiss)
+    val name = aboutParagraph(context, appearance, appearance.headlineSmall, appearance.palette.ink)
+    val version = aboutParagraph(context, appearance, appearance.bodyMedium, appearance.palette.muted)
+    val repository = AboutRepositoryCard(context, appearance, openRepository)
+    val error = AboutErrorCard(context, appearance).apply { visibility = GONE }
     private var contentHeight = 0
 
     init {
@@ -309,8 +359,8 @@ private class AboutColumn(
 }
 
 private class AboutBrandHeader(context: Context, private var appearance: AboutContentAppearance, requestDismiss: () -> Unit) : ViewGroup(context) {
-    private val mark = ReverbBrandMarkView(context, context.resources.getString(R.string.app_name))
-    private val close = AboutCloseButton(context, appearance, requestDismiss)
+    val mark = ReverbBrandMarkView(context, context.resources.getString(R.string.app_name))
+    val close = AboutCloseButton(context, appearance, requestDismiss)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(close); addView(mark) }
     fun bind(value: AboutContentAppearance, requestDismiss: () -> Unit) {
         appearance = value; close.bind(value, requestDismiss); mark.refreshResourcePalette()
@@ -335,37 +385,51 @@ private class AboutBrandHeader(context: Context, private var appearance: AboutCo
 }
 
 private class AboutCloseButton(context: Context, private var appearance: AboutContentAppearance, private var action: () -> Unit) : ViewGroup(context) {
+    var nativeInputRoot: View? = null
     private val key = Any()
-    private val visual = AboutCloseVisual(context, appearance.palette.muted)
+    val visual = AboutCloseVisual(context, appearance.palette.muted)
     private val indication = ReverbRowIndication.install(visual, appearance.palette.ink, ValueAnimator::getDurationScale)
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val controller = ReverbClickController(visual, object : NativeClickEnvironment {
+        override val nativeInputRoot: View? get() = this@AboutCloseButton.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent): Boolean {
-            if (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER) return event.x >= 0 && event.x <= width && event.y >= 0 && event.y <= height
-            val x = event.x - visual.left - visual.width / 2f
-            val y = event.y - visual.top - visual.height / 2f
-            val radius = min(visual.width, visual.height) / 2f
-            return x * x + y * y <= radius * radius
+            val w = visual.width.toFloat(); val h = visual.height.toFloat()
+            val x = event.x; val y = event.y
+            val radius = min(w, h) / 2f
+            val dx = x - w / 2f; val dy = y - h / 2f
+            if (dx * dx + dy * dy <= radius * radius) return true
+            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_FINGER) return false
+            val extentX = max(0f, minimumTouchWidthPx - w) / 2f
+            val extentY = max(0f, minimumTouchHeightPx - h) / 2f
+            return x >= -extentX && x <= w + extentX && y >= -extentY && y <= h + extentY
         }
-        override fun interestedParent(event: MotionEvent) = true
+        override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x - visual.left, y - visual.top) })
+    }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
+
+    val clickEndpoint = ReverbClickPhaseEndpoint(controller)
 
     init {
-        isClickable = true; isFocusable = true
-        contentDescription = context.resources.getString(R.string.close)
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        visual.owner = this
+        visual.glyph.contentDescription = context.resources.getString(R.string.close)
+        visual.setOnClickListener { action() }
         addView(visual)
-        setOnClickListener { action() }
     }
+    val minimumTouchTargetPx get() = 48f * appearance.density.density
+    fun invokeSourceClick(): Boolean { action(); return true }
+    fun visualTouch(event: MotionEvent) = controller.touch(event)
+    fun visualKey(event: KeyEvent) = controller.key(event)
+    fun visualHover(event: MotionEvent) = controller.hover(event)
+    fun visualFocus(value: Boolean) = controller.focusChanged(value)
     fun bind(value: AboutContentAppearance, action: () -> Unit) {
         appearance = value; this.action = action; visual.setColor(value.palette.muted)
         indication.updateColor(value.palette.ink)
-        contentDescription = context.resources.getString(R.string.close)
+        visual.glyph.contentDescription = context.resources.getString(R.string.close)
         bindInput(); requestLayout()
     }
-    private fun bindInput() = controller.bind(NativeClickBinding(key, true, { performClick() }))
+    private fun bindInput() = controller.bind(NativeClickBinding(key, true, { visual.performClick() }))
     override fun onAttachedToWindow() { super.onAttachedToWindow(); controller.attached(); bindInput() }
     override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -381,47 +445,83 @@ private class AboutCloseButton(context: Context, private var appearance: AboutCo
         visual.layout(x, y, x + visual.measuredWidth, y + visual.measuredHeight)
         indication.onMeasured(visual.width, visual.height, appearance.density.density)
     }
-    override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
-    override fun dispatchKeyEvent(event: KeyEvent) = controller.key(event) || super.dispatchKeyEvent(event)
-    override fun onHoverEvent(event: MotionEvent): Boolean {
-        val handled = controller.hover(event)
-        return super.onHoverEvent(event) || handled
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val local = MotionEvent.obtain(event)
+        return try { local.offsetLocation(-visual.left.toFloat(), -visual.top.toFloat()); controller.touch(local) }
+        finally { local.recycle() }
     }
-    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
-        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect); controller.focusChanged(gainFocus)
-    }
-    override fun getAccessibilityClassName(): CharSequence = "android.widget.Button"
+
 }
 
-private class AboutCloseVisual(context: Context, color: Int) : View(context) {
-    private val icon = ReverbIconDrawable(ReverbIcon.Close, resources.displayMetrics.density, color)
+private class AboutCloseVisual(context: Context, color: Int) : ViewGroup(context) {
+    lateinit var owner: AboutCloseButton
+    val glyph = AboutCloseGlyph(context, color)
     private val clip = Path()
+    var semanticRole: View? = null
     init {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        isClickable = true; isFocusable = true
+        addView(glyph)
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) { outline.setRoundRect(0, 0, width, height, min(width, height) / 2f) }
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, width, height, min(width, height) / 2f)
+            }
         }
     }
-    fun setColor(value: Int) { icon.setTint(value); invalidate() }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+    fun setColor(value: Int) = glyph.setColor(value)
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec); val h = MeasureSpec.getSize(heightMeasureSpec)
         val size = (24f * resources.displayMetrics.density).roundToInt()
-        val x = ((w - size) / 2f).roundToInt(); val y = ((h - size) / 2f).roundToInt()
-        icon.setBounds(x, y, x + size, y + size)
-        clip.rewind(); clip.addRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), min(w, h) / 2f, min(w, h) / 2f, Path.Direction.CW)
+        glyph.measure(MeasureSpec.makeMeasureSpec(min(w, size), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(min(h, size), MeasureSpec.EXACTLY))
+        semanticRole?.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+        setMeasuredDimension(w, h)
+    }
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val x = ((width - glyph.measuredWidth) / 2f).roundToInt()
+        val y = ((height - glyph.measuredHeight) / 2f).roundToInt()
+        glyph.layout(x, y, x + glyph.measuredWidth, y + glyph.measuredHeight)
+        semanticRole?.layout(0, 0, width, height)
+    }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        clip.rewind(); clip.addRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), min(w,h)/2f, min(w,h)/2f, Path.Direction.CW)
         invalidateOutline()
     }
-    override fun onDraw(canvas: Canvas) { icon.draw(canvas) }
     override fun draw(canvas: Canvas) {
         if (canvas.isHardwareAccelerated) super.draw(canvas) else {
-            val checkpoint = canvas.save(); canvas.clipPath(clip); super.draw(canvas); canvas.restoreToCount(checkpoint)
+            val checkpoint = canvas.save()
+            try { canvas.clipPath(clip); super.draw(canvas) } finally { canvas.restoreToCount(checkpoint) }
         }
     }
+    override fun onTouchEvent(event: MotionEvent) = owner.visualTouch(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = when (event.keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> owner.visualKey(event)
+        else -> super.dispatchKeyEvent(event)
+    }
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        val native = super.onHoverEvent(event)
+        return owner.visualHover(event) || native
+    }
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previous: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previous); owner.visualFocus(gainFocus)
+    }
+    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
+}
+
+private class AboutCloseGlyph(context: Context, color: Int) : View(context) {
+    private val icon = ReverbIconDrawable(ReverbIcon.Close, resources.displayMetrics.density, color)
+    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES; isScreenReaderFocusable = false }
+    fun setColor(value: Int) { icon.setTint(value); invalidate() }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
+    override fun onDraw(canvas: Canvas) = icon.draw(canvas)
+    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
 private class AboutRepositoryCard(context: Context, appearance: AboutContentAppearance, onClick: () -> Unit) : ViewGroup(context) {
     private val group = ReverbGroupLayout(context, 20f)
-    private val row = AboutRepositoryRow(context, appearance, onClick)
+    val row = AboutRepositoryRow(context, appearance, onClick)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         group.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -438,19 +538,24 @@ private class AboutRepositoryCard(context: Context, appearance: AboutContentAppe
 }
 
 private class AboutRepositoryRow(context: Context, private var appearance: AboutContentAppearance, onClick: () -> Unit) : ViewGroup(context) {
+    var nativeInputRoot: View? = null
     private val key = Any()
+    private val sourceClick = onClick
+    fun invokeSourceClick(): Boolean { sourceClick(); return true }
     private val icon = AboutGithubGlyph(context, appearance.palette.ink)
-    private val title = aboutParagraph(context, appearance, appearance.titleSmall, appearance.palette.ink)
-    private val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
+    val title = aboutParagraph(context, appearance, appearance.titleSmall, appearance.palette.ink)
+    val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
     private val indication = ReverbRowIndication.install(this, appearance.palette.ink, ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+        override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(), appearance.density.density, 20f)
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-        override fun interestedParent(event: MotionEvent) = true
+        override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
+    val clickEndpoint = ReverbClickPhaseEndpoint(controller)
     init {
         isClickable = true; isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -491,12 +596,17 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         label.layout(labelX, title.bottom, labelX + label.measuredWidth, title.bottom + label.measuredHeight)
         indication.onMeasured(width, height, appearance.density.density)
     }
+    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow(); controller.attached(); controller.bind(NativeClickBinding(key, true, { performClick() }))
     }
     override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
     override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
-    override fun dispatchKeyEvent(event: KeyEvent) = controller.key(event) || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = when (event.keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> controller.key(event)
+        else -> super.dispatchKeyEvent(event)
+    }
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val handled = controller.hover(event)
         return super.onHoverEvent(event) || handled
@@ -562,4 +672,349 @@ private fun aboutTonalColor(color: Int, palette: ReverbPalette, elevationDp: Flo
     if (color != palette.surface || elevationDp == 0f) return color
     val alpha = ((4.5f * ln(elevationDp + 1f)) + 2f) / 100f
     return Color(palette.surfaceTint).copy(alpha = alpha).compositeOver(Color(palette.surface)).toArgb()
+}
+
+/** A direct geometry owner for existing Views, not an independently measured/rendered layout tree. */
+private class AboutInputGeometry(private val density: Float) : AutoCloseable {
+    private lateinit var root: ReverbAboutContentView
+    private val coordinates = NativeWindowPointerCoordinates { root }
+    private var binding: NativeVerticalPhaseBinding? = null
+    private var surfaces: List<NativeViewPointerHitLayout> = emptyList()
+    val rootHit = object : NativeViewPointerHitLayout {
+        override val placed get() = ::root.isInitialized && root.isAttachedToWindow && root.isLaidOut
+        override val size get() = Size(root.width.toFloat(), root.height.toFloat())
+        override val minimumTouchTarget = Size.Zero
+        override val nodes = emptyList<NativeViewPhasePointerNode>()
+        override val childrenInHitOrder get() = surfaces
+        override fun screenToLocal(screen: Offset) = coordinates.coordinates(root).local(screen)
+        override fun withinLayerBounds(local: Offset) = true
+    }
+
+    fun bind(root: ReverbAboutContentView, surface: AboutSurface, content: AboutColumn) {
+        check(!::root.isInitialized)
+        this.root = root
+        val viewConfiguration = ViewConfiguration.get(root.context)
+        val vertical = NativeVerticalPhaseBinding(surface.viewport,
+            { viewConfiguration.scaledTouchSlop.toFloat() },
+            { viewConfiguration.scaledMaximumFlingVelocity.toFloat() }, { false })
+        binding = vertical
+        val close = content.header.close
+        val repository = content.repository.row
+        val closeNode = NativeClickPhaseNode(close.visual, close.clickEndpoint, vertical::interested)
+        val repositoryNode = NativeClickPhaseNode(repository, repository.clickEndpoint, vertical::interested)
+        val closeHit = Hit(close.visual, listOf(closeNode), emptyList()) { p ->
+            val radius = min(close.visual.width, close.visual.height) / 2f
+            val dx = p.x - close.visual.width / 2f; val dy = p.y - close.visual.height / 2f
+            dx * dx + dy * dy <= radius * radius
+        }
+        val repositoryHit = Hit(repository, listOf(repositoryNode), emptyList()) { p ->
+            reverbGroupGeometry(repository.width.toFloat(), repository.height.toFloat(), density, 20f)
+                .contains(p.x, p.y)
+        }
+        val viewport = surface.viewport
+        val inflation = (30f * density).roundToInt()
+        val viewportHit = Hit(viewport, listOf(vertical.observerNode, vertical.dragNode),
+            listOf(repositoryHit, closeHit)) { p ->
+            p.x >= -inflation && p.x < viewport.width + inflation && p.y >= 0f && p.y < viewport.height
+        }
+        // Surface has an empty pointer-input node that blocks siblings behind it without consuming.
+        val shield = object : NativeViewPhasePointerNode {
+            override val view: View get() = surface
+            override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+            override fun cancel() = Unit
+        }
+        surfaces = listOf(Hit(surface, listOf(shield), listOf(viewportHit), surface::containsShape))
+    }
+
+    private inner class Hit(
+        private val view: View,
+        override val nodes: List<NativeViewPhasePointerNode>,
+        override val childrenInHitOrder: List<NativeViewPointerHitLayout>,
+        private val clip: (Offset) -> Boolean,
+    ) : NativeViewPointerHitLayout {
+        override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
+        override val size get() = Size(view.width.toFloat(), view.height.toFloat())
+        override val minimumTouchTarget get() = Size(48f * density, 48f * density)
+        override fun screenToLocal(screen: Offset) = coordinates.coordinates(view).local(screen)
+        override fun withinLayerBounds(local: Offset) = clip(local)
+    }
+
+    fun prepare(event: MotionEvent) = coordinates.begin(event)
+    fun rootToScreen(point: Offset) = coordinates.rootToScreen(point)
+    fun coordinates(view: View): NativePointerCoordinates = coordinates.coordinates(view)
+    override fun close() { binding?.close(); binding = null; surfaces = emptyList() }
+}
+
+/** One native About-window cursor with direct existing-label leases. */
+private class AboutContentAccessibilityOwner(
+    windowRoot: View,
+    private val root: ReverbAboutContentView,
+    surface: View,
+    clipHost: View,
+    viewport: View,
+    content: AboutColumn,
+) : AutoCloseable {
+    private val window = PlainTextAccessibilityWindowScope(windowRoot)
+    private val leases = ArrayList<AutoCloseable>()
+    private val geometry = NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy { view ->
+        when {
+            view === clipHost || view === viewport ||
+                (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).getChildAt(0) === view) ->
+                NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+            else -> NativeTextSemanticsClip.Unclipped
+        }
+    })
+
+    init {
+        fun exposed(view: View): Boolean {
+            var current: View? = view
+            while (current != null) {
+                if (current.visibility != View.VISIBLE) return false
+                if (current === windowRoot) return view.isAttachedToWindow
+                current = current.parent as? View
+            }
+            return false
+        }
+        fun visit(view: View) {
+            if (view is ReverbParagraphView) {
+                view.isScreenReaderFocusable = view !== content.repository.row.title && view !== content.repository.row.label
+                leases += view.bindPlainTextAccessibility(window, geometry) { exposed(view) }
+                leases += bindAboutVisibility(view, { exposed(view) },
+                    view !== content.repository.row.title && view !== content.repository.row.label)
+            }
+            if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+        }
+        visit(content)
+        leases += bindAboutRepository(content.repository.row, geometry) { exposed(content.repository.row) }
+        leases += bindAboutDescription(content.header.mark, window) { exposed(content.header.mark) }
+        leases += bindAboutDescription(content.header.close.visual.glyph, window, speakingLeaf = false) {
+            exposed(content.header.close.visual.glyph)
+        }
+        leases += bindAboutClose(content.header.close, geometry) { exposed(content.header.close.visual) }
+    }
+
+    override fun close() {
+        leases.forEach(AutoCloseable::close)
+        leases.clear()
+    }
+}
+
+/** Retains native click/focus actions while adding the shared source description cursor actions. */
+private fun bindAboutDescription(
+    host: View,
+    window: PlainTextAccessibilityWindowScope,
+    speakingLeaf: Boolean = true,
+    exposed: () -> Boolean,
+): AutoCloseable {
+    val description = PlainTextAccessibility(host, window,
+        { PlainTextAccessibilitySnapshot(host.contentDescription?.toString().orEmpty(), { null }, { null }) },
+        exposed, descriptionOnly = true)
+    val delegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(view, info)
+            val clickable = info.isClickable; val focusable = info.isFocusable; val focused = info.isFocused
+            val actions = info.actionList.toList()
+            description.populate(info)
+            info.isVisibleToUser = info.isVisibleToUser && exposed() && !aboutHasTransparentAncestor(host)
+            info.isImportantForAccessibility = exposed() && !aboutHasTransparentAncestor(host)
+            info.isScreenReaderFocusable = speakingLeaf && exposed() && !aboutHasTransparentAncestor(host)
+            info.isClickable = clickable; info.isFocusable = focusable; info.isFocused = focused
+            actions.filter { it.id == AccessibilityNodeInfo.ACTION_CLICK ||
+                it.id == AccessibilityNodeInfo.ACTION_FOCUS || it.id == AccessibilityNodeInfo.ACTION_CLEAR_FOCUS }
+                .forEach(info::addAction)
+        }
+        override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean =
+            description.performAction(action, args) ?: super.performAccessibilityAction(view, action, args)
+    }
+    host.accessibilityDelegate = delegate
+    return AutoCloseable { host.accessibilityDelegate = null } // Exclusive private About-View ownership; API28-safe.
+}
+
+
+/** Material3 Surface(onClick) has no explicit Role and retains its two unmerged text children. */
+private fun bindAboutRepository(
+    host: AboutRepositoryRow,
+    geometry: NativePlainTextViewGeometry,
+    exposed: () -> Boolean,
+): AutoCloseable {
+    val manager = host.context.getSystemService(AccessibilityManager::class.java)
+    val delegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(view, info)
+            info.className = "android.view.View"
+            info.text = null; info.contentDescription = null
+            info.isClickable = true; info.isLongClickable = false
+            info.isFocusable = true; info.isFocused = host.isFocused
+            info.isEnabled = true; info.isSelected = false
+            info.isCheckable = false; info.isChecked = false
+            info.isScreenReaderFocusable = exposed() && !aboutHasTransparentAncestor(host)
+            info.isVisibleToUser = info.isVisibleToUser && exposed() && !aboutHasTransparentAncestor(host)
+            info.isImportantForAccessibility = exposed() && !aboutHasTransparentAncestor(host)
+            info.maxTextLength = -1; info.movementGranularities = 0
+            geometry.capture(host, Offset.Zero,
+                ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))?.let {
+                info.setBoundsInScreen(nativeMergedRoleBoundsInScreen(it, host.isLaidOut))
+            }
+            info.actionList.toList().forEach(info::removeAction)
+            info.addAction(if (host.isAccessibilityFocused)
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+            else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+            info.addAction(if (host.isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS
+                else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+            info.removeChild(host.title); info.removeChild(host.label)
+            info.addChild(host.title); info.addChild(host.label)
+        }
+        override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean {
+            if (!exposed()) return false
+            return when (action) {
+                AccessibilityNodeInfo.ACTION_CLICK -> {
+                    val result = host.invokeSourceClick()
+                    if (manager?.isEnabled == true && host.isAttachedToWindow) {
+                        @Suppress("DEPRECATION")
+                        val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_CLICKED).apply {
+                            className = "android.view.View"; isEnabled = true
+                            packageName = host.context.packageName; setSource(host)
+                        }
+                        host.parent?.requestSendAccessibilityEvent(host, event)
+                    }
+                    result
+                }
+                AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
+                AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS,
+                AccessibilityNodeInfo.ACTION_FOCUS, AccessibilityNodeInfo.ACTION_CLEAR_FOCUS ->
+                    super.performAccessibilityAction(view, action, args)
+                else -> false
+            }
+        }
+    }
+    host.accessibilityDelegate = delegate
+    return AutoCloseable { host.accessibilityDelegate = null } // Exclusive private About-View ownership; API28-safe.
+}
+
+private fun aboutHasTransparentAncestor(view: View): Boolean {
+    var current: View? = view
+    while (current != null) {
+        if (current.alpha == 0f) return true
+        current = current.parent as? View
+    }
+    return false
+}
+
+/** Transparency changes node visibility/importance, not its retained text/cursor semantics. */
+private fun bindAboutVisibility(host: View, present: () -> Boolean, speakingLeaf: Boolean): AutoCloseable {
+    host.accessibilityDelegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(view, info)
+            val visible = present() && !aboutHasTransparentAncestor(host)
+            info.isVisibleToUser = info.isVisibleToUser && visible
+            info.isImportantForAccessibility = visible
+            info.isScreenReaderFocusable = speakingLeaf && visible
+        }
+        override fun onInitializeAccessibilityEvent(view: View, event: AccessibilityEvent) {
+            super.onInitializeAccessibilityEvent(view, event)
+            event.className = "android.view.View"; event.isEnabled = true
+            event.text.clear(); event.contentDescription = null
+        }
+    }
+    return AutoCloseable { host.accessibilityDelegate = null }
+}
+
+/** Inner40dp action, described24dp child, then role-only child; outer48dp is layout only. */
+private fun bindAboutClose(
+    owner: AboutCloseButton,
+    geometry: NativePlainTextViewGeometry,
+    present: () -> Boolean,
+): AutoCloseable {
+    val host = owner.visual
+    fun bounds(touch: Boolean): Rect {
+        val x = if (touch) max(0f, owner.minimumTouchTargetPx - host.width) / 2f else 0f
+        val y = if (touch) max(0f, owner.minimumTouchTargetPx - host.height) / 2f else 0f
+        return geometry.capture(host, Offset.Zero,
+            ComposeRect(-x, -y, host.width + x, host.height + y))?.let {
+                nativeMergedRoleBoundsInScreen(it, host.isLaidOut)
+            } ?: Rect()
+    }
+    fun visible() = present() && !aboutHasTransparentAncestor(host)
+    val role = object : View(host.context) {
+        init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES; setWillNotDraw(true) }
+        override fun draw(canvas: Canvas) = Unit
+        override fun dispatchTouchEvent(event: MotionEvent) = false
+        override fun dispatchHoverEvent(event: MotionEvent) = false
+        override fun dispatchKeyEvent(event: KeyEvent) = false
+        override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(info)
+            info.className = "android.widget.Button"
+            info.text = null; info.contentDescription = null
+            info.isClickable = false; info.isLongClickable = false
+            info.isFocusable = false; info.isFocused = false
+            info.isEnabled = true; info.isScreenReaderFocusable = false
+            val visualBounds = bounds(false)
+            info.isVisibleToUser = visible() && !visualBounds.isEmpty
+            info.isImportantForAccessibility = visible()
+            info.setBoundsInParent(Rect()); info.setBoundsInScreen(visualBounds)
+            info.drawingOrder = 1
+            info.actionList.toList().forEach(info::removeAction)
+            info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+        }
+        override fun performAccessibilityAction(action: Int, args: Bundle?): Boolean = when (action) {
+            AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
+            AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> super.performAccessibilityAction(action, args)
+            else -> false
+        }
+    }
+    host.semanticRole = role
+    host.addView(role)
+    val manager = host.context.getSystemService(AccessibilityManager::class.java)
+    host.accessibilityDelegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(view, info)
+            info.className = "android.view.View"
+            info.text = null; info.contentDescription = null
+            info.isEnabled = true; info.isClickable = true; info.isLongClickable = false
+            info.isFocusable = true; info.isFocused = host.isFocused
+            val touchBounds = bounds(true)
+            info.isVisibleToUser = visible() && !touchBounds.isEmpty
+            info.isImportantForAccessibility = visible()
+            info.isScreenReaderFocusable = visible()
+            info.maxTextLength = -1; info.movementGranularities = 0
+            info.setBoundsInScreen(touchBounds)
+            info.actionList.toList().forEach(info::removeAction)
+            info.addAction(if (host.isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+            info.addAction(if (host.isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS
+                else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+            info.removeChild(host.glyph); info.removeChild(role)
+            info.addChild(host.glyph); info.addChild(role)
+        }
+        override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean {
+            if (!present()) return false
+            return when (action) {
+                AccessibilityNodeInfo.ACTION_CLICK -> {
+                    val result = owner.invokeSourceClick()
+                    if (manager?.isEnabled == true && host.isAttachedToWindow) {
+                        @Suppress("DEPRECATION")
+                        val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_CLICKED).apply {
+                            className = "android.view.View"; isEnabled = true
+                            packageName = host.context.packageName; setSource(host)
+                        }
+                        host.parent?.requestSendAccessibilityEvent(host, event)
+                    }
+                    result
+                }
+                AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
+                AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS,
+                AccessibilityNodeInfo.ACTION_FOCUS, AccessibilityNodeInfo.ACTION_CLEAR_FOCUS ->
+                    super.performAccessibilityAction(view, action, args)
+                else -> false
+            }
+        }
+    }
+    return AutoCloseable {
+        host.accessibilityDelegate = null
+        host.removeView(role)
+        host.semanticRole = null
+    }
 }

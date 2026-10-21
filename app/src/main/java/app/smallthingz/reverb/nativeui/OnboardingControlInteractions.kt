@@ -5,16 +5,19 @@ import android.graphics.drawable.Drawable
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import app.smallthingz.reverb.NativeClickPhaseEndpoint
+import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import java.util.IdentityHashMap
 import kotlin.math.min
 
 /**
  * Concrete input/ripple/elevation assembly for the released onboarding controls.
- * No navigation or permission state lives here. The native parent must still qualify its
- * interception/Final-pass routing against the source pager; ordinary ScrollView interception
- * already delivers ACTION_CANCEL and its delayed-press ancestor policy.
+ * No navigation or permission state lives here. The native root supplies the actual per-change
+ * consumption/parent interest and preserves its Android ancestor delay policy.
  */
-internal class OnboardingNativeInteractionsFactory : OnboardingFooterInteractionsFactory {
+internal class OnboardingNativeInteractionsFactory(
+    private val inputRoot: () -> View? = { null },
+) : OnboardingFooterInteractionsFactory {
     override fun create(
         inputHost: View,
         indicationHost: View,
@@ -23,10 +26,12 @@ internal class OnboardingNativeInteractionsFactory : OnboardingFooterInteraction
     ): OnboardingFooterInteractions = OnboardingNativeInteractions(
         inputHost, indicationHost, capsule = true, filled = filled,
         setShadowElevationPx = setShadowElevationPx,
+        inputRoot = inputRoot,
     )
 
     fun row(host: View): OnboardingFooterInteractions =
-        OnboardingNativeInteractions(host, host, capsule = false, filled = false, setShadowElevationPx = null)
+        OnboardingNativeInteractions(host, host, capsule = false, filled = false,
+            setShadowElevationPx = null, inputRoot = inputRoot)
 }
 
 private class OnboardingNativeInteractions(
@@ -35,6 +40,7 @@ private class OnboardingNativeInteractions(
     private val capsule: Boolean,
     filled: Boolean,
     setShadowElevationPx: ((Float) -> Unit)?,
+    inputRoot: () -> View?,
 ) : OnboardingFooterInteractions {
     private val indication = ReverbRowIndication.install(
         indicationHost, android.graphics.Color.BLACK, ValueAnimator::getDurationScale,
@@ -78,6 +84,7 @@ private class OnboardingNativeInteractions(
         }
     }
     private val environment = object : NativeClickEnvironment {
+        override val nativeInputRoot: View? get() = inputRoot()
         override val minimumTouchWidthPx: Float get() = 48f * inputHost.resources.displayMetrics.density
         override val minimumTouchHeightPx: Float get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent): Boolean {
@@ -86,13 +93,13 @@ private class OnboardingNativeInteractions(
             return reverbGroupGeometry(inputHost.width.toFloat(), inputHost.height.toFloat(), density, radius)
                 .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         }
-        // Existing Android scroll ancestors supply shouldDelayChildPressedState through the
-        // controller. A later pager route must preserve that policy rather than invent a delay.
+        // Standalone fixture fallback; native root phase delivery supplies per-change interest.
         override fun interestedParent(event: MotionEvent): Boolean = false
         // None of these released onboarding controls has a long-click action.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }
     private val input = ReverbClickController(inputHost, environment, sink)
+    override val pointerEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(input)
     private var enabled = inputHost.isEnabled
 
     override fun bind(enabled: Boolean, contentColor: Int) {

@@ -43,6 +43,9 @@ internal class ReverbGroupLayout(
     private val borderBounds = RectF()
     private var geometry = reverbGroupGeometry(0f, 0f, resources.displayMetrics.density, cornerRadiusDp)
     private val content = ReverbClippedGroupContent(context)
+    private var recordingEdges: ReverbRecordingGroupEdges? = null
+    private var recordingShape: ReverbRecordingGroupShape? = null
+    @ColorInt private var recordingSeparatorColor = 0
 
     init {
         require(cornerRadiusDp.isFinite() && cornerRadiusDp >= 0f)
@@ -79,6 +82,21 @@ internal class ReverbGroupLayout(
         content.setDividerColor(border)
     }
 
+    /** Null restores the existing Settings Surface geometry; default callers never allocate this path. */
+    fun setRecordingGroupEdges(edges: ReverbRecordingGroupEdges?) {
+        if (recordingEdges == edges) return
+        recordingEdges = edges
+        if (edges != null && recordingShape == null) recordingShape = ReverbRecordingGroupShape()
+        updateShape()
+        invalidate()
+    }
+
+    fun setRecordingSeparatorColor(@ColorInt color: Int) {
+        if (recordingSeparatorColor == color) return
+        recordingSeparatorColor = color
+        if (recordingEdges != null) invalidate()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         updateShape()
@@ -96,16 +114,27 @@ internal class ReverbGroupLayout(
         borderBounds.set(bounds)
         borderBounds.inset(geometry.strokeWidth / 2f, geometry.strokeWidth / 2f)
         borderPaint.strokeWidth = geometry.strokeWidth
-        content.setCornerRadiusPx(geometry.radius)
+        val edges = recordingEdges
+        if (edges == null) content.setCornerRadiusPx(geometry.radius) else {
+            val shape = checkNotNull(recordingShape)
+            shape.update(width.toFloat(), height.toFloat(), resources.displayMetrics.density, edges)
+            content.setRecordingShape(shape)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawRoundRect(bounds, geometry.radius, geometry.radius, fillPaint)
+        if (recordingEdges == null) canvas.drawRoundRect(bounds, geometry.radius, geometry.radius, fillPaint)
+        else checkNotNull(recordingShape).drawFill(canvas, fillPaint)
         super.onDraw(canvas)
     }
 
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
+        if (recordingEdges != null) {
+            // RecordingCard.drawWithContent uses raw 1.dp, not Surface BorderStroke rounding.
+            checkNotNull(recordingShape).drawBorder(canvas, borderPaint.color, recordingSeparatorColor)
+            return
+        }
         // Compose's border modifier draws after its content, including the per-row dividers.
         if (geometry.strokeWidth == 0f) return
         if (geometry.fillBorder) {
@@ -120,14 +149,13 @@ internal class ReverbGroupLayout(
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         // Clipping drawing alone does not clip Android's rectangular child hit testing. Admit a
         // gesture only inside the same outer shape; an admitted gesture keeps normal View ownership.
-        if (event.actionMasked == MotionEvent.ACTION_DOWN &&
-            !geometry.acceptsPointer(
-                event.x,
-                event.y,
-                touch = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER,
-                minimumTarget = 48f * resources.displayMetrics.density,
-            )
-        ) return false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            val touch = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+            val minimumTarget = 48f * resources.displayMetrics.density
+            val accepted = if (recordingEdges == null) geometry.acceptsPointer(event.x, event.y, touch, minimumTarget)
+                else checkNotNull(recordingShape).acceptsPointer(event.x, event.y, touch, minimumTarget)
+            if (!accepted) return false
+        }
         return super.dispatchTouchEvent(event)
     }
 
@@ -162,6 +190,8 @@ internal class ReverbGroupLayout(
  */
 private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(context) {
     private var radius = 0f
+    private var recordingShape: ReverbRecordingGroupShape? = null
+    private var nativeClip = true
     private val softwareClip = Path()
     private val softwareBounds = RectF()
 
@@ -170,15 +200,37 @@ private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, radius)
+                fillOutline(outline)
             }
         }
     }
 
     fun setCornerRadiusPx(value: Float) {
-        if (radius == value) return
+        if (recordingShape == null && radius == value) return
+        recordingShape = null
         radius = value
         rebuildClip()
+    }
+
+    fun setRecordingShape(value: ReverbRecordingGroupShape) {
+        recordingShape = value
+        rebuildClip()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun fillOutline(outline: Outline) {
+        val shape = recordingShape
+        if (shape == null) {
+            outline.setRoundRect(0, 0, width, height, radius)
+        } else if (width <= 0 || height <= 0) {
+            outline.setEmpty()
+        } else if (shape.topRadius == shape.bottomRadius) {
+            outline.setRoundRect(0, 0, width, height, shape.topRadius)
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            outline.setPath(softwareClip)
+        } else if (Build.VERSION.SDK_INT > 28 || softwareClip.isConvex) {
+            outline.setConvexPath(softwareClip)
+        } else outline.setEmpty()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -187,15 +239,25 @@ private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(
     }
 
     private fun rebuildClip() {
-        softwareBounds.set(0f, 0f, width.toFloat(), height.toFloat())
-        softwareClip.rewind()
-        softwareClip.addRoundRect(softwareBounds, radius, radius, Path.Direction.CW)
+        val shape = recordingShape
+        if (shape == null) {
+            softwareBounds.set(0f, 0f, width.toFloat(), height.toFloat())
+            softwareClip.rewind()
+            softwareClip.addRoundRect(softwareBounds, radius, radius, Path.Direction.CW)
+            nativeClip = true
+        } else {
+            shape.copyFillPath(softwareClip)
+            val outline = Outline()
+            fillOutline(outline)
+            nativeClip = outline.canClip()
+        }
+        clipToOutline = nativeClip
         invalidateOutline()
         invalidate()
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        if (canvas.isHardwareAccelerated) {
+        if (canvas.isHardwareAccelerated && nativeClip) {
             // View's RenderNode applies the rounded outline around this entire child subtree.
             super.dispatchDraw(canvas)
         } else {

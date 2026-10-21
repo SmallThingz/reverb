@@ -1,0 +1,25 @@
+# Native About host successor
+
+Integrated into the native-screens successor after source review; these files are not yet compiled or executed.
+
+Integrated files: ReverbAboutContentView.kt, ReverbAboutDialog.kt, ReverbAboutMotion.kt, NativeAboutWindowRuntime.kt, ReverbAboutMotionTest.kt. The existing AboutDialog.kt remains the actual Compose oracle. No production caller, Home source, palette, resource, permission or device state was changed.
+
+The content replaces platform ScrollView with NativeVerticalViewport and uses the existing NativePagerTouchRoot, NativeWindowPointerCoordinates, NativeVerticalPhaseBinding and click endpoints. The dialog has no scrollable ancestor, so its explicit nested pre/post scroll/fling functions return zero. Source blank-surface touch shielding remains a non-consuming pointer node. Existing size/padding/inset/radius/noise/color/link behavior is retained. Real source windows and pointer coordinates remain authoritative; no screenshot-derived geometry is used.
+
+Close preserves the source topology:48dp outer measurement,40dp clipped clickable,24dp described icon, then the role-only semantic child. The controller and foreground use the inner40dp coordinate space, preserving initial keyboard Press atZero and integer-center caching after pointer events. Native touch expansion uses float48dp before ancestor clipping/root rounding; it does not substitute the integer outer wrapper. The extra icon/role Views represent source semantic/layout nodes and draw no new pixels beyond the original glyph. Activation keys never fall through to stock native clickable handling when the source controller intentionally returns false.
+
+One PlainTextAccessibilityWindowScope belongs to this About window. Existing paragraphs and descriptions share it. Repository Surface is a role-less merging action with its original title/label children. Close description is its own24dp child; Button role is separate. Alpha0 changes visible/important/screen-reader flags without dropping text/actions or cursor identity. Clipped/offscreen visibility remains separate from hidden importance and screen-reader focus: native clipped visibility is preserved for text/description/repository nodes, and Close uses its captured clipped visual/touch bounds. Actual Android accessibility enumeration/focus/event cadence still requires qualification. No claim of a native TalkBack pass is made.
+
+NativeAboutWindowRuntime reuses AndroidUiDispatcher.Main and its actual MonotonicFrameClock. It creates no Composition/Recomposer or extra frame scheduler. Pausing prevents both future requests and already-queued callbacks from sampling after ON_STOP. This second check matches WindowRecomposer.android.kt399–402 and Recomposer.kt334–338/629–633: the original installed broadcast frame clock is gated by frameClockPaused inside the already-queued parent-frame callback. Pinned reference sources remain in the ignored proposal directory recorded in SOURCE.json; they are not application source files. Coroutine/clock costs remain real; no claim of zero runtime cost is made.
+
+Motion corrections:
+- Preserve one terminal-delivery frame after close before the first measure (already in current frozen candidate).
+- Pinned activity-compose1.13.0 PredictiveBackHandler.kt269–275 cancels the consumer Job; released inactive cancellation clears gestureActive immediately instead of entering its160ms active-cancellation fallback.
+- Repeated ordinary Back starts a new empty stream atZero (252–266).
+- Source Transition skips finished channels and StartDelayVectorizedAnimationSpec holds initial value/velocity before channel start; duration-scale rewinds do not resample finished alpha or feed negative time to an interrupted spring.
+
+ReverbAboutMotionTest contains14 focused cases, including the above corrections. These tests are unexecuted here. They verify pure state/math, not real dispatcher/RenderThread frame phase. The native callback adapter still requires actual Back dispatch/cancel/repeat and open/close interaction comparison against the released oracle; async consumer delivery/queue saturation is not proved by those tests.
+
+Finite actual qualification remains: light/dark About content; short/scrolling height, LTR/RTL and current physical density; close first by pointer then by keyboard, including unmatched/repeated keys; repository failure feedback and retained error after appearance rebind; vertical scroll/row cancellation/PageUp/Down/focus bring-into-view; ordinary/predictive Back including pre-measure close/cancel/repeated Back; stopped/resumed window; semantic parent/icon/role ordering and shared description/text cursor. Source tests or matching still screenshots do not substitute for these interaction/motion checks.
+
+NativeVerticalViewport.kt was integrated in the same reviewed window with the supported-action set, generic disabled/event class, TYPE_VIEW_SCROLLED-only offsets, and rejection of unadvertised actions. Actual native enumeration and event timing remain unqualified.

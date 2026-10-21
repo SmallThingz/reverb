@@ -1,0 +1,19 @@
+# Native populated Library assembly proposal
+
+Outside source sets; no production route, build or device mutation. This is the populated list slice, not a new FilesScreen controller.
+
+LibraryListItems.kt mechanically extracts the released private section model/buildListItems. FilesScreen-list-extraction.patch changes only type/function references and shares the exact header/recording key function. Supplied recording order, platform long-date formatting, section boundaries and key strings remain authoritative. No sorting, persistence, file access, metadata repair or deletion handling is added.
+
+ReverbLibraryListView is a concrete RecyclerView+LinearLayoutManager assembly of the integrated native row/header factories. It uses16dp outside viewport padding and no item gaps. The released LazyColumn has no animateItem, so RecyclerView itemAnimator is explicitly null. String recording identities are distinct from generated Long RecyclerView stable IDs. Row text uses the existing duration/size/timestamp helpers. First/last grouping follows immediate neighboring section entries exactly.
+
+The parent supplies the existing visible/filtered list, selection, current process/local operation-busy IDs, current InlinePlaybackRowOwner, trim request and screen-active state. Actions remain typed callbacks into the existing controller. Callback admission resamples current recording membership/busy state so a still-attached recycled/pending-layout row cannot invoke an old action after removal. This View never owns pending deletion maps, deadlines, Undo, file mutation, audio, capture state or a playback grant.
+
+Expansion is an explicit LibraryInlineExpansionHost/Lease seam. Its View sits inside the grouped card's shared Surface and selection-alpha column. The existing player presentation owner must bind exact recording/owner identity, screen-active and trim request; revoke old preview admission when ownership changes; and retain already accepted process-owned mutations when presentation detaches. Collapse keeps the lease through its own visibility exit and releases only after identity-bound completion. Recycler detach marks presentation inactive; recycle/branch removal retires the lease. The bridge must supply source outer320ms content-size and inline320/260ms/fade220+70/140ms behavior. That renderer is not implemented or replaced with platform defaults here.
+
+Selection-color/alpha frames can be delivered directly through setRecordingFrame without list diffs. Initial unsupplied frames use exact source target colors. The source Oklab180ms accepted-target animation owner remains an explicit integration requirement; current static fallback is not a motion-parity claim. attachedRecordingAnchor supplies the actual row for a separately owned source menu host.
+
+Parent outer shell retains toolbar, loading/empty/error branches, pull refresh, edge dismiss, dialogs and Undo/snackbar. clearListComposition mirrors permanent removal of the populated-list composition branch; temporary hidden/inactive screens retain the list. Accepted operations are never cancelled by recycler cleanup.
+
+Unqualified: compilation, actual list pixels/keyboard/accessibility provider and scroll/virtualization behavior, stable-key anchor behavior during in-flight scroll/data changes, native semantics collection details, exact row expansion/size motion and Oklab frame dispatch. This proposal is usable with an explicit inline presentation implementation but cannot replace production FilesScreen until those existing obligations are implemented and qualified. No native completion or performance latency claim is made.
+
+Self-review corrected the inherited row's Long/String ID mismatch and preserved distinct leading long-click labels when only the body long-click callback exists. Exact outline/default Settings geometry and four unrun geometry tests are in the separately integrated nativeui/library slice.

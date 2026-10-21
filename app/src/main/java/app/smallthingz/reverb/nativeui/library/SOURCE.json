@@ -1,0 +1,20 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "group_base_commit": "c88d70b5",
+  "group_base_sha256": "6572b943f2083a3689e916186cb2dc6f84b176795a7fca306c688362c438218a",
+  "status": "Grouped recording row/header integrated only; production route unchanged; no new build or native qualification",
+  "source_files": {
+    "app/src/main/java/app/smallthingz/reverb/RecordingCard.kt": "85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42",
+    "app/src/main/java/app/smallthingz/reverb/FilesScreen.kt": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371",
+    "app/src/main/java/app/smallthingz/reverb/AppTopBar.kt": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670"
+  },
+  "upstream_sources": {
+    "ui-android-1.11.2-sources.jar!/commonMain/androidx/compose/ui/platform/ShapeContainingUtil.kt": "5a6194401ff4df9944b6cf1afe81579356b66a5d3e66db278ef219bfa4d75d1f",
+    "reference/OutlineResolver.android.kt": "211915769990a15daf0e4bc0ee4b1dd946b9737eab843d0e6d81aeda20888e2d",
+    "reference/RenderNodeLayer.android.kt": "2a736d00bd0db1dddc3feb6978f6cefad5d75466fe676abaff464d584745a92b",
+    "reference/RoundedCornerShape.kt": "ea5fc45008a3c3ca19bb5e5e5a7ab1471f7b1c9500bc46eef8df706446a2210a",
+    "reference/CornerBasedShape.kt": "312bdf5f19d87de19bee88ce03397a092f5b1a289a7999fd9acb988ed81730a4",
+    "reference/ShapeContainingUtil.kt": "5a6194401ff4df9944b6cf1afe81579356b66a5d3e66db278ef219bfa4d75d1f"
+  },
+  "feature_boundary": "Collapsed/native row and optional same-surface inline view seam; list host remains separate ignored proposal"
+}

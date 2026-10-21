@@ -206,8 +206,8 @@ internal class ReverbParagraphView(
      * this label's semantics identity while refreshing layout callbacks. A stale close handle cannot
      * remove a newer binding. The host closes its binding when its layout lifetime ends.
      *
-     * Exposed=false for a label whose parent merges its semantics. The parent retains role/clicks;
-     * this method does not alter importantForAccessibility, focusability or keyboard traversal.
+     * Labels remain exposed beneath a merging parent in the source unmerged accessibility tree.
+     * The owner sets their screenReaderFocusable flag separately; this method adds no keyboard stop.
      */
     fun bindPlainTextAccessibility(
         window: PlainTextAccessibilityWindowScope,

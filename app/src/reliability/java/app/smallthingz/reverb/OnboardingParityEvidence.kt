@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -130,11 +131,15 @@ internal fun onboardingNativeNodeEvidence(
         val actions = node.actionList.sortedBy { it.id }.map {
             JSONObject().put("id", it.id).put("label", it.label?.toString() ?: JSONObject.NULL)
         }
+        val roleDescription = AccessibilityNodeInfoCompat.wrap(node).roleDescription?.toString()
+        val stateDescription = if (Build.VERSION.SDK_INT >= 30) node.stateDescription?.toString() else null
         val item = JSONObject()
             .put("class", node.className?.toString() ?: JSONObject.NULL)
             .put("text", node.text?.toString() ?: JSONObject.NULL)
             .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
-            .put("state_description", if (Build.VERSION.SDK_INT >= 30) node.stateDescription?.toString() ?: JSONObject.NULL else JSONObject.NULL)
+            .put("state_description", stateDescription ?: JSONObject.NULL)
+            .put("role_description", roleDescription ?: JSONObject.NULL)
+            .put("screen_reader_focusable", node.isScreenReaderFocusable)
             .put("enabled", node.isEnabled).put("clickable", node.isClickable)
             .put("long_clickable", node.isLongClickable).put("checkable", node.isCheckable)
             .put("checked", node.isChecked).put("selected", node.isSelected)
@@ -149,7 +154,11 @@ internal fun onboardingNativeNodeEvidence(
         raw.put(JSONObject(item.toString()).put("depth", depth)
             .put("package", node.packageName?.toString() ?: JSONObject.NULL)
             .put("children", node.childCount))
+        // Compose creates role-only virtual children for merging Button/Switch rows. They are
+        // semantic payload, not empty wrappers: keep their role/class even without text or clicks.
         val hasPayload = !node.text.isNullOrEmpty() || !node.contentDescription.isNullOrEmpty() ||
+            !stateDescription.isNullOrEmpty() || !roleDescription.isNullOrEmpty() ||
+            node.className?.toString() in onboardingSemanticRoleClasses ||
             node.isClickable || node.isCheckable || node.isScrollable
         if (node.isVisibleToUser && hasPayload && AndroidRect.intersects(rect, viewport)) {
             check(node.packageName?.toString() == activity.packageName) { "Foreign accessible content over fixture" }
@@ -185,3 +194,10 @@ internal fun onboardingStableSignature(evidence: JSONObject): String =
     onboardingTextGeometrySignature(evidence) + "\n" + onboardingNodeSignature(evidence) + "\n" +
         evidence.getJSONObject("geometry").getInt("actual_scroll") + ":" +
         evidence.getJSONObject("geometry").getInt("max_scroll")
+
+// Android legacy classes used for explicit roles; generic View/ViewGroup wrappers remain excluded.
+private val onboardingSemanticRoleClasses = setOf(
+    "android.widget.Button", "android.widget.CheckBox", "android.widget.RadioButton",
+    "android.widget.Spinner", "android.widget.ImageView", "android.widget.Switch",
+    "android.widget.SeekBar", "android.widget.ProgressBar",
+)

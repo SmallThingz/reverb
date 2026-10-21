@@ -1,0 +1,142 @@
+{
+  "release": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "sources": [
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/AndroidOverscroll.android.kt",
+      "sha256": "dd166bcb11e9632bfc6b1dd3fd26e75a11b21b6e46158d91551b943fb065c70e"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/EdgeEffectCompat.android.kt",
+      "sha256": "80ca93369ec21a88339df3086cd88e0024207f1b80df653f9bb9a5c1f62d7965"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/gestures/Scrollable.android.kt",
+      "sha256": "ac3c18dd8ad075c126f0984423a2279b3cabc850a3ae42e2477a7cd1c0d9e74d"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/ClipScrollableContainer.kt",
+      "sha256": "e32f340050c8f2e2eb8275c8b5e8818f8ac13720907257b561187a3cd76390bf"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/Scroll.kt",
+      "sha256": "1fb386efac2e6222a522c8ba5fc696f41654cebd9ebfbecdb0a55247e6a89eff"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/Draggable.kt",
+      "sha256": "53858ee7a5a1ccf0bffa18ad025bea83fa8e7f6e93921c4b1125f643bc3d5fb3"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/Scrollable.kt",
+      "sha256": "35f7c2c7f540d6bc23de8eaf457492f56fc87a4f95988b8754228c162338600a"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/ScrollableState.kt",
+      "sha256": "8d93bf92f5957b36e4177bfbaa641ec3f5a79ab2cd6eb919b0a6b5ab938abc64"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/animation/SplineBasedFloatDecayAnimationSpec.android.kt",
+      "sha256": "b7d7e997c5ee3edc3bb318255a8efe03c446a4c46385f77eadd805a83ae3af32"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/animation/BoundsAnimation.kt",
+      "sha256": "11bd27d69dd833ee4874c63a785a991fe824af0c68291f6d47f3f248a1dd2b9f"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/animation/SingleValueAnimation.kt",
+      "sha256": "e9e130f48de5a411abb21c7c1055e43ee8af5f37a9d76828d14cfbaaf6c478d8"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/animation/core/Animation.kt",
+      "sha256": "8d396494fd09afc5dda90b6e48327cf86f07b823539e25cbfac9248e23dae6ca"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/animation/core/DeferredTargetAnimation.kt",
+      "sha256": "d577d52b41e059f1a51415a5ad7caecb89c280268dbee4748d2d8f8b099d018c"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/animation/core/SuspendAnimation.kt",
+      "sha256": "4301f943eae91b09f85855e889b1cf96f35c59bb3aafbd4809650de2ecde911a"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/MutatorMutex.kt",
+      "sha256": "8af0c4eacc08b2e8b5a579848b66a42d519193da006d6d782c421d392dc39163"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/ScrollableArea.kt",
+      "sha256": "9d374bd55ea5c9a49a37105b9a99a60024e47419bb89ef3532f69d9f9e4ddab3"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/BringIntoViewSpec.kt",
+      "sha256": "97e8a42c051046dfc69162ecd895ce29ce49ab6a13ed68195b7a5e94c1e05921"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/gestures/BringIntoViewSpec.android.kt",
+      "sha256": "33f82dc1403bc0ae6fcd88e7742f759790a3f7eee14c454ad73f44d180759860"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/ContentInViewNode.kt",
+      "sha256": "6a54b24906092959ee35d0c1dec5e87082a12ec60b7e7f2014a34e49907f37e1"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/UpdatableAnimationState.kt",
+      "sha256": "9d3c4cc460417ad9222514b7fe88b02a83fa615638bd4abb8be666a6fc0fcb91"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/gestures/BringIntoViewRequestPriorityQueue.kt",
+      "sha256": "b8be602a5df705498601a1a4ffacc1e393ac53fe82014721040f2fd365ed893b"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/relocation/BringIntoViewRequester.kt",
+      "sha256": "047a2802ddeac91dc820ec1d95989bd5efe92bb7ffd34d8949291e553f43b7ad"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/relocation/BringIntoViewResponder.kt",
+      "sha256": "c26b9fe0a431ee702d6cc535d2d37471c6f6e8a000290e4dc2aba020f84d7269"
+    },
+    {
+      "jar": "ui-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt",
+      "sha256": "29616ea6501cf785d0de5c2ae325df09c58504683cc54b7576efb84b2a892e62"
+    }
+  ],
+  "mechanical_copy": {
+    "NativeEdgeEffectCompat.kt": [
+      "package androidx.compose.foundation -> app.smallthingz.reverb.nativeui",
+      "internal object EdgeEffectCompat -> NativeEdgeEffectCompat"
+    ],
+    "other_files": "Vertical-only adaptation of pinned state/scroll/fling/overscroll, semantics, content-in-view and coroutine ownership; uses pinned public MutatorMutex/math/geometry/frame clock. Actual native dispatch/event/raster qualification remains required.",
+    "NativeUpdatableScrollAnimation.kt": [
+      "package/class rename",
+      "checkPrecondition -> check; remove its internal import",
+      "All source arithmetic, timing, callback boundaries and cleanup retained"
+    ],
+    "NativeBringIntoViewRequestQueue.kt": [
+      "package/class/Request import rename",
+      "MutableVector -> ArrayList; reverse vector traversal -> indices.reversed()",
+      "checkPrecondition -> check; preserve source cancellation range literally"
+    ]
+  }
+}

@@ -2,7 +2,6 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.view.View
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 import androidx.lifecycle.Lifecycle
@@ -145,8 +144,8 @@ private class PermissionRow(
     OnboardingMarker(context, typography.titleMedium, density, resolver, marker = markerText),
     OnboardingIconView(context, ReverbIcon.Unchecked, 0), 24, 24, interactions) {
     private var state: PermissionRowState? = null
-    private var statusDescription: String = ""
     private val allowLabel = context.getString(R.string.allow)
+    override val accessibilityClickLabel: CharSequence get() = allowLabel
     val canRequestNow: Boolean get() = state?.let { it.canRequest && !it.allowed } == true
 
     init { onActivate = { state?.takeIf { canRequestNow }?.let { request(it.kind) } } }
@@ -158,23 +157,9 @@ private class PermissionRow(
             if (value.allowed) palette.primary else palette.onSurfaceVariant,
         )
         bindCard(value.title, value.body, canRequestNow, palette)
-        spokenText = listOfNotNull(markerText, value.title, value.body?.takeIf(String::isNotEmpty)).joinToString("\n")
-        statusDescription = context.getString(if (value.allowed) R.string.onboarding_allowed else R.string.allow)
-    }
-
-    override fun getAccessibilityClassName(): CharSequence = android.widget.Button::class.java.name
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = android.widget.Button::class.java.name
-        info.text = spokenText
-        info.contentDescription = statusDescription
-        info.isCheckable = false
-        // The source keeps OnClick semantics present when disabled, but removes its action.
-        info.isClickable = true
-        info.isEnabled = canRequestNow
-        info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
-        if (canRequestNow) {
-            info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, allowLabel))
-        }
+        trailing.contentDescription = context.getString(
+            if (value.allowed) R.string.onboarding_allowed else R.string.allow)
+        trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        trailing.isScreenReaderFocusable = false
     }
 }

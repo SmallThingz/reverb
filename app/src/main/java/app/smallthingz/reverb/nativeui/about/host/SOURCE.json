@@ -1,0 +1,15 @@
+{
+  "status": "integrated-uncompiled-unexecuted",
+  "files": {
+    "ReverbAboutContentView.kt": "57cb6243a2bc1041b33795442471f22f825fdc9767df143f0920ac406b943372",
+    "ReverbAboutDialog.kt": "0ba79cdcdf708d611fec6939cc71566d347a2cd9273ea6aee742427641cd841f",
+    "ReverbAboutMotion.kt": "7837c59198d92453913d8033e1f84b2c0ac50c711b8f605eec96868c89925da6",
+    "NativeAboutWindowRuntime.kt": "406de397e6f5917aa48e2d18648806d6ed2ce127980a8de1b483f8f3d770f56f",
+    "ReverbAboutMotionTest.kt": "bb2c16bf26d19e182067676e7957bd431e967ca3513bf2016d0196fcc81c9c0a",
+    "PredictiveBackHandler.pinned.kt": "3a1e26ce46e779c3a1c67e9735958d7ea3a750a562fa3e0333e162ba4a90ef99",
+    "PausableMonotonicFrameClock.pinned.kt": "4f7d31be968f8be53686df23058fda26af7ebb232fdc351af6b5900aa0610164",
+    "Recomposer.pinned.kt": "04e71ff5fb562deae999c742f39f50a64d9676fe987ee4155eed0ff5290f7d9f",
+    "BroadcastFrameClock.pinned.kt": "b2c327f8d949c9c27c70087bb1573f8048da049105dc1ad03a4960ecef9a99ca"
+  },
+  "reference_sources_location": "/home/a/kotlin/reverb/.tmp/native-views-20261021/about-host-proposal"
+}

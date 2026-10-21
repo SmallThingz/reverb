@@ -188,7 +188,8 @@ internal class PlainTextAccessibilityWindowScope(private val root: View) {
 /**
  * Hook these three operations into an ordinary ReverbParagraphView. Do not replace the containing
  * row's role/click semantics or set isFocusable: native keyboard/tab stops remain unchanged.
- * A merged child passes exposed=false and adds no competing actions.
+ * A child inside a merging row remains exposed in the source unmerged accessibility tree; the
+ * host marks it screenReaderFocusable=false without removing its text traversal operations.
  *
  * Caller supplies original semantics + lazy source MultiParagraph, not the displayed translation.
  * Pinned ParagraphLayoutCache.slowCreateTextLayoutResultOrNull rebuilds this layout on demand.
@@ -200,6 +201,8 @@ internal class PlainTextAccessibility(
     private val window: PlainTextAccessibilityWindowScope,
     private val snapshot: () -> PlainTextAccessibilitySnapshot,
     private val exposed: () -> Boolean,
+    /** Source contentDescription-only nodes share the cursor, but expose no text layout/boxes. */
+    private val descriptionOnly: Boolean = false,
 ) {
     internal var identity: Any = Any()
         private set
@@ -211,13 +214,29 @@ internal class PlainTextAccessibility(
 
     fun populate(info: AccessibilityNodeInfo) {
         if (!exposed()) return
+        // Plain source text has no native View select/clear-selection/show-on-screen actions.
+        // Preserve Android-owned accessibility focus, then add only the source cursor actions.
+        info.actionList.toList().forEach(info::removeAction)
+        info.addAction(if (view.isAccessibilityFocused)
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+            else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+        info.isAccessibilityFocused = view.isAccessibilityFocused
+        info.isFocusable = false
+        info.isFocused = false
+        info.isClickable = false
+        info.isLongClickable = false
+        info.isSelected = false
+        info.isEnabled = true
+        info.maxTextLength = -1
+        info.movementGranularities = 0
         val text = snapshot().originalText
         // Pinned getInfoText/trimToSize: cap the node payload without splitting a surrogate pair.
         // Traversal and selection still use the original untrimmed String, as the delegate does.
         val end = if (text.length <= 100000) text.length
             else if (Character.isHighSurrogate(text[99999]) && Character.isLowSurrogate(text[100000])) 99999
             else 100000
-        info.text = SpannableString(if (end == text.length) text else text.substring(0, end))
+        val nodeText = SpannableString(if (end == text.length) text else text.substring(0, end))
+        if (descriptionOnly) info.contentDescription = text else info.text = nodeText
         info.isEditable = false
         if (text.isEmpty()) return
         info.setTextSelection(window.cursor, window.cursor)
@@ -228,10 +247,10 @@ internal class PlainTextAccessibility(
         info.movementGranularities =
             AccessibilityNodeInfo.MOVEMENT_GRANULARITY_CHARACTER or
             AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD or
-            AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH or
-            AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE or
-            AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PAGE
-        if (Build.VERSION.SDK_INT >= 26) {
+            AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH
+        if (!descriptionOnly) info.movementGranularities = info.movementGranularities or
+            AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE or AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PAGE
+        if (Build.VERSION.SDK_INT >= 26 && !descriptionOnly) {
             info.availableExtraData = (info.availableExtraData +
                 AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY).distinct()
         }
@@ -261,7 +280,7 @@ internal class PlainTextAccessibility(
 
     /** True identifies this extra-data key, including malformed requests that produce no payload. */
     fun addExtraData(info: AccessibilityNodeInfo, key: String, arguments: Bundle?): Boolean {
-        if (Build.VERSION.SDK_INT < 26 || key != AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY) return false
+        if (descriptionOnly || Build.VERSION.SDK_INT < 26 || key != AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY) return false
         if (arguments == null || !view.isAttachedToWindow || !exposed()) return true
         val current = snapshot()
         val start = arguments.getInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, -1)

@@ -69,6 +69,7 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
         nativeParityOnMain(instrumentation) { frames.start() }
+        result.put("public_pointer_subset", verifyPublicPointerSubset(instrumentation, host, frames))
         for (case in InputScenario.entries) {
             val traces = mutableListOf<InputTrace>()
             for (compose in listOf(true, false)) {
@@ -79,7 +80,9 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
                     target = if (compose) ComposeInputFixture(host, trace, case) else NativeInputFixture(host, trace)
                     val parent = InputDelayFrame(host, case == InputScenario.QUICK_DELAYED_TAP)
                     val density = host.resources.displayMetrics.density
-                    val width = (160f * density + .5f).toInt()
+                    val width = (160f * density + .5f).toInt().let {
+                        if (case == InputScenario.KEYBOARD_AFTER_POINTER_ODD) it or 1 else it
+                    }
                     val height = (64f * density + .5f).toInt()
                     check(width <= host.fixtureRoot.width && height <= host.fixtureRoot.height)
                     parent.addView(target.view, FrameLayout.LayoutParams(-1, -1))
@@ -87,7 +90,8 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
                     host.fixtureRoot.addView(parent, FrameLayout.LayoutParams(width, height, Gravity.CENTER))
                     parent.isFocusableInTouchMode = true
                     check(parent.requestFocus())
-                    target.update("old", case == InputScenario.KEYBOARD_LONG_PRESS)
+                    target.update("old", case == InputScenario.KEYBOARD_LONG_PRESS ||
+                        case == InputScenario.KEYBOARD_AFTER_POINTER_ODD)
                 }
                 awaitNativeParityDraw(instrumentation, target.view)
                 awaitInputFrames(instrumentation, 2)
@@ -145,8 +149,122 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
     }
 }
 
+/** Public MotionEvent roundtrip only; dispatch remains inside the already admitted QA window. */
+private fun verifyPublicPointerSubset(
+    instrumentation: Instrumentation,
+    host: NativeParityActivity,
+    frames: InputFrameTrace,
+): JSONObject {
+    val receipt = JSONObject()
+    lateinit var target: NativeInputFixture
+    nativeParityOnMain(instrumentation) {
+        target = NativeInputFixture(host, InputTrace(frames))
+        host.fixtureRoot.removeAllViews()
+        host.fixtureRoot.addView(target.view, FrameLayout.LayoutParams(120, 120, Gravity.CENTER))
+    }
+    awaitNativeParityDraw(instrumentation, target.view)
+    try {
+        guardedInput(instrumentation, host, target) {
+            val ids = intArrayOf(3, 11, 23)
+            val properties = Array(3) { i -> MotionEvent.PointerProperties().apply {
+                id = ids[i]
+                toolType = if (i == 2) MotionEvent.TOOL_TYPE_STYLUS else MotionEvent.TOOL_TYPE_FINGER
+            } }
+            fun coords(sample: Int) = Array(3) { i -> MotionEvent.PointerCoords().apply {
+                x = 10.25f + i + sample
+                y = 20.5f + i * 2 + sample
+                pressure = .25f + i * .125f
+                size = .5f
+                touchMajor = 7f + i
+                toolMinor = 3f + sample
+                orientation = .125f
+                setAxisValue(MotionEvent.AXIS_TILT, .375f)
+                setAxisValue(MotionEvent.AXIS_GENERIC_1, 7.25f + sample)
+            } }
+            val original = MotionEvent.obtain(100, 110, MotionEvent.ACTION_MOVE, 3,
+                properties, coords(0), KeyEvent.META_SHIFT_ON, MotionEvent.BUTTON_STYLUS_PRIMARY,
+                .25f, .5f, 7, MotionEvent.EDGE_TOP, InputDevice.SOURCE_STYLUS, MotionEvent.FLAG_WINDOW_IS_OBSCURED)
+            try {
+                original.addBatch(120, coords(1), original.metaState)
+                original.addBatch(130, coords(2), original.metaState)
+                original.action = MotionEvent.ACTION_POINTER_UP or (2 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+                val subset = original.nativePointerSubset((1 shl 3) or (1 shl 23))
+                try {
+                    check(subset.pointerCount == 2 && subset.getPointerId(0) == 3 && subset.getPointerId(1) == 23)
+                    check(subset.action == (MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)))
+                    check(subset.downTime == original.downTime && subset.eventTime == original.eventTime)
+                    check(subset.historySize == 2 && subset.metaState == original.metaState)
+                    check(subset.buttonState == original.buttonState && subset.flags == original.flags)
+                    check(subset.deviceId == original.deviceId && subset.source == original.source)
+                    check(subset.edgeFlags == original.edgeFlags)
+                    check(subset.xPrecision == original.xPrecision && subset.yPrecision == original.yPrecision)
+                    for ((output, input) in intArrayOf(0, 2).withIndex()) {
+                        check(subset.getToolType(output) == original.getToolType(input))
+                        for (axis in 0..63) {
+                            check(subset.getAxisValue(axis, output) == original.getAxisValue(axis, input))
+                            for (history in 0 until 2) {
+                                check(subset.getHistoricalEventTime(history) == original.getHistoricalEventTime(history))
+                                check(subset.getHistoricalAxisValue(axis, output, history) ==
+                                    original.getHistoricalAxisValue(axis, input, history))
+                            }
+                        }
+                    }
+                    receipt.put("ids_action_properties_axes_history_metadata", "passed")
+                } finally { subset.recycle() }
+            } finally { original.recycle() }
+
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                // Public API34 creation can give ORIGINAL deep-press classification. The subset
+                // intentionally cannot rely on a setter; the node must forward original metadata.
+                var longClicks = 0
+                target.view.controller.bind(NativeClickBinding("subset-classification", true,
+                    onClick = {}, onLongClick = { longClicks++ }))
+                val endpoint = ReverbClickPhaseEndpoint(target.view.controller)
+                val node = NativeClickPhaseNode(target.view, endpoint) { false }
+                val point = androidx.compose.ui.geometry.Offset(12.25f, 24.5f)
+                val transform = NativePointerCoordinates(android.graphics.Matrix(), android.graphics.Matrix(),
+                    androidx.compose.ui.geometry.Offset.Zero)
+                fun deliver(action: Int, before: Boolean) {
+                    val originalClassified = checkNotNull(MotionEvent.obtain(
+                        100, 110, action, 3, properties, coords(0), 0, 0, 1f, 1f, 7, 0,
+                        InputDevice.SOURCE_STYLUS, host.display!!.displayId, 0, MotionEvent.CLASSIFICATION_DEEP_PRESS))
+                    try {
+                        val change = NativeDragPointerChange(1, 110, point, point, true, before,
+                            androidx.compose.ui.input.pointer.PointerType.Stylus, point)
+                        val event = NativeDragPointerEvent(listOf(change), androidx.compose.ui.geometry.Offset.Zero)
+                        node.bindMotion(originalClassified, transform, 1 shl 23)
+                        node.dispatch(event, NativePointerPass.INITIAL)
+                        node.dispatch(event, NativePointerPass.MAIN)
+                        node.dispatch(event, NativePointerPass.FINAL)
+                    } finally {
+                        node.bindMotion(null, null, 0)
+                        originalClassified.recycle()
+                    }
+                }
+                try {
+                    deliver(MotionEvent.ACTION_POINTER_DOWN or (2 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), false)
+                    check(longClicks == 0)
+                    deliver(MotionEvent.ACTION_MOVE, true)
+                    check(longClicks == 1) { "Original classification did not reach the native controller" }
+                    receipt.put("original_classification_through_node_to_controller", "passed")
+                } finally { node.cancel() }
+            } else {
+                receipt.put("original_classification_through_node_to_controller",
+                    "unverified: public classified synthetic MotionEvent creation requires API34")
+            }
+        }
+    } finally {
+        nativeParityOnMain(instrumentation) {
+            target.dispose()
+            host.fixtureRoot.removeAllViews()
+        }
+    }
+    return receipt
+}
+
 private enum class InputScenario {
     SAME_OWNER_CALLBACK, FOCUSED_LONG_CAPABILITY, QUICK_DELAYED_TAP, MULTI_POINTER_CANCEL, KEYBOARD_LONG_PRESS,
+    KEYBOARD_AFTER_POINTER_ODD,
 }
 
 private interface InputFixture {
@@ -318,7 +436,28 @@ private fun runInputScenario(instrumentation: Instrumentation, host: NativeParit
                 listOf(x to y, (target.view.width + 2f) to y))
             touch("up", MotionEvent.ACTION_UP)
         }
-        InputScenario.KEYBOARD_LONG_PRESS -> {
+        InputScenario.KEYBOARD_LONG_PRESS, InputScenario.KEYBOARD_AFTER_POINTER_ODD -> {
+            if (case == InputScenario.KEYBOARD_AFTER_POINTER_ODD) {
+                // A real pointer pass primes AbstractClickable's cached INTEGER bounds center.
+                // Keep both events in one UI turn so no long-press timeout can win the seed tap.
+                guardedInput(instrumentation, host, target) {
+                    check(target.view.width % 2 == 1)
+                    val time = SystemClock.uptimeMillis()
+                    val down = MotionEvent.obtain(time, time, MotionEvent.ACTION_DOWN, x, y, 0)
+                    val up = MotionEvent.obtain(time, time, MotionEvent.ACTION_UP, x, y, 0)
+                    down.source = InputDevice.SOURCE_TOUCHSCREEN
+                    up.source = InputDevice.SOURCE_TOUCHSCREEN
+                    try {
+                        target.trace.mark("seed-down:begin")
+                        target.view.dispatchTouchEvent(down)
+                        target.trace.mark("seed-down:end")
+                        target.trace.mark("seed-up:begin")
+                        target.view.dispatchTouchEvent(up)
+                        target.trace.mark("seed-up:end")
+                    } finally { down.recycle(); up.recycle() }
+                }
+                awaitInputFrames(instrumentation, 2)
+            }
             guardedInput(instrumentation, host, target) {
                 target.trace.mark("request-focus")
                 target.requestInputFocus()
@@ -387,6 +526,7 @@ private class InputTrace(private val frames: InputFrameTrace) {
             InputScenario.SAME_OWNER_CALLBACK -> listOf("click:new")
             InputScenario.QUICK_DELAYED_TAP -> listOf("click:old")
             InputScenario.KEYBOARD_LONG_PRESS -> listOf("long:old")
+            InputScenario.KEYBOARD_AFTER_POINTER_ODD -> listOf("click:old", "long:old")
             else -> emptyList()
         }
         val errors = mutableListOf<String>()
@@ -397,8 +537,21 @@ private class InputTrace(private val frames: InputFrameTrace) {
             }
         } else {
             val terminal = if (case == InputScenario.MULTI_POINTER_CANCEL) "cancel" else "release"
-            if (events.count { it == "press" } != 1 || events.count { it == terminal } != 1) {
-                errors += "Expected one press and one $terminal"
+            val expectedPresses = if (case == InputScenario.KEYBOARD_AFTER_POINTER_ODD) 2 else 1
+            if (events.count { it == "press" } != expectedPresses || events.count { it == terminal } != expectedPresses) {
+                errors += "Expected $expectedPresses press/$terminal pairs"
+            }
+        }
+        val presses = compared().filter { it.kind == "press" }
+        if (case == InputScenario.KEYBOARD_LONG_PRESS && presses.singleOrNull()?.let {
+                it.x != 0f || it.y != 0f
+            } == true) errors += "Keyboard-first origin must remain the untouched node's (0,0)"
+        if (case == InputScenario.KEYBOARD_AFTER_POINTER_ODD && presses.size == 2) {
+            val pointer = presses[0]
+            val keyboard = presses[1]
+            if (pointer.x == null || pointer.y == null || pointer.x % 1f != .5f ||
+                keyboard.x != pointer.x.toInt().toFloat() || keyboard.y != pointer.y.toInt().toFloat()) {
+                errors += "Keyboard origin must use the last pointer's integer bounds center at odd width"
             }
         }
         return errors

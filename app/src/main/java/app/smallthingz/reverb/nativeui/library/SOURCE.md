@@ -1,0 +1,11 @@
+# Library row/header source boundary
+
+The files in SOURCE.json pin released RecordingCard/FilesScreen behavior. This integration does not switch any production route or alter recording, deletion/Undo, player or export ownership.
+
+ReverbLibraryHeaderView preserves the released section label and independent8/28dp top plus8dp bottom padding. ReverbLibraryRecordingRow accepts already formatted immutable values, String recording identities and typed callbacks. Its leading72dp region and body remain separate input targets. First/middle/last rows share source16dp outer corners; selected outlines use raw1.dp pixels while the normal separator is one physical pixel. Existing Settings group defaults retain ceil-density Material Surface border math, fill/border outside child clipping and their existing rounded outline branch. A nullable optional recording-edge mode activates the alternate decoration; default callers allocate no recording paths.
+
+ReverbRecordingGroupGeometry is pure source-derived geometry. Four unrun focused tests cover raw-vs-ceil stroke width, section edge corners, source constrained vertical normalization and the narrow-row path-hit fallback requirement. Actual shape pixels/input remain native fixture obligations. The Android path fallback and asymmetric Outline handling come from pinned UI1.11.2 ShapeContainingUtil/OutlineResolver. AndroidX-derived algorithms retain Apache2.0; project behavior/assets retain the repository license.
+
+The row exposes setExpansionView(view), placing a presentation-owned inline View inside the same Surface and alpha layer. The source expanded/player renderer and outer content-size motion are not silently replaced. Caller must supply the exact Oklab180ms color/alpha frames,320ms outer size motion and inline320/260ms expansion plus source fades. Actual semantics provider/virtualization/ripple and large-font/narrow-layout parity remain unqualified.
+
+Handoff review corrected an inherited Long-ID mismatch (released entities use String), mandatory ripple hotspot mapping, disabled leading description, source ellipse arithmetic and overlapping-corner path hit testing. No new build/device result is claimed by this source integration.

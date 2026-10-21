@@ -1,0 +1,14 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "status": "Integrated into native-screens; production route unchanged; build/native qualification pending",
+  "source_files": {
+    "app/src/main/java/app/smallthingz/reverb/AboutDialog.kt": "882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b",
+    "app/src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": "fc977cc4f385def455abe021faf4635a87b6df85cd95de4885a8a1a128fd4d24"
+  },
+  "androidx_sources": {
+    "ui-android-1.11.2-sources.jar!/androidMain/androidx/compose/ui/window/AndroidDialog.android.kt": "baf19b8c49f83e6f4a62d182cbaa5e597a38541c27e641fa6476c45bdff23399",
+    "animation-core-android-1.11.2-sources.jar!/commonMain/androidx/compose/animation/core/Transition.kt": "4ae20c745a294f2b80f1b1032c674f3b20d21fcc6b449d29868a2fba7aeb33e3",
+    "animation-core-android-1.11.2-sources.jar!/commonMain/androidx/compose/animation/core/VisibilityThresholds.kt": "3330c11167539495b682bd8eb6bc43708cf9ec0e580a8c3a8921b64e887b9e41",
+    "animation-core-android-1.11.2-sources.jar!/commonMain/androidx/compose/animation/core/SuspendAnimation.kt": "4301f943eae91b09f85855e889b1cf96f35c59bb3aafbd4809650de2ecde911a"
+  }
+}

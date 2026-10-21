@@ -1,0 +1,87 @@
+{
+  "status": "Integrated after bounded source review; uncompiled and tests unrun for this slice",
+  "source": [
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entry": "commonMain/androidx/compose/animation/AnimationModifier.kt",
+      "sha256": "49b5c3096f0e3c0a8dc267538ab864328271ef8e5c2de098e073079d11ea1d23"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entry": "commonMain/androidx/compose/animation/EnterExitTransition.kt",
+      "sha256": "f19ac46d1718bc0e0c96d7f06e643c8a3a52db13c84bd856a956529a2d148198"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entry": "commonMain/androidx/compose/animation/AnimatedVisibility.kt",
+      "sha256": "70781d0163161c64cbef1d472fb1f09fe8bf9158fbc8df9b232816b58612291c"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entry": "commonMain/androidx/compose/animation/SingleValueAnimation.kt",
+      "sha256": "e9e130f48de5a411abb21c7c1055e43ee8af5f37a9d76828d14cfbaaf6c478d8"
+    },
+    {
+      "jar": "animation-android-1.11.2-sources.jar",
+      "jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entry": "commonMain/androidx/compose/animation/ColorVectorConverter.kt",
+      "sha256": "3ff31ad9217f13e9421a4dee0ad0cbf3cc8a1284879dd2b021323bba737d7f93"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/Transition.kt",
+      "sha256": "4ae20c745a294f2b80f1b1032c674f3b20d21fcc6b449d29868a2fba7aeb33e3"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/Animation.kt",
+      "sha256": "8d396494fd09afc5dda90b6e48327cf86f07b823539e25cbfac9248e23dae6ca"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/Animatable.kt",
+      "sha256": "1561378b721a147fd9b016fc1ec70cfe7bd3f89f64abf0aac92ebb538179bcc7"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/AnimateAsState.kt",
+      "sha256": "659ace7c824ade5698cf3189378c429c8d627aba40466d4b29092b365f3ed092"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/SuspendAnimation.kt",
+      "sha256": "4301f943eae91b09f85855e889b1cf96f35c59bb3aafbd4809650de2ecde911a"
+    },
+    {
+      "jar": "animation-core-android-1.11.2-sources.jar",
+      "jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entry": "commonMain/androidx/compose/animation/core/FloatAnimationSpec.kt",
+      "sha256": "7ffb94a9a8b62bbb65d653bdb21a71d974e57174513aae8fddb68cd183a33513"
+    },
+    {
+      "commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+      "path": "app/src/main/java/app/smallthingz/reverb/RecordingCard.kt",
+      "sha256": "85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42"
+    }
+  ],
+  "base_files": {
+    "ReverbLibraryRecordingRow.kt": "d59b1f92f18d1ede27daf33ac973d1bcf89fc19fc5e9660b53960932f5e4b404",
+    "ReverbLibraryListView.kt": "9f528f5e47baab8d635380e94b002e2f8e76864c1779ba303eb473fd8eb419bf"
+  },
+  "proposal_files": {
+    "LibraryRowMotion.kt": "461c0e3743d1482d1e93d78c1c8a89514f8ca95eaf273ca7c7664df94236c5d2",
+    "ReverbLibraryRecordingRow.kt": "17a08b2cdbb7f2c6796e3aa611e23b5988a1608a9801e298ee83532d3574c62b",
+    "LibraryExpansionViewport.kt": "d2eb56089d1c4c4797e3c11ad989605145bd9a7f1d3b2b479fd8527749027d34",
+    "ReverbLibraryListView.kt": "f9676604308163d92c2180ecace03979ae91838e3f6de9b9c3e6e54223dc0cea",
+    "LibraryRowMotionTest.kt": "e55a980492f77eee511264b4e6367facf6cfbf7a6a9216760087d2d3eaff3ac9"
+  }
+}

@@ -110,10 +110,6 @@ internal fun finishLibraryExpandedBack(
     )
 }
 
-private sealed class ListItem {
-    data class Header(val dateLabel: String) : ListItem()
-    data class Recording(val recording: RecordingEntity) : ListItem()
-}
 
 internal fun deletionBatchFailed(requestedCount: Int, deletedCount: Int, hadError: Boolean): Boolean =
     hadError || deletedCount < requestedCount
@@ -739,7 +735,7 @@ fun FilesScreen(
     }
 
     val listItems by remember {
-        derivedStateOf { buildListItems(context, visibleRecordings) }
+        derivedStateOf { buildLibraryListItems(context, visibleRecordings) }
     }
     LaunchedEffect(visibleRecordings) {
         onVisibleRecordingsChanged(visibleRecordings)
@@ -1057,21 +1053,16 @@ fun FilesScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp),
                     ) {
-                        itemsIndexed(listItems, key = { _, item ->
+                        itemsIndexed(listItems, key = { _, item -> libraryListItemKey(item) }) { index, item ->
                             when (item) {
-                                is ListItem.Header -> "header:${item.dateLabel}"
-                                is ListItem.Recording -> "recording:${item.recording.id}"
-                            }
-                        }) { index, item ->
-                            when (item) {
-                                is ListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)
-                                is ListItem.Recording -> {
+                                is LibraryListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)
+                                is LibraryListItem.Recording -> {
                                     val recording = item.recording
                                     RecordingItem(
                                         item = item,
                                         groupEdges = RecordingGroupEdges(
-                                            first = listItems.getOrNull(index - 1) !is ListItem.Recording,
-                                            last = listItems.getOrNull(index + 1) !is ListItem.Recording,
+                                            first = listItems.getOrNull(index - 1) !is LibraryListItem.Recording,
+                                            last = listItems.getOrNull(index + 1) !is LibraryListItem.Recording,
                                         ),
                                         isSelected = recording.id in selectedIds,
                                         selectionActive = selectionActive,
@@ -1316,7 +1307,7 @@ private fun HeaderItem(dateLabel: String, compactTop: Boolean = false) {
 
 @Composable
 private fun RecordingItem(
-    item: ListItem.Recording,
+    item: LibraryListItem.Recording,
     groupEdges: RecordingGroupEdges,
     isSelected: Boolean,
     selectionActive: Boolean,
@@ -1611,20 +1602,4 @@ private fun RecordingInfoRow(label: String, value: String) {
             )
         }
     }
-}
-
-private fun buildListItems(context: Context, recordings: List<RecordingEntity>): List<ListItem> {
-    if (recordings.isEmpty()) return emptyList()
-    val dateFormat = android.text.format.DateFormat.getLongDateFormat(context)
-    val items = mutableListOf<ListItem>()
-    var currentDateHeader = ""
-    recordings.forEach { recording ->
-        val dateHeader = dateFormat.format(Date(recording.startedAtMillis))
-        if (dateHeader != currentDateHeader) {
-            currentDateHeader = dateHeader
-            items.add(ListItem.Header(dateHeader))
-        }
-        items.add(ListItem.Recording(recording))
-    }
-    return items
 }

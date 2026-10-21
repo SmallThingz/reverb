@@ -189,7 +189,10 @@ internal class NativeOnboardingPager(
     }
 
     /** Called after the drag mutation ends. Returns unconsumed PHYSICAL velocity. */
-    suspend fun fling(physicalVelocityX: Float): Float {
+    suspend fun fling(
+        physicalVelocityX: Float,
+        deliverLogicalDelta: ScrollScope.(Float) -> Float = { scrollBy(it) },
+    ): Float {
         val velocity = physicalToLogicalDelta(physicalVelocityX)
         var remainingVelocity = 0f
         scroll {
@@ -211,7 +214,7 @@ internal class NativeOnboardingPager(
                     val delta = realValue - consumed
                     var used = 0f
                     try {
-                        used = scrollBy(delta)
+                        used = deliverLogicalDelta(delta)
                     } catch (_: CancellationException) {
                         cancelAnimation()
                     }

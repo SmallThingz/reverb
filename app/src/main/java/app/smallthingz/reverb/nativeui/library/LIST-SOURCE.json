@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "status": "Ignored proposal only; not integrated, compiled or device-qualified",
+  "source_files": {
+    "app/src/main/java/app/smallthingz/reverb/FilesScreen.kt": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371",
+    "app/src/main/java/app/smallthingz/reverb/RecordingCard.kt": "85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42",
+    "app/src/main/java/app/smallthingz/reverb/RecordingDatabase.kt": "66df66f5979225a727f807ff844b342b75bfe0882339296eae868d10b8520d85",
+    "app/src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": "be40d98c8b619c4920ca5b102ad8d38b6d0a7239bca6ed3a08110cce56f78423",
+    "app/src/main/java/app/smallthingz/reverb/Formatters.kt": "4407e8e1cbebad207ec0a7a75c733851b3f0db5bcda31e68fed1121c6b845dc6",
+    "app/src/main/java/app/smallthingz/reverb/RecordingFiles.kt": "fc1b1cbce70987f2855529abece3d8492471f490639081928bc82aab7cc24373"
+  }
+}

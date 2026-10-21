@@ -18,6 +18,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 import app.smallthingz.reverb.R
+import app.smallthingz.reverb.NativeClickPhaseEndpoint
+import app.smallthingz.reverb.NativeClickPhaseHost
 import java.io.Closeable
 import kotlin.math.max
 import kotlin.math.min
@@ -62,6 +64,7 @@ internal fun interface OnboardingFooterInteractionsFactory {
 }
 
 internal interface OnboardingFooterInteractions {
+    val pointerEndpoint: NativeClickPhaseEndpoint
     val foreground: Drawable
     fun bind(enabled: Boolean, contentColor: Int)
     fun measured(width: Int, height: Int)
@@ -242,7 +245,7 @@ private class FooterButton(
     resolver: FontFamily.Resolver,
     factory: OnboardingFooterInteractionsFactory,
     onActivate: () -> Unit,
-) : ViewGroup(context) {
+) : ViewGroup(context), NativeClickPhaseHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
     private val content = object : ViewGroup(context) {
@@ -285,6 +288,7 @@ private class FooterButton(
         }
     }
     private val interaction = factory.create(this, content, filled) { elevation = it }
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = interaction.pointerEndpoint
     private val capsuleOutline = object : ViewOutlineProvider() {
         override fun getOutline(view: View, outline: Outline) {
             outline.setRoundRect(0, 0, view.width, view.height, min(view.width, view.height) / 2f)
