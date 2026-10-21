@@ -15,6 +15,7 @@ import android.content.Context
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
+import android.os.Bundle
 import android.os.LocaleList
 import android.text.Editable
 import android.text.InputType
@@ -327,6 +328,22 @@ internal class SettingsRetentionInputView(
         private var active = true
         private var depth = 0
         private val commands = ArrayList<EditCommand>()
+        private val actions = NativeEditableConnectionActions(
+            active = { active },
+            currentTextLength = { currentFieldValue().text.length },
+            queueSelectAll = { command(SetSelectionCommand(0, it)) },
+            sendKey = { action, code -> sendKeyEvent(KeyEvent(action, code)) },
+            onEditorAction = { action ->
+                // Released KeyboardActionRunner handles Done/Next/Previous; its other defaults
+                // do nothing. In particular, native IME_NULL must not synthesize another Enter.
+                when (action) {
+                    EditorInfo.IME_ACTION_DONE,
+                    EditorInfo.IME_ACTION_NEXT,
+                    EditorInfo.IME_ACTION_PREVIOUS ->
+                        this@SettingsRetentionInputView.onEditorAction(action)
+                }
+            },
+        )
 
         override fun beginBatchEdit(): Boolean {
             if (!active) return false
@@ -372,10 +389,10 @@ internal class SettingsRetentionInputView(
         // InputConnectionWrapper otherwise forwards these overloads directly to Native Editor,
         // bypassing our command queue. Source RecordingIC inherits the interface's forwarding.
         @RequiresApi(33)
-        override fun commitText(text: CharSequence?, newCursorPosition: Int, textAttribute: TextAttribute?) =
+        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?) =
             commitText(text, newCursorPosition)
         @RequiresApi(33)
-        override fun setComposingText(text: CharSequence?, newCursorPosition: Int, textAttribute: TextAttribute?) =
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?) =
             setComposingText(text, newCursorPosition)
         @RequiresApi(33)
         override fun setComposingRegion(start: Int, end: Int, textAttribute: TextAttribute?) =
@@ -402,6 +419,18 @@ internal class SettingsRetentionInputView(
         }
         override fun commitCompletion(text: CompletionInfo?): Boolean = false
         override fun commitCorrection(correctionInfo: CorrectionInfo?): Boolean = active && autoCorrect
+        override fun performContextMenuAction(id: Int): Boolean = actions.performContextMenuAction(id)
+        override fun performEditorAction(actionCode: Int): Boolean = actions.performEditorAction(actionCode)
+        override fun sendKeyEvent(event: KeyEvent): Boolean =
+            actions.sendKeyEvent { target.sendKeyEvent(event) }
+        override fun performPrivateCommand(action: String?, data: Bundle?): Boolean =
+            actions.performPrivateCommand()
+        override fun clearMetaKeyStates(states: Int): Boolean = false
+        override fun requestCursorUpdates(cursorUpdateMode: Int): Boolean =
+            active && target.requestCursorUpdates(cursorUpdateMode)
+        @RequiresApi(33)
+        override fun requestCursorUpdates(cursorUpdateMode: Int, cursorUpdateFilter: Int): Boolean =
+            active && target.requestCursorUpdates(cursorUpdateMode, cursorUpdateFilter)
 
         override fun closeConnection() {
             if (!active) return
@@ -490,9 +519,10 @@ internal class SettingsRetentionInputView(
             environment.textDensity, environment.sharedFontResolver)
         val sourceWidth = maxOf(containerWidth, ceil(intrinsics.maxIntrinsicWidth).toInt())
         val constraints = Constraints.fitPrioritizingWidth(minWidth = containerWidth, maxWidth = sourceWidth,
-            minHeight = ceil(checkNotNull(minimumParagraph).height).toInt())
+            minHeight = ceil(checkNotNull(minimumParagraph).height).toInt(), maxHeight = Constraints.Infinity)
         val paragraph = MultiParagraph(intrinsics,
-            Constraints.fitPrioritizingWidth(maxWidth = sourceWidth), maxLines = 1, overflow = TextOverflow.Clip)
+            Constraints.fitPrioritizingWidth(minWidth = 0, maxWidth = sourceWidth,
+                minHeight = 0, maxHeight = Constraints.Infinity), maxLines = 1, overflow = TextOverflow.Clip)
         return TextLayoutResult(TextLayoutInput(value, style, emptyList(), 1, false,
             TextOverflow.Clip, environment.textDensity, direction(),
             environment.sharedFontResolver, constraints), paragraph,

@@ -118,7 +118,7 @@ private class SilenceBody(
     val curve=SilenceCurveView(context)
     private val configuration=ViewConfiguration.get(context)
     private var closed=false
-    private val calibrate=SettingsCalibrationActionView(context,environment,inputRoot) {
+    private val calibrate:SettingsCalibrationActionView=SettingsCalibrationActionView(context,environment,inputRoot) {
         if(!gesture.pointerDown&&canBegin())actions()?.calibrate()
     }
     private val cancel=SettingsCalibrationActionView(context,environment,inputRoot) {actions()?.cancel()}
@@ -129,7 +129,7 @@ private class SilenceBody(
     private val unavailable=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.muted)
     private val progress=SettingsCalibrationProgressView(context,environment)
     private val visibleItems=ArrayList<View>(6)
-    private val gesture=SettingsCalibrationGesture(::canBegin,
+    private val gesture:SettingsCalibrationGesture=SettingsCalibrationGesture(::canBegin,
         {actions()?.beginHeld()==true},{actions()?.completeTap()},{actions()?.finishHeld()},
         {actions()?.cancel()},{refresh()},
         {calibrate.width},{calibrate.height},
