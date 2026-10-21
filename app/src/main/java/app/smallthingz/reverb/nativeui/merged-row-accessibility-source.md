@@ -1,6 +1,6 @@
 # Merged onboarding row accessibility delegate
 
-`ReverbMergedRowAccessibility.kt` and the permission/buffer/audio row bindings are integrated in native-screens. They are not yet compiled or device-qualified. It changes no rendering, recorder/backend, permissions or system accessibility settings.
+`ReverbMergedRowAccessibility.kt` and the permission/buffer/audio row bindings are integrated in native-hosts. The earlier screens2 artifact compiled but its actual node comparison failed: marker text was advertised twice. The corrections described below are not yet compiled or device-qualified. They change no rendering, recorder/backend, permissions or system accessibility settings.
 
 ## Why a native semantic child instead of a mixed provider
 
@@ -13,6 +13,8 @@ The row owner appends `roleView` after its ordinary children and measures/layout
 ## Direct integration API
 
 Create `ReverbMergedRowAccessibility(host, role, sourceState, invokeSourceClick)` once for the row identity, then install it as the row's accessibilityDelegate and append its roleView. Onboarding permission uses BUTTON; buffer/audio rows use SWITCH. Same-identity binds update existing row fields read by sourceState. A different recycled identity gets a new delegate/role child. Owner-controlled row disposal removes the child/delegate; a detach/reattach does not recreate semantic identity.
+
+The actual row ViewGroup must override public `addChildrenForAccessibility` and delegate to this helper. Android ViewGroup uses that method during its own node initialization (Android16 ViewGroup3827), so it exposes exactly the original leaves plus the role child. Removing only guessed leaf IDs after the super call was wrong: a service requesting non-important Views could receive the marker wrapper subtree plus the same Text directly. Paragraph descendants report their merging row as their accessibility parent across layout-only ancestors. Group content filters wholly clipped/absent row IDs before advertising children, matching those rows' null-node admission. The fourth screens2 capture's exact missing-child cause remains unproven; the strict fixture now retains partial raw nodes and the failing parent/path/index rather than discarding the capture.
 
 SourceState reads enabled/checked/click label and real ordered semantic child Views without copying child text. The page/window owner installs an explicit float geometry and source-exposure lease through bindGeometry. Snapshot computes current presence/visibility and screen bounds from those existing Views; do not use getGlobalVisibleRect. The helper `nativeMergedRoleBoundsInScreen` consumes the existing float root geometry and preserves the source round-before-screen-map rule.
 

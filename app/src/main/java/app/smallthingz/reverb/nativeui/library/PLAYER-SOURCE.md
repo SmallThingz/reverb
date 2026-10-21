@@ -1,0 +1,23 @@
+# Native Library player candidate
+
+Authoritative release: 0.1.2 commit `3e16f8ddb78dca15df4b436d34d330801ce83ffd`. Sources and current candidate hashes are recorded in PLAYER-SOURCE.json; exact source copies and the two-symbol visibility patch remain at `.tmp/native-views-20261021/library-player-proposal` in the original checkout. Integrated after bounded source review; no compiler, host-test, device render, interaction, playback or trim pass is claimed here.
+
+## Rendering and input
+
+ReverbLibraryPlayerView/Controls are the direct released player Column: per-edge14dp inset; optional trim heading+5dp;128dp waveform;2dp time-row top;104dp trim/120dp normal SpringFineSeek; optional error+8dp;2dp action-row top; exact original Save/Cancel Surface layouts and strings. The concrete shared ReverbSpringFineSeekView is injected by its owning native window, not replaced with a platform SeekBar. NativeTimelineMarkerView preserves the original line/grip/cursor geometry, alpha and elevation. Palette is centralized. Home layout/blob/noise and audio algorithms are unchanged.
+
+Waveform snapshots use the existing ProgressiveWaveformData immutable publication; frame updates never copy sample arrays. NativeInlineWaveformMotion retains the760/430/330ms FastOutSlowIn animatables for the visual row lifetime and the source loading clock plus14 final wobble frames. Source morph and reveal values are not reconstructed from screenshots. Actual accepted-frame timing, shadow raster and animation phase require qualification.
+
+Position-only binds update cached marker placement and transforms. Text intrinsic changes, added/removed trim children, density and collapsing height request measurement. No unconditional whole-player remeasure is introduced for playback progress.
+
+InlineWaveformPointerOwner follows the exact source key set and MAIN-pass handler: revision/duration/prepared/trimMode restart it, trimSaving is read live, a handler is captured lazily and retained across same-key updates, normal UP preserves resume and consumed/missing UP revokes it before terminal seek. Source callback identity was corrected during review; the earlier proposal incorrectly adopted same-key replacement handlers. Seven focused tests cover terminal ownership, key replacement, live saving, consumed release and detach/recreation; they are unrun. The host must register the waveform phase node, fineSeek parent/puck nodes and NativeClickPhaseHost action leaves in its shared pointer tree, preserving source clipped bounds and consumption. No competing stock recognizer is introduced.
+
+Boundary labels remain the original Text nodes with source monospace roles, range/state descriptions and keyboard1second/Home/End actions. Shared text/window semantics registration and exact role topology remain native qualification work; no concatenated labels or successful screen-reader pass are claimed.
+
+## Controller ownership
+
+NativeRecordingInlinePlayerController is one recording.id lifetime and requires the owning native window's Main coroutine scope, lifecycle owner and true window-root View. It is not STARTED-gated. Row state retains trimSaving, activeTrimReceiver and accepted trim work across source revisions. The inner revision owns MediaPlayer, pinned read descriptor, seek queue, preview controller and waveform/read/progress jobs. Old accepted trim callbacks keep their captured revision state and accepted callbacks; they are not redirected into a new revision. The exact existing runCommittedInlineTrim/InlineTrimResultReceiver/backend helpers are reused.
+
+Only InlinePlayerMediaSource and openInlinePlayerMediaSource changed visibility from private to internal so the native owner can reuse them without copying storage behavior. All descriptor identity checks, atomic cleanup slots, callbacks, seek serialization, failure delivery and write algorithms remain the released source. Playback auto-start and trim-request/progress effect keys are explicit. UI state delivery is coalesced on Main; actual frame scheduling remains a qualification obligation, not a claim of byte-for-byte lifecycle implementation.
+
+The host must keep one controller until the source lazy-row visual lifetime ends, bind the current expansion owner/active/trim request, supply expansion-keyed predictive-back motion and deliver terminal Back using the owner captured at registration. It must call close exactly at disposal, not merely on invisibility or a temporary incoming transition. Library root/list/selection/Undo/operation assembly and actual native route cutover are still separate work.

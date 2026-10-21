@@ -1,0 +1,17 @@
+{
+  "status": "integrated-uncompiled-unexecuted",
+  "baseline": "v0.1.2",
+  "files": {
+    "NativeSettingsTopBarGeometry.kt": "502822f4d30671d41b43f017efe0f52d98a020ad60ba78cce77313d6eafe9712",
+    "ReverbStandardIconButtonView.kt": "0b7723a7932f17f857fb57d3801cb64f096fcfb469bb2cf247748ba2ee8aafbd",
+    "ReverbSettingsTopBarView.kt": "6dc071c65d04143c15d3f4429c8d1b33420bff570b60c918d6e1d03999e138b6",
+    "NativeSettingsTopBarGeometryTest.kt": "203a7ed4a77859d16ea183068c3399972794a55870222024a42bfd61fd0189bf"
+  },
+  "release_source": "app/src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+  "release_source_sha256": "bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc",
+  "pinned_material3": "1.4.0",
+  "appbar_source_sha256": "a2fc1d9e990df4c4725a0925e2b67c31157d5771c620cd56c5de9c8b1b0f5fec",
+  "tests_written": 5,
+  "tests_executed": false,
+  "insets": "systemBars.union(displayCutout), horizontal+top, subtract upstream consumed once"
+}

@@ -105,7 +105,11 @@ internal class ReverbIncidentBackView(
 
     override fun onDraw(canvas: Canvas) { super.onDraw(canvas); icon.draw(canvas) }
     override fun onTouchEvent(event: MotionEvent): Boolean = controller.touch(event)
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean = controller.key(event) || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = when (event.keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+        KeyEvent.KEYCODE_SPACE -> controller.key(event)
+        else -> super.dispatchKeyEvent(event)
+    }
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val nativeHandled = super.onHoverEvent(event)
         return controller.hover(event) || nativeHandled

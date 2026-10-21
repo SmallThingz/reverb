@@ -36,6 +36,7 @@ internal class OnboardingIconView(
     private var descriptionAccessibility: PlainTextAccessibility? = null
     private var descriptionExposure: (() -> Boolean)? = null
     private var descriptionToken: Any? = null
+    private var sourceDescriptionNode: (() -> NativeSourceAccessibilityNode)? = null
     private var currentIcon = icon
     private var glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
@@ -56,10 +57,16 @@ internal class OnboardingIconView(
     }
     override fun onDraw(canvas: Canvas) { glyph.draw(canvas) }
 
-    fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope, exposed: () -> Boolean): AutoCloseable {
+    fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope, exposed: () -> Boolean): AutoCloseable =
+        bindDescriptionAccessibility(window, null, exposed)
+
+    fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope,
+                                     sourceNode: (() -> NativeSourceAccessibilityNode)?,
+                                     exposed: () -> Boolean): AutoCloseable {
         val token = Any()
         descriptionToken = token
         descriptionExposure = exposed
+        sourceDescriptionNode = sourceNode
         if (descriptionWindow !== window || descriptionAccessibility == null) {
             descriptionWindow = window
             descriptionAccessibility = PlainTextAccessibility(this, window,
@@ -72,9 +79,13 @@ internal class OnboardingIconView(
                 descriptionWindow = null
                 descriptionAccessibility = null
                 descriptionExposure = null
+                sourceDescriptionNode = null
             }
         }
     }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (sourceDescriptionNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
+
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         if (contentDescription.isNullOrEmpty()) return
@@ -89,6 +100,7 @@ internal class OnboardingIconView(
         info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         descriptionAccessibility?.populate(info)
+        sourceDescriptionNode?.invoke()?.populate(info)
     }
     override fun performAccessibilityAction(action: Int, args: Bundle?): Boolean =
         descriptionAccessibility?.performAction(action, args) ?: super.performAccessibilityAction(action, args)
@@ -208,6 +220,9 @@ internal open class OnboardingCardView(
 
     override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
         if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
 
     protected fun bindCard(titleText: String, bodyText: String?, enabled: Boolean, palette: ReverbPalette) {
         input.bind(enabled, palette.ink)
@@ -331,6 +346,9 @@ internal class OnboardingAudioRow(
     }
     override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
         if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
 
     fun bind(text: String, checked: Boolean, visuallyEnabled: Boolean, interactionEnabled: Boolean, palette: ReverbPalette) {
         this.checked = checked

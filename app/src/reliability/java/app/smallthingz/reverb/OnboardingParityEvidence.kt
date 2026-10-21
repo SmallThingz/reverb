@@ -111,6 +111,7 @@ private fun pointInFixture(view: View, fixture: View, point: Offset): Offset {
  */
 internal fun onboardingNativeNodeEvidence(
     instrumentation: Instrumentation, activity: NativeParityActivity, content: View,
+    preserveFailure: (JSONObject) -> Unit,
 ): JSONObject {
     requireNativeParityHost(instrumentation, activity)
     instrumentation.uiAutomation.waitForIdle(80, 2_000)
@@ -122,8 +123,11 @@ internal fun onboardingNativeNodeEvidence(
     val raw = JSONArray()
     val canonical = mutableListOf<JSONObject>()
     var visited = 0
+    var currentPath: List<Int> = emptyList()
+    var missingChild: JSONObject? = null
     @Suppress("DEPRECATION")
-    fun visit(node: AccessibilityNodeInfo, depth: Int) {
+    fun visit(node: AccessibilityNodeInfo, depth: Int, path: List<Int>) {
+        currentPath = path
         check(depth < 64 && ++visited < 1_024) { "Unexpected accessibility tree; stop without truncation" }
         check(node.refresh()) { "Node became stale during a supposedly stable capture" }
         val rect = AndroidRect()
@@ -165,13 +169,32 @@ internal fun onboardingNativeNodeEvidence(
             canonical += item
         }
         for (index in 0 until node.childCount) {
-            val child = checkNotNull(node.getChild(index)) { "Missing child in stable accessibility tree" }
-            try { visit(child, depth + 1) } finally { child.recycle() }
+            val child = node.getChild(index)
+            if (child == null) {
+                missingChild = JSONObject().put("parent_path", JSONArray(path))
+                    .put("parent", JSONObject(item.toString()).put("depth", depth)
+                        .put("child_count", node.childCount))
+                    .put("missing_child_index", index)
+                error("Missing child in stable accessibility tree: parent path=$path, " +
+                    "class=${node.className}, bounds=$rect, depth=$depth, child=$index/${node.childCount}")
+            }
+            try { visit(child, depth + 1, path + index) } finally { child.recycle() }
         }
     }
     try {
         check(root.packageName?.toString() == activity.packageName) { "Focused root is not the QA package" }
-        visit(root, 0)
+        visit(root, 0, emptyList())
+    } catch (error: Throwable) {
+        // A missing native child remains a hard failure. Retain the exact parent/path and all
+        // already-read nodes instead of dropping the failing capture or filtering null children.
+        val partial = JSONObject().put("complete", false).put("raw", raw)
+            .put("canonical_partial", JSONArray(canonical))
+            .put("last_path", JSONArray(currentPath))
+            .put("missing_child", missingChild ?: JSONObject.NULL)
+            .put("error", android.util.Log.getStackTraceString(error))
+        try { preserveFailure(partial) }
+        catch (evidenceError: Throwable) { error.addSuppressed(evidenceError) }
+        throw error
     } finally {
         @Suppress("DEPRECATION")
         root.recycle()

@@ -23,6 +23,17 @@ allprojects {
                 def settingsSource = file('src/main/java/app/smallthingz/reverb/SettingsScreen.kt')
                 def chromeSource = file('src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt')
                 def iconsSource = file('src/main/java/app/smallthingz/reverb/AppIcons.kt')
+                def aboutOracleSources = [
+                    'src/main/java/app/smallthingz/reverb/AboutDialog.kt': '882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b',
+                    'src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt': 'fc977cc4f385def455abe021faf4635a87b6df85cd95de4885a8a1a128fd4d24',
+                    'src/main/java/app/smallthingz/reverb/ReverbBrandMark.kt': 'c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e',
+                    'src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt': '6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187',
+                    'src/main/java/app/smallthingz/reverb/AppFeedback.kt': 'dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518',
+                    'src/main/java/app/smallthingz/reverb/AppIcons.kt': 'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273',
+                ]
+                inputs.files(aboutOracleSources.keySet().collect { file(it) })
+                def onboardingScreenOracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt')
+                inputs.file(onboardingScreenOracle)
                 inputs.files(settingsSource, chromeSource, iconsSource)
                 doLast {
                     def source = settingsSource.getText('UTF-8')
@@ -33,6 +44,15 @@ allprojects {
                     }
                     def sha256 = { byte[] bytes ->
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+                    }
+                    aboutOracleSources.each { relative, expected ->
+                        if (sha256(file(relative).bytes) != expected) {
+                            throw new GradleException('Released About oracle changed: ' + relative)
+                        }
+                    }
+                    if (sha256(onboardingScreenOracle.bytes) !=
+                            '8be65c8c589678c3a5393d4cb7a73489af942e3a04cf0958845bbad5fc4c72a9') {
+                        throw new GradleException('Released onboarding screen oracle changed')
                     }
                     if (sha256(source.substring(start, end).getBytes('UTF-8')) !=
                             '807f2fdde7f224c91153de4b74c5c03c0713bdf41689a58c984951fad1d51952' ||

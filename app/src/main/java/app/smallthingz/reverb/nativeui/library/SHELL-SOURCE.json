@@ -1,0 +1,72 @@
+{
+  "status": "Integrated into native-hosts-20261021; no compile or native validation",
+  "source": [
+    {
+      "commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+      "path": "app/src/main/java/app/smallthingz/reverb/FilesScreen.kt",
+      "sha256": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371"
+    },
+    {
+      "commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+      "path": "app/src/main/java/app/smallthingz/reverb/AppTopBar.kt",
+      "sha256": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670"
+    },
+    {
+      "commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+      "path": "app/src/main/java/app/smallthingz/reverb/AppFeedback.kt",
+      "sha256": "dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/Surface.kt",
+      "sha256": "0e17037ad5ea3f97def48556ed3941715947ea639d333d0bed08806a9c636099"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/Button.kt",
+      "sha256": "c379b30a478b84c2b16669f0a7f7e1f48292886c88b70f9bd4569d8221c06355"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/ProgressIndicator.kt",
+      "sha256": "d0e4627fef5b340b1c4750cc69e7857fa0db7a2502d165bd1f17f5797d4af718"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/internal/ChildParentSemantics.kt",
+      "sha256": "99f84c1b22262408d2f20386d4182bf0127ed1db98e9ec254cf1263540b33898"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/tokens/CircularProgressIndicatorTokens.kt",
+      "sha256": "c0cdca0ff74bc5997dfc3b184c35d2b373230d48a17d7f50d47b2539ca170c67"
+    },
+    {
+      "jar": "material3-android-1.4.0-sources.jar",
+      "jar_sha256": "3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa",
+      "entry": "commonMain/androidx/compose/material3/tokens/ButtonSmallTokens.kt",
+      "sha256": "2a544da64de1e1ddbc728f71d5f1ab8ebdac1273ab6cabadffc12c7375ee878e"
+    }
+  ],
+  "files": {
+    "ReverbLibraryToolbarView.kt": "c4c391a71e5d2b6049da1d30541f3fae157884d713d1b357eaa5afda3c94964d",
+    "ReverbLibraryTextAction.kt": "8aa00cbba43ac04330594666b4747e037706a02fc88297287239e49d794dd72b",
+    "ReverbLibraryStatusView.kt": "91f317824f49ed97dc53571cc04d4a468c1397346a4501adbcf979e2c3d8e999",
+    "ReverbIncidentLoadingView.kt": "f1586a9b1b1cc27c6b1f497bec1f588e6f29092dc232feaa095d1e7440117db8",
+    "ReverbLibraryUndoCard.kt": "1a8764f22d0398698be2da68cc7e7e7d4f9faf23d980c7517fc1b106bd7a7907",
+    "ReverbAppTopBarView.kt": "58535dbc009c5351a5d4b014b7f6419fe93e3fe19c631aceec742e2287796527",
+    "ReverbTopBarHitTest.kt": "88d9e38b4cdd6a2a2ca2968107198c438a7b899f27c94dbd7d7a4e6ed1933865"
+  },
+  "base_head": "e4e9901ba82510ed898429849b575aa410aafc6d",
+  "tests": {
+    "ReverbTopBarHitTestTest.kt": {
+      "cases": 5,
+      "status": "not run"
+    }
+  }
+}

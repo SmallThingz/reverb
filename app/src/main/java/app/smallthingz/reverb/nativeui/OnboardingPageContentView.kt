@@ -194,10 +194,11 @@ internal class OnboardingPageContentView(
     /** Window-owned cursor/float geometry; retained across page detach and refreshed only as needed. */
     fun bindTextAccessibility(
         window: NativeWindowTextAccessibilityOwner,
+        sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
         sourceExposure: (View) -> Boolean,
     ): AutoCloseable {
         textAccessibility?.close()
-        val connected = window.bindPage(this, viewport, sourceExposure)
+        val connected = window.bindPage(this, viewport, sourceNode, sourceExposure)
         textAccessibility = connected
         return AutoCloseable {
             if (textAccessibility === connected) {

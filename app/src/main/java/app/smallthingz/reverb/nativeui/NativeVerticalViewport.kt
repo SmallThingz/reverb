@@ -5,6 +5,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.NativeScrollAccessibilityRegistration
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -66,6 +68,11 @@ internal class NativeVerticalViewport(
     private var localScrollRange = 0
     private var reportedScrollPosition = state.value
     private var focusedDescendant: View? = null
+    private var windowScrollEvents: NativeScrollAccessibilityRegistration? = null
+    private var pendingScrollEvent = false
+    private var pendingLayoutEvent = false
+    var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
+    var sourceAccessibilityChildren: (() -> List<View>)? = null
     override val bringIntoViewView: View get() = this
 
     /** New input admission only. It does not invent cancellation of an already-running fling. */
@@ -73,7 +80,7 @@ internal class NativeVerticalViewport(
         set(value) {
             if (field == value) return
             field = value
-            sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+            windowScrollEvents?.layoutChanged()
         }
 
     private val engine = NativeVerticalScrollEngine(state, object : NativeVerticalScrollHost {
@@ -168,9 +175,7 @@ internal class NativeVerticalViewport(
             // Source publishes bounds before returning its measure result, not after placement.
             val previousMaximum = state.maxValue
             state.measured(measuredHeight, childHeight)
-            if (previousMaximum != state.maxValue) {
-                sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
-            }
+            if (previousMaximum != state.maxValue) pendingLayoutEvent = true
             contentInView.measured(measuredHeight)
             setMeasuredDimension(measuredWidth, measuredHeight)
         } finally {
@@ -185,16 +190,36 @@ internal class NativeVerticalViewport(
             val y = -state.value.coerceIn(0, localScrollRange)
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }
+        if (changed) pendingLayoutEvent = true
+        notifyPlacedAccessibility()
+    }
+
+    /** One actual window queue; no per-viewport timer or duplicate stock scroll event. */
+    fun bindWindowScrollEvents(registration: NativeScrollAccessibilityRegistration): AutoCloseable {
+        check(windowScrollEvents == null)
+        windowScrollEvents = registration
+        // First range observation seeds source state; it is not a synthetic scroll.
+        pendingScrollEvent = false
+        return AutoCloseable {
+            if (windowScrollEvents === registration) {
+                windowScrollEvents = null
+                pendingScrollEvent = false
+                pendingLayoutEvent = false
+            }
+        }
+    }
+
+    private fun notifyPlacedAccessibility() {
+        if (pendingLayoutEvent) windowScrollEvents?.layoutChanged()
+        if (pendingScrollEvent) windowScrollEvents?.scrollChanged()
+        pendingLayoutEvent = false
+        pendingScrollEvent = false
     }
 
     private fun positionChanged() {
         val previous = reportedScrollPosition
         reportedScrollPosition = state.value
-        if (previous != reportedScrollPosition) {
-            // Ordinary native Views use this framework hook for scrolled accessibility delivery;
-            // event payload below reads retained state rather than this host's intentionally zero scrollY.
-            onScrollChanged(0, reportedScrollPosition, 0, previous)
-        }
+        if (previous != reportedScrollPosition) pendingScrollEvent = true
         if (measuring || isInLayout || !isLaidOut || isLayoutRequested) {
             invalidate()
             return
@@ -205,6 +230,7 @@ internal class NativeVerticalViewport(
             // Like placeRelativeWithLayer, move the content without remeasuring every descendant.
             child.offsetTopAndBottom(y - child.top)
         }
+        notifyPlacedAccessibility()
         invalidate()
     }
 
@@ -252,6 +278,14 @@ internal class NativeVerticalViewport(
     override fun getAccessibilityClassName(): CharSequence =
         if (interactionEnabled) "android.widget.ScrollView" else "android.view.View"
 
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (sourceAccessibilityNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val source = sourceAccessibilityChildren
+        if (source == null) super.addChildrenForAccessibility(outChildren) else outChildren.addAll(source())
+    }
+
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.actionList.toList().forEach(info::removeAction)
@@ -277,6 +311,7 @@ internal class NativeVerticalViewport(
                 info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP)
             }
         }
+        sourceAccessibilityNode?.invoke()?.populate(info)
     }
 
     override fun onInitializeAccessibilityEvent(event: AccessibilityEvent) {

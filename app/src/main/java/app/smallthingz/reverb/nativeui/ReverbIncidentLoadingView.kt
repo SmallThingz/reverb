@@ -24,8 +24,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 
-/** Released Incidents' 28dp indeterminate indicator, 2dp round stroke and transparent track. */
-internal class ReverbIncidentLoadingView(context: Context, color: Int) :
+/** Released indeterminate indicator: Incidents defaults to a 2dp round stroke; Library supplies 4dp. */
+internal class ReverbIncidentLoadingView(context: Context, color: Int, private val strokeWidthDp: Float = 2f) :
     View(context), Choreographer.FrameCallback {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         style = Paint.Style.STROKE
@@ -118,7 +118,7 @@ internal class ReverbIncidentLoadingView(context: Context, color: Int) :
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        paint.strokeWidth = 2f * resources.displayMetrics.density
+        paint.strokeWidth = strokeWidthDp * resources.displayMetrics.density
         val inset = paint.strokeWidth / 2f
         // Released drawCircularIndicator uses width for both arc dimensions, even if nonsquare.
         arc.set(inset, inset, width - inset, width - inset)

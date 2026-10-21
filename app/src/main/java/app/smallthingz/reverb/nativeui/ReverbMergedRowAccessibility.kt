@@ -43,6 +43,7 @@ internal data class NativeMergedRowAccessibilitySnapshot(
     val clickLabel: CharSequence?,
     /** Real semantic Views only, in source drawing order: marker/title/body/status as present. */
     val orderedChildren: List<View>,
+    val originalChildCount: Int,
     /** Source adjusted touch bounds; not an integer native visible-rect approximation. */
     val parentBoundsInScreen: Rect,
     /** Source parent.boundsInRoot rounded before screen mapping; no sibling-occlusion subtraction. */
@@ -95,17 +96,31 @@ internal class ReverbMergedRowAccessibility(
     private var geometry: NativePlainTextViewGeometry? = null
     private var sourceExposure: (() -> Boolean)? = null
     private var geometryToken: Any? = null
+    private var sourceNode: (() -> NativeSourceAccessibilityNode)? = null
+    private var sourceChildPresent: ((View) -> Boolean)? = null
 
-    fun bindGeometry(value: NativePlainTextViewGeometry, exposed: () -> Boolean): AutoCloseable {
+    fun sourceOrderedChildren(): List<View> = sourceState().orderedChildren
+
+    fun bindGeometry(value: NativePlainTextViewGeometry, exposed: () -> Boolean): AutoCloseable =
+        bindGeometry(value, null, null, exposed)
+
+    fun bindGeometry(value: NativePlainTextViewGeometry,
+                     node: (() -> NativeSourceAccessibilityNode)?,
+                     childPresent: ((View) -> Boolean)?,
+                     exposed: () -> Boolean): AutoCloseable {
         val token = Any()
         geometryToken = token
         geometry = value
         sourceExposure = exposed
+        sourceNode = node
+        sourceChildPresent = childPresent
         return AutoCloseable {
             if (geometryToken === token) {
                 geometryToken = null
                 geometry = null
                 sourceExposure = null
+                sourceNode = null
+                sourceChildPresent = null
             }
         }
     }
@@ -114,17 +129,34 @@ internal class ReverbMergedRowAccessibility(
         val state = sourceState()
         val mapped = geometry?.capture(host, Offset.Zero,
             ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))
+        val node = sourceNode?.invoke()
         val hidden = sourceExposure?.invoke() != true || !host.isShown || hasTransparentAncestor(host)
         val present = mapped != null && host.isAttachedToWindow && !mapped.visibleBoundsInRoot.isEmpty
         val bounds = mapped?.let { nativeMergedRoleBoundsInScreen(it, host.isLaidOut) } ?: Rect()
         // Released onboarding rows are at least64dp high and fill the available width: their
         // source minimum48dp touch expansion is zero. Rows do not overlap. Under these explicit
         // page invariants the adjusted touch bounds equal the parent clipped rectangle.
-        return NativeMergedRowAccessibilitySnapshot(present, hidden, present && !hidden,
-            state.enabled, state.checked, state.clickLabel, state.orderedChildren, bounds, bounds)
+        return NativeMergedRowAccessibilitySnapshot(node?.present ?: present, node?.hidden ?: hidden,
+            node?.visibleToUser ?: (present && !hidden), state.enabled, state.checked, state.clickLabel,
+            state.orderedChildren.filter { sourceChildPresent?.invoke(it) != false }, state.orderedChildren.size,
+            node?.boundsInScreen ?: bounds, bounds)
     }
 
     fun isNodePresent(): Boolean = host.isAttachedToWindow && snapshot().present
+
+    /**
+     * The actual ViewGroup must forward its public addChildrenForAccessibility here. Replacing
+     * guessed leaf IDs after super.onInitializeAccessibilityNodeInfo is insufficient: with
+     * FLAG_INCLUDE_NOT_IMPORTANT_VIEWS, Android initially advertises the marker/content wrappers,
+     * and their same Text descendant would then also be advertised directly by this row.
+     * Keep one semantic parent and one route to each original child, without changing View layout.
+     */
+    fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val current = snapshot()
+        if (!current.present) return
+        outChildren.addAll(current.orderedChildren)
+        if (current.originalChildCount > 0) outChildren.add(roleView)
+    }
 
     override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(view, info)
@@ -159,13 +191,9 @@ internal class ReverbMergedRowAccessibility(
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
         if (current.enabled) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
             AccessibilityNodeInfo.ACTION_CLICK, current.clickLabel))
-        // ViewGroup's native semantic-child list can sort a role child geometrically. Re-add the
-        // exact known children in source order; the owner must expose no extra semantic wrappers.
-        current.orderedChildren.forEach(info::removeChild)
-        info.removeChild(roleView)
-        current.orderedChildren.forEach(info::addChild)
-        if (current.orderedChildren.isNotEmpty()) info.addChild(roleView)
-        else applyRole(info) // Source applies role to the parent if it has no semantic children.
+        // ViewGroup's super call obtained the exact source children through the public override
+        // above. Do not append them again or reintroduce their non-semantic layout wrappers.
+        if (current.originalChildCount == 0) applyRole(info)
     }
 
     override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean {
@@ -213,7 +241,7 @@ internal class ReverbMergedRowAccessibility(
 
         override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? {
             val current = snapshot()
-            return if (isAttachedToWindow && current.present && current.orderedChildren.isNotEmpty())
+            return if (isAttachedToWindow && current.present && current.originalChildCount > 0)
                 super.createAccessibilityNodeInfo() else null
         }
 
@@ -242,14 +270,14 @@ internal class ReverbMergedRowAccessibility(
             info.movementGranularities = 0
             info.setBoundsInParent(Rect()) // Source provider writes only boundsInScreen.
             info.setBoundsInScreen(current.fakeRoleBoundsInScreen)
-            info.drawingOrder = current.orderedChildren.size
+            info.drawingOrder = current.originalChildCount
             info.actionList.toList().forEach(info::removeAction)
             addAccessibilityFocusAction(info, isAccessibilityFocused)
         }
 
         override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
             val current = snapshot()
-            if (!isAttachedToWindow || !current.present || current.orderedChildren.isEmpty()) return false
+            if (!isAttachedToWindow || !current.present || current.originalChildCount == 0) return false
             return when (action) {
                 AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS ->

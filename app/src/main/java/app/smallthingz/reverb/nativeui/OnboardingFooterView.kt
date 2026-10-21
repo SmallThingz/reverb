@@ -91,6 +91,27 @@ internal class OnboardingFooterView(
     resolver: FontFamily.Resolver,
     interactions: OnboardingFooterInteractionsFactory,
 ) : ViewGroup(context) {
+    /** Same native window cursor as page labels; keep the lease until this footer is disposed. */
+    fun bindTextAccessibility(window: NativeWindowTextAccessibilityOwner,
+                              sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
+                              exposed: (View) -> Boolean): AutoCloseable = window.bindFooter(this, sourceNode, exposed)
+
+    internal fun clipsAccessibilityTextAt(view: View): Boolean =
+        back.clipsAccessibilityTextAt(view) || next.clipsAccessibilityTextAt(view)
+
+    internal fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
+                                   geometry: NativePlainTextViewGeometry,
+                                   sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
+                                   exposed: (View) -> Boolean): AutoCloseable {
+        val first = back.bindAccessibility(cursor, geometry, sourceNode, exposed)
+        val second = try { next.bindAccessibility(cursor, geometry, sourceNode, exposed) }
+        catch (error: Throwable) {
+            try { first.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+        return AutoCloseable { closeNativeFooterAccessibility(first, second) }
+    }
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var state = OnboardingFooterState(0, 0, ready = false, finishing = false)
     private var palette: ReverbPalette? = null
@@ -244,8 +265,8 @@ private class FooterButton(
     density: Density,
     resolver: FontFamily.Resolver,
     factory: OnboardingFooterInteractionsFactory,
-    onActivate: () -> Unit,
-) : ViewGroup(context), NativeClickPhaseHost {
+    private val onActivate: () -> Unit,
+) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
     private val content = object : ViewGroup(context) {
@@ -289,6 +310,34 @@ private class FooterButton(
     }
     private val interaction = factory.create(this, content, filled) { elevation = it }
     override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = interaction.pointerEndpoint
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, listOf(label)) },
+        invokeSourceClick = {
+            if (isEnabled && isAttachedToWindow) { onActivate(); true } else false
+        })
+
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
+
+    fun clipsAccessibilityTextAt(view: View): Boolean = view === content
+
+    fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
+                          geometry: NativePlainTextViewGeometry,
+                          sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
+                          exposed: (View) -> Boolean): AutoCloseable {
+        val role = mergedRowAccessibility.bindGeometry(geometry,
+            sourceNode?.let { node -> { node(this) } }, sourceNode?.let { node -> { child -> node(child).present } }) { exposed(this) }
+        val text = try { label.bindPlainTextAccessibility(cursor, geometry,
+            sourceNode?.let { node -> { node(label) } }) { exposed(label) } }
+        catch (error: Throwable) {
+            try { role.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+        return AutoCloseable { closeNativeFooterAccessibility(role, text) }
+    }
     private val capsuleOutline = object : ViewOutlineProvider() {
         override fun getOutline(view: View, outline: Outline) {
             outline.setRoundRect(0, 0, view.width, view.height, min(view.width, view.height) / 2f)
@@ -305,9 +354,12 @@ private class FooterButton(
         content.outlineProvider = capsuleOutline
         content.clipToOutline = true
         content.foreground = interaction.foreground
-        content.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        content.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        label.isScreenReaderFocusable = false
         content.addView(label)
         addView(content)
+        addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate = mergedRowAccessibility
         setOnClickListener { if (isEnabled && isAttachedToWindow) onActivate() }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
@@ -341,9 +393,11 @@ private class FooterButton(
     override fun onMeasure(w: Int, h: Int) {
         content.measure(w, h)
         setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h))
+        mergedRowAccessibility.roleView.measure(w, h)
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         content.layout(0, 0, width, height)
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
         invalidateOutline()
         content.invalidateOutline()
         interaction.measured(width, height)
@@ -379,10 +433,17 @@ private class FooterButton(
         super.onDetachedFromWindow()
     }
     override fun performClick(): Boolean = isEnabled && isAttachedToWindow && super.performClick()
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = android.widget.Button::class.java.name
-        info.text = label.getText()
-    }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+}
+
+private fun closeNativeFooterAccessibility(vararg leases: AutoCloseable) {
+    var failure: Throwable? = null
+    leases.forEach { lease ->
+        try { lease.close() }
+        catch (error: Throwable) {
+            val previous = failure
+            if (previous == null) failure = error else previous.addSuppressed(error)
+        }
+    }
+    failure?.let { throw it }
 }

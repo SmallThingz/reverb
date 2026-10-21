@@ -191,14 +191,14 @@ internal fun inlineTrimGestureTarget(
     }
 }
 
-private data class InlinePlayerMediaSource(
+internal data class InlinePlayerMediaSource(
     val descriptor: FileDescriptor,
     val owner: Closeable,
 ) : Closeable {
     override fun close() = owner.close()
 }
 
-private fun openInlinePlayerMediaSource(
+internal fun openInlinePlayerMediaSource(
     context: Context,
     recording: RecordingEntity,
     cleanup: RecordingReadCleanup,

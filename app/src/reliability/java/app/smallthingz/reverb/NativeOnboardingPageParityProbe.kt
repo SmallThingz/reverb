@@ -184,7 +184,14 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
                                 .put("actual_scroll", render.scrollPosition())
                                 .put("max_scroll", render.maximumScroll())
                         }
-                        val nodes = onboardingNativeNodeEvidence(instrumentation, host, render.content)
+                        val nodes = onboardingNativeNodeEvidence(instrumentation, host, render.content) { partial ->
+                            val label = listOf("compose", "native", "compose-repeat", "native-repeat")[pass]
+                            val stem = "${case.name}-slice$slice-$label-failed"
+                            entry.put("failed_capture", stem)
+                            File(directory, "$stem-nodes.json").writeText(partial.toString(2))
+                            File(directory, "$stem-geometry.json").writeText(geometry.toString(2))
+                            saveNativeParityBitmap(directory, "$stem.png", bitmaps.last())
+                        }
                         evidence += JSONObject().put("geometry", geometry).put("nodes", nodes)
                     }
                     val labels = listOf("compose", "native", "compose-repeat", "native-repeat")

@@ -1,0 +1,19 @@
+{
+  "status": "integrated-uncompiled-unexecuted",
+  "baseline": "v0.1.2",
+  "files": {
+    "NativeSpringFineSeekState.kt": "ba8f4c34f144e5a185cb6ac293beff9e3a63a9075c24f128103ed5c09d0e0578",
+    "ReverbSpringFineSeekView.kt": "66125a5115686328fd7e5d63ab4db15a3e7bfaf054e60901da142f67e1c39908",
+    "NativeSpringFineSeekStateTest.kt": "27ca8ac7e2c941ddeeb0fd2956621248579ac2f1306d0b403b1803553a12ea89"
+  },
+  "source_file": "app/src/main/java/app/smallthingz/reverb/RangeExportEditor.kt",
+  "source_sha256": "79954eb9fdd0926eb685c07db1df3fe9d4ecd3dacfb8c74a60e0e3c44414bc65",
+  "SpringFineSeekControl_fragment_sha256": "144de919d104127c6fbbdd2d3d84f6d98d3bc73784f1b3af82771357928ddb5d",
+  "shared_helpers": "Unchanged FineSeekInputSession, RangeInputGesture, RangeDurationWheelInteraction, rangeFineTune* and cancelFineSeekOwnedAudio",
+  "tests_written": 15,
+  "tests_executed": false,
+  "review_corrections": [
+    "Live width on drag start/MOVE with retained DOWN travel",
+    "Merged-row explicit accessibility children and present-node admission"
+  ]
+}

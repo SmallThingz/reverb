@@ -195,6 +195,19 @@ private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(
     private val softwareClip = Path()
     private val softwareBounds = RectF()
 
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val firstAdded = outChildren.size
+        super.addChildrenForAccessibility(outChildren)
+        // A wholly clipped source row has no node. Never advertise its native ID and then return
+        // null when the service resolves it; preserve every unrelated/non-row child unchanged.
+        for (index in outChildren.lastIndex downTo firstAdded) {
+            val child = outChildren[index]
+            if (child is NativeMergedRowAccessibilityHost && !child.mergedRowAccessibility.isNodePresent()) {
+                outChildren.removeAt(index)
+            }
+        }
+    }
+
     init {
         orientation = VERTICAL
         clipToOutline = true

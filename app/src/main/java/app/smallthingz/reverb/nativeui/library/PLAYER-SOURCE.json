@@ -1,0 +1,51 @@
+{
+  "status": "Integrated candidate; no compile/test/device qualification",
+  "base": "e4e9901ba82510ed898429849b575aa410aafc6d",
+  "sources": [
+    {
+      "name": "AndroidComposeViewAccessibilityDelegateCompat.android.kt",
+      "sha256": "29616ea6501cf785d0de5c2ae325df09c58504683cc54b7576efb84b2a892e62",
+      "origin": "AndroidX UI1.11.2 source jar"
+    },
+    {
+      "name": "Formatters.kt",
+      "sha256": "4407e8e1cbebad207ec0a7a75c733851b3f0db5bcda31e68fed1121c6b845dc6",
+      "origin": "3e16f8ddb78dca15df4b436d34d330801ce83ffd"
+    },
+    {
+      "name": "InlineTrimBoundaryAction.kt",
+      "sha256": "3620ab8a08fb6a9737a5ddcb5c5845d2c3d32665a9a915049cc5b2487ddeafe9",
+      "origin": "3e16f8ddb78dca15df4b436d34d330801ce83ffd"
+    },
+    {
+      "name": "ProgressiveWaveform.kt",
+      "sha256": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+      "origin": "3e16f8ddb78dca15df4b436d34d330801ce83ffd"
+    },
+    {
+      "name": "RangeExportEditor.kt",
+      "sha256": "79954eb9fdd0926eb685c07db1df3fe9d4ecd3dacfb8c74a60e0e3c44414bc65",
+      "origin": "3e16f8ddb78dca15df4b436d34d330801ce83ffd"
+    },
+    {
+      "name": "RecordingInlinePlayer.kt",
+      "sha256": "be40d98c8b619c4920ca5b102ad8d38b6d0a7239bca6ed3a08110cce56f78423",
+      "origin": "3e16f8ddb78dca15df4b436d34d330801ce83ffd"
+    }
+  ],
+  "files": {
+    "ReverbLibraryPlayerView.kt": "3bf4d8300e8b52bfa62bb4571b054457680fdc0239bec1aaed9fd71f5a5dddeb",
+    "ReverbLibraryPlayerControls.kt": "0cf34c53a9b0f53700a1ca2ab0ef34224f34dadc5b00f06a7ec22ddb871bc0d6",
+    "ReverbTimelineMarkerView.kt": "f235a864476530841b90c7136c3db66669385907fa27efb8d05f3a81d3f28dd9",
+    "InlineWaveformPointerOwner.kt": "65d00ec7949720803d1c547ae0ec117a4563cde19ee49517988a142440ce6a09",
+    "NativeInlineWaveformMotion.kt": "318c39ada50dbf4a9b7bb3e4a86040ed9292e82923815726fdc2ceb146f4eb6d",
+    "../NativeRecordingInlinePlayerController.kt": "3a520abc7f886eae9e8f65315b48d1c959a6921d6b0d419f1c6b2f629ad39302"
+  },
+  "tests": {
+    "InlineWaveformPointerOwnerTest.kt": {
+      "cases": 7,
+      "status": "not run",
+      "sha256": "e0d7222ae7b7b78afb64de02bd225c7936f53646099c068f57d872e0fb09ad3d"
+    }
+  }
+}

@@ -4,6 +4,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.MainThread
 import androidx.compose.ui.geometry.Rect
+import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap
 
 /**
@@ -17,6 +19,44 @@ internal class NativeWindowTextAccessibilityOwner(
     private val hostClips: NativeTextSemanticsClipPolicy,
 ) {
     private val cursor = PlainTextAccessibilityWindowScope(windowRoot)
+    private var scrollEventsToken: Any? = null
+    private var scrollEvents: NativeWindowScrollAccessibilityEvents? = null
+
+    /** The page/pager/ordinary About scrollers share this window queue and the existing cursor. */
+    fun openScrollEvents(scope: CoroutineScope, onScrollGeometryChanged: () -> Unit,
+                         onBatchFinished: () -> Unit): NativeWindowScrollAccessibilityEvents {
+        check(scrollEventsToken == null) { "This native window already has a scroll-event owner" }
+        val token = Any()
+        scrollEventsToken = token
+        val created = try {
+            NativeWindowScrollAccessibilityEvents(windowRoot, scope, onScrollGeometryChanged,
+                onBatchFinished, onClosed = {
+                    if (scrollEventsToken === token) {
+                        scrollEventsToken = null
+                        scrollEvents = null
+                    }
+                })
+        } catch (error: Throwable) {
+            if (scrollEventsToken === token) scrollEventsToken = null
+            throw error
+        }
+        // A pre-cancelled scope can synchronously dispose during construction.
+        if (scrollEventsToken === token) scrollEvents = created
+        return created
+    }
+
+    /** Exact two-button footer; content clip is the source Surface layer, not its rounded ink. */
+    fun bindFooter(footer: OnboardingFooterView, sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
+                   sourceExposure: (View) -> Boolean): AutoCloseable =
+        footer.bindAccessibility(cursor, NativePlainTextViewGeometry(windowRoot,
+            NativeTextSemanticsClipPolicy { view ->
+                when {
+                    footer.clipsAccessibilityTextAt(view) -> NativeTextSemanticsClip.Rectangle(
+                        Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                    view.isWithin(footer) -> NativeTextSemanticsClip.Unclipped
+                    else -> hostClips.localClip(view)
+                }
+            }), sourceNode, sourceExposure)
 
     /**
      * The page owner calls refresh after an actual row-membership change, not on every frame.
@@ -30,6 +70,7 @@ internal class NativeWindowTextAccessibilityOwner(
     fun bindPage(
         page: OnboardingPageContentView,
         sourceScrollViewport: View,
+        sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
         sourceExposure: (View) -> Boolean,
     ): NativePageTextAccessibilityOwner {
         require(sourceScrollViewport.isWithin(page)) { "Source viewport must belong to this page" }
@@ -49,7 +90,7 @@ internal class NativeWindowTextAccessibilityOwner(
                 else -> hostClips.localClip(view)
             }
         }),
-        sourceExposure,
+        sourceExposure, sourceNode,
         ).also { it.refresh() }
     }
 }
@@ -67,6 +108,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
     private val cursor: PlainTextAccessibilityWindowScope,
     private val geometry: NativePlainTextViewGeometry,
     private val sourceExposure: (View) -> Boolean,
+    private val sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
 ) : AutoCloseable {
     private val leases = IdentityHashMap<View, AutoCloseable>()
     private var closed = false
@@ -92,9 +134,12 @@ internal class NativePageTextAccessibilityOwner internal constructor(
                 view.isScreenReaderFocusable = !view.hasMergingRowAncestor(page)
             }
             if (!leases.containsKey(view)) leases[view] = when (view) {
-                is ReverbParagraphView -> view.bindPlainTextAccessibility(cursor, geometry) { exposed(view) }
-                is NativeMergedRowAccessibilityHost -> view.mergedRowAccessibility.bindGeometry(geometry) { exposed(view) }
-                is OnboardingIconView -> view.bindDescriptionAccessibility(cursor) { exposed(view) }
+                is ReverbParagraphView -> view.bindPlainTextAccessibility(cursor, geometry,
+                    sourceNode?.let { node -> { node(view) } }) { exposed(view) }
+                is NativeMergedRowAccessibilityHost -> view.mergedRowAccessibility.bindGeometry(geometry,
+                    sourceNode?.let { node -> { node(view) } }, sourceNode?.let { node -> { child -> node(child).present } }) { exposed(view) }
+                is OnboardingIconView -> view.bindDescriptionAccessibility(cursor,
+                    sourceNode?.let { node -> { node(view) } }) { exposed(view) }
                 else -> error("Unexpected page accessibility binding")
             }
         }

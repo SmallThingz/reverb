@@ -209,15 +209,25 @@ internal class ReverbParagraphView(
      * Labels remain exposed beneath a merging parent in the source unmerged accessibility tree.
      * The owner sets their screenReaderFocusable flag separately; this method adds no keyboard stop.
      */
+    private var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
+
+    internal fun originalAccessibilityBoundsInView() = Rect(
+        paddingLeft.toFloat(), paddingTop.toFloat(),
+        (paddingLeft + measuredContentSize.width).toFloat(),
+        (paddingTop + measuredContentSize.height).toFloat(),
+    )
+
     fun bindPlainTextAccessibility(
         window: PlainTextAccessibilityWindowScope,
         geometry: NativePlainTextViewGeometry,
+        sourceNode: (() -> NativeSourceAccessibilityNode)? = null,
         exposed: () -> Boolean,
     ): AutoCloseable {
         val token = Any()
         accessibilityBindingToken = token
         accessibilityGeometry = geometry
         accessibilityExposed = exposed
+        sourceAccessibilityNode = sourceNode
         if (accessibilityWindow !== window || textAccessibility == null) {
             accessibilityWindow = window
             textAccessibility = PlainTextAccessibility(
@@ -246,6 +256,7 @@ internal class ReverbParagraphView(
                 accessibilityBindingToken = null
                 accessibilityGeometry = null
                 accessibilityExposed = null
+                sourceAccessibilityNode = null
                 accessibilityWindow = null
                 textAccessibility = null
             }
@@ -577,12 +588,28 @@ internal class ReverbParagraphView(
 
     override fun getAccessibilityClassName(): CharSequence = TextView::class.java.name
 
+    override fun getParentForAccessibility(): android.view.ViewParent? {
+        // A merged source row exposes its original Text directly. Marker/Surface/content Views
+        // remain layout-only ancestors, even when a service requests non-important native Views.
+        var ancestor = parent as? View
+        while (ancestor != null) {
+            if (ancestor is android.view.ViewGroup && ancestor is NativeMergedRowAccessibilityHost) return ancestor
+            if (ancestor.isImportantForAccessibility) break
+            ancestor = ancestor.parent as? View
+        }
+        return super.getParentForAccessibility()
+    }
+
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (sourceAccessibilityNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
+
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.className = TextView::class.java.name
         info.text = label
         info.isEditable = false
         textAccessibility?.populate(info)
+        sourceAccessibilityNode?.invoke()?.populate(info)
     }
 
     override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean =
