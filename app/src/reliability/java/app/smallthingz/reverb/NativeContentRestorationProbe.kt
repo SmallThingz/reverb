@@ -295,7 +295,8 @@ private class ForbiddenPermissionLauncher : ActivityResultLauncher<String>() {
     override fun launch(input: String, options: ActivityOptionsCompat?) =
         error("Restoration qualification attempted a forbidden permission launch: $input")
     override fun unregister() = Unit
-    override fun getContract(): ActivityResultContract<String, Boolean> = ActivityResultContracts.RequestPermission()
+    override val contract: ActivityResultContract<String, Boolean>
+        get() = ActivityResultContracts.RequestPermission()
 }
 
 private fun restorationParcel(input: Bundle): Bundle {
