@@ -8,10 +8,14 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.RectF
 import android.os.Build
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.view.InputDevice
+import android.view.MotionEvent
+import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.WindowInsets
@@ -179,7 +183,7 @@ private fun requireLibraryFixtureIdentity(context: Context) {
 }
 
 /** Complete identity-bound outputs owned by this isolated app, using the ordinary default provider. */
-private class LibraryOwnedFixtures(private val context: Context, private val evidence: File) : AutoCloseable {
+internal class LibraryOwnedFixtures(private val context: Context, private val evidence: File) : AutoCloseable {
     private val directory = getSavedRecordingsDirectory(context)
     private val owned = mutableListOf<RecordingEntity>()
     private val ownedDigests = mutableMapOf<String, CopyDigest>()
@@ -269,6 +273,21 @@ private class LibraryOwnedFixtures(private val context: Context, private val evi
         manifest.put("catalog_ids", JSONArray(current.map { it.id })); saveManifest()
         return current
     }
+    fun requireUnchanged() {
+        check(admitted && creationAttempts == owned.size && owned.isNotEmpty())
+        val current = runBlocking { RecordingRepository.listKnown(context) }
+        check(current.map { it.id }.toSet() == owned.map { it.id }.toSet())
+        owned.forEach { recording ->
+            val catalog = current.single { it.id == recording.id }
+            check(catalog.fileIdentity == recording.fileIdentity && catalog.displayName == recording.displayName &&
+                catalog.sizeBytes == recording.sizeBytes && catalog.durationMillis == recording.durationMillis)
+            val observed = recordingCatalogPostconditionObservation(context, recording)
+            check(observed.identityMatches && observed.displayNameMatches)
+            val digest = checkNotNull(sha256StableRecording(context, recording))
+            val expected = ownedDigests.getValue(recording.id)
+            check(digest.byteCount == expected.byteCount && digest.sha256.contentEquals(expected.sha256))
+        }
+    }
     override fun close() {
         var primary: Throwable? = null
         val deleted = mutableSetOf<String>()
@@ -311,11 +330,12 @@ private class LibraryFixtureLifecycle : LifecycleOwner {
     override val lifecycle: Lifecycle get() = registry
     init { registry.currentState = Lifecycle.State.RESUMED }
     fun pause() { registry.currentState = Lifecycle.State.STARTED }
+    fun resume() { registry.currentState = Lifecycle.State.RESUMED }
     fun close() { registry.currentState = Lifecycle.State.DESTROYED }
 }
 
 @OptIn(ExperimentalComposeViewContextApi::class)
-private class LibraryParityBoard(
+internal class LibraryParityBoard(
     private val host: NativeParityActivity,
     dark: Boolean,
     private val records: List<RecordingEntity>,
@@ -471,6 +491,235 @@ private class LibraryParityBoard(
         }
         settle(instrumentation)
     }
+    /** Bounded real-player route; the released renderer and fixture audio remain unchanged. */
+    fun verifyPlayback(
+        instrumentation: Instrumentation,
+        compose: Boolean,
+        directory: File,
+        checkpoint: (String, JSONObject) -> Unit,
+    ) {
+        val renderer = if (compose) "compose" else "native"
+        nativeParityOnMain(instrumentation) { show(compose) }
+        awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        fun state() = nativeParityOnMain(instrumentation) { playbackState(compose) }
+        fun record(name: String) = checkpoint(name, state())
+        fun capture(name: String) {
+            val bitmap = captureNativeParityContent(instrumentation, host) { show(compose) }
+            try { saveNativeParityBitmap(directory, "$renderer-$name.png", bitmap) }
+            finally { bitmap.recycle() }
+        }
+        record("prepared-first-attachment")
+        capture("prepared-first-attachment")
+        nativeParityOnMain(instrumentation) {
+            playbackGuard()
+            if (compose) sourceLifecycle.resume() else nativeLifecycle.resume()
+        }
+        awaitCondition(instrumentation, "initial expansion autoplay") { isPlaying(compose) }
+        record("autoplay")
+        nativeParityOnMain(instrumentation) {
+            playbackGuard(); invokeDescription(compose, context.getString(R.string.player_pause))
+        }
+        awaitCondition(instrumentation, "pause before explicit play") { !isPlaying(compose) }
+        val beforePlay = state()
+        checkpoint("before-explicit-play", beforePlay)
+        val beforePlayText = beforePlay.getJSONArray("transport_text").getString(0)
+        nativeParityOnMain(instrumentation) {
+            playbackGuard(); invokeDescription(compose, context.getString(R.string.player_play))
+        }
+        awaitCondition(instrumentation, "explicit play advances visible time") {
+            isPlaying(compose) && transportTexts(compose).first() != beforePlayText
+        }
+        record("playing-progress")
+        nativeParityOnMain(instrumentation) {
+            playbackGuard(); check(isPlaying(compose))
+            invokeDescription(compose, context.getString(R.string.player_pause))
+        }
+        awaitCondition(instrumentation, "explicit pause") { !isPlaying(compose) }
+        record("paused")
+        val pausedText = state().getJSONArray("transport_text").getString(0)
+        val pauseUntil = SystemClock.uptimeMillis() + 180L
+        while (SystemClock.uptimeMillis() < pauseUntil) {
+            requireNativeParityHost(instrumentation, host)
+            awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+            check(state().getJSONArray("transport_text").getString(0) == pausedText)
+        }
+        // The source waveform has no semantic node. Its bounds come from the current two
+        // time labels and the released 128dp waveform / 2dp gap, checked against the concrete
+        // native waveform View before dispatch. No screenshot-derived or stale screen position.
+        nativeParityOnMain(instrumentation) {
+            playbackGuard()
+            check(!isPlaying(compose))
+            val bounds = waveformBounds(compose)
+            val other = waveformBounds(!compose)
+            check(kotlin.math.abs(bounds.left - other.left) <= 1f &&
+                kotlin.math.abs(bounds.top - other.top) <= 1f &&
+                kotlin.math.abs(bounds.right - other.right) <= 1f &&
+                kotlin.math.abs(bounds.bottom - other.bottom) <= 1f) {
+                "Released/native logical waveform bounds differ: $bounds / $other"
+            }
+            val result = JSONObject().put("bounds", bounds.toString()).put("peer_bounds", other.toString())
+                .put("down_handled", JSONObject.NULL).put("up_handled", JSONObject.NULL)
+            // The checkpoint retains this object, so terminal failure serialization includes
+            // any observed partial dispatch without claiming an uncertain action was absent.
+            checkpoint("seek-input", result)
+            val time = SystemClock.uptimeMillis()
+            val origin = IntArray(2).also(host.fixtureRoot::getLocationOnScreen)
+            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                playbackGuard()
+                check(waveformBounds(compose) == bounds) { "Waveform moved during the owned tap" }
+                val x = bounds.left + bounds.width() * .75f
+                val y = bounds.centerY()
+                check(x >= 0f && y >= 0f && x < host.fixtureRoot.width && y < host.fixtureRoot.height)
+                val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                    id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER
+                })
+                val coordinates = arrayOf(MotionEvent.PointerCoords().apply {
+                    this.x = x + origin[0]; this.y = y + origin[1]
+                    pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f; size = 1f
+                })
+                val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, 1, properties,
+                    coordinates, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
+                try {
+                    val handled = host.fixtureRoot.dispatchTouchEvent(event)
+                    result.put(if (action == MotionEvent.ACTION_DOWN) "down_handled" else "up_handled", handled)
+                    check(handled) { "Owned waveform tap was not handled: $action" }
+                } finally { event.recycle() }
+            }
+        }
+        val expectedSeek = formatPlaybackTime((records.first().durationMillis * .75).toInt())
+        awaitCondition(instrumentation, "paused interior waveform seek") {
+            !isPlaying(compose) && transportTexts(compose).first() == expectedSeek
+        }
+        settle(instrumentation)
+        record("seek-paused"); capture("seek-paused")
+        nativeParityOnMain(instrumentation) { openPlaybackMenu(compose) }
+        awaitPlaybackWindow(instrumentation, "Trim menu") {
+            hasPlaybackText(compose, context.getString(R.string.trim_recording))
+        }
+        nativeParityOnMain(instrumentation) { clickPlaybackText(compose, context.getString(R.string.trim_recording)) }
+        awaitPlaybackWindow(instrumentation, "inline Trim controls") {
+            host.hasWindowFocus() && hasPlaybackText(compose, context.getString(R.string.trim_save_copy)) &&
+                hasPlaybackText(compose, context.getString(R.string.cancel))
+        }
+        nativeParityOnMain(instrumentation) { check(!isPlaying(compose)) }
+        settle(instrumentation)
+        checkpoint("trim", nativeParityOnMain(instrumentation) {
+            JSONObject().put("playing", isPlaying(compose)).put("labels", JSONArray(playbackTexts(compose)))
+        })
+        capture("trim")
+        nativeParityOnMain(instrumentation) { clickPlaybackText(compose, context.getString(R.string.cancel)) }
+        awaitCondition(instrumentation, "Trim Cancel leaves paused player") {
+            !hasPlaybackText(compose, context.getString(R.string.trim_save_copy)) && !isPlaying(compose) &&
+                transportTexts(compose).first() == formatPlaybackTime(0)
+        }
+        settle(instrumentation)
+        record("trim-cancelled"); capture("trim-cancelled")
+        nativeParityOnMain(instrumentation) {
+            if (compose) sourceLifecycle.pause() else nativeLifecycle.pause()
+            assertNoPlayback()
+        }
+    }
+
+    private fun playbackGuard(): View {
+        check(!closed && !host.isFinishing && host.fixtureRoot.isShown)
+        val root = WindowInspector.getGlobalWindowViews().filter {
+            it.isAttachedToWindow && it.isShown && it.display?.displayId == 0 && it.hasWindowFocus()
+        }.single()
+        check(root.context.packageName == host.packageName && host.fixtureRoot.display?.displayId == 0) {
+            "Current focus is not this physical QA route"
+        }
+        return root
+    }
+    private fun playbackNodes(merged: Boolean = true) = libraryViews(playbackGuard())
+        .filterIsInstance<ViewRootForTest>().flatMap { it.semanticsOwner.getAllSemanticsNodes(merged) }
+    private fun playbackTexts(compose: Boolean): List<String> = if (compose) playbackNodes(false)
+        .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
+        else libraryViews(playbackGuard()).filterIsInstance<ReverbParagraphView>().filter { it.isShown }.map { it.getText() }
+    private fun hasPlaybackText(compose: Boolean, text: String) = text in playbackTexts(compose)
+    private fun clickPlaybackText(compose: Boolean, text: String) {
+        if (compose) {
+            val node = playbackNodes().single {
+                it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { value -> value.text == text } &&
+                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
+                    it.config.getOrNull(SemanticsActions.OnClick)?.action != null
+            }
+            check(node.config.getOrNull(SemanticsActions.OnClick)!!.action!!.invoke())
+        } else {
+            val target = libraryViews(playbackGuard()).filterIsInstance<ReverbParagraphView>()
+                .filter { it.isShown && it.getText() == text }.mapNotNull { leaf ->
+                    var view: View? = leaf
+                    while (view != null && !view.isClickable) view = view.parent as? View
+                    view
+                }.distinct().single()
+            check(target.isEnabled && target.isShown && target.performClick())
+        }
+    }
+    private fun openPlaybackMenu(compose: Boolean) {
+        playbackGuard()
+        val title = records.first().displayName
+        if (compose) {
+            val node = playbackNodes().single {
+                it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { value -> value.text == title } &&
+                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
+                    it.config.getOrNull(SemanticsActions.OnLongClick)?.label == context.getString(R.string.open_options)
+            }
+            check(node.config.getOrNull(SemanticsActions.OnLongClick)!!.action!!.invoke())
+        } else {
+            val row = libraryViews(checkNotNull(native)).filterIsInstance<ReverbParagraphView>()
+                .filter { it.isShown && it.getText() == title }.mapNotNull { leaf ->
+                    var view: View? = leaf
+                    while (view != null && !view.isLongClickable) view = view.parent as? View
+                    view
+                }.distinct().single()
+            check(row.isEnabled && row.performLongClick())
+        }
+    }
+    private fun awaitPlaybackWindow(instrumentation: Instrumentation, label: String, ready: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 15_000L
+        while (true) {
+            val root = nativeParityOnMain(instrumentation) { playbackGuard() }
+            if (nativeParityOnMain(instrumentation, ready)) return
+            check(SystemClock.uptimeMillis() < deadline) { "Playback fixture timed out: $label" }
+            awaitNativeParityDraw(instrumentation, root)
+        }
+    }
+    private fun isPlaying(compose: Boolean): Boolean = if (compose) sourceNodes().any {
+        it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(context.getString(R.string.player_pause)) == true
+    } else checkNotNull(native?.activePlayerLeases()?.singleOrNull()?.currentPresentation).state.isPlaying
+    private fun sourceTransportNodes() = sourceNodes().filter { node ->
+        val text = node.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text
+        text != null && (0..(records.first().durationMillis / 1000).toInt()).any { text == formatPlaybackTime(it * 1000) }
+    }.also { check(it.size == 2) { "Expected two unique source transport labels, found ${it.size}" } }
+        .sortedBy { it.boundsInWindow.left }
+    private fun nativePlayer() = libraryViews(checkNotNull(native)).filterIsInstance<ReverbLibraryPlayerView>().single()
+    private fun transportTexts(compose: Boolean): List<String> = if (compose) sourceTransportNodes().map {
+        it.config.getOrNull(SemanticsProperties.Text)!!.single().text
+    } else nativePlayer().let { listOf(it.startLabel.getText(), it.endLabel.getText()) }
+    private fun waveformBounds(compose: Boolean): RectF {
+        val origin = IntArray(2).also(host.fixtureRoot::getLocationInWindow)
+        return if (compose) {
+            val labels = sourceTransportNodes()
+            val first = labels[0].boundsInWindow
+            val last = labels[1].boundsInWindow
+            check(kotlin.math.abs(first.top - last.top) <= 1f)
+            val bottom = first.top - 2f * density.density
+            RectF(first.left - origin[0], bottom - 128f * density.density - origin[1],
+                last.right - origin[0], bottom - origin[1])
+        } else nativePlayer().waveformInput.view.let { view ->
+            val at = IntArray(2).also(view::getLocationInWindow)
+            RectF((at[0] - origin[0]).toFloat(), (at[1] - origin[1]).toFloat(),
+                (at[0] - origin[0] + view.width).toFloat(), (at[1] - origin[1] + view.height).toFloat())
+        }.also { check(it.width() > 0 && it.height() > 0) }
+    }
+    private fun playbackState(compose: Boolean): JSONObject {
+        playbackGuard()
+        return JSONObject().put("playing", isPlaying(compose)).put("transport_text", JSONArray(transportTexts(compose)))
+            .put("uptime_ms", SystemClock.uptimeMillis()).put("fixture_id", records.first().id)
+            .put("native_position_ms", if (compose) JSONObject.NULL else
+                native?.activePlayerLeases()?.singleOrNull()?.currentPresentation?.state?.positionMillis)
+    }
+
     private fun invokeRecording(compose: Boolean, longClick: Boolean) {
         val title = records.first().displayName
         if (compose) {

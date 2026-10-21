@@ -82,11 +82,12 @@ internal class NativeLibraryPlayerLease(
             screenActive && expanded && attached, owner,
             library::isCurrentPlaybackOwner, callbacks)
         input = next
-        val existing = controller
-        if (existing == null) {
-            controller = NativeRecordingInlinePlayerController(container.context, container,
-                lifecycleOwner, scope, next, ::publish)
-        } else existing.bind(next)
+        controller = bindAttachedLibraryPlayer(controller, attached,
+            create = {
+                NativeRecordingInlinePlayerController(container.context, container,
+                    lifecycleOwner, scope, next, ::publish)
+            },
+            bindExisting = { it.bind(next) })
         if (!backKeyInitialized || backOwner !== owner) {
             backKeyInitialized = true
             backOwner = owner
