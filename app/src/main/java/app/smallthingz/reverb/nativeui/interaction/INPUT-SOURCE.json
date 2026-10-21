@@ -1,0 +1,30 @@
+{
+  "release": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "sources": [
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "path": "commonMain/androidx/compose/foundation/Clickable.kt",
+      "sha256": "aab03ed4ea7e967fcaecdd8d112297b66df1e94adb6bf57a25fdce35b8aa3aef"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "path": "androidMain/androidx/compose/foundation/Clickable.android.kt",
+      "sha256": "b04dae160908ed045010aba4187588771ab8c06da294f1c3c4f4ec1d9ef1eb8f"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "path": "commonMain/androidx/compose/foundation/gestures/TapGestureDetector.kt",
+      "sha256": "e8a6ec8a9cbb039ba38de6f894c287ffeaeec6bbf55300796d9b8bb6f332b743"
+    },
+    {
+      "jar": "foundation-android-1.11.2-sources.jar",
+      "path": "commonMain/androidx/compose/foundation/ComposeFoundationFlags.kt",
+      "sha256": "ba91d81339df36d7e5bf962d0fa638500210f5a3645cea9036d312b20557bf89"
+    },
+    {
+      "jar": "ui-android-1.11.2-sources.jar",
+      "path": "commonMain/androidx/compose/ui/input/pointer/PointerEvent.kt",
+      "sha256": "95efc0c788e2923c48b02d57083758cdc47576f3e6a9cfea6f8f67c25a8b144a"
+    }
+  ]
+}

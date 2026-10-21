@@ -32,20 +32,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.createFontFamilyResolver
-import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.smallthingz.reverb.nativeui.ReverbTextRole
+import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextScale
-import app.smallthingz.reverb.nativeui.ReverbFontFamily
-import app.smallthingz.reverb.nativeui.ReverbLineHeightAlignment
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import app.smallthingz.reverb.nativeui.resolveMetrics
 import java.io.File
@@ -310,23 +304,8 @@ private fun referenceTextScale(density: Density): ReverbTextScale = object : Rev
     override fun pixelsToSp(px: Float): Float = with(density) { px.toSp().value }
 }
 
-/** Candidate adapter stays independent of the reflected release Typography oracle. */
-private fun nativeParagraphTextStyle(role: ReverbTextRole): TextStyle = with(role.style) {
-    TextStyle(
-        fontFamily = if (fontFamily == ReverbFontFamily.DEFAULT) FontFamily.Default else FontFamily.SansSerif,
-        fontSize = fontSizeSp.sp,
-        fontWeight = FontWeight(fontWeight),
-        fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
-        letterSpacing = letterSpacingSp.sp,
-        lineHeight = lineHeightSp.sp,
-        platformStyle = PlatformTextStyle(includeFontPadding = false),
-        lineHeightStyle = LineHeightStyle(
-            alignment = if (lineHeightAlignment == ReverbLineHeightAlignment.PROPORTIONAL)
-                LineHeightStyle.Alignment.Proportional else LineHeightStyle.Alignment.Center,
-            trim = if (trimLineHeightEdges) LineHeightStyle.Trim.Both else LineHeightStyle.Trim.None,
-        ),
-    )
-}
+/** Production role mapping stays independent of the reflected release Typography oracle. */
+private fun nativeParagraphTextStyle(role: ReverbTextRole): TextStyle = ReverbParagraphStyles[role]
 
 private fun referenceTextStyle(typography: Typography, role: ReverbTextRole): TextStyle = when (role) {
     ReverbTextRole.HEADLINE_SMALL -> typography.headlineSmall

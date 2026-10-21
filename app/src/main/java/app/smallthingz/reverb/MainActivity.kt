@@ -1136,47 +1136,16 @@ private fun MainScreen(
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val noiseBrush = rememberAppNoiseBrush()
-    var incidentHistory by remember { mutableStateOf(IncidentHistoryUiState()) }
+    val incidentController = remember { IncidentHistoryController(context) }
+    var incidentHistory by remember { mutableStateOf(incidentController.state) }
     val hasIncidentAlert = incidentHistory.history.hasAlert
-
-    suspend fun loadIncidents(): Boolean {
-        val loaded = try {
-            withContext(Dispatchers.IO) {
-                prepareIncidentHistory(RecordingIncidentStore.readIncidents(context))
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            incidentHistory = incidentHistory.loadFailed()
-            return false
-        }
-        incidentHistory = incidentHistory.loadSucceeded(loaded)
-        return true
-    }
-
-    fun toggleIncidentAcknowledged(incident: RecordingIncident) {
-        if (!incidentHistory.canMutate) return
-        // The store owns this accepted user mutation past Activity/Compose lifetime. Its durable
-        // revision stream remains the sole source of UI convergence for rapid toggles.
-        RecordingIncidentStore.toggleIncidentAcknowledgedInBackground(context, incident)
-    }
 
     fun openIncidents() {
         showIncidents = true
     }
 
     LaunchedEffect(Unit) {
-        // StateFlow emits immediately for the initial load, then refreshes again whenever
-        // recovery, resume-time completion, or checked-state changes durable history. Latest-only
-        // collection cancels an obsolete read/retry when a newer durable revision arrives.
-        RecordingIncidentStore.historyRevision.collectLatest {
-            incidentHistory = incidentHistory.loadStarted()
-            var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
-            while (!loadIncidents()) {
-                delay(retryDelayMillis)
-                retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
-            }
-        }
+        incidentController.observeHistory { incidentHistory = it }
     }
 
     fun refreshLibrarySnapshot() {
@@ -1485,10 +1454,8 @@ private fun MainScreen(
             IncidentsScreen(
                 state = incidentHistory,
                 onBack = { showIncidents = false },
-                onToggleAcknowledged = ::toggleIncidentAcknowledged,
-                onDelete = {
-                    if (incidentHistory.canMutate) RecordingIncidentStore.deleteIncidentInBackground(context, it)
-                },
+                onToggleAcknowledged = incidentController::toggleAcknowledged,
+                onDelete = incidentController::delete,
                 openProgress = {
                     incidentsPanelOpenProgress(
                         settledProgress = incidentsMotion.progress,

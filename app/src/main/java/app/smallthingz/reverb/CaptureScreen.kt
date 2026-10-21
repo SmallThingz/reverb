@@ -7,13 +7,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
-import android.os.IBinder
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -102,7 +99,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
@@ -410,16 +406,9 @@ internal fun captureBufferReadout(
     }
 }
 
-internal fun captureServiceBindingCallbackIsCurrent(
-    callbackBindingGeneration: Long,
-    currentBindingGeneration: Long,
-    screenAlive: Boolean,
-): Boolean = screenAlive && callbackBindingGeneration == currentBindingGeneration
-
 private class CaptureScreenBookkeeping {
     var startupBufferChosen = false
     var latestListeningCommandGeneration = Long.MIN_VALUE
-    var serviceConnectionGeneration = 0L
     var timelineSnapshotRequestGeneration = 0L
     var pendingCustomRangeBuffer: ReverbService.BufferSlot? = null
     var activeSaveReceiver: SaveResultReceiver? = null
@@ -463,6 +452,7 @@ fun CaptureScreen(
         )
     }
     val bookkeeping = remember { CaptureScreenBookkeeping() }
+    val serviceUiOwner = remember { CaptureServiceUiOwner() }
     val uiForegroundOwner = remember { Any() }
     val oneShotBlobController = remember { AudioBlobController() }
     val loopingBlobController = remember { AudioBlobController() }
@@ -510,7 +500,7 @@ fun CaptureScreen(
     }
 
     fun requestRecorderState(recorder: ReverbService) {
-        val requestConnectionGeneration = bookkeeping.serviceConnectionGeneration
+        val requestConnectionGeneration = serviceUiOwner.connectionGeneration
         recorder.getState(
             object : ReverbService.StateCallback {
                 override fun state(
@@ -529,7 +519,7 @@ fun CaptureScreen(
                 ) {
                     if (!shouldApplyRecorderStateSnapshot(
                             snapshotConnectionGeneration = requestConnectionGeneration,
-                            currentConnectionGeneration = bookkeeping.serviceConnectionGeneration,
+                            currentConnectionGeneration = serviceUiOwner.connectionGeneration,
                             snapshotGeneration = commandGeneration,
                             latestCommandGeneration = bookkeeping.latestListeningCommandGeneration,
                         )
@@ -638,8 +628,6 @@ fun CaptureScreen(
     }
 
     DisposableEffect(lifecycleOwner) {
-        var boundConnection: ServiceConnection? = null
-
         fun clearConnectedServiceState(markSavingAsCancelRequested: Boolean) {
             closeCaptureSnapshotsBestEffort(rangeSnapshot, pendingExportSnapshot)
             rangeSnapshot = null
@@ -661,37 +649,13 @@ fun CaptureScreen(
             service = null
         }
 
-        fun unbindCurrentConnection() {
-            val current = boundConnection ?: return
-            // Invalidate callbacks before unbinding. Android can already have a callback queued
-            // on the main looper; that callback belongs to this retired bind lifetime.
-            boundConnection = null
-            bookkeeping.serviceConnectionGeneration++
-            runCatching { context.unbindService(current) }
-        }
-
-        fun bindIfNeeded() {
-            if (boundConnection != null ||
-                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-            ) return
-
-            val bindingGeneration = longArrayOf(++bookkeeping.serviceConnectionGeneration)
-            val candidate = object : ServiceConnection {
-                private fun isCurrent(): Boolean = captureServiceBindingCallbackIsCurrent(
-                    callbackBindingGeneration = bindingGeneration[0],
-                    currentBindingGeneration = bookkeeping.serviceConnectionGeneration,
-                    screenAlive = screenAlive.get(),
-                )
-
-                override fun onServiceConnected(className: ComponentName, binder: IBinder) {
-                    if (!isCurrent()) return
-                    val typedBinder = binder as? ReverbService.BackgroundRecorderBinder
-                        ?: run {
-                            clearConnectedServiceState(markSavingAsCancelRequested = false)
-                            bindingGeneration[0] = ++bookkeeping.serviceConnectionGeneration
-                            return
-                        }
-                    val connectedService = typedBinder.service
+        val binding = serviceUiOwner.bind(
+            context = context,
+            lifecycleOwner = lifecycleOwner,
+            view = view,
+            isAlive = screenAlive::get,
+            callbacks = object : CaptureServiceUiOwner.BindingCallbacks {
+                override fun connected(connectedService: ReverbService) {
                     if (service != null && service !== connectedService) {
                         clearConnectedServiceState(markSavingAsCancelRequested = false)
                     }
@@ -707,156 +671,42 @@ fun CaptureScreen(
                     requestRecorderState(connectedService)
                 }
 
-                override fun onServiceDisconnected(name: ComponentName) {
-                    if (!isCurrent()) return
-                    clearConnectedServiceState(markSavingAsCancelRequested = true)
-                    // This binding remains registered and Android may reconnect it. Advance both
-                    // the global generation and this connection's token so old state callbacks
-                    // die while a legitimate reconnect on the same binding remains acceptable.
-                    bindingGeneration[0] = ++bookkeeping.serviceConnectionGeneration
+                override fun unavailable(markSavingAsCancelRequested: Boolean) {
+                    clearConnectedServiceState(markSavingAsCancelRequested)
                 }
-            }
-            boundConnection = candidate
-            val bound = runCatching {
-                context.bindService(
-                    Intent(context, ReverbService::class.java),
-                    candidate,
-                    Context.BIND_AUTO_CREATE,
-                )
-            }.getOrDefault(false)
-            if (!bound && boundConnection === candidate) {
-                boundConnection = null
-                if (bookkeeping.serviceConnectionGeneration == bindingGeneration[0]) {
-                    bookkeeping.serviceConnectionGeneration++
-                }
-                clearConnectedServiceState(markSavingAsCancelRequested = false)
-            }
-        }
 
-        // LifecycleRegistry catches newly added observers up to the current state
-        // synchronously. Do not let that catch-up ON_START bypass the deliberate first-frame
-        // bind below; real later starts occur after addObserver returns.
-        var observerInstalled = false
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> if (observerInstalled) bindIfNeeded()
-
-                Lifecycle.Event.ON_STOP -> {
+                override fun stopped() {
                     detachActiveSaveUi()
                     clearConnectedServiceState(markSavingAsCancelRequested = false)
-                    unbindCurrentConnection()
                 }
-
-                else -> {}
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        observerInstalled = true
-        val initialBind = Runnable { bindIfNeeded() }
-        // Keep normal startup frame-first, but keyguard/occlusion can suppress app frames
-        // indefinitely. A delayed main-loop fallback restores durable capture intent even when
-        // postOnAnimation never fires; bindIfNeeded() makes the duplicate callback harmless.
-        view.postOnAnimation(initialBind)
-        view.postDelayed(initialBind, CAPTURE_INITIAL_BIND_FALLBACK_MILLIS)
-        onDispose {
-            view.removeCallbacks(initialBind)
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            detachActiveSaveUi()
-            clearConnectedServiceState(markSavingAsCancelRequested = false)
-            unbindCurrentConnection()
-        }
+            },
+        )
+        onDispose { binding.close() }
     }
 
     DisposableEffect(service, lifecycleOwner, view, uiForegroundOwner) {
-        val recorderService = service
-        var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        var windowFocused = view.hasWindowFocus()
-
-        fun updateUiForeground() {
-            recorderService?.setAppUiForeground(uiForegroundOwner, resumed && windowFocused)
-        }
-
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    resumed = true
-                    updateUiForeground()
-                }
-                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    resumed = false
-                    updateUiForeground()
-                }
-                else -> Unit
-            }
-        }
-        val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
-            windowFocused = hasFocus
-            updateUiForeground()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        view.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
-        updateUiForeground()
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            if (view.viewTreeObserver.isAlive) {
-                view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
-            }
-            recorderService?.setAppUiForeground(uiForegroundOwner, false)
-        }
+        val lease = serviceUiOwner.foregroundLease(
+            recorderService = service,
+            lifecycleOwner = lifecycleOwner,
+            view = view,
+            uiForegroundOwner = uiForegroundOwner,
+        )
+        onDispose { lease.close() }
     }
 
     DisposableEffect(service, lifecycleOwner, visualizationCallback, view, visualizerVisible) {
-        val recorderService = service
-        var registered = false
-        var resumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        var windowFocused = view.hasWindowFocus()
-
-        fun updateRegistration() {
-            val visible = resumed && windowFocused && visualizerVisible
-            if (visible && !registered) {
-                recorderService?.setVisualizationCallback(visualizationCallback)
-                registered = recorderService != null
-            } else if (!visible && registered) {
-                recorderService?.clearVisualizationCallback(visualizationCallback)
-                registered = false
+        val lease = serviceUiOwner.visualizationLease(
+            recorderService = service,
+            lifecycleOwner = lifecycleOwner,
+            view = view,
+            visualizationCallback = visualizationCallback,
+            visualizerVisible = visualizerVisible,
+            clearFrames = {
                 oneShotBlobController.clear()
                 loopingBlobController.clear()
-            }
-        }
-
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    resumed = true
-                    updateRegistration()
-                }
-                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    resumed = false
-                    updateRegistration()
-                }
-                else -> Unit
-            }
-        }
-        val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
-            windowFocused = hasFocus
-            updateRegistration()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        view.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
-        updateRegistration()
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            if (view.viewTreeObserver.isAlive) {
-                view.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
-            }
-            if (registered) {
-                recorderService?.clearVisualizationCallback(visualizationCallback)
-            }
-            oneShotBlobController.clear()
-            loopingBlobController.clear()
-        }
+            },
+        )
+        onDispose { lease.close() }
     }
 
     LaunchedEffect(lifecycleOwner) {
@@ -1025,12 +875,12 @@ fun CaptureScreen(
                         loopingEnabled = loopingEnabled,
                     )
                     if (captureBlobCommandMaySubmit(action, recorder.canRetryCaptureConfiguration())) {
-                        val connectionGeneration = bookkeeping.serviceConnectionGeneration
+                        val connectionGeneration = serviceUiOwner.connectionGeneration
                         val accepted = captureCommandOwner.submit(
                             transfer = { feedback -> recorder.requestCaptureBlobTap(bufferSlot, feedback) },
                             onResult = { completion ->
                                 val current = screenAlive.get() && service === recorder &&
-                                    connectionGeneration == bookkeeping.serviceConnectionGeneration
+                                    connectionGeneration == serviceUiOwner.connectionGeneration
                                 if (current) {
                                     val result = completion.command
                                     if (result.accepted &&
@@ -1301,7 +1151,6 @@ fun CaptureScreen(
     }
 }
 
-private const val CAPTURE_INITIAL_BIND_FALLBACK_MILLIS = 250L
 private const val BUFFER_FLIP_DURATION_MILLIS = 260
 private val CAPTURE_CONTROL_CLUSTER_HEIGHT = 112.dp
 private val CAPTURE_CONTROL_BOTTOM_SPACER = 18.dp

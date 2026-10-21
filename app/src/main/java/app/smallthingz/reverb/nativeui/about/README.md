@@ -1,0 +1,11 @@
+# About content provenance and integration boundary
+
+`ReverbAboutContentView` ports the released `AboutDialog.kt` content at the commit pinned in `SOURCE.json`. Its package-version read, original string resources, repository URL, error catch, 104dp brand, 24dp GitHub glyph, spacings, palette roles, bottom-only 32dp surface and link/feedback surfaces are source-derived. It does not replace the production About route.
+
+`ReverbIcon.GitHub` is generated directly from the released `ic_github.xml` path (27 move/cubic/close commands, 24x24 viewport, no auto-mirror). All existing glyph paths and the shared drawable renderer remain unchanged. There is no runtime XML/vector interpreter. The project source/assets retain the repository license; the shared AndroidX-derived renderer, palette and input behavior retain their existing Apache-2.0 notices in nativeui/icons, nativeui/color and nativeui/interaction.
+
+The pinned Material3 IconButton uses a 40dp circular visual container within the 48dp minimum interactive layout. About preserves that distinction, its 24dp close glyph, and inherited onSurface ripple independently of the glyph's onSurfaceVariant tint. Its Surface fill is outside the child shape-clipping layer, avoiding duplicate edge coverage. Error text keeps a polite accessibility live region.
+
+Factory: `createReverbAboutContent(context, appearance, requestDismiss)`. Appearance supplies the centralized palette, four released text styles, density and shared font resolver. `setAppearance` updates those values without rereading package version. `predictiveMotionTarget` is the inner Surface after navigation padding; entry/exit transforms belong on the complete content wrapper. The host must supply source full-width/top-gravity dialog setup, outside-dismiss and Back ownership, and source transition timing before use.
+
+Unqualified: actual content pixels/semantics, Android inset/window integration, large-font/narrow layouts, click/scroll cancellation and native ScrollView physics. ScrollView is a concrete interim viewport; the shared source-equivalent vertical-scroll adapter must replace/qualify its behavior before production cutover. This source handoff is not a raster, interaction, build or device pass.

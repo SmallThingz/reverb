@@ -1,0 +1,187 @@
+package app.smallthingz.reverb
+
+import android.app.Instrumentation
+import android.graphics.Rect as AndroidRect
+import android.os.Build
+import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.setFrom
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
+import app.smallthingz.reverb.nativeui.ReverbParagraphView
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Main-thread geometry read only; never inserts modifiers into the generated source oracle. */
+internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSONObject {
+    val text = mutableListOf<JSONObject>()
+    val raw = JSONArray()
+    if (reference) {
+        val root = onboardingViewDescendants(content).filterIsInstance<ViewRootForTest>().single()
+        check(!root.hasPendingMeasureOrLayout)
+        root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false).forEach { node ->
+            val strings = node.config.getOrNull(SemanticsProperties.Text)?.map { it.text }.orEmpty()
+            val descriptions = node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+            val position = node.positionInRoot
+            val bounds = node.boundsInRoot
+            raw.put(JSONObject().put("source_semantics_id", node.id)
+                .put("texts", JSONArray(strings)).put("descriptions", JSONArray(descriptions))
+                .put("position", JSONArray(listOf(position.x.toDouble(), position.y.toDouble())))
+                .put("size", JSONArray(listOf(node.size.width, node.size.height)))
+                .put("clipped_bounds", JSONArray(listOf(bounds.left.toDouble(), bounds.top.toDouble(),
+                    bounds.right.toDouble(), bounds.bottom.toDouble()))))
+            if (strings.size == 1) {
+                val layouts = mutableListOf<TextLayoutResult>()
+                node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+                val layout = layouts.singleOrNull()
+                text += textGeometry(
+                    strings.single(), position, node.size.width, node.size.height,
+                    layout?.firstBaseline, layout?.lastBaseline, layout?.lineCount,
+                )
+            }
+        }
+    } else {
+        onboardingViewDescendants(content).forEach { view ->
+            val location = pointInFixture(view, content, Offset.Zero)
+            raw.put(JSONObject().put("class", view.javaClass.name)
+                .put("position", JSONArray(listOf(location.x.toDouble(), location.y.toDouble())))
+                .put("size", JSONArray(listOf(view.width, view.height)))
+                .put("visibility", view.visibility)
+                .put("important_for_accessibility", view.importantForAccessibility)
+                .put("padding", JSONArray(listOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)))
+                .put("scroll", JSONArray(listOf(view.scrollX, view.scrollY))))
+            if (view is ReverbParagraphView && view.visibility != View.GONE) {
+                val paragraph = view.createOriginalSemanticsParagraph()
+                text += textGeometry(
+                    view.getText(),
+                    pointInFixture(view, content, Offset(
+                        view.paddingLeft.toFloat() - view.scrollX,
+                        view.paddingTop.toFloat() - view.scrollY,
+                    )),
+                    (view.width - view.paddingLeft - view.paddingRight).coerceAtLeast(0),
+                    (view.height - view.paddingTop - view.paddingBottom).coerceAtLeast(0),
+                    paragraph?.firstBaseline, paragraph?.lastBaseline, paragraph?.lineCount,
+                )
+            }
+        }
+    }
+    check(text.isNotEmpty()) { "No text geometry; an empty fixture is not parity evidence" }
+    return JSONObject().put("reference", reference).put("raw", raw)
+        .put("text_layouts", JSONArray(text.sortedBy(::geometrySortKey)))
+}
+
+private fun textGeometry(
+    text: String, position: Offset, width: Int, height: Int,
+    firstBaseline: Float?, lastBaseline: Float?, lines: Int?,
+): JSONObject = JSONObject().put("text", text)
+    .put("x", position.x.toDouble()).put("y", position.y.toDouble())
+    .put("width", width).put("height", height)
+    .put("first_baseline", firstBaseline?.toDouble() ?: JSONObject.NULL)
+    .put("last_baseline", lastBaseline?.toDouble() ?: JSONObject.NULL)
+    .put("line_count", lines ?: JSONObject.NULL)
+
+private fun geometrySortKey(node: JSONObject): String =
+    node.getString("text") + "\u0000" + node.getDouble("y") + "\u0000" + node.getDouble("x")
+
+/** Float point mapping, following actual native parent-scroll/placement/matrix edges. */
+private fun pointInFixture(view: View, fixture: View, point: Offset): Offset {
+    var current = view
+    var position = point
+    while (current !== fixture) {
+        val parent = current.parent as? View ?: error("Native text left its captured fixture")
+        position = Matrix().apply { setFrom(current.matrix) }.map(position) +
+            Offset(current.left.toFloat() - parent.scrollX, current.top.toFloat() - parent.scrollY)
+        current = parent
+    }
+    return position
+}
+
+/**
+ * Actual native/virtual AccessibilityNodeInfo tree from the focused QA window. Text and content
+ * descriptions are retained separately. No accessibility service/setting is enabled by this code.
+ * Empty structural wrappers may differ between native and Compose; all payload/action-bearing
+ * visible nodes are compared, and the complete raw tree is retained for review.
+ */
+internal fun onboardingNativeNodeEvidence(
+    instrumentation: Instrumentation, activity: NativeParityActivity, content: View,
+): JSONObject {
+    requireNativeParityHost(instrumentation, activity)
+    instrumentation.uiAutomation.waitForIdle(80, 2_000)
+    requireNativeParityHost(instrumentation, activity)
+    val origin = IntArray(2)
+    nativeParityOnMain(instrumentation) { content.getLocationOnScreen(origin) }
+    val viewport = AndroidRect(origin[0], origin[1], origin[0] + content.width, origin[1] + content.height)
+    val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow) { "No current QA node root" }
+    val raw = JSONArray()
+    val canonical = mutableListOf<JSONObject>()
+    var visited = 0
+    @Suppress("DEPRECATION")
+    fun visit(node: AccessibilityNodeInfo, depth: Int) {
+        check(depth < 64 && ++visited < 1_024) { "Unexpected accessibility tree; stop without truncation" }
+        check(node.refresh()) { "Node became stale during a supposedly stable capture" }
+        val rect = AndroidRect()
+        node.getBoundsInScreen(rect)
+        val actions = node.actionList.sortedBy { it.id }.map {
+            JSONObject().put("id", it.id).put("label", it.label?.toString() ?: JSONObject.NULL)
+        }
+        val item = JSONObject()
+            .put("class", node.className?.toString() ?: JSONObject.NULL)
+            .put("text", node.text?.toString() ?: JSONObject.NULL)
+            .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
+            .put("state_description", if (Build.VERSION.SDK_INT >= 30) node.stateDescription?.toString() ?: JSONObject.NULL else JSONObject.NULL)
+            .put("enabled", node.isEnabled).put("clickable", node.isClickable)
+            .put("long_clickable", node.isLongClickable).put("checkable", node.isCheckable)
+            .put("checked", node.isChecked).put("selected", node.isSelected)
+            .put("editable", node.isEditable).put("scrollable", node.isScrollable)
+            .put("focusable", node.isFocusable).put("focused", node.isFocused)
+            .put("accessibility_focused", node.isAccessibilityFocused)
+            .put("visible", node.isVisibleToUser)
+            .put("movement_granularities", node.movementGranularities)
+            .put("actions", JSONArray(actions))
+            .put("bounds", JSONArray(listOf(rect.left - origin[0], rect.top - origin[1],
+                rect.right - origin[0], rect.bottom - origin[1])))
+        raw.put(JSONObject(item.toString()).put("depth", depth)
+            .put("package", node.packageName?.toString() ?: JSONObject.NULL)
+            .put("children", node.childCount))
+        val hasPayload = !node.text.isNullOrEmpty() || !node.contentDescription.isNullOrEmpty() ||
+            node.isClickable || node.isCheckable || node.isScrollable
+        if (node.isVisibleToUser && hasPayload && AndroidRect.intersects(rect, viewport)) {
+            check(node.packageName?.toString() == activity.packageName) { "Foreign accessible content over fixture" }
+            canonical += item
+        }
+        for (index in 0 until node.childCount) {
+            val child = checkNotNull(node.getChild(index)) { "Missing child in stable accessibility tree" }
+            try { visit(child, depth + 1) } finally { child.recycle() }
+        }
+    }
+    try {
+        check(root.packageName?.toString() == activity.packageName) { "Focused root is not the QA package" }
+        visit(root, 0)
+    } finally {
+        @Suppress("DEPRECATION")
+        root.recycle()
+    }
+    check(canonical.any { !it.isNull("text") }) { "No accessible text; do not credit an empty node tree" }
+    requireNativeParityHost(instrumentation, activity)
+    return JSONObject().put("raw", raw).put("canonical", JSONArray(canonical.sortedBy { item ->
+        item.optString("text") + "\u0000" + item.optString("description") + "\u0000" +
+            item.getJSONArray("bounds").toString() + "\u0000" + item.optString("class")
+    }))
+}
+
+internal fun onboardingTextGeometrySignature(evidence: JSONObject): String =
+    evidence.getJSONObject("geometry").getJSONArray("text_layouts").toString()
+
+internal fun onboardingNodeSignature(evidence: JSONObject): String =
+    evidence.getJSONObject("nodes").getJSONArray("canonical").toString()
+
+internal fun onboardingStableSignature(evidence: JSONObject): String =
+    onboardingTextGeometrySignature(evidence) + "\n" + onboardingNodeSignature(evidence) + "\n" +
+        evidence.getJSONObject("geometry").getInt("actual_scroll") + ":" +
+        evidence.getJSONObject("geometry").getInt("max_scroll")

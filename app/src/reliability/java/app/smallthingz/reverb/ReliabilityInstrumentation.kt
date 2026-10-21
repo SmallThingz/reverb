@@ -29,12 +29,29 @@ class ReliabilityInstrumentation : Instrumentation() {
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
             check(!parityOnly || requestedTest in setOf(
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
+                "native_brand_parity", "native_switch_parity", "native_switch_motion",
+                "native_input_parity", "native_onboarding_page_parity",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
             if (requestedTest == "native_font_notifications") {
                 executed++
                 verifyNativeFontNotifications(this, report)
+            } else if (requestedTest == "native_brand_parity") {
+                executed++
+                verifyNativeBrandParity(this, report)
+            } else if (requestedTest == "native_onboarding_page_parity") {
+                executed++
+                verifyNativeOnboardingPageParity(this, report)
+            } else if (requestedTest == "native_input_parity") {
+                executed++
+                verifyNativeInputParity(this, report)
+            } else if (requestedTest == "native_switch_parity") {
+                executed++
+                verifyNativeSwitchStaticParity(this, report)
+            } else if (requestedTest == "native_switch_motion") {
+                executed++
+                verifyNativeSwitchObservedMotion(this, report)
             } else if (requestedTest == "native_icon_parity") {
                 executed++
                 verifyNativeIconParity(this, report)

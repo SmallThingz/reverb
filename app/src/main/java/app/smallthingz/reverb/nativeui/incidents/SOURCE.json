@@ -1,0 +1,20 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "pins": {
+    "app/src/main/java/app/smallthingz/reverb/IncidentsScreen.kt": "eca9e02c6f9f7fa54c01ab0501bad5a80024289125b9946d979637080ed88c8c",
+    "app/src/main/java/app/smallthingz/reverb/AppTopBar.kt": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+    "pinned-androidx/IconButton.kt": "00b7dc8585d25ce48b46ae88d1af754f5668b57a0009817fc1b9cc6ae097ff7f",
+    "pinned-androidx/ProgressIndicator.kt": "d0e4627fef5b340b1c4750cc69e7857fa0db7a2502d165bd1f17f5797d4af718",
+    "pinned-androidx/IconButtonTokens.kt": "af2686215081ea20852a2f323b97595c0df6bc1a48fb2f2dd94f282ff21d1c30",
+    "pinned-androidx/SmallIconButtonTokens.kt": "967d48980af99d376b6e58b938fb863e840232de81fd4cc0008c18d2b6f640bf",
+    "pinned-androidx/LazyItemScope.kt": "68fa036ff6cd0010434d9d3f87fe788dbbc3420b49d4505912c04b84b846e199",
+    "pinned-androidx/LazyLayoutItemAnimation.kt": "2d6182d16a115e8351caa5e0261830119fc3698b50fba3dbd2bb209f062e1229"
+  },
+  "androidx": [
+    "foundation1.11.2",
+    "material3 1.4.0",
+    "animation-core1.11.2",
+    "recyclerview1.4.0"
+  ],
+  "qualified": false
+}

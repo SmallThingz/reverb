@@ -1,0 +1,408 @@
+package app.smallthingz.reverb.nativeui
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Rect
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import androidx.compose.ui.text.TextStyle
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import app.smallthingz.reverb.AppFeedbackCenter
+import app.smallthingz.reverb.FeedbackTone
+import app.smallthingz.reverb.IncidentHistoryController
+import app.smallthingz.reverb.IncidentHistoryLoadStatus
+import app.smallthingz.reverb.IncidentHistoryUiState
+import app.smallthingz.reverb.IncidentPresentation
+import app.smallthingz.reverb.R
+import kotlin.math.max
+import kotlin.math.roundToInt
+
+internal data class IncidentsContentAppearance(
+    val card: IncidentCardAppearance,
+    val titleLarge: TextStyle,
+    val titleMedium: TextStyle,
+)
+
+/**
+ * Native contents of released IncidentsScreen. The caller retains the existing panel transform,
+ * reversible open-progress, predictive Back, navigation, and history-observer lifetime.
+ * No collection, accepted storage work, or Home changes are performed by this layout.
+ */
+internal class ReverbIncidentsContentView(
+    context: Context,
+    initialAppearance: IncidentsContentAppearance,
+    menuHost: IncidentCardMenuHost,
+    private var actions: IncidentCardActions,
+    onBack: () -> Unit,
+) : ViewGroup(context) {
+    private var appearance = initialAppearance
+    private val backgroundNoise = ReverbNoiseDrawable(resources, initialAppearance.card.palette.surface)
+    private val header = IncidentsHeader(context, initialAppearance, onBack)
+    private val empty = IncidentsEmptyContent(context, initialAppearance)
+    private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions)
+    private val list = RecyclerView(context).apply {
+        layoutManager = LinearLayoutManager(context)
+        adapter = this@ReverbIncidentsContentView.adapter
+        itemAnimator = ReverbIncidentItemAnimator()
+        clipToPadding = false
+        isVerticalScrollBarEnabled = false
+        isHorizontalScrollBarEnabled = false
+        addItemDecoration(object : RecyclerView.ItemDecoration() {
+            override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
+                val position = parent.getChildAdapterPosition(view)
+                outRect.set(0, 0, 0, if (position >= 0 && position < state.itemCount - 1) dp(10f) else 0)
+            }
+        })
+    }
+
+    init {
+        background = backgroundNoise
+        if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        descendantFocusability = FOCUS_AFTER_DESCENDANTS
+        addView(header)
+        addView(list)
+        addView(empty)
+        updateListPadding()
+        bind(IncidentHistoryUiState())
+    }
+
+    /** Already prepared history only; formatting and storage stay in the existing controller. */
+    fun bind(state: IncidentHistoryUiState) {
+        val hasRows = state.history.rows.isNotEmpty()
+        list.visibility = if (hasRows) VISIBLE else GONE
+        empty.visibility = if (hasRows) GONE else VISIBLE
+        if (hasRows) {
+            if (list.adapter == null) list.adapter = adapter
+            adapter.submit(state)
+        } else {
+            // Match removal of LazyColumn from composition, including owned popup/input disposal.
+            list.itemAnimator?.endAnimations()
+            adapter.disposeVisible(list)
+            list.adapter = null
+            adapter.submit(state)
+            list.scrollToPosition(0)
+            empty.bind(state)
+        }
+        requestLayout()
+    }
+
+    fun setAppearance(value: IncidentsContentAppearance, onBack: () -> Unit, actions: IncidentCardActions) {
+        appearance = value
+        this.actions = actions
+        backgroundNoise.setBackgroundColor(value.card.palette.surface)
+        header.bind(value, onBack)
+        empty.setAppearance(value)
+        adapter.setAppearance(value.card, actions)
+        updateListPadding()
+        requestLayout()
+    }
+
+    private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
+    private fun updateListPadding() = list.setPaddingRelative(dp(18f), dp(12f), dp(18f), dp(28f))
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = MeasureSpec.getSize(heightMeasureSpec)
+        header.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(height, MeasureSpec.AT_MOST))
+        val body = max(0, height - header.measuredHeight)
+        for (child in arrayOf(list, empty)) if (child.visibility != GONE) {
+            child.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(body, MeasureSpec.EXACTLY))
+        }
+        setMeasuredDimension(width, height)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        header.layout(0, 0, width, header.measuredHeight)
+        for (child in arrayOf(list, empty)) if (child.visibility != GONE) {
+            child.layout(0, header.measuredHeight, width, height)
+        }
+    }
+
+    /** Root owner calls this when the panel itself is permanently disposed, not merely closed. */
+    fun dispose() {
+        list.itemAnimator?.endAnimations()
+        adapter.disposeVisible(list)
+        list.adapter = null
+    }
+}
+
+/** Direct accepted-work and copy-feedback bridge; no optimistic acknowledgement/deletion state. */
+internal fun incidentContentActions(context: Context, controller: IncidentHistoryController): IncidentCardActions =
+    IncidentCardActions(controller::toggleAcknowledged, controller::delete) { row ->
+        val text = buildList {
+            add(row.date)
+            add(row.stopSummary)
+            if (row.cause.isNotEmpty()) add(row.cause)
+            if (row.runtime.isNotEmpty()) add(row.runtime)
+            if (row.age.isNotEmpty()) add(row.age)
+            row.description?.let(::add)
+        }.joinToString("\n")
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+            ClipData.newPlainText(context.getString(R.string.incident_copy_label), text))
+        AppFeedbackCenter.post(context.getString(R.string.incident_copied), FeedbackTone.SUCCESS)
+    }
+
+private class IncidentsHeader(
+    context: Context,
+    private var appearance: IncidentsContentAppearance,
+    onBack: () -> Unit,
+) : ViewGroup(context) {
+    private val back = ReverbIncidentBackView(context, appearance.card.palette, onBack)
+    private val title = paragraph(context, appearance.card, appearance.titleLarge, appearance.card.palette.ink).apply {
+        setText(context.getString(R.string.incidents_title))
+    }
+    private val noise = ReverbNoiseDrawable(resources, appearance.card.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
+    private var insets = Insets.NONE
+    private var delegatedBack = false
+
+    init {
+        background = noise
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        addView(back)
+        addView(title)
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, windowInsets ->
+            val next = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars())
+            if (insets != next) { insets = next; requestLayout() }
+            windowInsets
+        }
+    }
+
+    fun bind(value: IncidentsContentAppearance, onBack: () -> Unit) {
+        appearance = value
+        back.bind(value.card.palette, onBack)
+        title.setTypography(value.titleLarge, value.card.density, value.card.fontResolver)
+        title.setTextColor(value.card.palette.ink)
+        noise.setBackgroundColor(value.card.palette.surface)
+        requestLayout()
+    }
+    private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        ViewCompat.requestApplyInsets(this)
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val contentHeight = dp(66f)
+        val backSize = dp(46f)
+        back.measure(MeasureSpec.makeMeasureSpec(backSize, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(backSize, MeasureSpec.EXACTLY))
+        val titleWidth = max(0, width - insets.left - insets.right - dp(28f) - backSize - dp(8f))
+        title.measure(MeasureSpec.makeMeasureSpec(titleWidth, MeasureSpec.AT_MOST),
+            MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.AT_MOST))
+        setMeasuredDimension(width, resolveSize(contentHeight + insets.top + insets.bottom, heightMeasureSpec))
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
+        val rowTop = insets.top
+        val contentHeight = dp(66f)
+        val backX = if (rtl) width - insets.right - dp(14f) - back.measuredWidth else insets.left + dp(14f)
+        val backY = rowTop + ((contentHeight - back.measuredHeight) / 2f).roundToInt()
+        back.layout(backX, backY, backX + back.measuredWidth, backY + back.measuredHeight)
+        val titleX = if (rtl) backX - dp(8f) - title.measuredWidth else back.right + dp(8f)
+        val titleY = rowTop + ((contentHeight - title.measuredHeight) / 2f).roundToInt()
+        title.layout(titleX, titleY, titleX + title.measuredWidth, titleY + title.measuredHeight)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            val extraX = max(0f, (48f * appearance.card.density.density - back.width) / 2f)
+            val extraY = max(0f, (48f * appearance.card.density.density - back.height) / 2f)
+            delegatedBack = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER &&
+                event.x >= back.left - extraX && event.x <= back.right + extraX &&
+                event.y >= back.top - extraY && event.y <= back.bottom + extraY &&
+                (event.x < back.left || event.x >= back.right || event.y < back.top || event.y >= back.bottom)
+        }
+        if (!delegatedBack) return super.dispatchTouchEvent(event)
+        val translated = MotionEvent.obtain(event)
+        translated.offsetLocation(-back.left.toFloat(), -back.top.toFloat())
+        val consumed = try { back.dispatchTouchEvent(translated) } finally { translated.recycle() }
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) delegatedBack = false
+        return consumed
+    }
+}
+
+private class IncidentsEmptyContent(context: Context, private var appearance: IncidentsContentAppearance) : ViewGroup(context) {
+    private val loading = ReverbIncidentLoadingView(context, appearance.card.palette.primary)
+    private val icon = IncidentStatusIcon(context, appearance.card.palette.muted)
+    private val title = paragraph(context, appearance.card, appearance.titleMedium, appearance.card.palette.ink)
+    private val detail = paragraph(context, appearance.card, appearance.card.bodyMedium, appearance.card.palette.muted)
+    private var state = IncidentHistoryUiState()
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        addView(loading); addView(icon); addView(title); addView(detail)
+        bind(state)
+    }
+
+    fun bind(value: IncidentHistoryUiState) {
+        state = value
+        loading.visibility = if (value.status == IncidentHistoryLoadStatus.LOADING) VISIBLE else GONE
+        icon.visibility = if (loading.visibility == VISIBLE) GONE else VISIBLE
+        title.visibility = if (value.showEmptyHistory) VISIBLE else GONE
+        if (value.showEmptyHistory) {
+            title.setText(context.getString(R.string.incidents_empty))
+            detail.setText(context.getString(R.string.incidents_empty_detail))
+        } else {
+            detail.setText(context.getString(if (value.status == IncidentHistoryLoadStatus.LOADING)
+                R.string.incidents_loading else R.string.incidents_unavailable))
+        }
+        requestLayout()
+    }
+
+    fun setAppearance(value: IncidentsContentAppearance) {
+        appearance = value
+        loading.setColor(value.card.palette.primary)
+        icon.setColor(value.card.palette.muted)
+        title.setTypography(value.titleMedium, value.card.density, value.card.fontResolver)
+        title.setTextColor(value.card.palette.ink)
+        detail.setTypography(value.card.bodyMedium, value.card.density, value.card.fontResolver)
+        detail.setTextColor(value.card.palette.muted)
+        requestLayout()
+    }
+
+    private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = MeasureSpec.getSize(heightMeasureSpec)
+        val availableWidth = max(0, width - dp(56f))
+        val availableHeight = max(0, height - dp(56f))
+        var usedHeight = 0
+        var count = 0
+        for (index in 0 until childCount) {
+            val child = getChildAt(index)
+            if (child.visibility == GONE) continue
+            if (count++ > 0) usedHeight += dp(10f)
+            if (child === loading || child === icon) {
+                val size = dp(if (child === loading) 28f else 34f)
+                child.measure(MeasureSpec.makeMeasureSpec(minOf(size, availableWidth), MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(minOf(size, max(0, availableHeight - usedHeight)), MeasureSpec.EXACTLY))
+            } else child.measure(MeasureSpec.makeMeasureSpec(availableWidth, MeasureSpec.AT_MOST),
+                MeasureSpec.makeMeasureSpec(max(0, availableHeight - usedHeight), MeasureSpec.AT_MOST))
+            usedHeight += child.measuredHeight
+        }
+        setMeasuredDimension(width, height)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val children = (0 until childCount).map(::getChildAt).filter { it.visibility != GONE }
+        val total = children.sumOf { it.measuredHeight } + max(0, children.size - 1) * dp(10f)
+        var y = ((height - total) / 2f).roundToInt()
+        children.forEach { child ->
+            val x = ((width - child.measuredWidth) / 2f).roundToInt()
+            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
+            y += child.measuredHeight + dp(10f)
+        }
+    }
+}
+
+private class IncidentStatusIcon(context: Context, color: Int) : View(context) {
+    private val icon = ReverbIconDrawable(ReverbIcon.Incidents, resources.displayMetrics.density, color)
+    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+    fun setColor(color: Int) { icon.setTint(color); invalidate() }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
+    override fun onDraw(canvas: Canvas) { icon.draw(canvas) }
+}
+
+private class IncidentStaleView(context: Context, private var appearance: IncidentCardAppearance) : ViewGroup(context) {
+    private val text = paragraph(context, appearance, appearance.bodyMedium, appearance.palette.muted).apply {
+        setText(context.getString(R.string.incidents_stale))
+    }
+    init { addView(text); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+    fun bind(value: IncidentCardAppearance) {
+        appearance = value
+        text.setTypography(value.bodyMedium, value.density, value.fontResolver)
+        text.setTextColor(value.palette.muted)
+        requestLayout()
+    }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val inset = (4f * appearance.density.density).roundToInt()
+        text.measure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        setMeasuredDimension(text.measuredWidth, text.measuredHeight + inset * 2)
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val inset = (4f * appearance.density.density).roundToInt()
+        text.layout(0, inset, width, inset + text.measuredHeight)
+    }
+}
+
+private class IncidentsAdapter(
+    private val context: Context,
+    private var appearance: IncidentCardAppearance,
+    private val menus: IncidentCardMenuHost,
+    private var actions: IncidentCardActions,
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    private data class Item(val key: String, val row: IncidentPresentation?, val id: Long)
+    private var items = emptyList<Item>()
+    private var nextId = 1L
+    private var canMutate = false
+    init { setHasStableIds(true) }
+
+    fun submit(state: IncidentHistoryUiState) {
+        val old = items
+        val oldCanMutate = canMutate
+        val ids = old.associate { it.key to it.id }
+        val next = buildList {
+            if (state.history.rows.isNotEmpty() && state.status == IncidentHistoryLoadStatus.UNAVAILABLE) {
+                add(Item("incident-history-status", null, ids["incident-history-status"] ?: nextId++))
+            }
+            state.history.rows.forEach { row -> add(Item(row.key, row, ids[row.key] ?: nextId++)) }
+        }
+        val difference = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize() = old.size
+            override fun getNewListSize() = next.size
+            override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int) =
+                old[oldItemPosition].key == next[newItemPosition].key
+            override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int) =
+                old[oldItemPosition].row == next[newItemPosition].row && oldCanMutate == state.canMutate
+        })
+        items = next
+        canMutate = state.canMutate
+        difference.dispatchUpdatesTo(this)
+    }
+
+    fun setAppearance(value: IncidentCardAppearance, actions: IncidentCardActions) {
+        appearance = value
+        this.actions = actions
+        notifyItemRangeChanged(0, itemCount)
+    }
+    override fun getItemCount() = items.size
+    override fun getItemId(position: Int) = items[position].id
+    override fun getItemViewType(position: Int) = if (items[position].row == null) 0 else 1
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        val view = if (viewType == 0) IncidentStaleView(context, appearance)
+            else ReverbIncidentCardView(context, appearance, menus).apply { parentInterestedInDown = { true } }
+        view.layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        return object : RecyclerView.ViewHolder(view) {}
+    }
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        val row = items[position].row
+        if (row == null) (holder.itemView as IncidentStaleView).bind(appearance)
+        else (holder.itemView as ReverbIncidentCardView).apply {
+            setAppearance(appearance)
+            bind(row, canMutate, actions)
+        }
+    }
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        (holder.itemView as? ReverbIncidentCardView)?.unbind()
+        super.onViewRecycled(holder)
+    }
+    fun disposeVisible(list: RecyclerView) {
+        for (index in 0 until list.childCount) (list.getChildAt(index) as? ReverbIncidentCardView)?.unbind()
+    }
+}
+
+private fun paragraph(context: Context, appearance: IncidentCardAppearance, style: TextStyle, color: Int) =
+    ReverbParagraphView(context, style, appearance.density, appearance.fontResolver, color)

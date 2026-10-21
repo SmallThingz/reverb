@@ -65,6 +65,7 @@ internal enum class ReverbIcon(val autoMirrored: Boolean = false) {
     ThemeDark,
     ArrowDropDown,
     Add,
+    GitHub,
 }
 
 /** Private, immutable paths are shared; callers own paints, masks, and tint state. */
@@ -85,6 +86,7 @@ internal object ReverbIconPaths {
             else -> paint.style = Paint.Style.FILL
         }
         when (icon) {
+            ReverbIcon.GitHub -> canvas.drawPath(githubPath, paint)
             ReverbIcon.Settings -> {
                 canvas.drawPath(settingsPath0, paint)
             }
@@ -1228,4 +1230,34 @@ internal object ReverbIconPaths {
         }
     }
 
+
+    private val githubPath = Path().apply {
+        moveTo(12f, 2f)
+        cubicTo(6.48f, 2f, 2f, 6.58f, 2f, 12.22f)
+        rCubicTo(0f, 4.5f, 2.87f, 8.31f, 6.84f, 9.65f)
+        rCubicTo(0.5f, 0.1f, 0.68f, -0.22f, 0.68f, -0.49f)
+        rCubicTo(0f, -0.24f, -0.01f, -1.04f, -0.01f, -1.89f)
+        rCubicTo(-2.78f, 0.62f, -3.37f, -1.21f, -3.37f, -1.21f)
+        rCubicTo(-0.45f, -1.18f, -1.11f, -1.49f, -1.11f, -1.49f)
+        rCubicTo(-0.91f, -0.64f, 0.07f, -0.63f, 0.07f, -0.63f)
+        rCubicTo(1f, 0.07f, 1.53f, 1.05f, 1.53f, 1.05f)
+        rCubicTo(0.9f, 1.57f, 2.36f, 1.12f, 2.94f, 0.85f)
+        rCubicTo(0.09f, -0.67f, 0.35f, -1.12f, 0.63f, -1.37f)
+        rCubicTo(-2.22f, -0.26f, -4.55f, -1.14f, -4.55f, -5.06f)
+        rCubicTo(0f, -1.12f, 0.39f, -2.03f, 1.03f, -2.75f)
+        rCubicTo(-0.1f, -0.26f, -0.45f, -1.31f, 0.1f, -2.73f)
+        rCubicTo(0f, 0f, 0.84f, -0.28f, 2.75f, 1.05f)
+        rCubicTo(0.8f, -0.23f, 1.65f, -0.35f, 2.5f, -0.35f)
+        rCubicTo(0.85f, 0f, 1.7f, 0.12f, 2.5f, 0.35f)
+        rCubicTo(1.91f, -1.33f, 2.75f, -1.05f, 2.75f, -1.05f)
+        rCubicTo(0.55f, 1.42f, 0.2f, 2.47f, 0.1f, 2.73f)
+        rCubicTo(0.64f, 0.72f, 1.03f, 1.63f, 1.03f, 2.75f)
+        rCubicTo(0f, 3.93f, -2.33f, 4.8f, -4.56f, 5.05f)
+        rCubicTo(0.36f, 0.32f, 0.68f, 0.93f, 0.68f, 1.88f)
+        rCubicTo(0f, 1.36f, -0.01f, 2.45f, -0.01f, 2.78f)
+        rCubicTo(0f, 0.27f, 0.18f, 0.6f, 0.69f, 0.49f)
+        cubicTo(19.13f, 20.52f, 22f, 16.72f, 22f, 12.22f)
+        cubicTo(22f, 6.58f, 17.52f, 2f, 12f, 2f)
+        close()
+    }
 }

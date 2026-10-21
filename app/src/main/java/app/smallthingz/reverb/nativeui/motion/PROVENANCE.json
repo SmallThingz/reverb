@@ -1,0 +1,38 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "dependencies": {
+    "animation-core-android-1.11.2-sources.jar": {
+      "source_jar_path": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/animation-core-android-1.11.2-sources.jar",
+      "source_jar_sha256": "7d1eb2b33787112d607cfa85ccaa9d7776130beb2ec01bc958098d15a0fb8304",
+      "entries": {
+        "commonMain/androidx/compose/animation/core/AnimateAsState.kt": "659ace7c824ade5698cf3189378c429c8d627aba40466d4b29092b365f3ed092",
+        "commonMain/androidx/compose/animation/core/Animatable.kt": "1561378b721a147fd9b016fc1ec70cfe7bd3f89f64abf0aac92ebb538179bcc7",
+        "commonMain/androidx/compose/animation/core/Animation.kt": "8d396494fd09afc5dda90b6e48327cf86f07b823539e25cbfac9248e23dae6ca",
+        "commonMain/androidx/compose/animation/core/AnimationSpec.kt": "0c12a2063f4149fcdd0f51d315f40800c74352549d586531cb0cffa8d7366c42",
+        "commonMain/androidx/compose/animation/core/AnimationState.kt": "39dde170279e858e17efc5490a90a4fd62248040ad38ccc35b7d9bfb5705c1c9",
+        "commonMain/androidx/compose/animation/core/SuspendAnimation.kt": "4301f943eae91b09f85855e889b1cf96f35c59bb3aafbd4809650de2ecde911a",
+        "commonMain/androidx/compose/animation/core/FloatAnimationSpec.kt": "7ffb94a9a8b62bbb65d653bdb21a71d974e57174513aae8fddb68cd183a33513",
+        "commonMain/androidx/compose/animation/core/VectorizedAnimationSpec.kt": "ade95e54daad03dbec4e67666c257bf2c6a2c1e836a067187836548bf68a9f56",
+        "commonMain/androidx/compose/animation/core/VisibilityThresholds.kt": "3330c11167539495b682bd8eb6bc43708cf9ec0e580a8c3a8921b64e887b9e41",
+        "commonMain/androidx/compose/animation/core/VectorConverters.kt": "6cf233e50830c83521a9a4bc8ec7e76f1217fd45f4b6d6d3133ac4d3e938c901"
+      }
+    },
+    "animation-android-1.11.2-sources.jar": {
+      "source_jar_path": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/animation-android-1.11.2-sources.jar",
+      "source_jar_sha256": "814569f2f33a75bad2cf9b3875c363456e0cba392e8caa8cf02753fc3c360df4",
+      "entries": {
+        "commonMain/androidx/compose/animation/SingleValueAnimation.kt": "e9e130f48de5a411abb21c7c1055e43ee8af5f37a9d76828d14cfbaaf6c478d8",
+        "commonMain/androidx/compose/animation/ColorVectorConverter.kt": "3ff31ad9217f13e9421a4dee0ad0cbf3cc8a1284879dd2b021323bba737d7f93"
+      }
+    },
+    "ui-android-1.11.2-sources.jar": {
+      "source_jar_path": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-android-1.11.2-sources.jar",
+      "source_jar_sha256": "aafb071a46db33fc841234f58061c5bc543ddaa2c8e56247409cee8e81a7b6d2",
+      "entries": {}
+    }
+  },
+  "released_reverb_sources": {
+    "app/src/main/java/app/smallthingz/reverb/SettingsScreen.kt": "bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc",
+    "app/src/main/java/app/smallthingz/reverb/CaptureScreen.kt": "a15a847d65d756fa5c8cfe96c064fb50dedd5fdf78869ca954fc63d6e3eb978b"
+  }
+}

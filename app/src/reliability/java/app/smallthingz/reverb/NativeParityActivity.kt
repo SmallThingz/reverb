@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.app.Application
+import android.app.Instrumentation
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas as AndroidCanvas
@@ -40,6 +41,13 @@ import app.smallthingz.reverb.nativeui.ReverbGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbGroupRow
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import kotlin.math.roundToInt
+
+/** Keep assertion failures on the instrumentation thread so fixture cleanup and reports still run. */
+internal fun <T> nativeParityOnMain(instrumentation: Instrumentation, block: () -> T): T {
+    var outcome: Result<T>? = null
+    instrumentation.runOnMainSync { outcome = runCatching(block) }
+    return checkNotNull(outcome) { "Main-thread fixture dispatch returned without a result" }.getOrThrow()
+}
 
 internal data class NativeGroupCase(
     val dark: Boolean,

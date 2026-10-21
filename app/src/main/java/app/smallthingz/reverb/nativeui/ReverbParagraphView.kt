@@ -13,18 +13,30 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.graphics.Canvas
+import android.os.Build
+import android.os.Bundle
 import android.view.View
 import android.view.ViewStructure
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityManager
+import android.view.translation.ViewTranslationRequest
+import android.view.translation.ViewTranslationResponse
+import androidx.annotation.RequiresApi
+import java.util.function.Consumer
 import android.widget.TextView
 import androidx.compose.runtime.snapshots.SnapshotStateObserver
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.CanvasHolder
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.text.Paragraph
 import androidx.compose.ui.text.ParagraphIntrinsics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.MultiParagraph
+import androidx.compose.ui.text.MultiParagraphIntrinsics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.resolveDefaults
@@ -36,6 +48,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrain
 import kotlin.math.ceil
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -54,10 +67,13 @@ import kotlin.math.roundToInt
  * conversion implementation rather than copying only its two scalar values. Refresh the resolver
  * after locale/accessibility font-weight configuration changes.
  *
- * Remaining semantics qualification: native text/class/live-region semantics are exposed here.
- * Character-location extra-data, character/word traversal actions and Android translation
- * substitution are NOT implemented. Do not treat plain accessibility text as complete TalkBack
- * parity. Parent grouping/heading/click semantics remain the containing View's responsibility.
+ * A native host can bind one existing window's plain-text accessibility cursor/geometry ownership.
+ * This enables source-derived selectionless traversal and character bounds, without adding keyboard
+ * tab stops. It is not yet TalkBack-qualified. Unbound views retain basic native label semantics.
+ * API31 translation has a separate display cache. Original text/layout stays authoritative for
+ * accessibility, content capture and new translation requests; display measurement cannot overwrite
+ * the original cache's constraints. Runtime translation/event equivalence is not yet qualified.
+ * Parent grouping/heading/click semantics remain the containing View's responsibility.
  * A host supporting TextOverflow.Visible must also disable inappropriate parent child clipping.
  */
 internal class ReverbParagraphView(
@@ -76,22 +92,93 @@ internal class ReverbParagraphView(
     private var maximumLines = Int.MAX_VALUE
     private var overflow = TextOverflow.Clip
 
-    private var intrinsics: ParagraphIntrinsics? = null
-    private var paragraph: Paragraph? = null
-    private var previousConstraints: Constraints? = null
-    private var previousDirection: LayoutDirection? = null
+    /** Two small direct caches, not a renderer/state tree. Source substitution owns its own policy. */
+    private class ParagraphCache(
+        var text: String,
+        var style: TextStyle,
+        var density: Density,
+        var resolver: FontFamily.Resolver,
+        var softWrap: Boolean,
+        var maximumLines: Int,
+        var overflow: TextOverflow,
+    ) {
+        var intrinsics: ParagraphIntrinsics? = null
+        var paragraph: Paragraph? = null
+        var previousConstraints: Constraints? = null
+        var previousDirection: LayoutDirection? = null
+        var layoutSize = IntSize.Zero
+        var didOverflow = false
+
+        fun invalidateMetrics() {
+            intrinsics = null
+            paragraph = null
+            previousConstraints = null
+            previousDirection = null
+            layoutSize = IntSize.Zero
+            didOverflow = false
+        }
+    }
+
+    private val originalCache = ParagraphCache(
+        label, textStyle, density, fontResolver, softWrap, maximumLines, overflow,
+    )
+    private var substitutionCache: ParagraphCache? = null
+    private val substitution = ReverbTextSubstitutionState(label, ::invalidateTranslation)
+    private val translationApi31 = if (Build.VERSION.SDK_INT >= 31) {
+        ReverbTextTranslationApi31(this, substitution)
+    } else null
+    private val activeCache: ParagraphCache
+        get() = if (substitution.isShowingSubstitution) substitutionCache ?: originalCache else originalCache
+
     private var measuredContentSize = IntSize.Zero
     private var clipParagraph = false
+    private var firstBaseline = -1
+    private var lastBaseline = -1
     private val canvasHolder = CanvasHolder()
     private var observedIntrinsics: ParagraphIntrinsics? = null
+    private var textAccessibility: PlainTextAccessibility? = null
+    private var accessibilityWindow: PlainTextAccessibilityWindowScope? = null
+    private var accessibilityGeometry: NativePlainTextViewGeometry? = null
+    private var accessibilityExposed: (() -> Boolean)? = null
+    private var accessibilityBindingToken: Any? = null
 
     private val onFontsChanged: (ReverbParagraphView) -> Unit = { owner ->
-        if (owner.isAttachedToWindow && owner.observedIntrinsics != null) owner.invalidateTextMetrics()
+        if (owner.isAttachedToWindow && owner.observedIntrinsics != null) {
+            // Re-measure the active cache; do not erase an inactive original layout's history.
+            owner.requestLayout()
+            owner.invalidate()
+        }
     }
     private val fontObserver = SnapshotStateObserver { command ->
         // Apply delivery can occur while a paragraph is being measured. Defer its invalidation
         // until that traversal finishes instead of clearing the paragraph during onMeasure.
         post { command() }
+    }
+    private var reportedSubstitution: String? = null
+    private var reportedShowingSubstitution = false
+    private var translationSemanticsPosted = false
+    private val translationSemanticsInvalidation = Runnable {
+        translationSemanticsPosted = false
+        if (isAttachedToWindow) {
+            val changed = reportedSubstitution != substitution.substitution ||
+                reportedShowingSubstitution != substitution.isShowingSubstitution
+            reportedSubstitution = substitution.substitution
+            reportedShowingSubstitution = substitution.isShowingSubstitution
+            if (changed && accessibilityExposed?.invoke() != false &&
+                context.getSystemService(AccessibilityManager::class.java)?.isEnabled == true) {
+                // These are translation semantics properties, NOT replacement source text.
+                // Pinned delegate:2890-2908 uses generic/undefined content change for this diff.
+                // Forward directly: onInitializeAccessibilityEvent's text-change path is unsuitable.
+                @Suppress("DEPRECATION")
+                val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                event.className = View::class.java.name
+                event.packageName = context.packageName
+                event.isEnabled = true
+                event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED
+                event.setSource(this)
+                parent?.requestSendAccessibilityEvent(this, event)
+            }
+        }
     }
 
     init {
@@ -105,20 +192,88 @@ internal class ReverbParagraphView(
     fun setText(value: String) {
         if (label == value) return
         label = value
-        invalidateTextMetrics()
+        substitution.replaceOriginal(value) // same View identity, new source retires translation
+        substitutionCache = null
+        updateOriginalCache()
+        queueTranslationSemanticsInvalidation()
         if (isAttachedToWindow) sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
     }
 
     fun getText(): String = label
 
+    /**
+     * Bind to the containing native window, not a per-label cursor. Rebinding the same window keeps
+     * this label's semantics identity while refreshing layout callbacks. A stale close handle cannot
+     * remove a newer binding. The host closes its binding when its layout lifetime ends.
+     *
+     * Exposed=false for a label whose parent merges its semantics. The parent retains role/clicks;
+     * this method does not alter importantForAccessibility, focusability or keyboard traversal.
+     */
+    fun bindPlainTextAccessibility(
+        window: PlainTextAccessibilityWindowScope,
+        geometry: NativePlainTextViewGeometry,
+        exposed: () -> Boolean,
+    ): AutoCloseable {
+        val token = Any()
+        accessibilityBindingToken = token
+        accessibilityGeometry = geometry
+        accessibilityExposed = exposed
+        if (accessibilityWindow !== window || textAccessibility == null) {
+            accessibilityWindow = window
+            textAccessibility = PlainTextAccessibility(
+                this, window,
+                snapshot = {
+                    PlainTextAccessibilitySnapshot(
+                        label, ::createOriginalSemanticsParagraph,
+                        geometry = {
+                            accessibilityGeometry?.capture(
+                                this,
+                                Offset(paddingLeft.toFloat() - scrollX, paddingTop.toFloat() - scrollY),
+                                Rect(
+                                    paddingLeft.toFloat(), paddingTop.toFloat(),
+                                    (paddingLeft + measuredContentSize.width).toFloat(),
+                                    (paddingTop + measuredContentSize.height).toFloat(),
+                                ),
+                            )
+                        },
+                    )
+                },
+                exposed = { accessibilityExposed?.invoke() == true },
+            )
+        }
+        return AutoCloseable {
+            if (accessibilityBindingToken === token) {
+                accessibilityBindingToken = null
+                accessibilityGeometry = null
+                accessibilityExposed = null
+                accessibilityWindow = null
+                textAccessibility = null
+            }
+        }
+    }
+
+    /** Same-label text updates keep identity; recycler reuse for another row explicitly replaces it. */
+    fun replacePlainTextAccessibilityIdentity() {
+        textAccessibility?.replaceIdentity()
+    }
+
     /** Call from the host's configuration/theme binding, never from onDraw. */
     fun setTypography(style: TextStyle, textDensity: Density, sharedResolver: FontFamily.Resolver) {
         val densityChanged = density !== textDensity
         if (textStyle == style && !densityChanged && fontResolver === sharedResolver) return
+        val layoutChanged = !textStyle.hasSameLayoutAffectingAttributes(style) ||
+            fontResolver !== sharedResolver
         textStyle = style
         density = textDensity
         fontResolver = sharedResolver
-        invalidateTextMetrics()
+        if (layoutChanged) {
+            updateOriginalCache()
+        } else {
+            // Density belongs to whichever cache is actually measured; a display-only update
+            // must not discard an inactive original cache's semantics layout/constraints.
+            if (densityChanged) requestLayout()
+            invalidate()
+        }
     }
 
     fun setTextColor(argb: Int) {
@@ -134,20 +289,22 @@ internal class ReverbParagraphView(
         this.softWrap = softWrap
         maximumLines = maxLines
         this.overflow = overflow
-        paragraph = null
-        previousConstraints = null
-        requestLayout()
-        invalidate()
+        updateOriginalCache()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         fontObserver.start()
-        // Font/emoji state may have changed while this detached View had no observer.
-        invalidateTextMetrics()
+        // The source retains original/substitution caches across detach. Measurement checks font
+        // staleness; destroying both caches here would lose original semantics while translated.
+        reportedSubstitution = substitution.substitution
+        reportedShowingSubstitution = substitution.isShowingSubstitution
+        requestLayout()
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(translationSemanticsInvalidation)
+        translationSemanticsPosted = false
         clearFontObservation()
         fontObserver.stop()
         fontObserver.clear()
@@ -156,37 +313,93 @@ internal class ReverbParagraphView(
 
     override fun onRtlPropertiesChanged(layoutDirection: Int) {
         super.onRtlPropertiesChanged(layoutDirection)
-        invalidateTextMetrics()
-    }
-
-    private fun invalidateTextMetrics() {
-        clearFontObservation()
-        intrinsics = null
-        paragraph = null
-        previousConstraints = null
-        previousDirection = null
+        // ensureIntrinsics updates only the selected cache on the next measure, like the source.
         requestLayout()
         invalidate()
+    }
+
+    private fun updateOriginalCache() {
+        clearFontObservation()
+        originalCache.apply {
+            text = label
+            style = textStyle
+            resolver = fontResolver
+            softWrap = this@ReverbParagraphView.softWrap
+            maximumLines = this@ReverbParagraphView.maximumLines
+            overflow = this@ReverbParagraphView.overflow
+            invalidateMetrics()
+        }
+        requestLayout()
+        invalidate()
+    }
+
+    private fun cacheForMeasure(): ParagraphCache = activeCache.also { cache ->
+        // Only the actively measured source cache receives the current density.
+        if (cache.density !== density) {
+            cache.density = density
+            cache.invalidateMetrics()
+        }
+    }
+
+    /**
+     * Source SetTextSubstitution updates only its separate cache. Identical responses still request
+     * measure/draw/semantics, but preserve the existing cache; hide/show never discards original
+     * constraints. Source style/resolver/wrap policy updates apply to the original cache; the
+     * substitution receives current policy when its text is created/changed, exactly as the node.
+     */
+    private fun invalidateTranslation() {
+        val translated = substitution.substitution
+        if (translated == null) {
+            substitutionCache = null
+        } else if (substitutionCache?.text != translated) {
+            val existing = substitutionCache
+            if (existing == null) {
+                substitutionCache = ParagraphCache(
+                    translated, textStyle, originalCache.density, fontResolver,
+                    softWrap, maximumLines, overflow,
+                )
+            } else {
+                // Updating a substitution keeps that cache's density until its next measure.
+                existing.text = translated
+                existing.style = textStyle
+                existing.resolver = fontResolver
+                existing.softWrap = softWrap
+                existing.maximumLines = maximumLines
+                existing.overflow = overflow
+                existing.invalidateMetrics()
+            }
+        }
+        clearFontObservation()
+        requestLayout()
+        invalidate()
+        queueTranslationSemanticsInvalidation()
+    }
+
+    private fun queueTranslationSemanticsInvalidation() {
+        if (isAttachedToWindow && !translationSemanticsPosted) {
+            translationSemanticsPosted = true
+            postOnAnimation(translationSemanticsInvalidation)
+        }
     }
 
     private fun paragraphDirection(): LayoutDirection =
         if (layoutDirection == LAYOUT_DIRECTION_RTL) LayoutDirection.Rtl else LayoutDirection.Ltr
 
-    private fun ensureIntrinsics(direction: LayoutDirection): ParagraphIntrinsics {
-        val existing = intrinsics
-        if (existing != null && previousDirection == direction && !existing.hasStaleResolvedFonts) return existing
+    private fun ensureIntrinsics(cache: ParagraphCache, direction: LayoutDirection): ParagraphIntrinsics {
+        val existing = cache.intrinsics
+        if (existing != null && cache.previousDirection == direction && !existing.hasStaleResolvedFonts) return existing
         val created = ParagraphIntrinsics(
-            text = label,
-            style = resolveDefaults(textStyle, direction),
+            text = cache.text,
+            style = resolveDefaults(cache.style, direction),
             annotations = emptyList(),
             placeholders = emptyList(),
-            density = density,
-            fontFamilyResolver = fontResolver,
+            density = cache.density,
+            fontFamilyResolver = cache.resolver,
         )
-        intrinsics = created
-        paragraph = null
-        previousConstraints = null
-        previousDirection = direction
+        cache.intrinsics = created
+        cache.paragraph = null
+        cache.previousConstraints = null
+        cache.previousDirection = direction
         return created
     }
 
@@ -203,7 +416,10 @@ internal class ReverbParagraphView(
         // those states, then this second read closes that hand-off without readiness polling.
         if (alreadyStale || current.hasStaleResolvedFonts) {
             post {
-                if (isAttachedToWindow && observedIntrinsics === current) invalidateTextMetrics()
+                if (isAttachedToWindow && observedIntrinsics === current) {
+                    requestLayout()
+                    invalidate()
+                }
             }
         }
     }
@@ -226,20 +442,38 @@ internal class ReverbParagraphView(
             minHeight = minHeight, maxHeight = maxHeight,
         )
         val direction = paragraphDirection()
-        val currentIntrinsics = ensureIntrinsics(direction)
-        val currentParagraph = if (paragraph != null && previousConstraints == constraints) {
-            paragraph!!
+        val cache = cacheForMeasure()
+        val currentIntrinsics = ensureIntrinsics(cache, direction)
+        val previousConstraints = cache.previousConstraints
+        val layoutChanged = needsNativeParagraphRelayout(
+            previousConstraints, constraints, cache.paragraph?.height,
+            cache.paragraph?.didExceedMaxLines == true,
+        )
+        val currentParagraph = if (!layoutChanged) {
+            cache.paragraph!!
         } else {
-            layoutParagraph(currentIntrinsics, constraints).also {
-                paragraph = it
-                previousConstraints = constraints
+            layoutParagraph(cache, currentIntrinsics, constraints).also {
+                cache.paragraph = it
             }
         }
-        measuredContentSize = constraints.constrain(
-            IntSize(ceilPixel(currentParagraph.width), ceilPixel(currentParagraph.height)),
-        )
-        clipParagraph = overflow != TextOverflow.Visible &&
-            (measuredContentSize.width < currentParagraph.width || measuredContentSize.height < currentParagraph.height)
+        if (layoutChanged || previousConstraints != constraints) {
+            val width = if (layoutChanged) currentParagraph.width
+                else min(currentParagraph.maxIntrinsicWidth, currentParagraph.width)
+            cache.layoutSize = constraints.constrain(
+                IntSize(ceilPixel(width), ceilPixel(currentParagraph.height)),
+            )
+            cache.didOverflow = cache.overflow != TextOverflow.Visible &&
+                (cache.layoutSize.width < currentParagraph.width || cache.layoutSize.height < currentParagraph.height)
+            cache.previousConstraints = constraints
+        }
+        if (layoutChanged) {
+            // The released node owns one baseline cache, updated only for a changed layout, even
+            // when switching between its original/substitution caches. Preserve that behavior.
+            firstBaseline = currentParagraph.firstBaseline.roundToInt()
+            lastBaseline = currentParagraph.lastBaseline.roundToInt()
+        }
+        measuredContentSize = cache.layoutSize
+        clipParagraph = cache.didOverflow
         setMeasuredDimension(
             resolveSizeAndState(measuredContentSize.width + horizontalPadding, widthMeasureSpec, 0),
             resolveSizeAndState(measuredContentSize.height + verticalPadding, heightMeasureSpec, 0),
@@ -247,8 +481,8 @@ internal class ReverbParagraphView(
         observeResolvedFonts(currentIntrinsics)
     }
 
-    private fun layoutParagraph(current: ParagraphIntrinsics, constraints: Constraints): Paragraph {
-        val widthMatters = softWrap || overflow.isEllipsis()
+    private fun layoutParagraph(cache: ParagraphCache, current: ParagraphIntrinsics, constraints: Constraints): Paragraph {
+        val widthMatters = cache.softWrap || cache.overflow.isEllipsis()
         val availableWidth = if (widthMatters && constraints.hasBoundedWidth) constraints.maxWidth else Constraints.Infinity
         val paragraphWidth = if (constraints.minWidth == availableWidth) availableWidth
             else ceilPixel(current.maxIntrinsicWidth).coerceIn(constraints.minWidth, availableWidth)
@@ -258,36 +492,69 @@ internal class ReverbParagraphView(
                 minWidth = 0, maxWidth = paragraphWidth,
                 minHeight = 0, maxHeight = constraints.maxHeight,
             ),
-            maxLines = if (!softWrap && overflow.isEllipsis()) 1 else maximumLines,
-            overflow = overflow,
+            maxLines = if (!cache.softWrap && cache.overflow.isEllipsis()) 1 else cache.maximumLines,
+            overflow = cache.overflow,
         )
     }
 
     /** Intrinsic queries are explicit because Android View has no Compose-style intrinsic protocol. */
     fun minIntrinsicTextWidth(): Int =
-        ceilPixel(ensureIntrinsics(paragraphDirection()).minIntrinsicWidth)
+        ceilPixel(ensureIntrinsics(cacheForMeasure(), paragraphDirection()).minIntrinsicWidth)
 
     fun maxIntrinsicTextWidth(): Int =
-        ceilPixel(ensureIntrinsics(paragraphDirection()).maxIntrinsicWidth)
+        ceilPixel(ensureIntrinsics(cacheForMeasure(), paragraphDirection()).maxIntrinsicWidth)
 
     fun intrinsicTextHeight(widthPx: Int): Int {
         require(widthPx >= 0)
-        val current = ensureIntrinsics(paragraphDirection())
-        return ceilPixel(layoutParagraph(current, Constraints(maxWidth = widthPx)).height)
+        val cache = cacheForMeasure()
+        val current = ensureIntrinsics(cache, paragraphDirection())
+        return ceilPixel(layoutParagraph(cache, current, Constraints(maxWidth = widthPx)).height)
     }
 
-    override fun getBaseline(): Int = paragraph?.let { paddingTop + it.firstBaseline.roundToInt() } ?: -1
+    override fun getBaseline(): Int = if (firstBaseline >= 0) paddingTop + firstBaseline else -1
 
     val lastTextBaseline: Int
-        get() = paragraph?.let { paddingTop + it.lastBaseline.roundToInt() } ?: -1
+        get() = if (lastBaseline >= 0) paddingTop + lastBaseline else -1
 
     /** Read-only geometry for the parity harness, not a second layout. */
     val currentParagraph: Paragraph?
-        get() = paragraph
+        get() = activeCache.paragraph
+
+    /**
+     * Pinned ParagraphLayoutCache.slowCreateTextLayoutResultOrNull:366-402 creates a separate
+     * original MultiParagraph for semantics, using the last ORIGINAL cache's max constraints and
+     * maxLines (not the draw path's finalMaxLines). Do not use currentParagraph as an approximation.
+     * Before the original layout has been measured, the source returns null rather than measuring
+     * text speculatively. This function is called only for line/page traversal or character extras.
+     */
+    internal fun createOriginalSemanticsParagraph(): MultiParagraph? {
+        originalCache.paragraph ?: return null
+        originalCache.intrinsics ?: return null
+        originalCache.previousDirection ?: return null
+        val constraints = originalCache.previousConstraints ?: return null
+        val semanticsStyle = textStyle.merge(color = textColor)
+        return MultiParagraph(
+            intrinsics = MultiParagraphIntrinsics(
+                annotatedString = AnnotatedString(originalCache.text),
+                // The source semantics path passes unresolved style directly; the draw path above
+                // separately resolves defaults against layout direction. Do not conflate them.
+                style = semanticsStyle,
+                placeholders = emptyList(),
+                density = originalCache.density,
+                fontFamilyResolver = originalCache.resolver,
+            ),
+            constraints = Constraints(
+                maxWidth = constraints.maxWidth,
+                maxHeight = constraints.maxHeight,
+            ),
+            maxLines = originalCache.maximumLines,
+            overflow = originalCache.overflow,
+        )
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val current = paragraph ?: return
+        val current = activeCache.paragraph ?: return
         val saved = canvas.save()
         try {
             canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
@@ -315,6 +582,21 @@ internal class ReverbParagraphView(
         info.className = TextView::class.java.name
         info.text = label
         info.isEditable = false
+        textAccessibility?.populate(info)
+    }
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean =
+        textAccessibility?.performAction(action, arguments)
+            ?: super.performAccessibilityAction(action, arguments)
+
+    override fun addExtraDataToAccessibilityNodeInfo(
+        info: AccessibilityNodeInfo,
+        extraDataKey: String,
+        arguments: Bundle?,
+    ) {
+        if (textAccessibility?.addExtraData(info, extraDataKey, arguments) != true) {
+            super.addExtraDataToAccessibilityNodeInfo(info, extraDataKey, arguments)
+        }
     }
 
     override fun onInitializeAccessibilityEvent(event: AccessibilityEvent) {
@@ -331,6 +613,22 @@ internal class ReverbParagraphView(
         structure.setText(label)
     }
 
+    @RequiresApi(31)
+    override fun onCreateViewTranslationRequest(
+        supportedFormats: IntArray,
+        requestsCollector: Consumer<ViewTranslationRequest>,
+    ) {
+        // Like the released delegate, request the original plain String. Do not call super too:
+        // the framework collector accepts one request for an ordinary native View.
+        translationApi31?.createRequest(requestsCollector)
+    }
+
+    @RequiresApi(31)
+    override fun onViewTranslationResponse(response: ViewTranslationResponse) {
+        super.onViewTranslationResponse(response)
+        translationApi31?.receiveResponse(response)
+    }
+
     private fun contentMinimum(spec: Int, padding: Int): Int =
         if (MeasureSpec.getMode(spec) == MeasureSpec.EXACTLY) (MeasureSpec.getSize(spec) - padding).coerceAtLeast(0) else 0
 
@@ -342,4 +640,17 @@ internal class ReverbParagraphView(
         this == TextOverflow.Ellipsis || this == TextOverflow.StartEllipsis || this == TextOverflow.MiddleEllipsis
 
     private fun ceilPixel(value: Float): Int = ceil(value).roundToInt()
+}
+
+/** Pinned ParagraphLayoutCache.newLayoutWillBeDifferent after font/direction invalidation. */
+internal fun needsNativeParagraphRelayout(
+    previous: Constraints?,
+    current: Constraints,
+    previousParagraphHeight: Float?,
+    previousDidExceedMaxLines: Boolean,
+): Boolean {
+    if (previous == null || previousParagraphHeight == null) return true
+    if (current == previous) return false
+    if (current.maxWidth != previous.maxWidth || current.minWidth != previous.minWidth) return true
+    return current.maxHeight < previousParagraphHeight || previousDidExceedMaxLines
 }

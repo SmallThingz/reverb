@@ -247,12 +247,15 @@ private class IconParityBoards(private val activity: NativeParityActivity, densi
             ) {
                 Layout(content = {
                     iconSamples.forEach { sample ->
+                        // Both routes must retain the same painter/cache across resize and alpha
+                        // frames, just as the native board retains its Drawable. Icon(imageVector)
+                        // would remember a different painter inside only the opaque branch.
+                        val painter = rememberVectorPainter(sample.reference)
                         if (current.painterAlpha == 1f) {
-                            Icon(imageVector = sample.reference, contentDescription = null, tint = tint)
+                            Icon(painter = painter, contentDescription = null, tint = tint)
                         } else {
                             // Icon has no painter-alpha parameter. This source-derived
-                            // route checks VectorPainter's own bitmap-composite alpha.
-                            val painter = rememberVectorPainter(sample.reference)
+                            // route checks this same VectorPainter's bitmap-composite alpha.
                             Box(Modifier.paint(painter, contentScale = ContentScale.Fit,
                                 colorFilter = ColorFilter.tint(tint), alpha = current.painterAlpha))
                         }

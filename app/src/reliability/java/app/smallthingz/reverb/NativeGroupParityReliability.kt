@@ -52,6 +52,15 @@ internal fun verifyNativeGroupParity(instrumentation: Instrumentation, report: S
     var mismatches = 0
     var terminalFailure: Throwable? = null
     try {
+        // Regression: a failing main-thread assertion must return to this caller, retain exact
+        // throwable identity, and leave main alive for subsequent cleanup/draw work.
+        val expectedDispatchFailure = IllegalStateException("Synthetic fixture dispatch failure")
+        val returnedFailure = runCatching {
+            nativeParityOnMain(instrumentation) { throw expectedDispatchFailure }
+        }.exceptionOrNull()
+        check(returnedFailure === expectedDispatchFailure)
+        check(nativeParityOnMain(instrumentation) { Looper.myLooper() == Looper.getMainLooper() })
+        report.append("PASS native_parity_main_dispatch exception handoff and surviving main thread\n")
         activity = launchNativeParityActivity(instrumentation)
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         requireNativeParityHost(instrumentation, activity)
@@ -122,7 +131,7 @@ internal fun verifyNativeGroupParity(instrumentation: Instrumentation, report: S
     } finally {
         var cleanupFailure: Throwable? = null
         try {
-            activity?.let { host -> instrumentation.runOnMainSync { host.finish() } }
+            activity?.let { host -> nativeParityOnMain(instrumentation) { host.finish() } }
         } catch (error: Throwable) {
             cleanupFailure = error
             terminalFailure?.addSuppressed(error)
@@ -171,7 +180,7 @@ internal fun captureNativeParityContent(
 ): Bitmap {
     requireNativeParityHost(instrumentation, activity)
     lateinit var content: View
-    instrumentation.runOnMainSync { content = render() }
+    nativeParityOnMain(instrumentation) { content = render() }
     instrumentation.waitForIdleSync()
     awaitNativeParityDraw(instrumentation, content)
     // A second draw and frame boundary lets queued hardware rendering settle. Repeated
@@ -179,7 +188,7 @@ internal fun captureNativeParityContent(
     awaitNativeParityDraw(instrumentation, content)
     requireNativeParityHost(instrumentation, activity)
     val rectangle = Rect()
-    instrumentation.runOnMainSync {
+    nativeParityOnMain(instrumentation) {
         check(content.isLaidOut && !content.isLayoutRequested && content.isShown && content.isHardwareAccelerated)
         val location = IntArray(2)
         content.getLocationInWindow(location)
@@ -192,7 +201,7 @@ internal fun captureNativeParityContent(
     var submitted = false
     var recycleOnCompletion = false
     try {
-        instrumentation.runOnMainSync {
+        nativeParityOnMain(instrumentation) {
             PixelCopy.request(activity.window, rectangle, bitmap, { result ->
                 status = result
                 copied.countDown()
@@ -205,19 +214,28 @@ internal fun captureNativeParityContent(
         requireNativeParityHost(instrumentation, activity)
         return bitmap
     } catch (error: Throwable) {
-        instrumentation.runOnMainSync {
-            // A timeout does not cancel PixelCopy. Keep its destination alive until its
-            // callback, instead of letting a late native write target a recycled bitmap.
-            if (!submitted || copied.count == 0L) bitmap.recycle() else recycleOnCompletion = true
+        try {
+            nativeParityOnMain(instrumentation) {
+                // A timeout does not cancel PixelCopy. Keep its destination alive until its
+                // callback, instead of letting a late native write target a recycled bitmap.
+                if (!submitted || copied.count == 0L) bitmap.recycle() else recycleOnCompletion = true
+            }
+        } catch (cleanup: Throwable) {
+            error.addSuppressed(cleanup)
         }
         throw error
     }
 }
 
 internal fun requireNativeParityHost(instrumentation: Instrumentation, activity: NativeParityActivity) {
-    instrumentation.runOnMainSync {
-        check(!activity.isFinishing && activity.hasWindowFocus() && activity.fixtureRoot.isShown) {
-            "QA host is no longer the focused visible Activity; stop without reclaiming focus"
+    nativeParityOnMain(instrumentation) {
+        val finishing = activity.isFinishing
+        val windowFocus = activity.hasWindowFocus()
+        val shown = activity.fixtureRoot.isShown
+        check(!finishing && windowFocus && shown) {
+            "QA host is no longer the focused visible Activity; stop without reclaiming focus " +
+                "(finishing=$finishing, ownWindowFocus=$windowFocus, shown=$shown, " +
+                "display=${activity.fixtureRoot.display?.displayId})"
         }
         check(activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY) {
             "Parity fixture requires the actual physical display"
@@ -228,7 +246,7 @@ internal fun requireNativeParityHost(instrumentation: Instrumentation, activity:
 internal fun awaitNativeParityDraw(instrumentation: Instrumentation, view: View) {
     val drawn = CountDownLatch(1)
     lateinit var listener: ViewTreeObserver.OnDrawListener
-    instrumentation.runOnMainSync {
+    nativeParityOnMain(instrumentation) {
         listener = ViewTreeObserver.OnDrawListener {
             // Removal during dispatch is forbidden; schedule it after this traversal.
             view.post {
@@ -242,7 +260,7 @@ internal fun awaitNativeParityDraw(instrumentation: Instrumentation, view: View)
     try {
         check(drawn.await(5, TimeUnit.SECONDS)) { "No completed UI draw/frame boundary" }
     } finally {
-        instrumentation.runOnMainSync {
+        nativeParityOnMain(instrumentation) {
             if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnDrawListener(listener)
         }
     }

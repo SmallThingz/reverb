@@ -1,0 +1,15 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source_files": {
+    "app/src/main/java/app/smallthingz/reverb/AboutDialog.kt": "882fa4e8540ff8d0b02391644bcda12e4a8f23ad0c22597d49bfcb22bb2bf77b",
+    "app/src/main/java/app/smallthingz/reverb/AppFeedback.kt": "dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518",
+    "app/src/main/res/drawable/ic_github.xml": "46cd349d917e22cd8e86a15a1658e079668ee5acafa077b28f19745899f842c8",
+    "app/src/main/res/values/strings.xml": "49a56d381691c6c03460fc1257153b7e198ea333d7c6898c47a33530a173b2dd"
+  },
+  "status": "Native content integrated; production route unchanged; runtime parity unqualified",
+  "engine_dependencies": {
+    "androidx.compose.material3": "1.4.0",
+    "androidx.compose.ui": "1.11.2",
+    "androidx.compose.foundation": "1.11.2"
+  }
+}

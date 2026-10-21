@@ -1,0 +1,14 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "files": {
+    "app/src/main/java/app/smallthingz/reverb/ReverbBrandMark.kt": "c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e",
+    "app/src/main/res/drawable/ic_launcher_foreground.xml": "3c4e42d229ee61a00f31e8dcee52625eb202e94ed266525dcd60ed2a0a3f2f4d",
+    "app/src/main/res/values/colors.xml": "8b08c1f96e4662ac4afd20cc456e2c40994001db47a426f484b24dd715187de9",
+    "app/src/main/res/values-v31/colors.xml": "46aeceb228ed536e2a448e1123b7b46dc8d05455f1b06ddf3f3846f9a3927142",
+    "app/src/main/res/values-night-v31/colors.xml": "4716ac8ba125c58e66525425384b20f84157309331e1dc2aa4047123cf3cc138",
+    "app/src/main/icon.svg": "7aa0f212cdfadd86af317b1a2b348ab3577eec64291a3fbe9197d210cdec14d1",
+    "scripts/generate_brand_assets.py": "d2628a7947089961879dadcfa29bbd3d987aab2d65801d6302442c2f4a64f73c"
+  },
+  "upstream_rendering": "androidx.compose.ui:ui-android:1.11.2 and ui-graphics-android:1.11.2",
+  "status": "proposal only; not compiled or raster qualified"
+}
