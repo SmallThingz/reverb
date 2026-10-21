@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -301,6 +302,7 @@ internal class SettingsInteractionRender(
     private var composition: ComposeViewContext? = null
     private var compose: ComposeView? = null
     private var native: SettingsInteractionNativeContent? = null
+    private var nativeFocus: NativeSourceFocusPolicy? = null
     private var pointer: SettingsInteractionPointers? = null
     private var text: NativePageTextAccessibilityOwner? = null
     private var closed = false
@@ -347,8 +349,31 @@ internal class SettingsInteractionRender(
                     native?.pointerNodes?.invoke(it).orEmpty()
                 }
                 pointer = routing
-                root = NativePagerTouchRoot(activity, geometry::rootToScreen, geometry::coordinates,
-                    routing.layout, geometry::begin, mouseButtons = true)
+                root = object : NativePagerTouchRoot(activity, geometry::rootToScreen, geometry::coordinates,
+                    routing.layout, geometry::begin, mouseButtons = true) {
+                    private val focus = NativeSourceFocusPolicy(this,
+                        takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
+                        clearOwnerFocus = { super.clearFocus() }).also { nativeFocus = it }
+                    override fun focusableViewAvailable(view: View) {
+                        if (focus.reportsAvailability(view)) super.focusableViewAvailable(view)
+                    }
+                    override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean =
+                        focus.requestFocus(direction, previouslyFocusedRect)
+                    override fun requestChildFocus(child: View, focused: View) {
+                        super.requestChildFocus(child, focused)
+                        focus.childFocused(focused)
+                    }
+                    override fun clearChildFocus(child: View) {
+                        super.clearChildFocus(child)
+                        focus.childCleared(child)
+                    }
+                    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+                        if (focus.hasPendingInvalidation) false else super.dispatchKeyEvent(event)
+                    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                        focus.beforeMeasure()
+                        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                    }
+                }
                 // Match the released AndroidComposeView and actual NativeActivityContentView
                 // before attaching children; controls retain their normal keyboard focus policy.
                 root.isFocusable = true
@@ -516,6 +541,7 @@ internal class SettingsInteractionRender(
             if (primary == null) failure = error else if (primary !== error) primary.addSuppressed(error)
         } }
         release { if (::inputRoot.isInitialized) (inputRoot as? NativePagerTouchRoot)?.cancelPointerInput() }
+        release { nativeFocus?.close() }
         release { pointer?.close() }; release { native?.close?.invoke() }; release { text?.close() }
         release { compose?.disposeComposition() }; composition = null
         release { recomposer.cancel() }; release { recomposerJob?.cancel() }

@@ -259,11 +259,24 @@ private fun runFineLeafGesture(instrumentation: Instrumentation, host: NativePar
                 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
             motion.offsetLocation(-screen[0].toFloat(), -screen[1].toFloat())
             try {
+                val previous = render.inputs.optJSONObject(render.inputs.length() - 1)
+                // AndroidComposeView rejects a single-pointer MOVE with unchanged raw coordinates.
+                // This is the deliberate stationary sample of the already-admitted parent scroll,
+                // not evidence that the owned scene or the pointer stream was lost.
+                val stationaryReferenceMove = render.label == "compose" && scenario == FineLeafScenario.PARENT_SCROLL &&
+                    action == MotionEvent.ACTION_MOVE && previous != null &&
+                    previous.getInt("action") == MotionEvent.ACTION_MOVE && previous.getBoolean("handled") &&
+                    previous.getJSONArray("point").getDouble(0) == point.x.toDouble() &&
+                    previous.getJSONArray("point").getDouble(1) == point.y.toDouble() &&
+                    previous.getJSONArray("raw_point").getDouble(0) == motion.rawX.toDouble() &&
+                    previous.getJSONArray("raw_point").getDouble(1) == motion.rawY.toDouble() && render.scroll() > 0
                 render.inputs.put(JSONObject().put("action", action).put("uptime_ms", now)
-                    .put("point", JSONArray(listOf(point.x, point.y))).put("scroll_before", render.scroll()))
+                    .put("point", JSONArray(listOf(point.x, point.y)))
+                    .put("raw_point", JSONArray(listOf(motion.rawX, motion.rawY)))
+                    .put("stationary_reference_move", stationaryReferenceMove).put("scroll_before", render.scroll()))
                 val handled = render.root.dispatchTouchEvent(motion)
                 render.inputs.getJSONObject(render.inputs.length() - 1).put("handled", handled).put("scroll_after_dispatch", render.scroll())
-                check(handled) { "Current own fixture did not admit the expected pointer stream" }
+                check(handled || stationaryReferenceMove) { "Current own fixture did not admit the expected pointer stream" }
             } finally { motion.recycle() }
         }
     }

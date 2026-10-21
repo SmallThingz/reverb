@@ -101,6 +101,8 @@ private class SliderBody(
         },parentInterested)
     val nodes:List<NativeViewPhasePointerNode> = listOf(tap,NativeDragPhaseNode(this,drag))
     init {
+        // M3 Slider keeps keyboard focus but draws only its source thumb and track.
+        defaultFocusHighlightEnabled=false
         isEnabled=enabled;isFocusable=enabled
         isClickable=false
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES

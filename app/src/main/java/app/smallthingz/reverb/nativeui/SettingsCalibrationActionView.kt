@@ -91,7 +91,7 @@ private class CalibrationActionSurface(
     fun bind(text:String,enabled:Boolean,next:ReverbViewEnvironment) {
         val densityChanged=environment.textDensity.density!=next.textDensity.density
         this.enabled=enabled;environment=next
-        val color=if(enabled)next.palette.primary else Color(next.palette.onSurface).copy(alpha=.38f).toArgb()
+        val color=if(enabled)next.palette.primary else Color(next.palette.onSurfaceVariant).copy(alpha=.38f).toArgb()
         interactions.bind(enabled,color)
         isEnabled=enabled;isFocusable=enabled
         label.setText(text)

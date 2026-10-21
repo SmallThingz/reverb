@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.view.View
+import android.view.KeyEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.MonotonicFrameClock
@@ -46,6 +47,7 @@ internal class NativeActivityContentView(
     private var remainingOnboardingState = restoredOnboarding
     private var closed = false
     private var rendering = false
+    private var sourceFocus: NativeSourceFocusPolicy? = null
     private var renderAgain = false
     private var windowInsets = WindowInsetsCompat.Builder().build()
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface)
@@ -72,13 +74,33 @@ internal class NativeActivityContentView(
         clipChildren = false
         clipToPadding = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        // Released AndroidComposeView owns initial native window focus, not the first child editor.
+        // Resolve window focus through the released owner policy, preserving explicit child focus.
         isFocusable = true
         isFocusableInTouchMode = true
         defaultFocusHighlightEnabled = false
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         background = noise
+        sourceFocus = NativeSourceFocusPolicy(this,
+            takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
+            clearOwnerFocus = { super.clearFocus() })
     }
+
+    override fun focusableViewAvailable(view: View) {
+        if (sourceFocus?.reportsAvailability(view) != false) super.focusableViewAvailable(view)
+    }
+    override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean =
+        sourceFocus?.requestFocus(direction, previouslyFocusedRect)
+            ?: super.requestFocus(direction, previouslyFocusedRect)
+    override fun requestChildFocus(child: View, focused: View) {
+        super.requestChildFocus(child, focused)
+        sourceFocus?.childFocused(focused)
+    }
+    override fun clearChildFocus(child: View) {
+        super.clearChildFocus(child)
+        sourceFocus?.childCleared(child)
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        if (sourceFocus?.hasPendingInvalidation == true) false else super.dispatchKeyEvent(event)
 
     fun bind(value: NativeOnboardingScreenSnapshot, nextEnvironment: ReverbViewEnvironment) {
         if (closed) return
@@ -184,6 +206,7 @@ internal class NativeActivityContentView(
     }
 
     override fun onMeasure(w: Int, h: Int) {
+        sourceFocus?.beforeMeasure()
         val width = MeasureSpec.getSize(w)
         val height = MeasureSpec.getSize(h)
         main?.measure(activityExact(width), activityExact(height))
@@ -278,6 +301,7 @@ internal class NativeActivityContentView(
                 if (first == null) failure = error else if (first !== error) first.addSuppressed(error)
             }
         }
+        release { sourceFocus?.close() }
         release(::retireDenied)
         release(::retireMain)
         release(::retireFeedback)
