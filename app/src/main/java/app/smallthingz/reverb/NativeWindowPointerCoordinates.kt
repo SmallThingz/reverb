@@ -66,35 +66,38 @@ internal class NativeWindowPointerCoordinates(private val root: () -> View) {
         NativePointerCoordinates(screenToLocal, rootToLocal, Offset(position[0], position[1]))
     }
 
-    private fun matrixToWindow(view: View): Matrix {
-        val result = Matrix()
-        if (Build.VERSION.SDK_INT >= 29) {
-            view.transformMatrixToGlobal(result)
-            var top = view
-            while (top.parent is View) top = top.parent as View
-            top.getLocationOnScreen(location)
-            val screenX = location[0]
-            val screenY = location[1]
-            top.getLocationInWindow(location)
-            result.postTranslate((location[0] - screenX).toFloat(), (location[1] - screenY).toFloat())
-        } else {
-            // Preserve the pinned API21 fallback's CURRENT-view scroll ordering, including SDK28.
-            calculateLegacy(view, result)
-        }
-        return result
-    }
+    private fun matrixToWindow(view: View): Matrix = nativeViewMatrixToWindow(view, location)
+}
 
-    private fun calculateLegacy(view: View, result: Matrix) {
-        val parent = view.parent
-        if (parent is View) {
-            calculateLegacy(parent, result)
-            result.preTranslate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
-            result.preTranslate(view.left.toFloat(), view.top.toFloat())
-        } else {
-            view.getLocationInWindow(location)
-            result.preTranslate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
-            result.preTranslate(location[0].toFloat(), location[1].toFloat())
-        }
-        if (!view.matrix.isIdentity) result.preConcat(view.matrix)
+/** Shared pinned window transform; the caller owns its two-Int scratch buffer. */
+internal fun nativeViewMatrixToWindow(view: View, location: IntArray): Matrix {
+    val result = Matrix()
+    if (Build.VERSION.SDK_INT >= 29) {
+        view.transformMatrixToGlobal(result)
+        var top = view
+        while (top.parent is View) top = top.parent as View
+        top.getLocationOnScreen(location)
+        val screenX = location[0]
+        val screenY = location[1]
+        top.getLocationInWindow(location)
+        result.postTranslate((location[0] - screenX).toFloat(), (location[1] - screenY).toFloat())
+    } else {
+        // Preserve the pinned API21 fallback's CURRENT-view scroll ordering, including SDK28.
+        calculateLegacy(view, result, location)
     }
+    return result
+}
+
+private fun calculateLegacy(view: View, result: Matrix, location: IntArray) {
+    val parent = view.parent
+    if (parent is View) {
+        calculateLegacy(parent, result, location)
+        result.preTranslate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
+        result.preTranslate(view.left.toFloat(), view.top.toFloat())
+    } else {
+        view.getLocationInWindow(location)
+        result.preTranslate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
+        result.preTranslate(location[0].toFloat(), location[1].toFloat())
+    }
+    if (!view.matrix.isIdentity) result.preConcat(view.matrix)
 }

@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -19,6 +20,7 @@ internal class NativeSourceFocusPolicy(
     private val clearOwnerFocus: () -> Unit,
 ) : AutoCloseable, View.OnAttachStateChangeListener {
     private val state = NativeSourceFocusState<View>()
+    private val matrixLocation = IntArray(2)
     private var observer: ViewTreeObserver? = null
     private var invalidationLayoutRequested = false
     private var parking = false
@@ -222,9 +224,15 @@ internal class NativeSourceFocusPolicy(
     private fun bounds(view: View): FocusRect? {
         if (!belongs(view) || !view.isLaidOut) return null
         val matrix = Matrix()
-        view.transformMatrixToGlobal(matrix)
         val ownerMatrix = Matrix()
-        root.transformMatrixToGlobal(ownerMatrix)
+        if (Build.VERSION.SDK_INT >= 29) {
+            view.transformMatrixToGlobal(matrix)
+            root.transformMatrixToGlobal(ownerMatrix)
+        } else {
+            // SDK28 uses the same pinned fallback as pointer coordinates, including scroll order.
+            matrix.set(nativeViewMatrixToWindow(view, matrixLocation))
+            ownerMatrix.set(nativeViewMatrixToWindow(root, matrixLocation))
+        }
         val inverse = Matrix()
         if (!ownerMatrix.invert(inverse)) return null
         matrix.postConcat(inverse)
