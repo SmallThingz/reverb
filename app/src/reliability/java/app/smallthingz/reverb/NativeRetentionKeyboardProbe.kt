@@ -342,6 +342,7 @@ private class RetentionKeyboardGuard(
         beforeRaw: String, beforeSelection: Pair<Int, Int>,
         afterRaw: String, afterSelection: Pair<Int, Int>, hide: Boolean,
     ) {
+        check(!hide || key == "KEYCODE_BACK") { "Only BACK may request the IME-hide transition" }
         val before = snapshot()
         requireText(before, beforeRaw, beforeSelection)
         check(before.target().positiveIme() && before.target().getBoolean("editable_focused")) {
@@ -350,6 +351,8 @@ private class RetentionKeyboardGuard(
         var requestPublished = false
         awaitNativeParityKeyboardCommand(
             instrumentation, directory, nonce, renderer, stage, key,
+            // IME dismissal moves the same focused editor during the pending acknowledgement.
+            stableTargetBounds = !hide,
             guardedSnapshot = { snapshot().also { current ->
                 if (!requestPublished) {
                     requireText(current, beforeRaw, beforeSelection)
