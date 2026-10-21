@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.text.TextStyle
@@ -101,6 +103,10 @@ internal class ReverbIncidentsContentView(
     }
 
     fun observeAccessibilityMembership(changed: () -> Unit) { accessibilityMembershipChanged = changed }
+    fun bindSourceAccessibility(sourceNode: ((View) -> NativeSourceAccessibilityNode)?) {
+        header.bindSourceAccessibility(sourceNode)
+        empty.bindSourceAccessibility(sourceNode)
+    }
     /** The source LazyColumn exists only in the nonempty history branch. */
     val pointerList: ReverbLibraryRecyclerView?
         get() = list.takeIf { it.visibility == VISIBLE && it.adapter != null }
@@ -184,6 +190,7 @@ internal class ReverbIncidentsContentView(
 
     /** Root owner calls this when the source overlay leaves composition at fully closed progress. */
     fun dispose() {
+        bindSourceAccessibility(null)
         savedPosition.leaveList()
         list.itemAnimator?.endAnimations()
         adapter.disposeVisible(list)
@@ -221,6 +228,17 @@ private class IncidentsHeader(
     }
     private val noise = ReverbNoiseDrawable(resources, appearance.card.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
     private var insets = Insets.NONE
+    private var sourceAccessibilityNode: ((View) -> NativeSourceAccessibilityNode)? = null
+
+    fun bindSourceAccessibility(sourceNode: ((View) -> NativeSourceAccessibilityNode)?) {
+        sourceAccessibilityNode = sourceNode
+    }
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val children = ArrayList<View>()
+        super.addChildrenForAccessibility(children)
+        children.filterTo(outChildren) { it !== back || sourceAccessibilityNode?.invoke(it)?.present != false }
+    }
 
     init {
         background = noise
@@ -261,8 +279,12 @@ private class IncidentsHeader(
         val contentHeight = dp(66f)
         val backX = if (rtl) width - insets.right - dp(14f) - back.measuredWidth else insets.left + dp(14f)
         val backY = rowTop + ((contentHeight - back.measuredHeight) / 2f).roundToInt()
-        back.layout(backX, backY, backX + back.measuredWidth, backY + back.measuredHeight)
-        val titleX = if (rtl) backX - dp(8f) - title.measuredWidth else back.right + dp(8f)
+        // IconButton(size46dp) keeps its outer Row allocation, while M3's minimum48dp
+        // layout + Placeable's apparent-size centering can leave a one-pixel visual residual.
+        val visualX = backX + nativeMinimumInteractiveVisualOffset(back.measuredWidth, dp(48f))
+        val visualY = backY + nativeMinimumInteractiveVisualOffset(back.measuredHeight, dp(48f))
+        back.layout(visualX, visualY, visualX + back.measuredWidth, visualY + back.measuredHeight)
+        val titleX = if (rtl) backX - dp(8f) - title.measuredWidth else backX + back.measuredWidth + dp(8f)
         val titleY = rowTop + ((contentHeight - title.measuredHeight) / 2f).roundToInt()
         title.layout(titleX, titleY, titleX + title.measuredWidth, titleY + title.measuredHeight)
     }
@@ -276,7 +298,7 @@ private class IncidentsEmptyContent(
     scope: CoroutineScope,
     durationScale: () -> Float,
 ) : ViewGroup(context) {
-    private val loading = ReverbIncidentLoadingView(context, appearance.card.palette.primary, frames, scope, durationScale)
+    private val loading = IncidentsLoadingView(context, appearance.card.palette.primary, frames, scope, durationScale)
     private val icon = IncidentStatusIcon(context, appearance.card.palette.muted)
     private val title = paragraph(context, appearance.card, appearance.titleMedium, appearance.card.palette.ink)
     private val detail = paragraph(context, appearance.card, appearance.card.bodyMedium, appearance.card.palette.muted)
@@ -285,6 +307,19 @@ private class IncidentsEmptyContent(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(loading); addView(icon); addView(title); addView(detail)
         bind(state)
+    }
+
+    private var sourceAccessibilityNode: ((View) -> NativeSourceAccessibilityNode)? = null
+
+    fun bindSourceAccessibility(sourceNode: ((View) -> NativeSourceAccessibilityNode)?) {
+        sourceAccessibilityNode = sourceNode
+        loading.bindSourceAccessibility(sourceNode?.let { node -> { node(loading) } })
+    }
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val children = ArrayList<View>()
+        super.addChildrenForAccessibility(children)
+        children.filterTo(outChildren) { it !== loading || sourceAccessibilityNode?.invoke(it)?.present != false }
     }
 
     fun bind(value: IncidentHistoryUiState) {
@@ -317,8 +352,9 @@ private class IncidentsEmptyContent(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
-        val availableWidth = max(0, width - dp(56f))
-        val availableHeight = max(0, height - dp(56f))
+        val padding = dp(28f)
+        val availableWidth = max(0, width - padding * 2)
+        val availableHeight = max(0, height - padding * 2)
         var usedHeight = 0
         var count = 0
         for (index in 0 until childCount) {
@@ -339,13 +375,58 @@ private class IncidentsEmptyContent(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val children = (0 until childCount).map(::getChildAt).filter { it.visibility != GONE }
         val total = children.sumOf { it.measuredHeight } + max(0, children.size - 1) * dp(10f)
-        var y = ((height - total) / 2f).roundToInt()
+        val padding = dp(28f)
+        val columnWidth = children.maxOfOrNull { it.measuredWidth } ?: 0
+        // Box centers the intrinsic Column first; Column then centers each child independently.
+        val columnX = padding + ((max(0, width - padding * 2) - columnWidth) / 2f).roundToInt()
+        var y = padding + ((max(0, height - padding * 2) - total) / 2f).roundToInt()
         children.forEach { child ->
-            val x = ((width - child.measuredWidth) / 2f).roundToInt()
+            val x = columnX + ((columnWidth - child.measuredWidth) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             y += child.measuredHeight + dp(10f)
         }
     }
+}
+
+/** Incidents' unmerged progress leaf; other callers retain their own description/merge policy. */
+private class IncidentsLoadingView(
+    context: Context,
+    color: Int,
+    frames: MonotonicFrameClock,
+    scope: CoroutineScope,
+    durationScale: () -> Float,
+) : ReverbIncidentLoadingView(context, color, frames, scope, durationScale) {
+    private var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
+
+    init { isScreenReaderFocusable = true }
+
+    fun bindSourceAccessibility(sourceNode: (() -> NativeSourceAccessibilityNode)?) {
+        sourceAccessibilityNode = sourceNode
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info.text = null
+        info.contentDescription = null
+        info.isFocusable = false
+        info.isClickable = false
+        info.isScreenReaderFocusable = true
+        info.movementGranularities = 0
+        info.actionList.toList().forEach(info::removeAction)
+        info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+            else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+        sourceAccessibilityNode?.invoke()?.populate(info)
+    }
+
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (sourceAccessibilityNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean =
+        if (sourceAccessibilityNode?.invoke()?.present == false) false else when (action) {
+            AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
+            AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> super.performAccessibilityAction(action, arguments)
+            else -> false
+        }
 }
 
 private class IncidentStatusIcon(context: Context, color: Int) : View(context) {
@@ -369,12 +450,15 @@ private class IncidentStaleView(context: Context, private var appearance: Incide
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val inset = (4f * appearance.density.density).roundToInt()
-        text.measure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-        setMeasuredDimension(text.measuredWidth, text.measuredHeight + inset * 2)
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        text.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST),
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        setMeasuredDimension(resolveSize(text.measuredWidth, widthMeasureSpec), text.measuredHeight + inset * 2)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val inset = (4f * appearance.density.density).roundToInt()
-        text.layout(0, inset, width, inset + text.measuredHeight)
+        val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - text.measuredWidth else 0
+        text.layout(x, inset, x + text.measuredWidth, inset + text.measuredHeight)
     }
 }
 

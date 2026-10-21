@@ -77,11 +77,32 @@ internal class NativeOnboardingPagerAccessibility(
     private val geometry: NativePlainTextViewGeometry,
     private val userScrollEnabled: () -> Boolean,
     private val sourceNode: () -> NativeOnboardingPagerNode,
-    windowEvents: NativeWindowHorizontalAccessibilityEvents,
-) : View.AccessibilityDelegate(), AutoCloseable {
+    private val windowEvents: NativeWindowHorizontalAccessibilityEvents,
+) : View.AccessibilityDelegate(), View.OnAttachStateChangeListener, AutoCloseable {
     private var closed = false
     private var previousOffset: Float? = null
-    private val events = windowEvents.register(host, ::isNodePresent, ::readRange)
+    private var events: NativeHorizontalAccessibilityEventRegistration? = null
+
+    init {
+        // An Activity-owned queue may outlive this subtree. Construction happens before the
+        // subtree is parented into that window; register only after its actual attachment.
+        if (host.isAttachedToWindow) onViewAttachedToWindow(host)
+        host.addOnAttachStateChangeListener(this)
+    }
+
+    override fun onViewAttachedToWindow(view: View) {
+        if (closed) return
+        check(events == null) { "Pager already owns an attached scroll registration" }
+        events = windowEvents.register(host, ::isNodePresent, ::readRange)
+        previousOffset = null // Each attached source observation seeds its initial range.
+    }
+
+    override fun onViewDetachedFromWindow(view: View) {
+        val retired = events
+        events = null
+        previousOffset = null
+        retired?.close()
+    }
 
     fun isNodePresent(): Boolean = !closed && host.isAttachedToWindow && sourceNode().present
 
@@ -91,12 +112,12 @@ internal class NativeOnboardingPagerAccessibility(
         val current = readOffset()
         val previous = previousOffset
         previousOffset = current
-        if (previous != null && current != previous && isNodePresent()) events.scrollChanged()
+        if (previous != null && current != previous && isNodePresent()) events?.scrollChanged()
     }
 
     /** Host invokes after actual viewport geometry/max-range changes, including max-only layout. */
     fun sourceLayoutChanged() {
-        if (!closed) events.layoutChanged()
+        if (!closed) events?.layoutChanged()
     }
 
     private fun readRange(): NativeHorizontalAccessibilityRange =
@@ -201,6 +222,7 @@ internal class NativeOnboardingPagerAccessibility(
     override fun close() {
         if (closed) return
         closed = true
-        events.close()
+        host.removeOnAttachStateChangeListener(this)
+        onViewDetachedFromWindow(host)
     }
 }

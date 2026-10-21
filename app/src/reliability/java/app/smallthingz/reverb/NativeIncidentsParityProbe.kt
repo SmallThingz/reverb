@@ -21,6 +21,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.Recomposer
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.graphics.toArgb
@@ -88,8 +91,10 @@ internal fun verifyNativeIncidentsParity(instrumentation: Instrumentation, repor
             val name = "${if (dark) "dark-rtl" else "light-ltr"}-${scene.name.lowercase()}"
             val entry = JSONObject().put("name", name).put("passed", false)
             entries.put(entry)
+            val focusTrace = JSONArray()
+            entry.put("focus_trace", focusTrace)
             val current = nativeParityOnMain(instrumentation) {
-                IncidentsParityBoard(host, dark, scene)
+                IncidentsParityBoard(host, dark, scene, focusTrace = focusTrace)
             }.also { board = it }
             val images = ArrayList<Bitmap>(4)
             val evidence = ArrayList<JSONObject>(4)
@@ -193,7 +198,7 @@ internal fun verifyNativeIncidentsParity(instrumentation: Instrumentation, repor
     failure?.let { throw it }
 }
 
-private enum class IncidentParityScene { EMPTY, LOADING, ERROR, POPULATED, STALE }
+internal enum class IncidentParityScene { EMPTY, LOADING, ERROR, POPULATED, STALE }
 
 /** No durable incident path is constructed; only these immutable QA values can be observed. */
 private fun incidentParityHistory(): IncidentHistoryPresentation = prepareIncidentHistory(
@@ -209,7 +214,9 @@ private fun incidentParityHistory(): IncidentHistoryPresentation = prepareIncide
 )
 
 private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
-                                    private val rows: IncidentHistoryPresentation) : IncidentHistoryAccess {
+                                    private var rows: IncidentHistoryPresentation,
+                                    private val interactive: Boolean = false) : IncidentHistoryAccess {
+    val commands = ArrayList<String>()
     override val revisions = MutableStateFlow(0L)
     var mutations = 0
         private set
@@ -221,20 +228,37 @@ private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
         IncidentParityScene.POPULATED -> rows
     }
     override fun toggleAcknowledgedInBackground(incident: RecordingIncident) {
-        mutations++; error("Static Incidents fixture must not acknowledge")
+        mutations++
+        check(interactive) { "Static Incidents fixture must not acknowledge" }
+        val key = recordingIncidentPresentationKey(incident)
+        check(rows.rows.count { it.key == key } == 1)
+        rows = prepareIncidentHistory(rows.rows.map { row ->
+            if (row.key == key) toggleRecordingIncidentAcknowledgement(row.incident, 1_800_000_000_000L)
+            else row.incident
+        }.asReversed(), Locale.US, ZoneOffset.UTC)
+        commands += "ack:$key"
+        revisions.value++
     }
     override fun deleteInBackground(incident: RecordingIncident) {
-        mutations++; error("Static Incidents fixture must not delete")
+        mutations++
+        check(interactive) { "Static Incidents fixture must not delete" }
+        val key = recordingIncidentPresentationKey(incident)
+        check(rows.rows.count { it.key == key } == 1)
+        rows = IncidentHistoryPresentation(rows.rows.filterNot { it.key == key })
+        commands += "delete:$key"
+        revisions.value++
     }
 }
 
 private object IncidentsFixtureMotionScale : MotionDurationScale { override val scaleFactor = 0f }
 
 @OptIn(ExperimentalComposeViewContextApi::class)
-private class IncidentsParityBoard(
+internal class IncidentsParityBoard(
     private val host: NativeParityActivity,
     private val dark: Boolean,
     private val scene: IncidentParityScene,
+    private val interactive: Boolean = false,
+    private val focusTrace: JSONArray = JSONArray(),
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
@@ -259,16 +283,42 @@ private class IncidentsParityBoard(
             else -> IncidentHistoryLoadStatus.READY
         },
     )
-    private val access = IncidentsFixtureAccess(scene, history)
+    private val access = IncidentsFixtureAccess(scene, history, interactive)
+    private val sourceAccess = if (interactive) IncidentsFixtureAccess(scene, history, true) else null
+    private var sourceState by mutableStateOf(expected)
+    private var sourceOpen by mutableStateOf(true)
+    private var sourceMotion: IncidentsPanelMotionState? = null
+    private var sourceRendered = false
+    private var sourceHistory: IncidentHistoryController? = null
+    private var sourceBackCount = 0
+    private var nativeBackCount = 0
+    private val motionScale: MotionDurationScale = if (interactive) object : MotionDurationScale {
+        override val scaleFactor = 1f
+    } else IncidentsFixtureMotionScale
     private var asyncFailure: Throwable? = null
     private val scope = CoroutineScope(AndroidUiDispatcher.Main + SupervisorJob() +
-        IncidentsFixtureMotionScale + CoroutineExceptionHandler { _, failure ->
+        motionScale + CoroutineExceptionHandler { _, failure ->
             val first = asyncFailure
             if (first == null) asyncFailure = failure else if (first !== failure) first.addSuppressed(failure)
         })
     private val frames = checkNotNull(scope.coroutineContext[MonotonicFrameClock])
     private val recomposer = Recomposer(scope.coroutineContext)
     private var recomposerJob: Job? = null
+    // Static ABAB replaces rendered siblings inside one retained window-focus owner, matching
+    // NativeActivityContentView/AndroidComposeView initial root ownership. This is ordinary
+    // BEFORE_DESCENDANTS focus: explicit child requestFocus/key traversal remains enabled.
+    private val staticRoot = if (interactive) null else FrameLayout(context).apply {
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        isFocusable = true
+        isFocusableInTouchMode = true
+        defaultFocusHighlightEnabled = false
+        descendantFocusability = android.view.ViewGroup.FOCUS_BEFORE_DESCENDANTS
+    }
+    private val contentRoot: FrameLayout get() = staticRoot ?: host.fixtureRoot
+    private val focusListener = android.view.ViewTreeObserver.OnGlobalFocusChangeListener { old, next ->
+        recordFocus("global-focus-change", old, next)
+    }
+    private var focusListenerInstalled = false
     private val referenceHost = FrameLayout(context)
     private val reference = ComposeView(context)
     private var native: NativeIncidentsScreenView? = null
@@ -283,12 +333,23 @@ private class IncidentsParityBoard(
         try {
             host.fixtureRoot.removeAllViews()
             host.fixtureRoot.setBackgroundColor(colors.surface.toArgb())
+            staticRoot?.let { root ->
+                check(host.hasWindowFocus()) // Never acquire or reclaim window focus.
+                host.fixtureRoot.viewTreeObserver.addOnGlobalFocusChangeListener(focusListener)
+                focusListenerInstalled = true
+                host.fixtureRoot.addView(root, FrameLayout.LayoutParams(-1, -1))
+                // One initial native focus owner, before either renderer creates focusable leaves.
+                // No per-pass clearing/reassignment and no alteration of global touch/input mode.
+                check(root.requestFocus()) { "Static Incidents window root did not acquire initial View focus" }
+                recordFocus("initial-root-focus")
+                check(root.isFocused)
+            }
             val direction = if (dark) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
             referenceHost.layoutDirection = direction
             reference.layoutDirection = direction
             referenceHost.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             if (Build.VERSION.SDK_INT >= 29) referenceHost.isForceDarkAllowed = false
-            host.fixtureRoot.addView(referenceHost, FrameLayout.LayoutParams(-1, -1))
+            contentRoot.addView(referenceHost, FrameLayout.LayoutParams(-1, -1))
             val compositionContext = ComposeViewContext(referenceHost, recomposer)
             recomposerJob = scope.launch { recomposer.runRecomposeAndApplyChanges() }
             reference.setContent {
@@ -298,11 +359,26 @@ private class IncidentsParityBoard(
                     LocalLayoutDirection provides if (dark) LayoutDirection.Rtl else LayoutDirection.Ltr,
                 ) {
                     MaterialTheme(colorScheme = colors, typography = typography) {
-                        IncidentsScreen(expected,
-                            onBack = { unexpectedCallbacks++; error("Static Incidents fixture must not navigate") },
-                            onToggleAcknowledged = { unexpectedCallbacks++; error("Static fixture must not acknowledge") },
-                            onDelete = { unexpectedCallbacks++; error("Static fixture must not delete") },
-                            modifier = Modifier.fillMaxSize().consumeWindowInsets(WindowInsets.safeDrawing))
+                        val motion = if (interactive) rememberIncidentsPanelMotion(sourceOpen, 220) else null
+                        val renderSource = !interactive || sourceOpen || checkNotNull(motion).hasVisibleProgress
+                        androidx.compose.runtime.SideEffect { sourceMotion = motion; sourceRendered = renderSource }
+                        if (renderSource) {
+                            IncidentsScreen(if (interactive) sourceState else expected,
+                                onBack = {
+                                    if (interactive) { sourceBackCount++; sourceOpen = false }
+                                    else { unexpectedCallbacks++; error("Static Incidents fixture must not navigate") }
+                                },
+                                onToggleAcknowledged = {
+                                    if (interactive) checkNotNull(sourceHistory).toggleAcknowledged(it)
+                                    else { unexpectedCallbacks++; error("Static fixture must not acknowledge") }
+                                },
+                                onDelete = {
+                                    if (interactive) checkNotNull(sourceHistory).delete(it)
+                                    else { unexpectedCallbacks++; error("Static fixture must not delete") }
+                                },
+                                modifier = Modifier.fillMaxSize().consumeWindowInsets(WindowInsets.safeDrawing),
+                                openProgress = { motion?.progress ?: 1f })
+                        }
                     }
                 }
                 androidx.compose.runtime.SideEffect { referenceComposed = true }
@@ -327,9 +403,17 @@ private class IncidentsParityBoard(
                         (view !is NativeMergedRowAccessibilityHost || view.mergesAccessibilityDescendants)
                     if (click) 48f * density.density else 0f
                 })
+            sourceAccess?.let { memory ->
+                val controller = IncidentHistoryController(memory, waitBeforeRetry = { awaitCancellation() })
+                sourceHistory = controller
+                scope.launch { controller.observeHistory { sourceState = it } }
+            }
             val historyOwner = IncidentHistoryController(access, waitBeforeRetry = { awaitCancellation() })
             val panelOwner = NativeIncidentsScreenOwner(context, scope, initiallyOpen = true,
-                onBackRequested = { unexpectedCallbacks++; error("Static Incidents fixture must not navigate") },
+                onBackRequested = {
+                    if (interactive) { nativeBackCount++; checkNotNull(owner).bindNavigation(false, false) }
+                    else { unexpectedCallbacks++; error("Static Incidents fixture must not navigate") }
+                },
                 onAlertChanged = {}, history = historyOwner)
             owner = panelOwner
             val content = NativeIncidentsScreenView(context, environment, panelOwner, scope,
@@ -337,7 +421,7 @@ private class IncidentsParityBoard(
                 scrollEvents = events)
             native = content
             content.layoutDirection = direction
-            host.fixtureRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
+            contentRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
             show(true)
         } catch (failure: Throwable) {
             try { close() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
@@ -348,8 +432,11 @@ private class IncidentsParityBoard(
     fun show(compose: Boolean): View {
         check(!closed && host.hasWindowFocus())
         asyncFailure?.let { throw it }
+        recordFocus("before-show-${if (compose) "released" else "native"}")
         referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
-        native?.visibility = if (compose) View.GONE else View.VISIBLE
+        native?.visibility = if (!compose && owner?.overlayVisible == true) View.VISIBLE else View.GONE
+        recordFocus("after-show-${if (compose) "released" else "native"}")
+        requireStaticRootFocus()
         return shown(compose)
     }
 
@@ -371,15 +458,60 @@ private class IncidentsParityBoard(
             await { owner?.state?.status == IncidentHistoryLoadStatus.READY }
             nativeParityOnMain(instrumentation) { access.revisions.value = 1L }
         }
-        await { referenceComposed && owner?.state?.let {
+        await { referenceComposed && (!interactive || sourceState.status == expected.status) && owner?.state?.let {
             it.status == expected.status && it.history.rows == expected.history.rows
         } == true }
     }
 
+    /** QA-only observations/host navigation; static mode does not call these. */
+    fun interactiveState(reference: Boolean): IncidentHistoryUiState {
+        check(interactive); requireNoAsyncFailure()
+        return if (reference) sourceState else checkNotNull(owner).state
+    }
+    fun interactiveProgress(reference: Boolean): Float {
+        check(interactive); requireNoAsyncFailure()
+        return if (reference) checkNotNull(sourceMotion).progress else checkNotNull(owner).openProgress
+    }
+    fun interactiveMounted(reference: Boolean): Boolean {
+        check(interactive); requireNoAsyncFailure()
+        return if (reference) sourceRendered else checkNotNull(native).pointerContent != null
+    }
+    fun interactiveReopen(reference: Boolean) {
+        check(interactive); requireNoAsyncFailure()
+        if (reference) sourceOpen = true else checkNotNull(owner).bindNavigation(true, true)
+    }
+    fun interactiveCommands(reference: Boolean): List<String> =
+        (if (reference) checkNotNull(sourceAccess) else access).commands.toList()
+    fun interactiveBackCount(reference: Boolean): Int = if (reference) sourceBackCount else nativeBackCount
+    fun interactiveContent(reference: Boolean): View = shown(reference)
+    fun interactiveBackdrop(): View = host.fixtureRoot
+
     fun requireNoAsyncFailure() { asyncFailure?.let { throw it } }
+
+    private fun recordFocus(stage: String, old: View? = null, next: View? = null) {
+        if (interactive) return
+        fun describe(view: View?): Any = view?.let {
+            JSONObject().put("class", it.javaClass.name)
+                .put("description", it.contentDescription?.toString() ?: JSONObject.NULL)
+                .put("static_root", it === staticRoot).put("focused", it.isFocused)
+                .put("shown", it.isShown).put("width", it.width).put("height", it.height)
+        } ?: JSONObject.NULL
+        focusTrace.put(JSONObject().put("stage", stage).put("uptime_ms", SystemClock.uptimeMillis())
+            .put("own_window_focus", host.hasWindowFocus()).put("touch_mode", host.fixtureRoot.isInTouchMode)
+            .put("current", describe(host.fixtureRoot.findFocus()))
+            .put("old", describe(old)).put("new", describe(next))
+    }
+
+    private fun requireStaticRootFocus() {
+        if (!interactive) check(staticRoot?.isFocused == true) {
+            "Static Incidents focus changed; retain evidence without clearing/reassigning focus"
+        }
+    }
 
     fun checkState() {
         requireNoAsyncFailure()
+        recordFocus("captured-state")
+        requireStaticRootFocus()
         val actual = checkNotNull(owner).state
         check(actual.status == expected.status && actual.history.rows == expected.history.rows)
         check(access.mutations == 0 && unexpectedCallbacks == 0)
@@ -424,8 +556,15 @@ private class IncidentsParityBoard(
         release { recomposer.cancel() }
         release { recomposerJob?.cancel() }
         release { scope.cancel() }
-        release { host.fixtureRoot.removeView(referenceHost) }
-        native?.let { content -> release { host.fixtureRoot.removeView(content) } }
+        release {
+            if (focusListenerInstalled && host.fixtureRoot.viewTreeObserver.isAlive) {
+                host.fixtureRoot.viewTreeObserver.removeOnGlobalFocusChangeListener(focusListener)
+            }
+            focusListenerInstalled = false
+        }
+        release { contentRoot.removeView(referenceHost) }
+        native?.let { content -> release { contentRoot.removeView(content) } }
+        staticRoot?.let { root -> release { host.fixtureRoot.removeView(root) } }
         native = null
         owner = null
         windowText = null

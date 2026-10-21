@@ -11,6 +11,8 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
+import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.ReverbClickPhaseEndpoint
@@ -22,12 +24,18 @@ internal class ReverbIncidentBackView(
     context: Context,
     palette: ReverbPalette,
     private var onBack: () -> Unit,
-) : View(context), NativeClickPhaseHost, NativePointerLayerShape {
+) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     var pointerInputRoot: View? = null
     private val ownerKey = Any()
     private val clip = Path()
     private val rect = RectF()
-    private val icon = ReverbIconDrawable(ReverbIcon.Back, resources.displayMetrics.density, palette.muted)
+    private val icon = OnboardingIconView(context, ReverbIcon.Back, palette.muted).apply {
+        contentDescription = context.getString(R.string.back)
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        { NativeMergedRowAccessibilityState(true, null, null, listOf(icon)) },
+        invokeSourceClick = { onBack(); true })
     private val indication = ReverbRowIndication.install(this, palette.ink, ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerInputRoot
@@ -51,8 +59,11 @@ internal class ReverbIncidentBackView(
     init {
         isClickable = true
         isFocusable = true
-        contentDescription = context.getString(R.string.back)
+        contentDescription = null
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        accessibilityDelegate = mergedRowAccessibility
+        addView(icon)
+        addView(mergedRowAccessibility.roleView)
         setOnClickListener { onBack() }
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
@@ -65,7 +76,7 @@ internal class ReverbIncidentBackView(
 
     fun bind(palette: ReverbPalette, onBack: () -> Unit) {
         this.onBack = onBack
-        icon.setTint(palette.muted)
+        icon.bind(ReverbIcon.Back, palette.muted)
         indication.updateColor(palette.ink)
         bindInput()
         invalidate()
@@ -88,10 +99,6 @@ internal class ReverbIncidentBackView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val glyph = (24f * resources.displayMetrics.density).roundToInt()
-        val left = ((w - glyph) / 2f).roundToInt()
-        val top = ((h - glyph) / 2f).roundToInt()
-        icon.setBounds(left, top, left + glyph, top + glyph)
         indication.onMeasured(w, h, resources.displayMetrics.density)
         rect.set(0f, 0f, w.toFloat(), h.toFloat())
         clip.rewind()
@@ -99,10 +106,22 @@ internal class ReverbIncidentBackView(
         invalidateOutline()
     }
 
-    override fun onRtlPropertiesChanged(layoutDirection: Int) {
-        super.onRtlPropertiesChanged(layoutDirection)
-        icon.layoutDirection = layoutDirection
-        invalidate()
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = MeasureSpec.getSize(heightMeasureSpec)
+        val glyph = (24f * resources.displayMetrics.density).roundToInt()
+        icon.measure(MeasureSpec.makeMeasureSpec(glyph, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(glyph, MeasureSpec.EXACTLY))
+        mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+        setMeasuredDimension(width, height)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val x = ((width - icon.measuredWidth) / 2f).roundToInt()
+        val y = ((height - icon.measuredHeight) / 2f).roundToInt()
+        icon.layout(x, y, x + icon.measuredWidth, y + icon.measuredHeight)
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
     }
 
     override fun draw(canvas: Canvas) {
@@ -114,7 +133,6 @@ internal class ReverbIncidentBackView(
         }
     }
 
-    override fun onDraw(canvas: Canvas) { super.onDraw(canvas); icon.draw(canvas) }
     override fun onTouchEvent(event: MotionEvent): Boolean = controller.touch(event)
     override fun dispatchKeyEvent(event: KeyEvent): Boolean = when (event.keyCode) {
         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
@@ -129,5 +147,11 @@ internal class ReverbIncidentBackView(
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         controller.focusChanged(gainFocus)
     }
-    override fun getAccessibilityClassName(): CharSequence = "android.widget.Button"
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
+
+    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }

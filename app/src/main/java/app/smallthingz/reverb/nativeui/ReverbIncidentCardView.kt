@@ -84,7 +84,9 @@ internal class ReverbIncidentCardView(
     private var menuCreated = false
     private var menuLifetime = Any()
     private val surface = ReverbGroupLayout(context, cornerRadiusDp = 18f)
-    private val body = IncidentBody(context, initialAppearance)
+    private val body = IncidentBody(context, initialAppearance,
+        onPrimaryAction = { performPrimaryAction(); true },
+        onOpenMenu = { openMenu(); true })
     private val bodyIndication = ReverbRowIndication.install(this, initialAppearance.palette.ink) {
         ValueAnimator.getDurationScale()
     }
@@ -310,7 +312,12 @@ internal class ReverbIncidentCardView(
     }
 }
 
-private class IncidentBody(context: Context, initial: IncidentCardAppearance) : ViewGroup(context), NativeClickPhaseHost {
+private class IncidentBody(
+    context: Context,
+    initial: IncidentCardAppearance,
+    onPrimaryAction: () -> Boolean,
+    onOpenMenu: () -> Boolean,
+) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ReverbClickController? = null
@@ -324,8 +331,13 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
     private val age = label(initial.bodySmall)
     private val description = label(initial.bodySmall)
     private val divider = IncidentDivider(context)
-    val checkTarget = IncidentCheckTarget(context, initial.density.density)
+    val checkTarget = IncidentCheckTarget(context, initial.density.density, onPrimaryAction, onOpenMenu)
     private val details = listOf<View>(divider, cause, runtime, age, description)
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
+        NativeMergedRowAccessibilityState(true, null, clickLabel,
+            listOf(date, summary, checkTarget, cause, runtime, age, description).filter { it.visibility == VISIBLE },
+            longClickable = true, rolePresent = false)
+    }, onPrimaryAction, onOpenMenu)
 
     init {
         clipChildren = false
@@ -333,6 +345,7 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         ViewCompat.setScreenReaderFocusable(this, true)
+        accessibilityDelegate = mergedRowAccessibility
         listOf(date, summary, cause, runtime, age, description, divider, checkTarget).forEach { addView(it) }
         clear()
     }
@@ -468,25 +481,19 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         super.onDetachedFromWindow()
     }
 
-    override fun addChildrenForAccessibility(children: ArrayList<View>) {
-        // Source drawing order: header Column, nested state action, then detail Texts.
-        listOf(date, summary, checkTarget, cause, runtime, age, description).forEach {
-            if (it.visibility == VISIBLE) children.add(it)
-        }
-    }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
 
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = View::class.java.name
-        info.text = null
-        info.contentDescription = null
-        ViewCompat.setScreenReaderFocusable(this, true)
-        info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, clickLabel))
-    }
+    override fun addChildrenForAccessibility(children: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(children)
 }
 
-private class IncidentCheckTarget(context: Context, initialDensity: Float) : ViewGroup(context), NativeClickPhaseHost,
-    NativePointerLayerShape {
+private class IncidentCheckTarget(
+    context: Context,
+    initialDensity: Float,
+    onPrimaryAction: () -> Boolean,
+    onOpenMenu: () -> Boolean,
+) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ReverbClickController? = null
@@ -498,6 +505,11 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
     private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
     private var clickLabel: String? = null
     private var hitGeometry = reverbGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
+        NativeMergedRowAccessibilityState(true, null, clickLabel,
+            if (glyph.contentDescription != null) listOf(glyph) else emptyList(),
+            longClickable = true, rolePresent = false)
+    }, onPrimaryAction, onOpenMenu)
 
     override fun containsPointerLayer(x: Float, y: Float): Boolean = hitGeometry.contains(x, y)
 
@@ -505,6 +517,7 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         ViewCompat.setScreenReaderFocusable(this, true)
+        accessibilityDelegate = mergedRowAccessibility
         addView(glyph)
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
@@ -602,13 +615,11 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
 
     override fun getAccessibilityClassName(): CharSequence = View::class.java.name
 
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = getAccessibilityClassName()
-        // Role-less clickable parent; the original22dp described Icon remains a separate child.
-        info.isCheckable = false
-        info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, clickLabel))
-    }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+
+    override fun addChildrenForAccessibility(children: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(children)
 }
 
 private class IncidentDivider(context: Context) : View(context) {

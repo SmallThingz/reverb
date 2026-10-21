@@ -38,6 +38,7 @@
     "src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt": "beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090",
     "src/reliability/java/app/smallthingz/reverb/ReleasedProgressiveWaveformRenderers.kt": "a4a0aaf7cfbc454ee6cd7c8502a989025b8accc8652f5836fad786d006bff24d",
     "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt": "19cef23bb9c6bc36871c63fb2d9651879afbfa2ee4dd96a98ab407b4f27de9a2",
+    "src/reliability/java/app/smallthingz/reverb/ReleasedSettingsQuickTileInlineEditor.kt": "448f5f7b157ad5dd7b7332869f6c5ffbbd425ddcbe2df8fb81ca15edf7517371",
     "src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt": "c594b341689a9d8f881b2e170d72b8f2e178d1ccbfe612c515188a8287c7699e",
     "src/reliability/java/app/smallthingz/reverb/ReverbSheet.kt": "779692a1a2dff21a57dbff75ab12d3db10d3d688bc1058bbac95aeb97c5c6e3f",
     "src/reliability/java/app/smallthingz/reverb/ReverbTheme.kt": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
@@ -689,6 +690,30 @@
           "length": 5109
         }
       ]
+    }
+  },
+  "declaration_oracles": {
+    "src/reliability/java/app/smallthingz/reverb/ReleasedSettingsQuickTileInlineEditor.kt": {
+      "released_revision": "v0.1.2",
+      "released_source": "app/src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt",
+      "released_source_sha256": "e794b1b506816fbb66e3dabbee8bf4b7f2a181c160ba095371ccb45471c1c5d9",
+      "released_span_start": 22214,
+      "released_span_length": 8845,
+      "reconstructed_source": "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt",
+      "start_marker": "@Composable\nprivate fun TileStatus(",
+      "inverse": [
+        {
+          "from": "ReleasedSettingsTileStatus(",
+          "to": "TileStatus(",
+          "count": 5
+        },
+        {
+          "from": "internal fun ReleasedSettingsQuickTileInlineEditor(",
+          "to": "private fun QuickTileInlineEditor(",
+          "count": 1
+        }
+      ],
+      "body_sha256": "2cebd7258c21788fad4b9c9b5c162eda19f5afc7a31527714256ae995b8e18c9"
     }
   }
 }

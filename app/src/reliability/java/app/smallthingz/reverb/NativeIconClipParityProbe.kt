@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -68,7 +69,7 @@ import org.json.JSONObject
  * Surface [63,710,954,3304], Recovery status Icon [105,2052,63,63]. Its bottom eight pixels are
  * outside the viewport. Removing text/other rows isolates the same released Icon, ScrollNode and
  * Surface draw boundaries. The full-screen oracle and its failed receipt remain unchanged.
- * That capture's physical display uses 421 dpi (density 2.63125), as its saved activity dump
+ * That capture's physical display uses 421 dpi, as its saved activity dump
  * records. The unrelated 1072px virtual display uses 420 dpi; it is not this fixture's source.
  *
  * Exact source primitives: MainActivity.kt900-909 Surface/Column and932-940 Icon; foundation1.11.2
@@ -118,6 +119,8 @@ internal fun verifyNativeIconClipParity(instrumentation: Instrumentation, report
         nativeParityOnMain(instrumentation) {
             val metrics = activity.resources.displayMetrics
             val configuration = activity.resources.configuration
+            // ResourcesImpl multiplies by the rounded Float reciprocal, not densityDpi / 160f.
+            val expectedDensity = configuration.densityDpi * (1f / DisplayMetrics.DENSITY_DEFAULT)
             result.put("observed_configuration", JSONObject()
                 .put("width_px", activity.fixtureRoot.width)
                 .put("height_px", activity.fixtureRoot.height)
@@ -127,7 +130,7 @@ internal fun verifyNativeIconClipParity(instrumentation: Instrumentation, report
             check(activity.fixtureRoot.width == 1080 && activity.fixtureRoot.height == 2400 &&
                 metrics.densityDpi == CLIP_SOURCE_DENSITY_DPI &&
                 configuration.densityDpi == CLIP_SOURCE_DENSITY_DPI &&
-                metrics.density == CLIP_SOURCE_DENSITY_DPI / 160f) {
+                metrics.density == expectedDensity) {
                 "This diagnostic reproduces retained physical0 1080x2400,421dpi source geometry; do not rescale it"
             }
         }

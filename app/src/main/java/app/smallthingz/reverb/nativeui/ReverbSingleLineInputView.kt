@@ -218,6 +218,13 @@ internal class ReverbSingleLineInputView(
         onNativeFocusChanged = null
     }
 
+    override fun scrollTo(x: Int, y: Int) {
+        // Released Rename uses singleLine CoreTextField: HorizontalScrollLayoutModifier places
+        // text at (horizontalOffset, 0), even when its unrestricted raw value contains newlines.
+        // TextView cursor-follow must not introduce a source-absent vertical scrolling axis.
+        super.scrollTo(x, 0)
+    }
+
     private fun acceptOwnerText(raw: String) {
         if (raw != previousOwnerText) {
             previousOwnerText = raw

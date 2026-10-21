@@ -32,6 +32,8 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -55,7 +57,8 @@ internal fun verifyNativeActivityLifecycle(instrumentation: Instrumentation, rep
     }
     val prefs = getRecorderPreferences(context)
     val before = prefs.all.toMap()
-    val themeBefore = prefs.snapshotDurablePreferenceValue(PrefKey.THEME_MODE)
+    val themeBefore = durablePreferenceValueSnapshot(before, PrefKey.THEME_MODE)
+    val onboardingBefore = durablePreferenceValueSnapshot(before, PrefKey.ONBOARDING_SHOWN)
     check(durablePreferenceSnapshotIsExactlyRestorable(themeBefore))
     val permissionNames = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS,
         Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -75,6 +78,26 @@ internal fun verifyNativeActivityLifecycle(instrumentation: Instrumentation, rep
             "Light appearance under unchanged device inversion/force-dark state")))
     val ledger = ActivityLifecycleLedger(classes.mapTo(HashSet()) { it.name }, result)
     writeLifecycleEvidence(directory, result) // A failed later publication must never leave an old PASS receipt.
+    // Process death bypasses finally. Publish the exact two-key QA baseline before any theme edit.
+    // ONBOARDING_SHOWN is observation-only; this fixture never resets setup or invokes Finish.
+    val originalPreferences = JSONObject().put("schema", 1)
+        .put("package", context.packageName).put("uid", android.os.Process.myUid())
+        .put("pid", android.os.Process.myPid()).put("preference_file", context.packageName)
+        .put("observed_uptime_ms", SystemClock.uptimeMillis())
+        .put("keys", JSONObject()
+            .put(PrefKey.THEME_MODE.name, lifecyclePreferenceEvidence(themeBefore))
+            .put(PrefKey.ONBOARDING_SHOWN.name, lifecyclePreferenceEvidence(onboardingBefore)))
+        .put("fixture_write_keys", JSONArray(listOf(PrefKey.THEME_MODE.name)))
+        .put("automatic_recovery", false)
+    val originalName = "original-qa-preferences.json"
+    val originalSha = writeOriginalLifecyclePreferences(directory, originalName, originalPreferences)
+    result.put("original_qa_preferences", JSONObject().put("file", originalName).put("sha256", originalSha))
+        .put("preference_restoration_verified", false)
+    writeLifecycleEvidence(directory, result)
+    // This initial false receipt remains discoverable even if the launched Activity kills the process.
+    instrumentation.sendStatus(0, Bundle().apply {
+        putString("stream", "PARITY_EVIDENCE ${directory.name}/result.json\n")
+    })
     var failure: Throwable? = null
     var themeWritten = false
     var comparisonSucceeded = false
@@ -212,6 +235,7 @@ internal fun verifyNativeActivityLifecycle(instrumentation: Instrumentation, rep
             }
             if (themeWritten) check(prefs.edit().restoreDurablePreferenceValue(PrefKey.THEME_MODE, themeBefore).commit())
             check(prefs.all == before) { "QA preference restoration did not reproduce the original typed map" }
+            result.put("preference_restoration_verified", true)
         }
         cleanup { conditions() }
         cleanup { app.unregisterActivityLifecycleCallbacks(ledger) }
@@ -536,4 +560,42 @@ private fun writeLifecycleEvidence(directory: File, result: JSONObject) {
     val pending = File(directory, "result.json.pending")
     pending.writeText(result.toString(2))
     check(pending.renameTo(File(directory, "result.json"))) { "Cannot publish complete lifecycle evidence" }
+}
+
+/** Exact SharedPreferences wire types; deliberately called for only the two named QA keys above. */
+private fun lifecyclePreferenceEvidence(snapshot: DurablePreferenceValueSnapshot): JSONObject {
+    val result = JSONObject().put("present", snapshot.present)
+    if (!snapshot.present) return result.put("type", "absent")
+    when (val value = snapshot.value) {
+        null -> result.put("type", "null").put("value", JSONObject.NULL)
+        is Boolean -> result.put("type", "Boolean").put("value", value)
+        is Int -> result.put("type", "Int").put("value", value)
+        // Decimal String avoids lossy downstream JSON number conversions for 64-bit values.
+        is Long -> result.put("type", "Long").put("decimal", value.toString())
+        // Raw bits preserve negative zero and non-finite values without invalid JSON numbers.
+        is Float -> result.put("type", "Float")
+            .put("raw_bits_hex", value.toRawBits().toUInt().toString(16).padStart(8, '0'))
+        is String -> result.put("type", "String").put("value", value)
+        is Set<*> -> {
+            check(value.all { it is String }) { "Unsupported original QA preference set; no theme mutation" }
+            result.put("type", "StringSet").put("value", JSONArray(value.map { it as String }.sorted()))
+        }
+        else -> error("Unsupported original QA preference type ${value.javaClass.name}; no theme mutation")
+    }
+    return result
+}
+
+/** One immutable recovery-evidence publication, not a recovery command or preference journal. */
+private fun writeOriginalLifecyclePreferences(directory: File, name: String, value: JSONObject): String {
+    val target = File(directory, name)
+    val pending = File(directory, "$name.pending")
+    check(!target.exists() && !pending.exists()) { "Original QA baseline must never be overwritten" }
+    val bytes = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+    FileOutputStream(pending).use { output ->
+        output.write(bytes)
+        output.fd.sync()
+    }
+    check(pending.renameTo(target)) { "Cannot publish original QA preferences before mutation" }
+    check(target.readBytes().contentEquals(bytes)) { "Original QA preference evidence failed readback" }
+    return MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

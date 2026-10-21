@@ -354,7 +354,7 @@ private class QuickTileBitmapView(context: Context, option: QuickSaveTileOption,
 }
 
 /** Stable target-keyed inline editor: changing buffer retains this surface and its native wheel. */
-private class QuickTileInlineView(
+internal class QuickTileInlineView(
     context: Context,
     private val owner: NativeQuickTileInlineOwner,
     private val lifecycle: androidx.lifecycle.Lifecycle,

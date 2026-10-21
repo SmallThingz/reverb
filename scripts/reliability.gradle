@@ -80,7 +80,7 @@ allprojects {
                     def splitSha256 = { byte[] bytes ->
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
                     }
-                    if (splitSha256(splitSourceMapFile.bytes) != 'a377a490ed1c3efc0f84bbc8bbc69e21e1e21ec6dc979bdd4c591e356f4e4005') {
+                    if (splitSha256(splitSourceMapFile.bytes) != '441a3c805dadb0711e79b72d132cf4151c431eaa1f63b8a393c7c104442f90e0') {
                         throw new GradleException('Native renderer split manifest changed')
                     }
                     def splitActualBytes = [:]
@@ -128,6 +128,35 @@ allprojects {
                             throw new GradleException('Native split no longer reconstructs original: ' + original)
                         }
                         originalSplitBytes[original] = reconstructed
+                    }
+                    // The finite Settings leaf oracle is a declaration-only extraction of v0.1.2.
+                    // Pin actual compiled output, invert only declared names/visibility, then compare
+                    // its complete suffix with both the released span hash and reconstructed renderer.
+                    splitSourceMap.declaration_oracles.each { relative, definition ->
+                        def text = new String(splitActualBytes[relative], java.nio.charset.StandardCharsets.UTF_8)
+                        definition.inverse.each { replacement ->
+                            if (text.count(replacement.from as String) != (replacement.count as int)) {
+                                throw new GradleException('Released declaration seam changed: ' + relative)
+                            }
+                            text = text.replace(replacement.from as String, replacement.to as String)
+                        }
+                        def marker = definition.start_marker as String
+                        if (text.count(marker) != 1) {
+                            throw new GradleException('Released declaration boundary changed: ' + relative)
+                        }
+                        byte[] body = text.substring(text.indexOf(marker)).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                        def original = new String(originalSplitBytes[definition.reconstructed_source],
+                            java.nio.charset.StandardCharsets.UTF_8)
+                        if (original.count(marker) != 1) {
+                            throw new GradleException('Original declaration boundary changed: ' + relative)
+                        }
+                        byte[] originalBody = original.substring(original.indexOf(marker))
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                        if (body.length != (definition.released_span_length as int) ||
+                            splitSha256(body) != definition.body_sha256 ||
+                            !java.util.Arrays.equals(body, originalBody)) {
+                            throw new GradleException('Declaration no longer equals exact released source span: ' + relative)
+                        }
                     }
                     def releasedOracleBytes = { relative ->
                         originalSplitBytes.containsKey(relative) ?

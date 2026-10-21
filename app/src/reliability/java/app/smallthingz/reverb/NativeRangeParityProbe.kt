@@ -285,6 +285,11 @@ private class RangeParityBoard(
         // Match NativeCaptureContentView: child shadows may extend into that inset.
         clipChildren = false
         clipToPadding = false
+        // Match the real NativeActivityContentView / released AndroidComposeView focus owner.
+        // Otherwise an unchanged AndroidView wheel becomes this fixture's implicit first focus.
+        isFocusable = true
+        isFocusableInTouchMode = true
+        defaultFocusHighlightEnabled = false
     }
     private val composeContext: ComposeViewContext
     private val blob = AudioBlobController()
@@ -437,6 +442,18 @@ private class RangeParityBoard(
         return JSONObject().put("width", content.width).put("height", content.height)
             .put("compact", compact).put("wheel_bounds", wheelBounds ?: JSONObject.NULL)
             .put("endpoints_diagnostic", endpoints)
+            .put("focus_diagnostic", focusEvidence(content, wheel))
+    }
+    private fun focusEvidence(content: View, wheel: RangeDurationWheelView?): JSONObject {
+        val focused = host.window.decorView.findFocus()
+        return JSONObject().put("in_touch_mode", content.isInTouchMode)
+            .put("focused_class", focused?.javaClass?.name ?: JSONObject.NULL)
+            .put("focused_inside_board", focused != null && rangeDescendants(content).any { it === focused })
+            .put("native_board_itself_focused", nativeHost.isFocused)
+            .put("wheel_focused", wheel?.isFocused ?: JSONObject.NULL)
+            .put("wheel_focusable", wheel?.isFocusable ?: JSONObject.NULL)
+            .put("wheel_focusable_in_touch_mode", wheel?.isFocusableInTouchMode ?: JSONObject.NULL)
+            .put("wheel_default_focus_highlight_enabled", wheel?.defaultFocusHighlightEnabled ?: JSONObject.NULL)
     }
     fun resizeWithWheel(reference: Boolean, seconds: Float): JSONObject {
         check(!compact && host.hasWindowFocus() && ready(reference))

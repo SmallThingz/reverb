@@ -120,6 +120,7 @@ internal class NativeIncidentsScreenView(
                 incidentContentActions(context, owner.history), owner::requestBack, frames, scope,
                 { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, inputRoot, savedPosition)
             content = shown
+            shown.bindSourceAccessibility(sourceNode)
             shown.setStatusBarInsets(statusBarInsets)
             addView(shown)
             textLease = windowText.bindContent(shown, NativeTextSemanticsClipPolicy(shown::semanticsClip), sourceNode) {

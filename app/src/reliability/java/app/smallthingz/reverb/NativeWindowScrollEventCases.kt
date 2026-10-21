@@ -5,6 +5,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
+import androidx.compose.ui.unit.Density
+import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +32,7 @@ internal fun verifyNativeWindowScrollEventCases(host: ViewGroup): List<String> {
     check(Looper.myLooper() == Looper.getMainLooper())
     check(host.isAttachedToWindow)
     check(host.context.packageName.endsWith(".nativeparity.reliability"))
+    val pagerAttachmentCases = verifyNativePagerScrollAttachmentCases(host)
     val fixture = FrameLayout(host.context)
     val horizontal = View(host.context)
     val vertical = View(host.context)
@@ -51,7 +56,7 @@ internal fun verifyNativeWindowScrollEventCases(host: ViewGroup): List<String> {
             event.scrollY, event.maxScrollY, event.text.toList(), event.contentDescription)
         true
     }
-    val passed = mutableListOf<String>()
+    val passed = pagerAttachmentCases.toMutableList()
     var primaryFailure: Throwable? = null
     try {
         val h = queue.registerScroll(horizontal, { horizontalPresent }, { fixture },
@@ -138,6 +143,114 @@ internal fun verifyNativeWindowScrollEventCases(host: ViewGroup): List<String> {
         var cleanupFailure: Throwable? = null
         listOf<() -> Unit>({ queue.close() }, { scope.cancel() }, { clock.runCurrent() },
             { host.removeView(fixture) }).forEach { cleanup ->
+            try { cleanup() } catch (error: Throwable) {
+                val previous = cleanupFailure
+                if (previous == null) cleanupFailure = error else previous.addSuppressed(error)
+            }
+        }
+        cleanupFailure?.let { cleanup ->
+            val primary = primaryFailure
+            if (primary == null) throw cleanup else primary.addSuppressed(cleanup)
+        }
+    }
+    return passed
+}
+
+/** Same external window-root construction order as NativeActivityContentView during hydration. */
+private fun verifyNativePagerScrollAttachmentCases(host: ViewGroup): List<String> {
+    val subtree = FrameLayout(host.context)
+    val reparented = FrameLayout(host.context)
+    val viewport = FrameLayout(host.context)
+    subtree.addView(viewport, FrameLayout.LayoutParams(100, 100))
+    val clock = NativeScrollCaseClock()
+    val scope = CoroutineScope(clock + SupervisorJob())
+    val queue = NativeWindowScrollAccessibilityEvents(host, scope, {}, {}, {})
+    queue.accessibilityForceEnabledForTesting = true
+    val sent = mutableListOf<Int>()
+    queue.onSendAccessibilityEvent = { event -> sent += event.eventType; true }
+    var registrations = 0
+    var retirements = 0
+    val tracked = NativeWindowHorizontalAccessibilityEvents { source, present, range ->
+        val actual = queue.register(source, present, range) // Keep the real ancestry check.
+        registrations++
+        object : NativeHorizontalAccessibilityEventRegistration {
+            override fun scrollChanged() = actual.scrollChanged()
+            override fun layoutChanged() = actual.layoutChanged()
+            override fun close() { retirements++; actual.close() }
+        }
+    }
+    val pager = NativeOnboardingPager(scope, Density(1f)).also { it.updateLayout(100) }
+    val geometry = NativePlainTextViewGeometry(host,
+        NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
+    fun create(source: ViewGroup) = NativeOnboardingPagerAccessibility(source, pager, scope,
+        geometry, { true }, { NativeOnboardingPagerNode(true, false, true, emptyList()) }, tracked)
+    var delegate: NativeOnboardingPagerAccessibility? = null
+    var other: NativeOnboardingPagerAccessibility? = null
+    var primaryFailure: Throwable? = null
+    val passed = mutableListOf<String>()
+    try {
+        val created = create(viewport) // Used to throw before Activity.addView established ancestry.
+        delegate = created
+        check(registrations == 0 && !viewport.isAttachedToWindow)
+        val foreign = FrameLayout(host.context)
+        val rejected = runCatching {
+            queue.register(foreign, { true }, { NativeAccessibilityScrollRange(0f, 100f) })
+        }.exceptionOrNull()
+        check(rejected is IllegalArgumentException &&
+            rejected.message == "Scroller must belong to this native window root")
+        host.addView(subtree, ViewGroup.LayoutParams(100, 100))
+        check(viewport.isAttachedToWindow && registrations == 1)
+        created.sourceStateChanged()
+        created.sourceLayoutChanged() // Retire while this notification is still queued.
+        host.removeView(subtree)
+        check(retirements == 1)
+        clock.runCurrent()
+        check(sent.isEmpty())
+        passed += "pager defers external-window registration until attach; foreign ancestry still rejects"
+
+        pager.requestScrollToPage(1)
+        pager.updateLayout(100)
+        created.sourceStateChanged() // Detached state changes cannot enqueue or seed reattachment.
+        host.addView(reparented, ViewGroup.LayoutParams(100, 100))
+        reparented.addView(subtree, FrameLayout.LayoutParams(100, 100))
+        check(registrations == 2)
+        created.sourceStateChanged()
+        clock.advanceBy(100)
+        check(sent.isEmpty())
+        created.sourceLayoutChanged()
+        clock.runCurrent()
+        check(sent == listOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))
+        created.sourceLayoutChanged()
+        created.close(); created.close()
+        check(retirements == 2)
+        clock.advanceBy(100)
+        check(sent.size == 1)
+        passed += "pager detach retires queued event; same-window reparent seeds range and owns one fresh registration"
+
+        val closedBeforeAttach = FrameLayout(host.context)
+        val retiredBeforeAttach = create(closedBeforeAttach)
+        other = retiredBeforeAttach
+        retiredBeforeAttach.close()
+        subtree.addView(closedBeforeAttach, FrameLayout.LayoutParams(20, 20))
+        check(registrations == 2)
+        passed += "pager disposed before attachment cannot register later"
+        val existingHost = create(closedBeforeAttach) // Already attached construction works too.
+        other = existingHost
+        check(registrations == 3)
+        existingHost.close(); existingHost.close()
+        subtree.removeView(closedBeforeAttach)
+        reparented.removeView(subtree)
+        check(retirements == 3)
+        passed += "already-attached pager registers once; close and later detach retire it once"
+    } catch (error: Throwable) {
+        primaryFailure = error
+        throw error
+    } finally {
+        var cleanupFailure: Throwable? = null
+        listOf<() -> Unit>({ other?.close() }, { delegate?.close() },
+            { (subtree.parent as? ViewGroup)?.removeView(subtree) },
+            { host.removeView(reparented) }, { queue.close() }, { scope.cancel() },
+            { clock.runCurrent() }).forEach { cleanup ->
             try { cleanup() } catch (error: Throwable) {
                 val previous = cleanupFailure
                 if (previous == null) cleanupFailure = error else previous.addSuppressed(error)
