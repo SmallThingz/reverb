@@ -55,6 +55,7 @@ internal fun verifyNativeRetentionKeyboardParity(
     var completed = 0
     try {
         writeRetentionKeyboardEvidence(directory, result, null)
+        result.put("initial_discovery_regressions", JSONArray(verifyRetentionInitialDiscoveryChecks()))
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { interactiveWindows = it }
         val activity = launchNativeParityActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -83,7 +84,7 @@ internal fun verifyNativeRetentionKeyboardParity(
                 awaitNativeParityDraw(instrumentation, field.content)
                 awaitNativeParityDraw(instrumentation, field.content)
                 val guard = RetentionKeyboardGuard(instrumentation, activity, label, rawOwner, entry)
-                val initial = guard.snapshot()
+                val initial = guard.initialSnapshot()
                 check(initial.target().getString("raw_text") == original)
                 check(!initial.target().getBoolean("editable_focused")) { "Fixture must begin unfocused" }
                 entry.put("initial", initial)
@@ -208,7 +209,26 @@ private class RetentionKeyboardGuard(
     private var expectedWindowId: Int? = null
     private var expectedTargetIdentity: String? = null
 
-    fun snapshot(): JSONObject = withTarget { node, appWindow, imeWindow ->
+    private var initialDiscoveryAttempted = false
+
+    fun initialSnapshot(): JSONObject {
+        check(!initialDiscoveryAttempted) { "Initial editable discovery may only run once" }
+        initialDiscoveryAttempted = true
+        val discovery = RetentionInitialDiscovery(SystemClock.uptimeMillis())
+        val attempts = JSONArray().also { evidence.put("initial_discovery", it) }
+        while (true) {
+            try { return snapshot(discovery) }
+            catch (pending: RetentionInitialTargetNotPublished) {
+                attempts.put(JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                    .put("window_id", discovery.windowId).put("matching_targets", 0))
+                Thread.sleep(40)
+            }
+        }
+    }
+
+    fun snapshot(): JSONObject = snapshot(null)
+
+    private fun snapshot(discovery: RetentionInitialDiscovery?): JSONObject = withTarget(discovery) { node, appWindow, imeWindow ->
         val ownerRaw = nativeParityOnMain(instrumentation) { rawOwner.raw }
         val bounds = Rect().also(node::getBoundsInScreen)
         check(!bounds.isEmpty && node.isEnabled && node.isVisibleToUser && node.isEditable)
@@ -322,8 +342,12 @@ private class RetentionKeyboardGuard(
             .put("uptime_ms", SystemClock.uptimeMillis()).put("observed", value))
     }
 
-    private fun <T> withTarget(block: (AccessibilityNodeInfo, AccessibilityWindowInfo, JSONObject?) -> T): T {
+    private fun <T> withTarget(
+        initialDiscovery: RetentionInitialDiscovery? = null,
+        block: (AccessibilityNodeInfo, AccessibilityWindowInfo, JSONObject?) -> T,
+    ): T {
         requireNativeParityHost(instrumentation, host)
+        check(host.applicationInfo.uid == android.os.Process.myUid()) { "QA host UID changed" }
         val windows = instrumentation.uiAutomation.windows
         check(windows.isNotEmpty()) { "No actual accessible windows after explicit test-service setup" }
         val roots = mutableListOf<AccessibilityNodeInfo>()
@@ -337,7 +361,23 @@ private class RetentionKeyboardGuard(
                 }
             check(own.size == 1 && own.single().first.isFocused) { "Own physical application window is not uniquely focused" }
             val (window, root) = own.single()
+            expectedWindowId?.let { check(window.id == it) { "Editable application window changed" } }
+            val inventory = JSONArray()
+            val observation = JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                .put("window_id", window.id).put("window_focused", window.isFocused)
+                .put("display_id", window.displayId).put("uid", host.applicationInfo.uid)
+                .put("package", host.packageName).put("nodes", inventory)
+            evidence.put("last_discovery", observation)
             fun visit(node: AccessibilityNodeInfo) {
+                inventory.put(JSONObject().put("window_id", node.windowId)
+                    .put("package", node.packageName?.toString() ?: JSONObject.NULL)
+                    .put("class", node.className?.toString() ?: JSONObject.NULL)
+                    .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
+                    .put("text", node.text?.toString() ?: JSONObject.NULL)
+                    .put("editable", node.isEditable).put("enabled", node.isEnabled)
+                    .put("visible", node.isVisibleToUser).put("focused", node.isFocused)
+                    .put("bounds", Rect().also(node::getBoundsInScreen).array())
+                    .put("child_count", node.childCount))
                 if (node.isEditable && node.contentDescription?.toString() == label) nodes += node
                 for (index in 0 until node.childCount) {
                     val child = checkNotNull(node.getChild(index)) { "Editable tree changed while reading child $index" }
@@ -346,6 +386,11 @@ private class RetentionKeyboardGuard(
                 }
             }
             visit(root)
+            observation.put("matching_targets", nodes.size)
+            if (initialDiscovery != null &&
+                !initialDiscovery.ready(window.id, nodes.size, SystemClock.uptimeMillis())) {
+                throw RetentionInitialTargetNotPublished()
+            }
             check(nodes.size == 1) { "Expected one current editable '$label', observed ${nodes.size}" }
             val node = nodes.single()
             check(node.refresh()) { "Editable node became stale before action/observation" }

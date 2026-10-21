@@ -5,9 +5,11 @@ import android.app.Instrumentation
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.View
+import android.view.inspector.WindowInspector
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.ui.platform.ViewRootForTest
@@ -77,7 +79,8 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
                 "$renderer-acknowledged", pictures)
             val mainWindow = currentIncidentApplicationWindow(instrumentation, activity)
             incidentAction(instrumentation, activity, content, reference, label, longClick = true)
-            val menu = awaitIncidentMenu(instrumentation, activity, mainWindow)
+            val menuReadiness = JSONObject().also { run.put("menu_readiness", it) }
+            val menu = awaitIncidentMenu(instrumentation, activity, mainWindow, menuReadiness)
             run.put("menu", menu)
             captureIncidentMenu(instrumentation, activity, menu.getInt("window_id"), directory,
                 "$renderer-menu", pictures)
@@ -282,6 +285,10 @@ private fun currentIncidentApplicationWindow(instrumentation: Instrumentation, h
     } finally { @Suppress("DEPRECATION") node.recycle() }
 }
 
+/** Only a newly observed own root may lack its separately published window metadata. */
+private class IncidentMenuWindowNotPublished(val observation: JSONObject) :
+    IllegalStateException("Own Incidents popup window metadata is not published")
+
 /** Current physical0 QA popup only. No historical window labels or app request substitute. */
 private fun currentIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity,
                                 expectedWindow: Int? = null): Pair<AccessibilityNodeInfo, JSONObject> {
@@ -290,7 +297,10 @@ private fun currentIncidentMenu(instrumentation: Instrumentation, host: NativePa
     try {
         check(root.refresh() && root.packageName?.toString() == host.packageName && root.isVisibleToUser)
         if (expectedWindow != null) check(root.windowId == expectedWindow)
-        val window = checkNotNull(root.window)
+        val window = root.window ?: throw IncidentMenuWindowNotPublished(JSONObject()
+            .put("root_window_id", root.windowId).put("root_package", root.packageName?.toString())
+            .put("root_visible", root.isVisibleToUser).put("root_class", root.className?.toString())
+            .put("root_child_count", root.childCount).put("window_metadata", JSONObject.NULL))
         try {
             check(window.displayId == 0 && window.type == AccessibilityWindowInfo.TYPE_APPLICATION && window.isFocused)
         } finally { @Suppress("DEPRECATION") window.recycle() }
@@ -315,8 +325,10 @@ private fun currentIncidentMenu(instrumentation: Instrumentation, host: NativePa
 }
 
 private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity,
-                              mainWindow: Int): JSONObject {
+                              mainWindow: Int, readiness: JSONObject): JSONObject {
     val deadline = SystemClock.uptimeMillis() + 8_000L
+    var pendingWindow: Int? = null
+    var attempts = 0
     // Root may still be the known own main window while its new popup is attaching.
     while (SystemClock.uptimeMillis() < deadline) {
         val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
@@ -324,10 +336,40 @@ private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativePari
             check(root.packageName?.toString() == host.packageName) { "Foreign window interrupted Incidents popup" }
             root.windowId
         } finally { @Suppress("DEPRECATION") root.recycle() }
+        readiness.put("reads", ++attempts).put("last_root_window_id", id)
+        pendingWindow?.let { check(id == it) { "Observed Incidents popup changed before readiness" } }
         if (id != mainWindow) {
-            val (node, evidence) = currentIncidentMenu(instrumentation, host, id)
-            @Suppress("DEPRECATION") node.recycle()
-            return evidence
+            pendingWindow = id
+            try {
+                val (node, evidence) = currentIncidentMenu(instrumentation, host, id)
+                @Suppress("DEPRECATION") node.recycle()
+                readiness.put("accepted", true).put("accepted_window_id", id)
+                return evidence
+            } catch (pending: IncidentMenuWindowNotPublished) {
+                // Root and window info use separate accessibility Binder/cache queries. This
+                // read-only wait covers only missing metadata, never wrong ownership/focus,
+                // an unexpected replacement window, absent labels, or a failed user action.
+                val windows = nativeParityOnMain(instrumentation) {
+                    JSONArray().apply {
+                        WindowInspector.getGlobalWindowViews().forEach { view ->
+                            put(JSONObject().put("class", view.javaClass.name)
+                                .put("package", view.context.packageName)
+                                .put("uid", view.context.applicationInfo.uid)
+                                .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                                .put("focused", view.hasWindowFocus()).put("display_id", view.display?.displayId))
+                        }
+                    }
+                }
+                val observation = pending.observation.put("uptime_ms", SystemClock.uptimeMillis())
+                    .put("local_windows", windows)
+                if (!readiness.has("first_pending")) readiness.put("first_pending", observation)
+                readiness.put("last_pending", observation).put("accepted", false)
+                val focused = (0 until windows.length()).map(windows::getJSONObject).filter {
+                    it.getBoolean("attached") && it.getBoolean("shown") && it.getBoolean("focused")
+                }.single()
+                check(focused.getString("package") == host.packageName && focused.getInt("uid") == Process.myUid() &&
+                    focused.getInt("display_id") == 0) { "Own physical popup focus was lost while metadata was pending" }
+            }
         }
         Thread.sleep(16)
     }
