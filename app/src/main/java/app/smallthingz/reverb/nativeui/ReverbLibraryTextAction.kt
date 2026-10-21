@@ -11,6 +11,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost
@@ -54,10 +55,11 @@ internal class ReverbLibraryTextAction(context: Context, environment: ReverbView
 }
 
 private class LibraryTextActionSurface(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) :
-    ViewGroup(context), NativeClickPhaseHost {
+    ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     private val identity = Any()
     private var action: (() -> Unit)? = null
-    val label = environment.paragraph(context, "", ReverbTextRole.LABEL_LARGE, environment.palette.primary)
+    val label = ReverbParagraphView(context, reverbButtonTextStyle(), environment.textDensity,
+        environment.sharedFontResolver, environment.palette.primary)
     private val path = Path()
     private val indication = ReverbRowIndication.install(this, environment.palette.primary, ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
@@ -71,6 +73,18 @@ private class LibraryTextActionSurface(context: Context, private var environment
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, listOf(label)) },
+        invokeSourceClick = {
+            if (isEnabled && isAttachedToWindow && action != null) { action?.invoke(); true } else false
+        })
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
+    override fun containsPointerLayer(x: Float, y: Float) =
+        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
+            min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
     init {
         isClickable = true
         isFocusable = true
@@ -78,6 +92,8 @@ private class LibraryTextActionSurface(context: Context, private var environment
         ViewCompat.setScreenReaderFocusable(this, true)
         ViewCompat.setScreenReaderFocusable(label, false)
         addView(label)
+        addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate = mergedRowAccessibility
         setOnClickListener { action?.invoke() }
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
@@ -91,7 +107,8 @@ private class LibraryTextActionSurface(context: Context, private var environment
         environment = value
         action = callback
         label.setText(text)
-        value.bindParagraphStyle(label, ReverbTextRole.LABEL_LARGE, color)
+        label.setTypography(reverbButtonTextStyle(), value.textDensity, value.sharedFontResolver)
+        label.setTextColor(color)
         // An explicit Text color in FeedbackCard does not replace Button's LocalContentColor.
         indication.updateColor(value.palette.primary)
         bindInput()
@@ -112,11 +129,14 @@ private class LibraryTextActionSurface(context: Context, private var environment
             contentSpec(heightMeasureSpec, vertical + vertical))
         setMeasuredDimension(resolveSize(max(dp(58f), label.measuredWidth + horizontal + horizontal), widthMeasureSpec),
             resolveSize(max(dp(40f), label.measuredHeight + vertical + vertical), heightMeasureSpec))
+        mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val x = ((width - label.measuredWidth) / 2f).roundToInt()
         val y = ((height - label.measuredHeight) / 2f).roundToInt()
         label.layout(x, y, x + label.measuredWidth, y + label.measuredHeight)
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
     }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         indication.onMeasured(w, h, environment.textDensity.density)
@@ -139,7 +159,7 @@ private class LibraryTextActionSurface(context: Context, private var environment
     override fun onFocusChanged(focused: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(focused, direction, rect); controller.focusChanged(focused) }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); controller.attached(); bindInput() }
     override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
-    override fun getAccessibilityClassName(): CharSequence = "android.widget.Button"
+    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
 private fun isActivationKey(code: Int): Boolean = when (code) {

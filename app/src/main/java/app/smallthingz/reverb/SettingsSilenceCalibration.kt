@@ -32,6 +32,7 @@ internal class SettingsSilenceCalibration(
     private val lifecycle: Lifecycle,
     private val readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
     private val onCalibrated: (SilenceGateConfig, SilenceCalibrationHistogram) -> Unit,
+    private val onChanged: () -> Unit = {},
 ) {
     var running by mutableStateOf(false)
         private set
@@ -82,6 +83,7 @@ internal class SettingsSilenceCalibration(
                         if (!isCurrent()) throw CancellationException()
                         elapsedMillis = it.elapsedMillis
                         progress = if (holding) null else it.progress
+                        onChanged()
                     },
                 )
                 // Both this live admission read and the draft callback execute on Main without
@@ -107,11 +109,13 @@ internal class SettingsSilenceCalibration(
                     running = false
                     holding = false
                     progress = null
+                    onChanged()
                 }
             }
         }
         // A bind can reject synchronously; do not reinstall its already-finished job after cleanup.
         if (request == generation && running) job = startedJob
+        onChanged()
     }
 
     /** A short press keeps its already-started sample and converts it to the ordinary timed run. */
@@ -120,6 +124,7 @@ internal class SettingsSilenceCalibration(
         holding = false
         activeRequest?.useTimedSample()
         progress = activeRequest?.state?.value?.progress
+        onChanged()
     }
 
     /** A held sample ends at release; the audio owner removes both handling edges. */
@@ -127,6 +132,7 @@ internal class SettingsSilenceCalibration(
         if (!holding || !running || !acceptsInput()) return
         holding = false
         activeRequest?.finishHold()
+        onChanged()
     }
 
     fun cancel(clearMeasurement: Boolean = false) {
@@ -143,6 +149,7 @@ internal class SettingsSilenceCalibration(
             measured = null
             error = null
         }
+        onChanged()
     }
 
     fun close() {

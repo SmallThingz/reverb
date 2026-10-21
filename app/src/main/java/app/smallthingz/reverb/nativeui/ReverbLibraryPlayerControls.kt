@@ -2,6 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import android.animation.ValueAnimator
 import android.content.Context
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -55,9 +57,10 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
     }
 }
 
-internal class PlayerTrimButtons(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
-    private val cancel = PlayerTrimAction(context, environment, inputRoot, false)
-    private val save = PlayerTrimAction(context, environment, inputRoot, true)
+internal class PlayerTrimButtons(context: Context, private var environment: ReverbViewEnvironment,
+    inputRoot: View, frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context) {
+    private val cancel = PlayerTrimAction(context, environment, inputRoot, false, frames, scope, durationScale)
+    private val save = PlayerTrimAction(context, environment, inputRoot, true, frames, scope, durationScale)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren = false; addView(cancel); addView(save) }
     fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
         val densityChanged = environment.textDensity.density != value.textDensity.density
@@ -87,9 +90,10 @@ internal class PlayerTrimButtons(context: Context, private var environment: Reve
 
 /** Surface(onClick), not Material Button: no implicit disabled text/tint or role is added. */
 private class PlayerTrimAction(context: Context, private var environment: ReverbViewEnvironment,
-                               inputRoot: View, private val savingAction: Boolean) : ViewGroup(context) {
+                               inputRoot: View, private val savingAction: Boolean,
+    frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context) {
     private val surface = ReverbGroupLayout(context, 14f)
-    private val row = PlayerTrimActionRow(context, environment, inputRoot, savingAction)
+    private val row = PlayerTrimActionRow(context, environment, inputRoot, savingAction, frames, scope, durationScale)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
@@ -123,7 +127,9 @@ private class PlayerTrimAction(context: Context, private var environment: Reverb
 }
 
 private class PlayerTrimActionRow(context: Context, private var environment: ReverbViewEnvironment,
-                                  inputRoot: View, private val save: Boolean) : ViewGroup(context), NativeClickPhaseHost {
+                                  inputRoot: View, private val save: Boolean,
+    private val frames: MonotonicFrameClock, private val scope: CoroutineScope,
+    private val durationScale: () -> Float) : ViewGroup(context), NativeClickPhaseHost {
     private val label = environment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
     private var glyph: PlayerGlyph? = null
     private var spinner: ReverbIncidentLoadingView? = null
@@ -161,7 +167,7 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
         val showSpinner = save && saving
         if (showSpinner) {
             glyph?.let(::removeView); glyph = null
-            if (spinner == null) spinner = ReverbIncidentLoadingView(context, color).also { addView(it, 0) }
+            if (spinner == null) spinner = ReverbIncidentLoadingView(context, color, frames, scope, durationScale).also { addView(it, 0) }
             spinner!!.setColor(color)
         } else {
             spinner?.let(::removeView); spinner = null

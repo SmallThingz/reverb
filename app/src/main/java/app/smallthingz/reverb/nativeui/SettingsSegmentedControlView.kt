@@ -97,7 +97,9 @@ private class SegmentCell<T>(
     private var environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
     private var activate: (() -> Unit)?,
-): ViewGroup(context), NativeClickPhaseHost, AutoCloseable {
+): ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, AutoCloseable {
+    override fun containsPointerLayer(x:Float,y:Float):Boolean=
+        reverbGroupGeometry(width.toFloat(),height.toFloat(),environment.textDensity.density,22f).contains(x,y)
     private var chosen=selected
     private var closed=false
     private val text=environment.paragraph(context,item.label,ReverbTextRole.BODY_MEDIUM,

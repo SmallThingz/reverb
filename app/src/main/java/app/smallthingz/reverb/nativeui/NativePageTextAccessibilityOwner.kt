@@ -45,6 +45,40 @@ internal class NativeWindowTextAccessibilityOwner(
         return created
     }
 
+    /** Direct binding for another source content subtree; its real Views retain all identities. */
+    fun bindContent(
+        content: ViewGroup,
+        contentClips: NativeTextSemanticsClipPolicy,
+        sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
+        sourceExposure: (View) -> Boolean,
+    ): NativePageTextAccessibilityOwner = NativePageTextAccessibilityOwner(
+        content, cursor, NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy { view ->
+            if (view.isWithin(content)) contentClips.localClip(view) else hostClips.localClip(view)
+        }), sourceExposure, sourceNode,
+    ).also { it.refresh() }
+
+    /** Settings owns the subtree; the top bar reuses this window's text cursor and exact clips. */
+    fun bindSettingsTopBar(
+        bar: ReverbSettingsTopBarView,
+        contentRoot: ViewGroup,
+        contentClips: NativeTextSemanticsClipPolicy,
+        sourceNode: (View) -> NativeSourceAccessibilityNode,
+    ): AutoCloseable = bar.bindAccessibility(cursor, NativePlainTextViewGeometry(windowRoot,
+        NativeTextSemanticsClipPolicy { view ->
+            if (view.isWithin(contentRoot)) contentClips.localClip(view) else hostClips.localClip(view)
+        }), sourceNode)
+
+    /** The progress leaf expands its own semantic bounds before this shared ancestor clip policy. */
+    fun bindSettingsProgress(
+        progress: SettingsCalibrationProgressView,
+        contentRoot: ViewGroup,
+        contentClips: NativeTextSemanticsClipPolicy,
+        exposed: () -> Boolean,
+    ): AutoCloseable = progress.bindAccessibility(NativePlainTextViewGeometry(windowRoot,
+        NativeTextSemanticsClipPolicy { view ->
+            if (view.isWithin(contentRoot)) contentClips.localClip(view) else hostClips.localClip(view)
+        }), exposed)
+
     /** Exact two-button footer; content clip is the source Surface layer, not its rounded ink. */
     fun bindFooter(footer: OnboardingFooterView, sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
                    sourceExposure: (View) -> Boolean): AutoCloseable =
@@ -168,7 +202,8 @@ internal class NativePageTextAccessibilityOwner internal constructor(
 private fun View.hasMergingRowAncestor(page: View): Boolean {
     var ancestor = parent as? View
     while (ancestor != null) {
-        if (ancestor is NativeMergedRowAccessibilityHost) return true
+        if (ancestor is NativeMergedRowAccessibilityHost ||
+            androidx.core.view.ViewCompat.isScreenReaderFocusable(ancestor)) return true
         if (ancestor === page) return false
         ancestor = ancestor.parent as? View
     }

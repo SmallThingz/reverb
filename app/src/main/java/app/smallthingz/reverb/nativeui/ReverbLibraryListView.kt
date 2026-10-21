@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import kotlinx.coroutines.CoroutineScope
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -60,6 +61,8 @@ internal interface LibraryInlineExpansionLease {
 internal class ReverbLibraryListView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
+    private val animationScope: CoroutineScope,
+    private val nativeInputRoot: View,
     actions: LibraryRecordingRowActions,
     private val inlineHost: LibraryInlineExpansionHost,
 ) : FrameLayout(context) {
@@ -70,7 +73,7 @@ internal class ReverbLibraryListView(
     private var blockedRecordingIds = emptySet<String>()
     private val layout = LinearLayoutManager(context, RecyclerView.VERTICAL, false)
     private val rowAdapter = LibraryRowsAdapter()
-    private val list = RecyclerView(context).apply {
+    private val list = ReverbLibraryRecyclerView(context).apply {
         layoutManager = layout
         adapter = rowAdapter
         // Released populated LazyColumn does not apply animateItem. Default RV fades/moves differ.
@@ -79,6 +82,7 @@ internal class ReverbLibraryListView(
         isHorizontalScrollBarEnabled = false
         setHasFixedSize(false)
     }
+    val scrollView: ReverbLibraryRecyclerView get() = list
     private val guardedActions = LibraryRecordingRowActions(
         activate = { id -> if (admit(id)) currentActions.activate?.invoke(id) },
         longClick = { id -> if (admit(id)) currentActions.longClick?.invoke(id) },
@@ -88,6 +92,8 @@ internal class ReverbLibraryListView(
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         descendantFocusability = FOCUS_AFTER_DESCENDANTS
+        clipChildren = false
+        clipToPadding = false
         addView(list, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         updateInsets()
     }
@@ -105,6 +111,7 @@ internal class ReverbLibraryListView(
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
+        if (state == value) return
         state = value.copy(items = value.items.toList(), selectedIds = value.selectedIds.toSet(),
             activeMutationIds = value.activeMutationIds.toSet(), localOperationBusyIds = value.localOperationBusyIds.toSet())
         val sampled = checkNotNull(state)
@@ -230,7 +237,7 @@ internal class ReverbLibraryListView(
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
             val holder = when (viewType) {
                 0 -> object : RecyclerView.ViewHolder(ReverbLibraryHeaderView(context, environment)) {}
-                1 -> RecordingHolder(ReverbLibraryRecordingRow(context, environment))
+                1 -> RecordingHolder(ReverbLibraryRecordingRow(context, environment, animationScope, nativeInputRoot))
                 else -> object : RecyclerView.ViewHolder(View(context).apply {
                     importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
                 }) {}

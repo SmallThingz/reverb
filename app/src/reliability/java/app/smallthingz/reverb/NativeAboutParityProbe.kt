@@ -100,7 +100,7 @@ internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: S
             entries.put(entry)
             try {
                 for (compose in listOf(true, false)) {
-                    current = AboutFixture.open(instrumentation, activity, case, compose)
+                    current = AboutFixture.open(instrumentation, activity, case, compose) { current = it }
                     val fixture = checkNotNull(current)
                     fixture.awaitSettled(settledMillis)
                     fixture.guard()
@@ -157,7 +157,7 @@ internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: S
             val runs = JSONArray()
             entries.put(entry.put("runs", runs))
             for (compose in listOf(true, false)) {
-                current = AboutFixture.open(instrumentation, activity, AboutCase(true), compose)
+                current = AboutFixture.open(instrumentation, activity, AboutCase(true), compose) { current = it }
                 val fixture = checkNotNull(current)
                 fixture.awaitSettled(settledMillis)
                 var exercised = true
@@ -287,9 +287,12 @@ private class AboutFixture private constructor(
     }
 
     companion object {
-        fun open(instrumentation: Instrumentation, host: NativeParityActivity, case: AboutCase, compose: Boolean): AboutFixture {
+        fun open(instrumentation: Instrumentation, host: NativeParityActivity, case: AboutCase, compose: Boolean,
+                 onCreated: (AboutFixture) -> Unit): AboutFixture {
             requireNativeParityHost(instrumentation, host)
             val fixture = AboutFixture(instrumentation, host, case, compose)
+            // Preserve an opening failure's trace before openWindow can throw; cleanup stays owned.
+            onCreated(fixture)
             try {
                 fixture.openWindow()
                 return fixture
@@ -368,6 +371,7 @@ private class AboutFixture private constructor(
             }
             if (found) {
                 awaitNativeParityDraw(instrumentation, window.decorView)
+                awaitOpeningWindowFocus()
                 guard()
                 if (case.short) {
                     nativeParityOnMain(instrumentation) {
@@ -385,13 +389,37 @@ private class AboutFixture private constructor(
     }
 
     fun guard() = nativeParityOnMain(instrumentation) { requireOwnWindowOnMain() }
+    private fun awaitOpeningWindowFocus() {
+        // First draw and native window-focus delivery are independent platform callbacks.
+        // Observe only this newly-created own Window; never request or reclaim focus.
+        repeat(30) {
+            val ready = nativeParityOnMain(instrumentation) {
+                check(!closed && !activity.isFinishing && activity.fixtureRoot.isAttachedToWindow &&
+                    activity.fixtureRoot.isShown && activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY)
+                val decor = window.decorView
+                check(decor.context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+                val registered = decor in WindowInspector.getGlobalWindowViews()
+                trace.put(JSONObject().put("event", "opening_window_readiness").put("renderer", renderer)
+                    .put("frame", frameNumber).put("attached", decor.isAttachedToWindow)
+                    .put("shown", decor.isShown).put("focused", decor.hasWindowFocus())
+                    .put("display", decor.display?.displayId).put("registered", registered))
+                registered && decor.isAttachedToWindow && decor.isShown && decor.hasWindowFocus() &&
+                    decor.display?.displayId == Display.DEFAULT_DISPLAY
+            }
+            if (ready) return
+            awaitAboutFrame(instrumentation)
+        }
+        error("New own About Window did not become attached/shown/focused on physical0 within30 frames; no focus requested")
+    }
     private fun requireOwnWindowOnMain() {
         check(Looper.myLooper() == Looper.getMainLooper())
         val decor = window.decorView
         check(!closed && !activity.isFinishing && activity.fixtureRoot.isAttachedToWindow)
         check(decor.isAttachedToWindow && decor.isShown && decor.hasWindowFocus() &&
             decor.display?.displayId == Display.DEFAULT_DISPLAY) {
-            "Exact About QA Window is no longer focused/visible on physical0; stop without reclaiming focus"
+            "Exact About QA Window is no longer focused/visible on physical0; " +
+                "attached=${decor.isAttachedToWindow}, shown=${decor.isShown}, focused=${decor.hasWindowFocus()}, " +
+                "display=${decor.display?.displayId}, renderer=$renderer; stop without reclaiming focus"
         }
         check(decor.context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
         check(decor in WindowInspector.getGlobalWindowViews())

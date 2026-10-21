@@ -46,6 +46,8 @@ internal class NativeOnboardingPlacedPagerViewport(
     private val contentInView = NativePagerContentInViewOwner(pager, frames,
         { requireNotNull(attachedScope) }, ::focusedBounds,
         NativePagerBringIntoViewSpec(pager, nativeBringIntoViewSpec(context)))
+    private val focusSearchPages = mutableSetOf<Int>()
+    private var attachedPages: Set<Int> = emptySet()
     private var measuring = false
     var sourceAccessibility: NativeOnboardingPagerAccessibility? = null
     var placedPages: IntRange = IntRange.EMPTY
@@ -70,15 +72,33 @@ internal class NativeOnboardingPlacedPagerViewport(
 
     private fun reconcilePlaced(width: Int, height: Int) {
         val next = nativeOnboardingPlacedPages(width, pager.layoutAbsoluteOffsetPx)
-        if (next == placedPages) return
-        for (index in placedPages) if (index !in next) removeView(pages[index])
-        for (index in next) if (pages[index].parent !== this) {
+        val focusedPage = pages.indexOfFirst { it.hasFocus() }.takeIf { it >= 0 }
+        val wanted = (next.toSet() + focusSearchPages + listOfNotNull(focusedPage)).toSortedSet()
+        if (wanted == attachedPages && next == placedPages) return
+        for (index in attachedPages) if (index !in wanted) removeView(pages[index])
+        for (index in wanted) if (pages[index].parent !== this) {
             val insertion = (0 until childCount).count { pages.indexOf(getChildAt(it)) < index }
             addView(pages[index], insertion, LayoutParams(-1, -1))
             pages[index].measure(exact(width), exact(height))
         }
         placedPages = next
+        attachedPages = wanted
         placementChanged()
+    }
+
+    fun focusPlacedPages(): List<Int> = attachedPages.sorted()
+
+    /** Synchronous source beyond-bounds placement; accepted focus pins the new page afterwards. */
+    fun withFocusSearchPage(page: Int, block: () -> Boolean): Boolean {
+        check(page in pages.indices && isAttachedToWindow && isLaidOut)
+        val added = focusSearchPages.add(page)
+        reconcilePlaced(width, height)
+        place(width, height)
+        return try { block() } finally {
+            if (added) focusSearchPages.remove(page)
+            reconcilePlaced(width, height)
+            place(width, height)
+        }
     }
 
     override fun onMeasure(w: Int, h: Int) {
@@ -92,7 +112,7 @@ internal class NativeOnboardingPlacedPagerViewport(
             pager.updateLayout(width, density)
             contentInView.measured(width)
             reconcilePlaced(width, height)
-            for (index in placedPages) pages[index].measure(exact(width), exact(height))
+            for (index in attachedPages) pages[index].measure(exact(width), exact(height))
         } finally { measuring = false }
     }
 
@@ -105,7 +125,7 @@ internal class NativeOnboardingPlacedPagerViewport(
         if (sourceAccessibility?.isNodePresent() == false) null else super.createAccessibilityNodeInfo()
 
     private fun place(width: Int, height: Int) {
-        for (index in placedPages) {
+        for (index in attachedPages) {
             val x = pager.pageTranslationX(index).toInt()
             pages[index].layout(x, 0, x + width, height)
         }
@@ -156,6 +176,8 @@ internal class NativeOnboardingPlacedPagerViewport(
     override fun clearChildFocus(child: View) {
         super.clearChildFocus(child)
         focusedDescendant = null
+        // Release a source focus pin when native focus leaves the page. No delayed reservation.
+        requestLayout()
     }
 
     private fun focusedBounds(): ComposeRect? {

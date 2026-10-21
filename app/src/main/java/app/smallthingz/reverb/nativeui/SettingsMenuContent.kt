@@ -30,6 +30,16 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/** Concrete DropdownMenuItem inputs; callbacks remain owned by the screen's current row. */
+internal data class ReverbMenuAction(
+    val label: String,
+    val icon: ReverbIcon,
+    val textColor: Int,
+    val iconColor: Int,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
+
 /** A source Surface: shadow outside its rounded content clip; no tonal overlay at 0dp. */
 internal class SettingsMenuContent(
     context: Context,
@@ -84,6 +94,15 @@ internal class SettingsMenuContent(
         this.palette = palette
         fill.color = palette.raised
         column.bind(content, palette, select)
+        requestLayout()
+        invalidate()
+    }
+
+    /** Released Incidents/Library use default12dp horizontal/zero vertical item padding. */
+    fun bindActions(actions: List<ReverbMenuAction>, palette: ReverbPalette, background: Int = palette.surfaceContainerHigh) {
+        this.palette = palette
+        fill.color = background
+        column.bindActions(actions, palette)
         requestLayout()
         invalidate()
     }
@@ -173,6 +192,22 @@ internal class SettingsMenuColumn(
         requestLayout()
     }
 
+    fun bindActions(actions: List<ReverbMenuAction>, palette: ReverbPalette) {
+        this.palette = palette
+        while (rows.size > actions.size) {
+            val row = rows.removeAt(rows.lastIndex)
+            row.close()
+            removeView(row)
+        }
+        actions.forEachIndexed { index, action ->
+            val row = rows.getOrNull(index) ?: SettingsMenuItemView(
+                context, style, density, resolver, palette, interestedParent,
+            ).also { rows += it; addView(it) }
+            row.bindAction(action, palette)
+        }
+        requestLayout()
+    }
+
     fun maxIntrinsicWidth(): Int = rows.maxOfOrNull { it.maxIntrinsicWidth() } ?: 0
 
     override fun onMeasure(w: Int, h: Int) {
@@ -202,7 +237,8 @@ internal class SettingsMenuItemView(
     palette: ReverbPalette,
     private val interestedParent: (MotionEvent) -> Boolean,
 ) : ViewGroup(context), AutoCloseable {
-    private val text = ReverbParagraphView(context, style, density, resolver, palette.muted)
+    // DropdownMenuItem's ProvideTextStyle(labelLarge) merges the inherited default body style.
+    private val text = ReverbParagraphView(context, reverbDefaultTextStyle().merge(style), density, resolver, palette.muted)
     private val check = OnboardingIconView(context, ReverbIcon.Check, palette.primary)
     private val horizontal = dp(16f)
     private val vertical = dp(8f)
@@ -222,6 +258,7 @@ internal class SettingsMenuItemView(
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, sink)
     private var selected = false
+    private var leading = false
     private var action: (() -> Unit)? = null
     private var closed = false
 
@@ -249,6 +286,9 @@ internal class SettingsMenuItemView(
     fun bind(label: String, selected: Boolean, palette: ReverbPalette, action: () -> Unit) {
         this.action = action
         this.selected = selected
+        leading = false
+        isEnabled = true
+        input.bind(NativeClickBinding(this, true, { performClick() }))
         text.setText(label)
         text.setTextColor(if (selected) palette.ink else palette.muted)
         check.bind(ReverbIcon.Check, palette.primary)
@@ -257,28 +297,49 @@ internal class SettingsMenuItemView(
         requestLayout()
     }
 
+    fun bindAction(value: ReverbMenuAction, palette: ReverbPalette) {
+        action = value.onClick
+        selected = false
+        leading = true
+        isEnabled = value.enabled
+        text.setText(value.label)
+        text.setTextColor(value.textColor)
+        check.bind(value.icon, value.iconColor)
+        check.visibility = VISIBLE
+        indication.updateColor(palette.ink)
+        input.bind(NativeClickBinding(this, value.enabled, { performClick() }))
+        requestLayout()
+    }
+
     fun maxIntrinsicWidth(): Int =
-        (text.maxIntrinsicTextWidth() + 2 * horizontal + if (selected) dp(24f) + dp(12f) else 0)
+        (text.maxIntrinsicTextWidth() + 2 * (if (leading) dp(12f) else horizontal) +
+            if (leading || selected) dp(24f) + dp(12f) else 0)
             .coerceIn(dp(112f), dp(280f))
 
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
-        val inner = (width - 2 * horizontal).coerceAtLeast(0)
-        val iconWidth = if (selected) min(dp(24f), inner) else 0
-        val gap = if (selected) min(dp(12f), (inner - iconWidth).coerceAtLeast(0)) else 0
-        if (selected) check.measure(exact(iconWidth), exact(dp(24f)))
+        val inset = if (leading) dp(12f) else horizontal
+        val inner = (width - 2 * inset).coerceAtLeast(0)
+        val hasIcon = leading || selected
+        val iconWidth = if (hasIcon) min(dp(24f), inner) else 0
+        val gap = if (hasIcon) min(dp(12f), (inner - iconWidth).coerceAtLeast(0)) else 0
+        if (hasIcon) check.measure(exact(iconWidth), exact(dp(24f)))
         text.measure(atMost((inner-iconWidth-gap).coerceAtLeast(0)), unspecified())
-        val height = max(dp(48f), max(text.measuredHeight, if (selected) check.measuredHeight else 0) + 2 * vertical)
+        val height = max(dp(48f), max(text.measuredHeight, if (hasIcon) check.measuredHeight else 0) +
+            if (leading) 0 else 2 * vertical)
         setMeasuredDimension(width, resolveSize(height, h))
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
-        val textX = if (rtl) width - horizontal - text.measuredWidth else horizontal
+        val inset = if (leading) dp(12f) else horizontal
+        val textStart = inset + if (leading) check.measuredWidth + dp(12f) else 0
+        val textX = if (rtl) width - textStart - text.measuredWidth else textStart
         val textY = ((height-text.measuredHeight)/2f).roundToInt()
         text.layout(textX,textY,textX+text.measuredWidth,textY+text.measuredHeight)
-        if (selected) {
-            val x = if (rtl) horizontal else width-horizontal-check.measuredWidth
+        if (leading || selected) {
+            val logicalStart = if (leading) inset else width-inset-check.measuredWidth
+            val x = if (rtl) width-logicalStart-check.measuredWidth else logicalStart
             val y = ((height-check.measuredHeight)/2f).roundToInt()
             check.layout(x,y,x+check.measuredWidth,y+check.measuredHeight)
         }
@@ -299,7 +360,7 @@ internal class SettingsMenuItemView(
         }
     }
     override fun performClick(): Boolean {
-        if (closed) return false
+        if (closed || !isEnabled) return false
         val currentAction = action ?: return false
         super.performClick()
         currentAction()
@@ -327,7 +388,7 @@ internal class SettingsMenuItemView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         input.attached()
-        if (!closed) input.bind(NativeClickBinding(this, true, { performClick() }))
+        if (!closed) input.bind(NativeClickBinding(this, isEnabled, { performClick() }))
     }
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {

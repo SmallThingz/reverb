@@ -308,19 +308,19 @@ internal fun buildCaptureFailureNotification(context: Context, message: String):
         .build()
 }
 
-private data class ExportRangeMemory(
+internal data class ExportRangeMemory(
     val bufferSlot: ReverbService.BufferSlot,
     val availableSeconds: Double,
 )
 
-private data class ExportRange(
+internal data class ExportRange(
     val startSeconds: Float,
     val endSeconds: Float,
     val warningDurationSeconds: Float?,
     val rememberOnSave: ExportRangeMemory? = null,
 )
 
-private data class ExportUiConfig(
+internal data class ExportUiConfig(
     val format: ExportFormat,
     val codec: ExportCodec,
     val sampleFormat: PcmSampleFormat,
@@ -2199,7 +2199,7 @@ private fun ExportClampSheet(
     )
 }
 
-private fun startExport(
+internal fun startExport(
     context: Context,
     service: ReverbService?,
     range: ExportRange,
@@ -2256,7 +2256,7 @@ private fun startExport(
     }
 }
 
-private fun buildCustomExportRange(
+internal fun buildCustomExportRange(
     availableSeconds: Double,
     requestedStartSeconds: Float,
     requestedEndSeconds: Float,
@@ -2471,7 +2471,7 @@ internal class SaveResultReceiver(
     }
 }
 
-private fun currentExportConfig(context: Context, recorder: ReverbService?): ExportUiConfig {
+internal fun currentExportConfig(context: Context, recorder: ReverbService?): ExportUiConfig {
     val activeConfig = recorder?.getConfigurationSnapshot()
     val format = activeConfig?.format ?: getConfiguredOutputFormat(context)
     val codec = activeConfig?.codec ?: getConfiguredOutputCodec(context)

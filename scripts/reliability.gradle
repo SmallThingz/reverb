@@ -32,6 +32,15 @@ allprojects {
                     'src/main/java/app/smallthingz/reverb/AppIcons.kt': 'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273',
                 ]
                 inputs.files(aboutOracleSources.keySet().collect { file(it) })
+                // Generated normal-Home oracle keeps released leaf bodies; only explicit
+                // service-presence seams and QA symbol names differ (generator/provenance retained).
+                def homeOracleSources = [
+                    'src/reliability/java/app/smallthingz/reverb/ReleasedHomeFixtureOracle.kt': '5acd675302d79e1aad10f5ec603fce7d631b164834c7cd9e0773bfdc5ab5b5c1',
+                    'src/main/java/app/smallthingz/reverb/AppTopBar.kt': '99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670',
+                    'src/main/java/app/smallthingz/reverb/AudioBlobView.kt': '85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8',
+                    'src/main/java/app/smallthingz/reverb/ReverbTheme.kt': 'a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1',
+                ]
+                inputs.files(homeOracleSources.keySet().collect { file(it) })
                 def onboardingScreenOracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt')
                 inputs.file(onboardingScreenOracle)
                 inputs.files(settingsSource, chromeSource, iconsSource)
@@ -48,6 +57,11 @@ allprojects {
                     aboutOracleSources.each { relative, expected ->
                         if (sha256(file(relative).bytes) != expected) {
                             throw new GradleException('Released About oracle changed: ' + relative)
+                        }
+                    }
+                    homeOracleSources.each { relative, expected ->
+                        if (sha256(file(relative).bytes) != expected) {
+                            throw new GradleException('Released Home oracle changed: ' + relative)
                         }
                     }
                     if (sha256(onboardingScreenOracle.bytes) !=

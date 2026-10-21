@@ -7,6 +7,7 @@ import app.smallthingz.reverb.NativePointerPass
 import app.smallthingz.reverb.RangeDurationWheelInteraction
 import app.smallthingz.reverb.RangeInputGesture
 import app.smallthingz.reverb.cancelFineSeekOwnedAudio
+import app.smallthingz.reverb.fineSeekPointerTapInsideBounds
 import app.smallthingz.reverb.rangeFineTuneConstrainedY
 import app.smallthingz.reverb.rangeFineTuneDeltaSeconds
 import app.smallthingz.reverb.rangeFineTuneHorizontalTouchPull
@@ -19,7 +20,7 @@ import kotlin.math.abs
 import kotlin.math.cosh
 import kotlin.math.roundToInt
 
-/** Library's source callback set; this leaf never creates or owns a player/seek operation. */
+/** Source callback set; the optional Range gesture factory retains the editor's generation owner. */
 internal data class SpringFineSeekBinding(
     val enabled: Boolean,
     val isPlaying: Boolean,
@@ -32,6 +33,7 @@ internal data class SpringFineSeekBinding(
     val onUpdateFineAdjustShuttle: (Float, Float) -> Unit,
     val onEndFineAdjust: () -> Unit,
     val onCancelFineAdjust: () -> Unit,
+    val createInputGesture: (((Boolean) -> Unit) -> RangeInputGesture)? = null,
 )
 
 /** Source uses two intentionally distinct travel clamps:1 physical px in input,1dp in drawing. */
@@ -61,12 +63,12 @@ internal fun springFineSeekReturnRemaining(elapsedNanos: Long): Float {
 }
 
 /**
- * Source Library specialization of SpringFineSeekControl's awaitEachGesture + two frame effects.
+ * Source SpringFineSeekControl's awaitEachGesture + two frame effects.
  * Source pure rate/session helpers are reused unchanged. No pointer recognizer, audio owner or
  * coroutine renderer is hidden here. The shared phase tree supplies source-consumption ordering.
  *
- * The Range editor's optional createInputGesture/Initial-pass tap ownership is deliberately not
- * claimed: this leaf implements the actual Library call, where that optional argument is absent.
+ * Library keeps child-clickable pointer taps. Range's optional factory takes Initial-pass ownership
+ * and finishes the same DOWN's generation; keyboard/accessibility still use the child clickable.
  */
 internal class NativeSpringFineSeekState(
     private val invalidate: () -> Unit,
@@ -92,6 +94,7 @@ internal class NativeSpringFineSeekState(
     private var returnStartX = 0f
     private var returnStartY = 0f
     private var touchSlop = Float.NaN
+    private var awaitingRangeTapOwner = false
 
     private class PointerRun(
         val session: FineSeekInputSession,
@@ -100,8 +103,10 @@ internal class NativeSpringFineSeekState(
         val down: Offset,
         val geometry: SpringFineSeekGeometry,
         val startedOnPuck: Boolean,
+        val ownsPointerTap: Boolean,
         var dragStartRawVertical: Float,
         var fineAdjustStarted: Boolean = false,
+        var awaitingDownFinal: Boolean = ownsPointerTap,
     )
 
     fun bind(next: SpringFineSeekBinding, newTouchSlop: Float) {
@@ -113,12 +118,12 @@ internal class NativeSpringFineSeekState(
         if (pointerRestart) {
             cancel()
             handlerBinding = null
+            awaitingRangeTapOwner = next.createInputGesture != null
         }
         touchSlop = newTouchSlop
         if (!next.enabled && (previous == null || previous.enabled != next.enabled)) {
-            // Source LaunchedEffect(enabled): no custom Range owner exists in Library.
             val owner = pointerOwner
-            if (owner != null) owner.cancel() else next.onCancelFineAdjust()
+            if (owner != null) owner.cancel() else if(next.createInputGesture==null)next.onCancelFineAdjust()
             if (pointerOwner == null && dragSession == null) {
                 horizontalPull = 0f; rawVerticalPull = 0f
                 returning = false
@@ -141,20 +146,27 @@ internal class NativeSpringFineSeekState(
     }
 
     private fun pointerEvent(event: NativeDragPointerEvent, pass: NativePointerPass, geometry: SpringFineSeekGeometry) {
-        if (pass != NativePointerPass.MAIN || binding?.enabled != true) return
+        if (binding?.enabled != true) return
         if (waitingForAllUp) {
-            if (event.changes.none { it.pressed }) waitingForAllUp = false
+            if (pass==NativePointerPass.MAIN&&event.changes.none { it.pressed }) {
+                waitingForAllUp = false
+                awaitingRangeTapOwner = binding?.createInputGesture != null
+            }
             return
         }
         val active = run
         if (active == null) {
+            val rangeOwnsPointerTap=awaitingRangeTapOwner
+            if(pass!=if(rangeOwnsPointerTap)NativePointerPass.INITIAL else NativePointerPass.MAIN)return
             // Android awaitFirstDown(requireUnconsumed=false) has no primary-mouse restriction.
             if (event.changes.isEmpty() || !event.changes.all { it.changedToDown }) return
             val down = event.changes.first()
+            // Range owns even a rejected DOWN before the child clickable's Main pass.
+            if(rangeOwnsPointerTap)down.consume()
             pointerOwner?.cancel()
             val captured = handlerBinding ?: checkNotNull(binding).also { handlerBinding = it }
             val session = FineSeekInputSession(
-                createInputGesture = { onCancel -> RangeInputGesture(
+                createInputGesture = { onCancel -> binding?.createInputGesture?.invoke(onCancel)?:RangeInputGesture(
                     interactionAllowed = { binding?.enabled == true },
                     durationInteraction = { idleDurationOwner }, onCancel = onCancel,
                 ) },
@@ -163,7 +175,7 @@ internal class NativeSpringFineSeekState(
                     val ownsDrag = dragSession === cancelled
                     if (ownsPointer) pointerOwner = null
                     if (ownsDrag) stopDrag()
-                    cancelFineSeekOwnedAudio(false, ownsDrag, stillCurrent) {
+                    cancelFineSeekOwnedAudio(rangeOwnsPointerTap&&ownsPointer, ownsDrag, stillCurrent) {
                         binding?.onCancelFineAdjust?.invoke()
                     }
                 },
@@ -178,9 +190,10 @@ internal class NativeSpringFineSeekState(
                 rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull) * geometry.inputVerticalTravel
             val pointerRun = PointerRun(session, captured, down.id, down.position, geometry,
                 rangeFineTunePuckContains(down.position.x, down.position.y, puckX, puckY, 32f * geometry.density),
+                rangeOwnsPointerTap,
                 rawVerticalPull)
             run = pointerRun
-            if (!pointerRun.startedOnPuck) {
+            if (!pointerRun.startedOnPuck&&!rangeOwnsPointerTap) {
                 if (!session.perform { startDrag(pointerRun, down.position.x, geometry.width); down.consume() }) {
                     finishRun(pointerRun, normal = false, stillPressed = event.changes.any { it.pressed })
                 }
@@ -188,11 +201,33 @@ internal class NativeSpringFineSeekState(
             return
         }
 
+        // Source explicitly awaits the Range DOWN's Final pass before starting an outside drag.
+        if(active.awaitingDownFinal) {
+            if(pass!=NativePointerPass.FINAL)return
+            active.awaitingDownFinal=false
+            if(!active.startedOnPuck&&!active.session.perform {startDrag(active,active.down.x,geometry.width)}) {
+                finishRun(active,normal=false,stillPressed=event.changes.any {it.pressed})
+            }
+            return
+        }
+        if(pass!=NativePointerPass.MAIN)return
+
         val change = event.changes.firstOrNull { it.id == active.id }
+        if(change!=null&&active.ownsPointerTap) {
+            val hitSize=(64f*active.geometry.density).roundToInt()
+            val centerX=((active.geometry.width-hitSize)*.5f).roundToInt()+hitSize*.5f
+            val centerY=((active.geometry.height-hitSize)*.5f).roundToInt()+hitSize*.5f
+            active.session.observePointerTap(fineSeekPointerTapInsideBounds(
+                change.position.x,change.position.y,
+                centerX+(horizontalPull*active.geometry.inputHorizontalTravel).roundToInt(),
+                centerY+(rangeFineTuneConstrainedY(rawVerticalPull,horizontalPull)*active.geometry.inputVerticalTravel).roundToInt(),
+                hitSize*.5f),change.consumed)
+        }
         if (change == null || !change.pressed) {
             // Same source release test: consumed UP is cancellation, including child's ordinary tap.
             val normal = change != null && !change.pressed && !change.consumed
             if (!normal) active.session.cancel()
+            if(active.ownsPointerTap)change?.consume()
             finishRun(active, normal, event.changes.any { it.pressed })
             return
         }
@@ -240,6 +275,7 @@ internal class NativeSpringFineSeekState(
                         active.binding.onEndFineAdjust()
                     },
                 )
+                active.ownsPointerTap&&active.startedOnPuck->active.session.finishPointerTap(active.binding.onTogglePlayback)
                 else -> active.session.finish {} // Library's child clickable owns ordinary tap.
             }
         } finally {
@@ -247,6 +283,7 @@ internal class NativeSpringFineSeekState(
             if (pointerOwner === active.session) pointerOwner = null
             if (run === active) run = null
             waitingForAllUp = stillPressed
+            if(!stillPressed)awaitingRangeTapOwner=binding?.createInputGesture!=null
         }
     }
 
@@ -296,6 +333,7 @@ internal class NativeSpringFineSeekState(
         if (active != null) finishRun(active, normal = false, stillPressed = false)
         else pointerOwner?.cancel()
         waitingForAllUp = false
+        awaitingRangeTapOwner = binding?.createInputGesture != null
     }
 
     fun release() {

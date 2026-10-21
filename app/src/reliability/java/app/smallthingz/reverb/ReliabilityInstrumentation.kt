@@ -30,7 +30,8 @@ class ReliabilityInstrumentation : Instrumentation() {
             check(!parityOnly || requestedTest in setOf(
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
-                "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity",
+                "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
+                "native_home_parity", "native_home_input",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
@@ -43,6 +44,15 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_about_parity") {
                 executed++
                 verifyNativeAboutParity(this, report)
+            } else if (requestedTest == "native_home_parity") {
+                executed++
+                verifyNativeHomeParity(this, report)
+            } else if (requestedTest == "native_home_input") {
+                executed++
+                verifyNativeHomeInputParity(this, report)
+            } else if (requestedTest == "native_retention_input_parity") {
+                executed++
+                verifyNativeRetentionInputParity(this, report)
             } else if (requestedTest == "native_onboarding_screen_parity") {
                 executed++
                 verifyNativeOnboardingScreenParity(this, report)

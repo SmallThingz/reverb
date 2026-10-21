@@ -43,6 +43,15 @@ internal class NativeWindowPointerCoordinates(private val root: () -> View) {
         return Offset(position[0], position[1])
     }
 
+    /** The known Home child roots join their parent's ONE dispatch. Reuse its actual window offset;
+     * do not transform or redispatch a MotionEvent merely to initialize child hit coordinates. */
+    fun beginFromParent(windowPosition: Offset) {
+        perView.clear()
+        windowPositionInScreen = windowPosition
+        rootToScreenMatrix.set(matrixToWindow(root()))
+        rootToScreenMatrix.postTranslate(windowPosition.x, windowPosition.y)
+    }
+
     fun coordinates(view: View): NativePointerCoordinates = perView.getOrPut(view) {
         val localToScreen = matrixToWindow(view)
         localToScreen.postTranslate(windowPositionInScreen.x, windowPositionInScreen.y)

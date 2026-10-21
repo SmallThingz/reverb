@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
+import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -50,14 +51,19 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
     } else {
         onboardingViewDescendants(content).forEach { view ->
             val location = pointInFixture(view, content, Offset.Zero)
-            raw.put(JSONObject().put("class", view.javaClass.name)
+            val goneAncestor = if (view is ReverbParagraphView) goneInFixture(view, content) else null
+            val rawNode = JSONObject().put("class", view.javaClass.name)
                 .put("position", JSONArray(listOf(location.x.toDouble(), location.y.toDouble())))
                 .put("size", JSONArray(listOf(view.width, view.height)))
                 .put("visibility", view.visibility)
                 .put("important_for_accessibility", view.importantForAccessibility)
                 .put("padding", JSONArray(listOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)))
-                .put("scroll", JSONArray(listOf(view.scrollX, view.scrollY))))
-            if (view is ReverbParagraphView && view.visibility != View.GONE) {
+                .put("scroll", JSONArray(listOf(view.scrollX, view.scrollY)))
+            if (goneAncestor != null) rawNode
+                .put("text_geometry_excluded_reason", "GONE in captured ancestor chain")
+                .put("gone_ancestor_class", goneAncestor.javaClass.name)
+            raw.put(rawNode)
+            if (view is ReverbParagraphView && goneAncestor == null) {
                 val paragraph = view.createOriginalSemanticsParagraph()
                 text += textGeometry(
                     view.getText(),
@@ -75,6 +81,16 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
     check(text.isNotEmpty()) { "No text geometry; an empty fixture is not parity evidence" }
     return JSONObject().put("reference", reference).put("raw", raw)
         .put("text_layouts", JSONArray(text.sortedBy(::geometrySortKey)))
+}
+
+/** A GONE wrapper has no released Text counterpart; retain INVISIBLE/alpha-zero/clipped labels. */
+private fun goneInFixture(view: View, fixture: View): View? {
+    var current = view
+    while (true) {
+        if (current.visibility == View.GONE) return current
+        if (current === fixture) return null
+        current = current.parent as? View ?: error("Native text left its captured fixture")
+    }
 }
 
 private fun textGeometry(
@@ -125,11 +141,57 @@ internal fun onboardingNativeNodeEvidence(
     var visited = 0
     var currentPath: List<Int> = emptyList()
     var missingChild: JSONObject? = null
+    var staleChild: JSONObject? = null
     @Suppress("DEPRECATION")
     fun visit(node: AccessibilityNodeInfo, depth: Int, path: List<Int>) {
         currentPath = path
         check(depth < 64 && ++visited < 1_024) { "Unexpected accessibility tree; stop without truncation" }
-        check(node.refresh()) { "Node became stale during a supposedly stable capture" }
+        val cachedBounds = AndroidRect().also(node::getBoundsInScreen)
+        val cached = JSONObject().put("path", JSONArray(path))
+            .put("class", node.className?.toString() ?: JSONObject.NULL)
+            .put("text", node.text?.toString() ?: JSONObject.NULL)
+            .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
+            .put("resource_id", node.viewIdResourceName ?: JSONObject.NULL)
+            .put("window_id", node.windowId).put("children", node.childCount)
+            .put("visible", node.isVisibleToUser).put("enabled", node.isEnabled)
+            .put("focused", node.isFocused)
+            .put("screen_bounds", JSONArray(listOf(cachedBounds.left, cachedBounds.top, cachedBounds.right, cachedBounds.bottom)))
+        if (!node.refresh()) {
+            staleChild = cached
+            try {
+                cached.put("current_native_candidates", nativeParityOnMain(instrumentation) {
+                    val candidates = JSONArray()
+                    for (view in onboardingViewDescendants(content)) {
+                        val location = IntArray(2)
+                        view.getLocationOnScreen(location)
+                        val physical = AndroidRect(location[0], location[1], location[0] + view.width, location[1] + view.height)
+                        val info = view.createAccessibilityNodeInfo()
+                        try {
+                            val currentBounds = info?.let { AndroidRect().also(it::getBoundsInScreen) }
+                            val semanticMatch = currentBounds == cachedBounds &&
+                                info?.className?.toString() == cached.optString("class") &&
+                                info?.text?.toString() == cached.optString("text", null) &&
+                                info?.contentDescription?.toString() == cached.optString("description", null)
+                            if (semanticMatch || physical == cachedBounds) {
+                                candidates.put(JSONObject().put("native_class", view.javaClass.name)
+                                    .put("match", if (semanticMatch) "current node payload and bounds" else "physical bounds only; identity unproven")
+                                    .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                                    .put("visibility", view.visibility).put("laid_out", view.isLaidOut)
+                                    .put("current_node_present", info != null)
+                                    .put("current_node_class", info?.className?.toString() ?: JSONObject.NULL)
+                                    .put("current_node_visible", info?.isVisibleToUser ?: JSONObject.NULL)
+                                    .put("merged_source_admitted", (view as? NativeMergedRowAccessibilityHost)
+                                        ?.mergedRowAccessibility?.isNodePresent() ?: JSONObject.NULL))
+                            }
+                        } finally { info?.recycle() }
+                    }
+                    candidates
+                })
+            } catch (diagnostic: Throwable) {
+                cached.put("native_diagnostic_error", android.util.Log.getStackTraceString(diagnostic))
+            }
+            error("Node became stale during a supposedly stable capture")
+        }
         val rect = AndroidRect()
         node.getBoundsInScreen(rect)
         val actions = node.actionList.sortedBy { it.id }.map {
@@ -191,6 +253,7 @@ internal fun onboardingNativeNodeEvidence(
             .put("canonical_partial", JSONArray(canonical))
             .put("last_path", JSONArray(currentPath))
             .put("missing_child", missingChild ?: JSONObject.NULL)
+            .put("stale_child_before_refresh", staleChild ?: JSONObject.NULL)
             .put("error", android.util.Log.getStackTraceString(error))
         try { preserveFailure(partial) }
         catch (evidenceError: Throwable) { error.addSuppressed(evidenceError) }

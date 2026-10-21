@@ -1,0 +1,141 @@
+{
+  "release_oracle": {
+    "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+    "file": "app/src/main/java/app/smallthingz/reverb/SettingsScreen.kt",
+    "source_sha256": "bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc",
+    "header_exact_sha256": "6485333e7786c2851d382411bd5e016529ed68195370279baa91261dd9aea8e5",
+    "call_exact_sha256": "2fdee85faf594eae7880b427a6ff2c1d37c5141ef2a9f9f8071cf7b7045e2077",
+    "generated_sha256": "ddbab4f6155ebb5400917282c7c32c5fd9f9841de26babeb4b7fc077e5b9f726",
+    "adaptations": [
+      "Retained exact byte sequences for local chrome/mode/focus/value and BasicTextField call.",
+      "Replaced surrounding RetentionValue header/unit/estimate layout with one fixture Row to supply the same weight scope and externally specified editor width.",
+      "Reference helper is internal under a new name; current production source is unchanged."
+    ],
+    "scope": "Editor leaf only; original wrapper is separately implemented by SettingsRetentionValueView."
+  },
+  "pinned_sources": [
+    {
+      "file": "AndroidCursorHandle.android.kt",
+      "entry": "androidMain/androidx/compose/foundation/text/AndroidCursorHandle.android.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "103b59cd940cdb8db1cfd3579442c47ae58a6aa59d1976786d82016d66e4e18f"
+    },
+    {
+      "file": "TextFieldCursor.android.kt",
+      "entry": "androidMain/androidx/compose/foundation/text/TextFieldCursor.android.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "3470f13fd4dfd9f8372248adada546b74fbaecb7c2af3887bcc86a6f3f27c4b4"
+    },
+    {
+      "file": "AndroidSelectionHandles.android.kt",
+      "entry": "androidMain/androidx/compose/foundation/text/selection/AndroidSelectionHandles.android.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "2c11c55368e2c49976b8d5f2fa4747e8b4cefa2aebe619923b9693f16efcc7e1"
+    },
+    {
+      "file": "BasicTextField.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/BasicTextField.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "005653171730f086a44a4abae717382da7732a7eed8821c1d4cf86a1ab46a7a8"
+    },
+    {
+      "file": "CoreTextField.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/CoreTextField.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "f431d5a13585184c587033e7fc82aa13d6f26a7d64ba1d9b3cd8a15d61ce199b"
+    },
+    {
+      "file": "TextFieldCursor.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldCursor.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "2350afe22d3461be98989261cda0924b95ebf5b85ddfd7eabcc2d3c149139db0"
+    },
+    {
+      "file": "TextFieldDelegate.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldDelegate.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "7abd1a3c045ffed501197ffa4e3008ebcb74ebcbd173a0f83c3f27917569f17a"
+    },
+    {
+      "file": "TextFieldSize.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldSize.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "8dbba489913121f4c553b5ed4ce8e498c40e86bb762295c7fbbc9a5b27b14ab8"
+    },
+    {
+      "file": "CursorAnimationState.kt",
+      "entry": "commonMain/androidx/compose/foundation/text/input/internal/CursorAnimationState.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "sha256": "9fd4f516cd8555bb6ddc2b41fabccde92577a6a922d52fd355b04070bb4208d8"
+    },
+    {
+      "file": "EditProcessor.kt",
+      "entry": "commonMain/androidx/compose/ui/text/input/EditProcessor.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-text-android/1.11.2/ui-text-android-1.11.2-sources.jar",
+      "sha256": "065b53d19cee483a5eb74ee3bcdb26da74210641a813f56124ca8549fdb537c8"
+    },
+    {
+      "file": "TextFieldValue.kt",
+      "entry": "commonMain/androidx/compose/ui/text/input/TextFieldValue.kt",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-text-android/1.11.2/ui-text-android-1.11.2-sources.jar",
+      "sha256": "90872a7473f820811c5abbc4e085db664e7a04bedc67553460ddd7d3bd155e9b"
+    }
+  ],
+  "additional_sources": [
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/KeyboardActionRunner.kt",
+      "sha256": "a6a8ed18dacfe300a736e8774d81f021669982a2078cf583227ea12bfdb54a8e"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/TextDelegate.kt",
+      "sha256": "55d4a08ea794b3ffd4444b8d9b9653a69a4f9ae6215a6e4b7c63a14202980f53"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldFocusModifier.kt",
+      "sha256": "aa2c57957f9ba983067b5ec70f2bcc5c4b71a990fe513f0a78c55b8892b91e2c"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldKeyInput.kt",
+      "sha256": "c9b0fecbb73ee77c26a8654d80a86cb4c2cd6ae0f21b945fe2723ae99ea37f3e"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/TextFieldScroll.kt",
+      "sha256": "c84e4d12b252e05dde77ce90e366cbd50d445e3cac2deb8231d09fe98f380e2b"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-android/1.11.2/ui-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/text/input/TextInputServiceAndroid.android.kt",
+      "sha256": "10c2a38fd7d6b8657d63f4fd9fb6d915136e3596692eca56ba29765193db6cef"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-android/1.11.2/ui-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/text/input/RecordingInputConnection.android.kt",
+      "sha256": "6ee165a1197364128938a6d386bb21ad8f50efdaf502ac6b1243e479f0e18443"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/text/input/internal/RecordingInputConnection.android.kt",
+      "sha256": "7e610de087c8c55406360a00d795fe755065f41ceb412eb95e401642c938ac55"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/text/input/internal/EditorInfo.android.kt",
+      "sha256": "a8af897ec42ba125f9af958ef261d72fd002bc5d4d71c04a510e9151295034f3"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/foundation/text/input/internal/LegacyPlatformTextInputServiceAdapter.android.kt",
+      "sha256": "8880a0f630c07bbde19e3d6dcf9f9af9bff0657da86b9e657e2cc1e73770e64e"
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.11.2/foundation-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/foundation/text/input/internal/LegacyPlatformTextInputServiceAdapter.kt",
+      "sha256": "51fbee441344afb3c2ff554118ef2154ba9294a69bcef3b5d9c667fa02610a00"
+    }
+  ]
+}

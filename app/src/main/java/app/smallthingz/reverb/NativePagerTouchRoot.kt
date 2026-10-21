@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.graphics.Matrix
-import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -51,8 +50,9 @@ internal open class NativePagerTouchRoot(
     private val coordinates: (View) -> NativePointerCoordinates,
     private val hitLayout: NativeViewPointerHitLayout,
     private val prepareCoordinates: (MotionEvent) -> Unit,
+    mouseButtons: Boolean = false,
 ) : FrameLayout(context) {
-    private val source = NativeMotionPointerSource(rootToScreen)
+    private val source = NativeMotionPointerSource(rootToScreen, mouseButtons)
     private val paths = NativePointerPhaseTree()
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -61,9 +61,9 @@ internal open class NativePagerTouchRoot(
             cancelPointerInput()
             return if (owned) true else super.dispatchTouchEvent(event)
         }
-        if (!isTouchLane(event)) return super.dispatchTouchEvent(event)
+        if (!nativePressedPointerAction(event.actionMasked)) return super.dispatchTouchEvent(event)
         prepareCoordinates(event)
-        val frame = source.read(event) ?: return false
+        val frame = source.read(event) ?: return super.dispatchTouchEvent(event)
         paths.pruneDetached()
         for (change in frame.changes) {
             if (change.pressed && !change.previouslyPressed) {
@@ -84,6 +84,9 @@ internal open class NativePagerTouchRoot(
                 frame.project(transform::local, transform.originOnScreen, ids)
             }
             paths.release(frame.changes.filterNot { it.pressed }.mapTo(mutableSetOf()) { it.id })
+            // Pinned PointerInputEventProcessor computes movement separately from dispatch/handled.
+            // AndroidView interop can suppress this request on the SAME per-event state.
+            if (frame.anyMovementConsumed()) parent?.requestDisallowInterceptTouchEvent(true)
             dispatched
         } finally {
             bound.forEach { it.bindMotion(null, null, 0) }
@@ -100,12 +103,4 @@ internal open class NativePagerTouchRoot(
         super.onDetachedFromWindow()
     }
 
-    private fun isTouchLane(event: MotionEvent): Boolean =
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE,
-            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP -> true
-            else -> false
-        } && !event.isFromSource(InputDevice.SOURCE_MOUSE) &&
-            !event.isFromSource(InputDevice.SOURCE_TOUCHPAD) &&
-            (0 until event.pointerCount).none { event.getToolType(it) == MotionEvent.TOOL_TYPE_MOUSE }
 }

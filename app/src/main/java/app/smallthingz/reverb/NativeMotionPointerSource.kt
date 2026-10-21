@@ -1,33 +1,39 @@
 /*
- * Touch/stylus subset derived from UI 1.11.2 MotionEventAdapter and PointerInputChangeEventProducer.
+ * Pressed-pointer subset derived from UI 1.11.2 MotionEventAdapter and PointerInputChangeEventProducer.
  * Copyright 2022-2025 The Android Open Source Project.
  * Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
  */
 package app.smallthingz.reverb
 
 import android.os.Build
-import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerType
 
 /**
  * Owned at the native window input root, BEFORE child dispatch. Accepts root-space MotionEvents,
- * not events already transformed/recycled by a child View. Mouse/hover/wheel/indirect input belongs
- * to its separate source-matched lane and is deliberately not represented as touchscreen input.
+ * not events already transformed/recycled by a child View. The optional mouse-button lane retains
+ * Mouse type/button state; hover/wheel/indirect input is never represented as touchscreen input.
  */
-internal class NativeMotionPointerSource(private val rootToScreen: (Offset) -> Offset) {
+internal class NativeMotionPointerSource(
+    private val rootToScreen: (Offset) -> Offset,
+    mouseButtons: Boolean = false,
+) {
     private data class Previous(val id: Long, val screenPosition: Offset, val pressed: Boolean)
     private val previous = mutableMapOf<Int, Previous>()
     private var nextId = 0L
+    private val admission = NativePressedPointerAdmission(mouseButtons)
 
-    fun cancel() { previous.clear() }
+    fun cancel() { previous.clear(); admission.reset() }
 
     fun read(event: MotionEvent): NativeRootPointerFrame? {
         if (event.actionMasked == MotionEvent.ACTION_CANCEL) { cancel(); return null }
-        if (event.actionMasked !in TOUCH_ACTIONS) return null
-        if (event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) return null
-        if ((0 until event.pointerCount).any { event.getToolType(it) == MotionEvent.TOOL_TYPE_MOUSE }) return null
+        val indirect = Build.VERSION.SDK_INT >= 34 &&
+            (event.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
+                event.classification == MotionEvent.CLASSIFICATION_PINCH)
+        if (!admission.accepts(event.actionMasked, event.source,
+                (0 until event.pointerCount).any { event.getToolType(it) == MotionEvent.TOOL_TYPE_MOUSE },
+                event.buttonState, indirect)) return null
         if (event.actionMasked == MotionEvent.ACTION_DOWN) previous.clear()
         val changes = ArrayList<NativeRootPointerChange>(event.pointerCount)
         for (index in 0 until event.pointerCount) {
@@ -42,7 +48,8 @@ internal class NativeMotionPointerSource(private val rootToScreen: (Offset) -> O
                 (event.actionMasked == MotionEvent.ACTION_POINTER_UP && index == event.actionIndex)
             val pressed = !up
             val type = when (event.getToolType(index)) {
-                MotionEvent.TOOL_TYPE_FINGER -> PointerType.Touch
+                MotionEvent.TOOL_TYPE_FINGER -> if (nativeMouseSource(event.source)) PointerType.Mouse else PointerType.Touch
+                MotionEvent.TOOL_TYPE_MOUSE -> PointerType.Mouse
                 MotionEvent.TOOL_TYPE_STYLUS -> PointerType.Stylus
                 MotionEvent.TOOL_TYPE_ERASER -> PointerType.Eraser
                 else -> PointerType.Unknown
@@ -60,14 +67,7 @@ internal class NativeMotionPointerSource(private val rootToScreen: (Offset) -> O
             )
             if (pressed) previous[androidId] = Previous(id, screen, true) else previous.remove(androidId)
         }
-        return NativeRootPointerFrame(changes)
-    }
-
-    private companion object {
-        val TOUCH_ACTIONS = setOf(
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE,
-            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP,
-        )
+        return NativeRootPointerFrame(changes, event.buttonState and MotionEvent.BUTTON_PRIMARY != 0)
     }
 }
 
@@ -85,7 +85,14 @@ internal class NativeRootPointerChange(
     val consumption: NativePointerConsumption = NativePointerConsumption(),
 )
 
-internal class NativeRootPointerFrame(val changes: List<NativeRootPointerChange>) {
+internal class NativeRootPointerFrame(
+    val changes: List<NativeRootPointerChange>,
+    val primaryMouseButtonPressed: Boolean = false,
+) {
+    val dispatchState = NativePointerDispatchState()
+    fun anyMovementConsumed(): Boolean = !dispatchState.suppressMovementConsumption && changes.any {
+        it.screenPosition != it.previousScreenPosition && it.consumption.consumed
+    }
     /**
      * Use the actual float matrix transform, including all ancestor transforms. Integer
      * getLocationOnScreen/getGlobalVisibleRect approximations are not an exact substitute.
@@ -101,5 +108,5 @@ internal class NativeRootPointerFrame(val changes: List<NativeRootPointerChange>
                 screenToLocal(change.previousScreenPosition), change.pressed, change.previouslyPressed,
                 change.type, change.originalPosition, change.history, change.consumption,
             )
-        }, nodeOriginOnScreen)
+        }, nodeOriginOnScreen, primaryMouseButtonPressed, dispatchState)
 }

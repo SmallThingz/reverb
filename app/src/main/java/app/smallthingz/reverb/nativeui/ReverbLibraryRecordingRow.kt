@@ -6,7 +6,10 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
-import android.view.Choreographer
+import kotlinx.coroutines.CoroutineScope
+import app.smallthingz.reverb.NativeClickPhaseHost
+import app.smallthingz.reverb.NativeClickPhaseEndpoint
+import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import androidx.compose.ui.unit.IntSize
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -69,6 +72,8 @@ internal data class LibraryRecordingRowFrame(
 internal class ReverbLibraryRecordingRow(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
+    animationScope: CoroutineScope,
+    private val nativeInputRoot: View,
 ) : FrameLayout(context) {
     private var environment = initialEnvironment
     private var row: LibraryRecordingRow? = null
@@ -79,16 +84,14 @@ internal class ReverbLibraryRecordingRow(
     private var selectionMotion: LibrarySelectionMotion? = null
     private var expansionMotion = LibraryExpansionMotion(false)
     private var outerSizeMotion: LibraryTweenValue<IntSize, androidx.compose.animation.core.AnimationVector2D>? = null
-    private val choreographer = Choreographer.getInstance()
-    private var framePosted = false
     private var exitPosted = false
     var onExpansionExit: (() -> Unit)? = null
     private val expansionViewport = LibraryExpansionViewport(context,
         currentMotion = { expansionMotion },
         needsFrames = { scheduleFrame() })
-    private val frameCallback = Choreographer.FrameCallback { time ->
-        framePosted = false
-        val scale = ValueAnimator.getDurationScale()
+    private val frames: HomeFrameLoop = HomeFrameLoop(this, animationScope,
+        { row != null && (selectionMotion?.running == true || expansionMotion.running || outerSizeMotion?.running == true) },
+    ) { time, scale ->
         val previousExpansionSize = expansionMotion.measuredSize
         val previousOuterSize = outerSizeMotion?.value
         val selectionWasRunning = selectionMotion?.running == true
@@ -155,7 +158,7 @@ internal class ReverbLibraryRecordingRow(
         body.bind(value, callbacks)
         bindInputs()
         checkNotNull(selectionMotion).target(LibraryRecordingRowFrame.target(value, environment.palette),
-            ValueAnimator.getDurationScale())
+            frames.durationScale)
         expansionMotion.setVisible(value.expanded)
         if (value.expanded) exitPosted = false
         setFrame(checkNotNull(selectionMotion).value)
@@ -169,7 +172,7 @@ internal class ReverbLibraryRecordingRow(
         bodyIndication.updateColor(value.palette.ink)
         leadingIndication.updateColor(value.palette.ink)
         row?.let { selectionMotion?.target(LibraryRecordingRowFrame.target(it, value.palette),
-            ValueAnimator.getDurationScale()) }
+            frames.durationScale) }
         selectionMotion?.value?.let(::setFrame)
         scheduleFrame()
     }
@@ -196,7 +199,7 @@ internal class ReverbLibraryRecordingRow(
         surface.measure(widthMeasureSpec, heightMeasureSpec)
         val natural = IntSize(surface.measuredWidth, surface.measuredHeight)
         val size = outerSizeMotion ?: LibraryTweenValue.size(natural).also { outerSizeMotion = it }
-        size.target(natural, ValueAnimator.getDurationScale())
+        size.target(natural, frames.durationScale)
         setMeasuredDimension(resolveSize(size.value.width, widthMeasureSpec),
             resolveSize(size.value.height, heightMeasureSpec))
         scheduleFrame()
@@ -208,17 +211,8 @@ internal class ReverbLibraryRecordingRow(
         surface.layout(x, 0, x + surface.measuredWidth, surface.measuredHeight)
     }
 
-    private fun scheduleFrame() {
-        if (!isAttachedToWindow || framePosted || row == null) return
-        if (selectionMotion?.running != true && !expansionMotion.running && outerSizeMotion?.running != true) return
-        framePosted = true
-        choreographer.postFrameCallback(frameCallback)
-    }
-
-    private fun cancelFrames() {
-        choreographer.removeFrameCallback(frameCallback)
-        framePosted = false
-    }
+    private fun scheduleFrame() = frames.request()
+    private fun cancelFrames() = frames.cancel()
 
     fun unbind() {
         bodyInput.bind(null)
@@ -273,6 +267,7 @@ internal class ReverbLibraryRecordingRow(
 
     private fun input(target: View, indication: ReverbRowIndication): ReverbClickController =
         ReverbClickController(target, object : NativeClickEnvironment {
+            override val nativeInputRoot: View get() = this@ReverbLibraryRecordingRow.nativeInputRoot
             override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
             override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
@@ -332,8 +327,15 @@ private class RecordingCardColumn(context: Context, private val body: View) : Vi
 }
 
 /** Forwards exact click-controller input; does not fall back to stock touch/key click handling. */
-private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(context) {
+internal interface NativeLibrarySummaryInput : NativeClickPhaseHost {
+    val sourceClickPresent: Boolean
+}
+private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(context), NativeLibrarySummaryInput {
+    private var endpoint: NativeClickPhaseEndpoint? = null
     var input: ReverbClickController? = null
+        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = checkNotNull(endpoint)
+    override val sourceClickPresent: Boolean get() = isClickable
     var clickLabel: String? = null
     var longClickLabel: String? = null
     var selectedSemantic: Boolean? = null

@@ -1,6 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
 import android.os.Bundle
 import android.view.KeyEvent
@@ -77,8 +79,11 @@ internal class ReverbLibraryPlayerView(
     environment: ReverbViewEnvironment,
     val fineSeekView: ReverbSpringFineSeekView,
     nativeInputRoot: View,
+    frames: MonotonicFrameClock,
+    scope: CoroutineScope,
+    durationScale: () -> Float,
 ) : ViewGroup(context) {
-    private val content = PlayerColumn(context, environment, fineSeekView, nativeInputRoot)
+    private val content = PlayerColumn(context, environment, fineSeekView, nativeInputRoot, frames, scope, durationScale)
     private var state: LibraryPlayerUiState? = null
     val waveformInput: NativeViewPhasePointerNode get() = content.timeline
     val startLabel: ReverbParagraphView get() = content.times.start
@@ -132,7 +137,9 @@ internal class ReverbLibraryPlayerView(
 }
 
 private class PlayerColumn(context: Context, private var environment: ReverbViewEnvironment,
-                           private val fineSeek: ReverbSpringFineSeekView, private val nativeInputRoot: View) : ViewGroup(context) {
+                           private val fineSeek: ReverbSpringFineSeekView, private val nativeInputRoot: View,
+    private val frames: MonotonicFrameClock, private val scope: CoroutineScope,
+    private val durationScale: () -> Float) : ViewGroup(context) {
     val timeline = PlayerTimeline(context, environment)
     val times = PlayerTimes(context, environment)
     var error: ReverbParagraphView? = null
@@ -153,7 +160,7 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
         state = next
         if (next.trimMode) {
             if (heading == null) heading = PlayerTrimHeading(context, value).also { addView(it, 0) }
-            if (buttons == null) buttons = PlayerTrimButtons(context, value, nativeInputRoot).also(::addView)
+            if (buttons == null) buttons = PlayerTrimButtons(context, value, nativeInputRoot, frames, scope, durationScale).also(::addView)
             if (environmentChanged || previous == null || !previous.trimMode ||
                 previous.trimStartMillis != next.trimStartMillis || previous.trimEndMillis != next.trimEndMillis) {
                 heading!!.bind(value, next)

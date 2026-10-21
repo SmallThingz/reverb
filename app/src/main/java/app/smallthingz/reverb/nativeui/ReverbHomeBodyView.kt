@@ -47,7 +47,7 @@ internal class ReverbHomeBodyView(
     initialEnvironment: ReverbViewEnvironment,
     nativeInputRoot: () -> View?,
     blobInputEnvironment: NativeClickEnvironment,
-    animationScope: CoroutineScope,
+    private val animationScope: CoroutineScope,
     swipeSurfaceFactory: (ReverbHomeBlobControl) -> ViewGroup,
     private val onBoundsChanged: (body: View, bodyLocalBounds: RectF, blob: View) -> Unit,
 ) : ViewGroup(context), AutoCloseable {
@@ -107,7 +107,12 @@ internal class ReverbHomeBodyView(
             metrics.seconds > 0f, recording), frame, actions)
         val showProgress = value.visualizerVisible && (!value.serviceStateHydrated || value.preparingRange)
         if (showProgress) {
-            val indicator = progress ?: ReverbIncidentLoadingView(context, environment.palette.primary).also {
+            val indicator = progress ?: ReverbIncidentLoadingView(
+                context, environment.palette.primary,
+                requireNotNull(animationScope.coroutineContext[androidx.compose.runtime.MonotonicFrameClock]),
+                animationScope,
+                { animationScope.coroutineContext[androidx.compose.ui.MotionDurationScale]?.scaleFactor ?: 1f },
+            ).also {
                 progress = it
                 swipeSurface.addView(it)
             }

@@ -55,9 +55,50 @@ class NativePointerHitTestTest {
         assertEquals(listOf(parent, direct), nativePointerHitPath(root, Offset(20f, 10f), PointerType.Touch))
     }
 
-    private fun node(name: String) = object : NativePhasePointerNode {
+    @Test fun directSharingSiblingRetainsItsPathBeforeTheNextDirectSibling() {
+        val parent = node("parent")
+        val front = node("front", sharing = true)
+        val back = node("back")
+        val last = node("last")
+        val root = layout(parent, width = 100f, height = 100f,
+            children = listOf(layout(front), layout(back), layout(last)))
+        assertEquals(listOf(parent, front, back), nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+    }
+
+    @Test fun nearSharingSiblingDoesNotPreventBetterDirectSiblingFromReplacingIt() {
+        val front = node("front", sharing = true)
+        val back = node("back")
+        val root = layout(children = listOf(layout(front, x = 20f), layout(back)))
+        assertEquals(listOf(back), nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+    }
+
+    @Test fun acceptedSharedPathKeepsOnlyTheBestFollowingNearSibling() {
+        val front = node("front", sharing = true)
+        val farther = node("farther")
+        val nearer = node("nearer")
+        val root = layout(children = listOf(layout(front), layout(farther, x = 22f), layout(nearer, x = 20f)))
+        assertEquals(listOf(front, nearer), nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+    }
+
+    @Test fun sharedSiblingsKeepPinnedFlatHitPathPassOrderRatherThanNewSiblingBranches() {
+        val calls = mutableListOf<String>()
+        val parent = node("parent", calls = calls)
+        val front = node("front", sharing = true, calls = calls)
+        val back = node("back", calls = calls)
+        val root = layout(parent, width = 100f, height = 100f, children = listOf(layout(front), layout(back)))
+        val tree = NativePointerPhaseTree()
+        tree.add(1L, nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+        val event = NativeDragPointerEvent(listOf(NativeDragPointerChange(1L, 0L, Offset(10f, 10f),
+            Offset(10f, 10f), true, false, PointerType.Touch, Offset(10f, 10f))), Offset.Zero)
+        tree.dispatch { _, _ -> event }
+        assertEquals(listOf("parent:INITIAL", "front:INITIAL", "back:INITIAL", "back:MAIN",
+            "front:MAIN", "parent:MAIN", "parent:FINAL", "front:FINAL", "back:FINAL"), calls)
+    }
+
+    private fun node(name: String, sharing: Boolean = false, calls: MutableList<String>? = null) = object : NativePhasePointerNode {
         override val attached = true
-        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+        override val shareWithSiblings = sharing
+        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) { calls?.add("$name:$pass") }
         override fun cancel() = Unit
         override fun toString() = name
     }

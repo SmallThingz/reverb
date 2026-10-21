@@ -22,7 +22,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import app.smallthingz.reverb.NativePagerTouchRoot
+import app.smallthingz.reverb.NativeHomePointerRoot
 import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeWindowPointerCoordinates
 import kotlin.math.ceil
@@ -178,8 +178,7 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
         context: Context,
         coordinates: NativeWindowPointerCoordinates,
         hitLayout: NativeViewPointerHitLayout,
-    ) : NativePagerTouchRoot(context, coordinates::rootToScreen, coordinates::coordinates,
-        hitLayout, coordinates::begin) {
+    ) : NativeHomePointerRoot(context, coordinates, hitLayout) {
         private val shape = Path()
         private var manualClip = false
         private val sourceOutline = Outline()

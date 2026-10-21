@@ -727,41 +727,42 @@ internal class RangeExportEditorState(
     private val rememberedRangeExport: RememberedRangeExport? = null,
     onPreviewReleaseFailure: (Throwable) -> Unit = {},
     private val onPreviewFailure: (Throwable) -> Unit = {},
+    notifyNativeUiChanged: (() -> Unit)? = null,
 ) {
     private val previewController = TimelineAudioPreviewController(
         onTrackReleaseFailure = onPreviewReleaseFailure,
     )
 
-    var snapshot by mutableStateOf<ReverbService.TimelineSnapshot?>(null)
+    var snapshot by rangeUiState(mutableStateOf<ReverbService.TimelineSnapshot?>(null), notifyNativeUiChanged)
         private set
-    var durationSeconds by mutableFloatStateOf(rangeTimelineDurationSeconds(initialDurationSeconds))
+    var durationSeconds by rangeUiState(mutableFloatStateOf(rangeTimelineDurationSeconds(initialDurationSeconds)), notifyNativeUiChanged)
         private set
     private val initialRestoredRange = restoreRememberedRangeExport(durationSeconds, rememberedRangeExport)
     private var restoreRememberedRangeOnFirstSnapshot = rememberedRangeExport != null
 
-    var startSeconds by mutableFloatStateOf(initialRestoredRange.startSeconds)
+    var startSeconds by rangeUiState(mutableFloatStateOf(initialRestoredRange.startSeconds), notifyNativeUiChanged)
         private set
-    var endSeconds by mutableFloatStateOf(initialRestoredRange.endSeconds)
+    var endSeconds by rangeUiState(mutableFloatStateOf(initialRestoredRange.endSeconds), notifyNativeUiChanged)
         private set
-    var lastTarget by mutableStateOf(RangeEditTarget.START)
+    var lastTarget by rangeUiState(mutableStateOf(RangeEditTarget.START), notifyNativeUiChanged)
         private set
-    var coarseWaveform by mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS))
+    var coarseWaveform by rangeUiState(mutableStateOf(FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)), notifyNativeUiChanged)
         private set
-    var coarseWaveformBuiltCount by mutableIntStateOf(0)
+    var coarseWaveformBuiltCount by rangeUiState(mutableIntStateOf(0), notifyNativeUiChanged)
         private set
-    var detailWaveform by mutableStateOf(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS))
+    var detailWaveform by rangeUiState(mutableStateOf(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS)), notifyNativeUiChanged)
         private set
-    var detailWaveformBuiltCount by mutableIntStateOf(0)
+    var detailWaveformBuiltCount by rangeUiState(mutableIntStateOf(0), notifyNativeUiChanged)
         private set
-    var waveformPass by mutableStateOf(RangeWaveformPass.COARSE)
+    var waveformPass by rangeUiState(mutableStateOf(RangeWaveformPass.COARSE), notifyNativeUiChanged)
         private set
-    var waveformLoading by mutableStateOf(true)
+    var waveformLoading by rangeUiState(mutableStateOf(true), notifyNativeUiChanged)
         private set
-    var isPlaying by mutableStateOf(false)
+    var isPlaying by rangeUiState(mutableStateOf(false), notifyNativeUiChanged)
         private set
-    var isScrubbing by mutableStateOf(false)
+    var isScrubbing by rangeUiState(mutableStateOf(false), notifyNativeUiChanged)
         private set
-    var selectionDurationInteraction by mutableStateOf(RangeDurationWheelInteraction())
+    var selectionDurationInteraction by rangeUiState(mutableStateOf(RangeDurationWheelInteraction()), notifyNativeUiChanged)
         private set
 
     val selectionDurationEditing: Boolean

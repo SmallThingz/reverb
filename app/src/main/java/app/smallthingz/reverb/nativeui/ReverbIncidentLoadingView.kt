@@ -4,7 +4,6 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.database.ContentObserver
 import android.graphics.Canvas
@@ -13,7 +12,6 @@ import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.view.Choreographer
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.animation.core.CubicBezierEasing
@@ -23,17 +21,28 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /** Released indeterminate indicator: Incidents defaults to a 2dp round stroke; Library supplies 4dp. */
-internal class ReverbIncidentLoadingView(context: Context, color: Int, private val strokeWidthDp: Float = 2f) :
-    View(context), Choreographer.FrameCallback {
+internal class ReverbIncidentLoadingView(
+    context: Context,
+    color: Int,
+    private val frames: MonotonicFrameClock,
+    private val scope: CoroutineScope,
+    private val durationScale: () -> Float,
+    private val strokeWidthDp: Float = 2f,
+) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         this.color = color
     }
     private val arc = RectF()
-    private var posted = false
+    private var frameJob: Job? = null
     private var origin = Long.MIN_VALUE
     private var lastScale = Float.NaN
     private var rotation = 0f
@@ -80,7 +89,7 @@ internal class ReverbIncidentLoadingView(context: Context, color: Int, private v
             return
         }
         // InfiniteTransition skips to each animation's target and suspends at zero motion scale.
-        val scale = ValueAnimator.getDurationScale()
+        val scale = durationScale()
         if (scale == 0f) {
             stopFrames()
             rotation = 1080f + 360f
@@ -88,21 +97,23 @@ internal class ReverbIncidentLoadingView(context: Context, color: Int, private v
             lastScale = 0f
             origin = Long.MIN_VALUE
             invalidate()
-        } else if (!posted) {
-            posted = true
-            Choreographer.getInstance().postFrameCallback(this)
+        } else if (frameJob?.isActive != true) {
+            frameJob = scope.launch {
+                while (isActive && isAttachedToWindow && isShown && windowVisibility == VISIBLE) {
+                    frames.withFrameNanos(::frame)
+                }
+            }
         }
     }
 
     private fun stopFrames() {
-        if (posted) Choreographer.getInstance().removeFrameCallback(this)
-        posted = false
+        frameJob?.cancel()
+        frameJob = null
     }
 
-    override fun doFrame(frameTimeNanos: Long) {
-        posted = false
+    private fun frame(frameTimeNanos: Long) {
         if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
-        val scale = ValueAnimator.getDurationScale()
+        val scale = durationScale()
         if (scale == 0f) { updateScheduling(); return }
         if (origin == Long.MIN_VALUE || lastScale != scale) {
             origin = frameTimeNanos
@@ -113,8 +124,10 @@ internal class ReverbIncidentLoadingView(context: Context, color: Int, private v
             IncidentLoadingMotion.additional.getValueFromNanos(playTime)
         progress = IncidentLoadingMotion.progress.getValueFromNanos(playTime)
         invalidate()
-        updateScheduling()
     }
+
+    /** Host-injected scale changes use the same wake-up as the platform setting observer. */
+    fun motionScaleChanged() = updateScheduling()
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)

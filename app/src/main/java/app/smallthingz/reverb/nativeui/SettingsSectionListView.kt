@@ -31,10 +31,12 @@ internal class SettingsSectionListView(
     private var environment:ReverbViewEnvironment,
     restricted:Boolean,
     restored:SettingsListSavedPosition?=null,
+    private val onStructureChanged:()->Unit={},
 ):FrameLayout(context),AutoCloseable {
     private val manager=LinearLayoutManager(context,RecyclerView.VERTICAL,false)
     private val rows=Rows(restricted)
-    private val list=RecyclerView(context).apply {
+    val viewport:ReverbLibraryRecyclerView get()=list
+    private val list=ReverbLibraryRecyclerView(context).apply {
         layoutManager=manager;adapter=rows
         itemAnimator=null
         isVerticalScrollBarEnabled=false;isHorizontalScrollBarEnabled=false
@@ -110,6 +112,16 @@ internal class SettingsSectionListView(
             return Holder(section).also {holders.add(it)}
         }
         override fun onBindViewHolder(holder:Holder,position:Int)=holder.section.bind()
+        override fun onViewAttachedToWindow(holder:Holder) {
+            super.onViewAttachedToWindow(holder)
+            // RV may reattach a cached holder without rebinding its unchanged stable item ID.
+            holder.section.bind()
+            onStructureChanged()
+        }
+        override fun onViewDetachedFromWindow(holder:Holder) {
+            super.onViewDetachedFromWindow(holder)
+            onStructureChanged()
+        }
         override fun onViewRecycled(holder:Holder) {
             // Reuse retains the same keyed section type. No durable/draft operation is triggered.
             super.onViewRecycled(holder)

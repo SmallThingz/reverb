@@ -1,5 +1,5 @@
 {
-  "status": "Integrated into native-hosts-20261021; no compile or native validation",
+  "status": "Active native-hosts integration; no new compile/test/device qualification for this source snapshot",
   "source": [
     {
       "commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
@@ -55,11 +55,11 @@
   ],
   "files": {
     "ReverbLibraryToolbarView.kt": "2fd582d333850defcb70d5a0e7683fb01bafa4e1fd0e11775b8730021901d742",
-    "ReverbLibraryTextAction.kt": "8aa00cbba43ac04330594666b4747e037706a02fc88297287239e49d794dd72b",
-    "ReverbLibraryStatusView.kt": "91f317824f49ed97dc53571cc04d4a468c1397346a4501adbcf979e2c3d8e999",
-    "ReverbIncidentLoadingView.kt": "f1586a9b1b1cc27c6b1f497bec1f588e6f29092dc232feaa095d1e7440117db8",
+    "ReverbLibraryTextAction.kt": "da7196884e67a766581a84684ea5d256787df835ecb2188fd5e8f24cb520c124",
+    "ReverbLibraryStatusView.kt": "9f2ac545ce6915aa47143c997583267e183ab8dc1a84a7a55dc2084027ced4ef",
+    "ReverbIncidentLoadingView.kt": "f9b2cf661f8974d06494ae94f8d736a38101013929c17c29fab9b14b34606c49",
     "ReverbLibraryUndoCard.kt": "1a8764f22d0398698be2da68cc7e7e7d4f9faf23d980c7517fc1b106bd7a7907",
-    "ReverbAppTopBarView.kt": "8e95dd5192283c4320bf607650da29315e260a94b7f766c718ac9d9469094e09",
+    "ReverbAppTopBarView.kt": "c8434f2480dffe02b80e365a0caff73ff12a1125e7678183cc08e10155c1509d",
     "ReverbTopBarHitTest.kt": "88d9e38b4cdd6a2a2ca2968107198c438a7b899f27c94dbd7d7a4e6ed1933865"
   },
   "base_head": "e4e9901ba82510ed898429849b575aa410aafc6d",

@@ -15,8 +15,8 @@ import kotlin.math.max
  * Each instance is a real released coordinator boundary; modifier nodes retain their source order.
  * childrenInHitOrder is the source's reversed z-sorted *placed* children, never View.elevation order.
  *
- * This onboarding slice has no pointer sibling sharing, explicit stylus touch-bound expansion or
- * interceptOutOfBoundsChildEvents nodes. Adding such a source node requires porting that branch.
+ * Pointer sibling sharing follows source acceptHits/siblingHits. Explicit stylus touch-bound
+ * expansion and interceptOutOfBoundsChildEvents remain outside these concrete screen nodes.
  */
 internal interface NativePointerHitLayout {
     val placed: Boolean
@@ -24,6 +24,7 @@ internal interface NativePointerHitLayout {
     val minimumTouchTarget: Size
     val nodes: List<NativePhasePointerNode>
     val childrenInHitOrder: List<NativePointerHitLayout>
+    val shareWithSiblings: Boolean get() = nodes.any { it.attached && it.shareWithSiblings }
     fun screenToLocal(screen: Offset): Offset
     fun withinLayerBounds(local: Offset): Boolean
 }
@@ -65,6 +66,7 @@ internal fun nativePointerHitPath(
         return score
     }
     fun record(node: NativePhasePointerNode, score: NativePointerHitScore, child: () -> Unit) {
+        val startDepth = depth
         while (hits.size > depth + 1) {
             hits.removeAt(hits.lastIndex)
             scores.removeAt(scores.lastIndex)
@@ -73,7 +75,7 @@ internal fun nativePointerHitPath(
         scores += score
         depth++
         child()
-        depth--
+        depth = startDepth
     }
     fun hit(layout: NativePointerHitLayout, inheritedLayer: Boolean) {
         if (!layout.placed) return
@@ -95,10 +97,15 @@ internal fun nativePointerHitPath(
             withinLayer && inBounds || distance.isFinite() && best() > score
         )
         fun children() {
+            val startDepth = depth
             for (child in layout.childrenInHitOrder) {
                 hit(child, inLayer)
-                if (best().direct) break
+                if (best().direct) {
+                    if (child.shareWithSiblings) depth = hits.lastIndex // HitTestResult.acceptHits.
+                    else break
+                }
             }
+            depth = startDepth // HitTestResult.siblingHits restores the caller's depth.
         }
         fun modifiers(index: Int) {
             if (index == layout.nodes.size) children()

@@ -73,6 +73,14 @@ internal class ReverbGroupLayout(
         content.removeView(child)
     }
 
+    /** Actual source clip, shared with the window's phase hit tree; no geometry approximation. */
+    fun containsVisualPoint(x: Float, y: Float): Boolean =
+        if (recordingEdges == null) geometry.contains(x, y)
+        else checkNotNull(recordingShape).acceptsPointer(x, y, false, 0f)
+
+    /** Surface's content layer, rather than its outer draw/border layer. Read-only identity. */
+    val pointerContent: ViewGroup get() = content
+
     fun setPalette(@ColorInt field: Int, @ColorInt border: Int) {
         if (fillPaint.color != field || borderPaint.color != border) {
             fillPaint.color = field

@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.Velocity
 internal enum class NativePointerPass { INITIAL, MAIN, FINAL }
 internal enum class NativeDragAxis { HORIZONTAL, VERTICAL }
 internal class NativePointerConsumption(var consumed: Boolean = false)
+/** One InternalPointerEvent flag shared by every node-local projection, reset for each root event. */
+internal class NativePointerDispatchState(var suppressMovementConsumption: Boolean = false)
 internal data class NativePointerHistory(val timeMillis: Long, val originalPosition: Offset)
 
 /**
@@ -42,6 +44,7 @@ internal data class NativeDragPointerEvent(
     val changes: List<NativeDragPointerChange>,
     val nodeOriginOnScreen: Offset,
     val primaryMouseButtonPressed: Boolean = false,
+    val dispatchState: NativePointerDispatchState = NativePointerDispatchState(),
 ) {
     fun isDown(): Boolean = changes.isNotEmpty() &&
         !(changes.all { it.type == PointerType.Mouse } && !primaryMouseButtonPressed) &&

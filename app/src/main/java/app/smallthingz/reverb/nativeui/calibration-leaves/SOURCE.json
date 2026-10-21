@@ -1,0 +1,21 @@
+{
+  "status": "integrated-uncompiled-unexecuted",
+  "files": {
+    "SettingsCalibrationActionView.kt": "bdebe7ed314c2d828743b2ccdd667c313f68db3c6f42ca9d79507dbfe8bff15c",
+    "SettingsCalibrationProgressView.kt": "3f17e6cbd39042e9ee8402d0cb4f4cca1ed3234dd18115550aa04fb3e107b514",
+    "SettingsCalibrationProgressTest.kt": "6d7d674e8488cc4b37b5b25dc80f79e2bd6aec151bfb493bfe94d7979a7d7c44"
+  },
+  "release_source_sha256": "07a678ccb30aebd9f7196ef88df3534b975a8ed3bb62b658f0ab0a01eef47f39",
+  "pinned_material3": "1.4.0",
+  "pinned_ui": "1.11.2",
+  "pinned_sources": {
+    "ProgressIndicator.kt": "d0e4627fef5b340b1c4750cc69e7857fa0db7a2502d165bd1f17f5797d4af718",
+    "Button.kt": "c379b30a478b84c2b16669f0a7f7e1f48292886c88b70f9bd4569d8221c06355"
+  },
+  "tests_written": 3,
+  "tests_executed": false,
+  "unqualified": [
+    "actual raster/interaction/accessibility",
+    "whole-window semantics event ordering"
+  ]
+}

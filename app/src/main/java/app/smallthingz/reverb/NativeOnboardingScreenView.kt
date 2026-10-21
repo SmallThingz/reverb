@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.os.Build
 import android.view.View
+import android.view.KeyEvent
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -189,6 +190,60 @@ internal class NativeOnboardingScreenView private constructor(
         dispatcher.addCallback(lifecycleOwner, backCallback)
         pager.requestScrollToPage(restored.page, restored.offsetFraction)
         publishState()
+    }
+
+    private val beyondBoundsFocus = NativePagerBeyondBoundsFocus(
+        focused = ::findFocus,
+        placed = { viewport.placedPages },
+        existingPages = { viewport.focusPlacedPages() },
+        userScrollEnabled = { userScrollEnabled },
+        pageOf = { view ->
+            var cursor: View? = view
+            var found: Int? = null
+            while (cursor != null && cursor !== this) {
+                val index = pages.indexOf(cursor)
+                if (index >= 0) { found = index; break }
+                cursor = cursor.parent as? View
+            }
+            found
+        },
+        candidatesInPlacementOrder = { page ->
+            buildList {
+                fun visit(view: View) {
+                    if (view.visibility != View.VISIBLE) return
+                    if (view is NativeClickPhaseHost && view.isFocusable) add(view)
+                    if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+                }
+                visit(pages[page])
+            }
+        },
+        rtl = { layoutDirection == View.LAYOUT_DIRECTION_RTL },
+        pageBounds = { page -> nativeBringIntoViewLocalRect(this, pages[page].sourceVerticalViewport,
+            androidx.compose.ui.geometry.Rect(0f, 0f, pages[page].width.toFloat(), pages[page].height.toFloat())) },
+        focusBounds = { view -> nativeBringIntoViewLocalRect(this, view,
+            androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat())) },
+        withExtraPage = { page, block -> viewport.withFocusSearchPage(page, block) },
+    )
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (super.dispatchKeyEvent(event)) return true // Descendant's activation/page key wins first.
+        if (event.action != KeyEvent.ACTION_DOWN) return false
+        val forward = when (event.keyCode) {
+            KeyEvent.KEYCODE_TAB -> !event.isShiftPressed
+            KeyEvent.KEYCODE_NAVIGATE_NEXT -> true
+            KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> false
+            else -> {
+                val direction = when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> androidx.compose.ui.focus.FocusDirection.Left
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> androidx.compose.ui.focus.FocusDirection.Right
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_PAGE_UP -> androidx.compose.ui.focus.FocusDirection.Up
+                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> androidx.compose.ui.focus.FocusDirection.Down
+                    else -> return false
+                }
+                return beyondBoundsFocus.moveDirectional(direction)
+            }
+        }
+        return beyondBoundsFocus.move(forward)
     }
 
     private val stateIsFinishing get() = !state.controlsEnabled

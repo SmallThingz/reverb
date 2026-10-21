@@ -49,7 +49,7 @@ internal data class SpringFineSeekEnvironment(
 )
 
 /**
- * The released Library SpringFineSeekControl as direct ordinary Views.
+ * The released SpringFineSeekControl as direct ordinary Views, including Range's optional tap owner.
  *
  * Parent supplies source104/120dp bounds and external trim alpha. Place fineSeekNode on this full
  * rectangle only while fineSeekInputEnabled, then puckClickNode on puckClickView's live64dp rectangle in the shared phase hit tree.

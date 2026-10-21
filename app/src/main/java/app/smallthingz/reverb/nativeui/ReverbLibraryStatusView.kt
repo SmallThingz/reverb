@@ -24,6 +24,7 @@ internal class ReverbLibraryStatusView(
     private val parentScope: CoroutineScope,
     private val nested: NativeVerticalNestedHost,
     private val nativeInputRoot: View,
+    private val durationScale: () -> Float,
 ) : ViewGroup(context) {
     private var mode: LibraryBodyMode? = null
     private var retry: () -> Unit = {}
@@ -46,7 +47,7 @@ internal class ReverbLibraryStatusView(
             viewport = null
             emptyScrollState = null
             mode = next
-            val column = LibraryStatusColumn(context, environment, next, nativeInputRoot) { retry() }
+            val column = LibraryStatusColumn(context, environment, next, nativeInputRoot, frames, parentScope, durationScale) { retry() }
             body = column
             if (next == LibraryBodyMode.EMPTY) {
                 val scroll = NativeVerticalScrollState()
@@ -96,10 +97,13 @@ private class LibraryStatusColumn(
     private var environment: ReverbViewEnvironment,
     private val mode: LibraryBodyMode,
     inputRoot: View,
+    frames: MonotonicFrameClock,
+    scope: CoroutineScope,
+    durationScale: () -> Float,
     retry: () -> Unit,
 ) : ViewGroup(context) {
     private val loading = if (mode == LibraryBodyMode.LOADING)
-        ReverbIncidentLoadingView(context, environment.palette.primary, strokeWidthDp = 4f) else null
+        ReverbIncidentLoadingView(context, environment.palette.primary, frames, scope, durationScale, strokeWidthDp = 4f) else null
     private val failure = if (mode == LibraryBodyMode.FAILED)
         environment.paragraph(context, context.getString(R.string.recordings_refresh_failed),
             ReverbTextRole.BODY_MEDIUM, environment.palette.muted) else null

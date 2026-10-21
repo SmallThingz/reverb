@@ -8,6 +8,7 @@ package app.smallthingz.reverb
 /** Input-only retained path, not a render/state tree. Nodes are existing concrete input owners. */
 internal interface NativePhasePointerNode {
     val attached: Boolean
+    val shareWithSiblings: Boolean get() = false
     fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass)
     fun cancel()
 }

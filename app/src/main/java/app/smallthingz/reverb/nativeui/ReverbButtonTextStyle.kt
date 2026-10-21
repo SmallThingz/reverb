@@ -12,6 +12,9 @@ private val inheritedButtonBase = TextStyle.Default.copy(
 private val releasedButtonLabel = ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]
 private val inheritedButtonLabel = inheritedButtonBase.merge(releasedButtonLabel)
 
+/** Omitted Text style directly under ReverbTheme, before a component provides another role. */
+internal fun reverbDefaultTextStyle(): TextStyle = inheritedButtonBase
+
 /**
  * Text with omitted style inside the released Material3 Button/TextButton inherits this merge:
  * DefaultTextStyle -> MaterialTheme's bodyLarge -> Button's labelLarge.

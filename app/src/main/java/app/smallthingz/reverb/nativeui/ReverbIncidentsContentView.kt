@@ -9,9 +9,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
 import androidx.core.graphics.Insets
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -42,19 +42,28 @@ internal class ReverbIncidentsContentView(
     menuHost: IncidentCardMenuHost,
     private var actions: IncidentCardActions,
     onBack: () -> Unit,
+    frames: MonotonicFrameClock,
+    scope: CoroutineScope,
+    durationScale: () -> Float,
+    inputRoot: View,
 ) : ViewGroup(context) {
     private var appearance = initialAppearance
     private val backgroundNoise = ReverbNoiseDrawable(resources, initialAppearance.card.palette.surface)
-    private val header = IncidentsHeader(context, initialAppearance, onBack)
-    private val empty = IncidentsEmptyContent(context, initialAppearance)
-    private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions)
+    private val header = IncidentsHeader(context, initialAppearance, onBack, inputRoot)
+    private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
+    private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
+    private var accessibilityMembershipChanged: () -> Unit = {}
     private val list = RecyclerView(context).apply {
         layoutManager = LinearLayoutManager(context)
         adapter = this@ReverbIncidentsContentView.adapter
-        itemAnimator = ReverbIncidentItemAnimator()
+        itemAnimator = ReverbIncidentItemAnimator(frames, scope, durationScale)
         clipToPadding = false
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
+        addOnChildAttachStateChangeListener(object : RecyclerView.OnChildAttachStateChangeListener {
+            override fun onChildViewAttachedToWindow(view: View) = accessibilityMembershipChanged()
+            override fun onChildViewDetachedFromWindow(view: View) = accessibilityMembershipChanged()
+        })
         addItemDecoration(object : RecyclerView.ItemDecoration() {
             override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
                 val position = parent.getChildAdapterPosition(view)
@@ -75,6 +84,15 @@ internal class ReverbIncidentsContentView(
         bind(IncidentHistoryUiState())
     }
 
+    fun observeAccessibilityMembership(changed: () -> Unit) { accessibilityMembershipChanged = changed }
+    fun setStatusBarInsets(insets: Insets) = header.setStatusBarInsets(insets)
+    fun semanticsClip(view: View): NativeTextSemanticsClip = when {
+        view === this || view === list ||
+            (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).getChildAt(0) === view) ->
+            NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+        else -> NativeTextSemanticsClip.Unclipped
+    }
+
     /** Already prepared history only; formatting and storage stay in the existing controller. */
     fun bind(state: IncidentHistoryUiState) {
         val hasRows = state.history.rows.isNotEmpty()
@@ -93,6 +111,7 @@ internal class ReverbIncidentsContentView(
             empty.bind(state)
         }
         requestLayout()
+        accessibilityMembershipChanged()
     }
 
     fun setAppearance(value: IncidentsContentAppearance, onBack: () -> Unit, actions: IncidentCardActions) {
@@ -129,7 +148,7 @@ internal class ReverbIncidentsContentView(
         }
     }
 
-    /** Root owner calls this when the panel itself is permanently disposed, not merely closed. */
+    /** Root owner calls this when the source overlay leaves composition at fully closed progress. */
     fun dispose() {
         list.itemAnimator?.endAnimations()
         adapter.disposeVisible(list)
@@ -157,8 +176,11 @@ private class IncidentsHeader(
     context: Context,
     private var appearance: IncidentsContentAppearance,
     onBack: () -> Unit,
+    inputRoot: View,
 ) : ViewGroup(context) {
-    private val back = ReverbIncidentBackView(context, appearance.card.palette, onBack)
+    private val back = ReverbIncidentBackView(context, appearance.card.palette, onBack).apply {
+        pointerInputRoot = inputRoot
+    }
     private val title = paragraph(context, appearance.card, appearance.titleLarge, appearance.card.palette.ink).apply {
         setText(context.getString(R.string.incidents_title))
     }
@@ -171,11 +193,10 @@ private class IncidentsHeader(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(back)
         addView(title)
-        ViewCompat.setOnApplyWindowInsetsListener(this) { _, windowInsets ->
-            val next = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars())
-            if (insets != next) { insets = next; requestLayout() }
-            windowInsets
-        }
+    }
+
+    fun setStatusBarInsets(value: Insets) {
+        if (insets != value) { insets = value; requestLayout() }
     }
 
     fun bind(value: IncidentsContentAppearance, onBack: () -> Unit) {
@@ -187,11 +208,6 @@ private class IncidentsHeader(
         requestLayout()
     }
     private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        ViewCompat.requestApplyInsets(this)
-    }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
@@ -235,8 +251,14 @@ private class IncidentsHeader(
     }
 }
 
-private class IncidentsEmptyContent(context: Context, private var appearance: IncidentsContentAppearance) : ViewGroup(context) {
-    private val loading = ReverbIncidentLoadingView(context, appearance.card.palette.primary)
+private class IncidentsEmptyContent(
+    context: Context,
+    private var appearance: IncidentsContentAppearance,
+    frames: MonotonicFrameClock,
+    scope: CoroutineScope,
+    durationScale: () -> Float,
+) : ViewGroup(context) {
+    private val loading = ReverbIncidentLoadingView(context, appearance.card.palette.primary, frames, scope, durationScale)
     private val icon = IncidentStatusIcon(context, appearance.card.palette.muted)
     private val title = paragraph(context, appearance.card, appearance.titleMedium, appearance.card.palette.ink)
     private val detail = paragraph(context, appearance.card, appearance.card.bodyMedium, appearance.card.palette.muted)
@@ -343,6 +365,7 @@ private class IncidentsAdapter(
     private var appearance: IncidentCardAppearance,
     private val menus: IncidentCardMenuHost,
     private var actions: IncidentCardActions,
+    private val inputRoot: View,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private data class Item(val key: String, val row: IncidentPresentation?, val id: Long)
     private var items = emptyList<Item>()
@@ -383,7 +406,10 @@ private class IncidentsAdapter(
     override fun getItemViewType(position: Int) = if (items[position].row == null) 0 else 1
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val view = if (viewType == 0) IncidentStaleView(context, appearance)
-            else ReverbIncidentCardView(context, appearance, menus).apply { parentInterestedInDown = { true } }
+            else ReverbIncidentCardView(context, appearance, menus).apply {
+                parentInterestedInDown = { true }
+                pointerInputRoot = inputRoot
+            }
         view.layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         return object : RecyclerView.ViewHolder(view) {}
     }

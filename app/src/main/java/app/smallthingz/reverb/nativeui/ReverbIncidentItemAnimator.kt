@@ -4,8 +4,6 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
-import android.view.Choreographer
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.Spring
@@ -14,14 +12,23 @@ import androidx.compose.animation.core.TwoWayConverter
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.runtime.MonotonicFrameClock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.SimpleItemAnimator
 import kotlin.math.roundToInt
 
 /** animateItem's MediumLow spring fades/placement; no platform default timing or change crossfade. */
-internal class ReverbIncidentItemAnimator : SimpleItemAnimator(), Choreographer.FrameCallback {
+internal class ReverbIncidentItemAnimator(
+    private val frames: MonotonicFrameClock,
+    private val scope: CoroutineScope,
+    private val durationScale: () -> Float,
+) : SimpleItemAnimator() {
     private val active = LinkedHashMap<RecyclerView.ViewHolder, Motion>()
-    private var posted = false
+    private var frameJob: Job? = null
     private enum class Kind { ADD, REMOVE }
     private class Motion(val holder: RecyclerView.ViewHolder) {
         var alpha: FloatMotion? = null
@@ -113,15 +120,17 @@ internal class ReverbIncidentItemAnimator : SimpleItemAnimator(), Choreographer.
     }
 
     private fun schedule() {
-        if (!posted && active.isNotEmpty()) {
-            posted = true
-            Choreographer.getInstance().postFrameCallback(this)
+        if (frameJob?.isActive == true || active.isEmpty()) return
+        frameJob = scope.launch {
+            while (isActive && active.isNotEmpty()) {
+                frames.withFrameNanos(::frame)
+            }
         }
     }
 
-    override fun doFrame(frameTimeNanos: Long) {
-        posted = false
-        val scale = ValueAnimator.getDurationScale()
+    private fun frame(frameTimeNanos: Long) {
+        val scale = durationScale()
+        require(scale >= 0f)
         // Framework completion callbacks may reenter the animator; iterate an identity snapshot.
         active.values.toList().forEach { motion ->
             if (active[motion.holder] !== motion) return@forEach
@@ -159,7 +168,6 @@ internal class ReverbIncidentItemAnimator : SimpleItemAnimator(), Choreographer.
             }
         }
         pruneFinished()
-        schedule()
     }
 
     private fun finishAlphaCallback(motion: Motion) {
@@ -175,8 +183,8 @@ internal class ReverbIncidentItemAnimator : SimpleItemAnimator(), Choreographer.
     private fun pruneFinished() {
         active.entries.removeAll { it.value.alpha == null && it.value.offset == null }
         if (active.isEmpty()) {
-            if (posted) Choreographer.getInstance().removeFrameCallback(this)
-            posted = false
+            frameJob?.cancel()
+            frameJob = null
             dispatchAnimationsFinished()
         }
     }
@@ -195,8 +203,8 @@ internal class ReverbIncidentItemAnimator : SimpleItemAnimator(), Choreographer.
 
     override fun endAnimations() {
         active.keys.toList().forEach(::endAnimation)
-        if (posted) Choreographer.getInstance().removeFrameCallback(this)
-        posted = false
+        frameJob?.cancel()
+        frameJob = null
     }
 
     override fun isRunning(): Boolean = active.isNotEmpty()

@@ -205,11 +205,11 @@ internal class SettingsInsetView(
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
 }
 
-private fun settingsSectionTitle(context:Context,stringRes:Int,environment:ReverbViewEnvironment):ReverbParagraphView =
+internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:ReverbViewEnvironment):ReverbParagraphView =
     environment.paragraph(context,context.getString(stringRes),ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
         .also { bindSectionTitle(it,environment) }
-private fun bindSectionTitle(view:ReverbParagraphView,environment:ReverbViewEnvironment) {
-    view.setTypography(ReverbParagraphStyles[ReverbTextRole.BODY_LARGE].copy(
+internal fun bindSectionTitle(view:ReverbParagraphView,environment:ReverbViewEnvironment) {
+    view.setTypography(reverbDefaultTextStyle().copy(
         fontSize=19.sp,lineHeight=26.sp,fontWeight=FontWeight.Medium),
         environment.textDensity,environment.sharedFontResolver)
     view.setTextColor(environment.palette.onSurface)

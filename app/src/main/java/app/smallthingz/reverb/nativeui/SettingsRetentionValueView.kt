@@ -19,7 +19,13 @@ internal class SettingsRetentionValueView(
     label:String,
     private val editor:View,
     private var environment:ReverbViewEnvironment,
-):ViewGroup(context) {
+):ViewGroup(context), app.smallthingz.reverb.NativeAndroidInteropHost {
+    override val nativeInteropRequests = app.smallthingz.reverb.NativeAndroidInteropRequests()
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        nativeInteropRequests.request(disallowIntercept)
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
+
     private val icon=OnboardingIconView(context,glyph,environment.palette.muted)
     private val heading=environment.paragraph(context,label,ReverbTextRole.BODY_LARGE,environment.palette.muted)
     private val unit=environment.paragraph(context,context.getString(R.string.retention_mib_unit),ReverbTextRole.BODY_LARGE,environment.palette.muted)
@@ -45,7 +51,7 @@ internal class SettingsRetentionValueView(
         bindTypography();requestLayout()
     }
     private fun bindTypography() {
-        val base=ReverbParagraphStyles[ReverbTextRole.BODY_LARGE]
+        val base=reverbDefaultTextStyle()
         heading.setTypography(base.copy(fontSize=14.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)
         unit.setTypography(base.copy(fontSize=14.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)
         estimate.setTypography(base.copy(fontSize=13.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)

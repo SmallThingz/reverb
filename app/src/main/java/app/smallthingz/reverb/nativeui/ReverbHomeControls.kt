@@ -181,7 +181,7 @@ internal class ReverbHomeControls(
 }
 
 /** Shared exact click/ripple ownership on an existing control; no themed platform Button. */
-private abstract class HomeClickable(
+internal abstract class HomeClickable(
     context: Context,
     protected var currentEnvironment: ReverbViewEnvironment,
     private val nativeRoot: () -> View?,
@@ -269,7 +269,7 @@ private abstract class HomeClickable(
     }
 }
 
-private class HomeBufferSegment(context: Context, currentEnvironment: ReverbViewEnvironment,
+internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbViewEnvironment,
     root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root, 16f) {
     private val glyph = HomeGlyph(context, currentEnvironment, ReverbIcon.OneShot)
     private val label = currentEnvironment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
@@ -292,12 +292,12 @@ private class HomeBufferSegment(context: Context, currentEnvironment: ReverbView
         label.setTextLayout(maxLines = 1)
     }
     fun bind(text: String, icon: ReverbIcon, selected: Boolean, recording: Boolean,
-        enabled: Boolean, filled: Boolean, next: () -> Unit) {
+        enabled: Boolean, filled: Boolean, interactionEnabled: Boolean = true, next: () -> Unit) {
         selection = selected; this.recording = recording; bufferEnabled = enabled; this.filled = filled
         isSelected = selected
         glyph.setIcon(icon)
         label.setText(text)
-        bindClick(true, next) // Disabled/full buffers remain selectable in the released Home.
+        bindClick(interactionEnabled, next) // Disabled/full buffers remain selectable; Home keeps the true default.
         updateTargets()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {

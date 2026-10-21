@@ -1,5 +1,5 @@
 {
-  "status": "Integrated candidate; no compile/test/device qualification",
+  "status": "Active native-hosts integration; no new compile/test/device qualification for this source snapshot",
   "base": "e4e9901ba82510ed898429849b575aa410aafc6d",
   "sources": [
     {
@@ -34,8 +34,8 @@
     }
   ],
   "files": {
-    "ReverbLibraryPlayerView.kt": "a2608a0f3846ccf06c42abd9e4c38037c3fdff13b08c44ae54cc8f8fb3548e5a",
-    "ReverbLibraryPlayerControls.kt": "b22c9989b7f774be936afb722736192bb67c9a542eee1a1eaf00d48af859f3b1",
+    "ReverbLibraryPlayerView.kt": "d1d937b3e0aa924bc789d51b07ff17d809de2348f28feec231372e813b457336",
+    "ReverbLibraryPlayerControls.kt": "2de5309c2632db2c23740819e7f8d66320ea8b5cf09353ede10ec5ee23edf1ec",
     "ReverbTimelineMarkerView.kt": "99916de4d25b8d24ff025ce151925b9b7f50717ac1d1ca90ca3f3ba59c0e563f",
     "InlineWaveformPointerOwner.kt": "ae73ebde086fff8982b2eac2864950c55b1469f2c67743275eb36f16adeeb11b",
     "NativeInlineWaveformMotion.kt": "318c39ada50dbf4a9b7bb3e4a86040ed9292e82923815726fdc2ceb146f4eb6d",

@@ -25,6 +25,7 @@ internal class SettingsAudioChoicesSection(
     frames: MonotonicFrameClock,
     scope: CoroutineScope,
     savedMenuScrollPositions: Map<SettingsAudioChoice, Int> = emptyMap(),
+    inputRoot: () -> android.view.View? = { null },
 ) : AutoCloseable {
     private var current = initial
     private var palette = initialPalette
@@ -45,7 +46,7 @@ internal class SettingsAudioChoicesSection(
 
     init {
         choices = SettingsAudioChoicesView(context,bodySmall,bodyLarge,density,resolver,
-            initial.copy(expanded=emptySet()),initialPalette,sampleRateLabel,menus,selections)
+            initial.copy(expanded=emptySet()),initialPalette,sampleRateLabel,menus,selections,inputRoot)
     }
 
     fun bind(next: SettingsAudioChoicesState, palette: ReverbPalette) {

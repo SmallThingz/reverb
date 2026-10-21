@@ -1,0 +1,31 @@
+{
+  "status": "Integrated for coordinated compile; no host tests or runtime qualification yet",
+  "released_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "released_FilesScreen_sha256": "25fd8e042560fbcc15ac5b9b409a893e2670ae2d1fbcb390c5f91ae45da1d0c5",
+  "files": {
+    "NativeLibraryController.kt": "7eff47c05ccf49a07dfcd7ef8bfd47e8b49218f11ee9ad7ffae6c54fe8a0a709",
+    "NativeLibraryEdgeDismiss.kt": "0e83e330636ca4e9371d3d72b424933a060564470462faadca39b1121c5a5950",
+    "nativeui/NativeLibraryPlayerLease.kt": "e58b61caf446970739657565920a1fe4601dfd3ae3c18acd314e723d4bb982a1",
+    "nativeui/NativeLibraryPointerBinding.kt": "0b7aaa1fa5a187b495ca4d0fdc8f64b8fb799350c83058811e9d0bcb0c85f1e4",
+    "nativeui/NativeLibraryPredictiveBack.kt": "47d4c7020bcf80c8e6b3882e3d8a11cd32a9e282611e4e8d082162cd4b8c3f09",
+    "nativeui/NativeLibraryScrollAccumulator.kt": "75061628703afc48f481682763289005553ae5775013f3caad303ec24e6a308c",
+    "nativeui/NativeLibraryScrollOwner.kt": "2cadd34963141b4a65a63ab864eb1ecc0d8f550bed0a25c5d39069a2c6d90fec",
+    "nativeui/ReverbLibraryScreenContent.kt": "4d156fb087a8cd1bb71ca52935c1ae74d57dd9c05534e05ac058848d58f3db1f",
+    "nativeui/NativePointerLayerShape.kt": "af2cdf31a4babb792b36acd7b878b1e794c102ef6d1fc5c2020d3e93f56b3305",
+    "nativeui/ReverbLibraryListView.kt": "8eded8d98aa7baa39121aca0dbb59b40f7fb361114da32b2bec78d6d9adde38e",
+    "nativeui/ReverbLibraryRecordingRow.kt": "9b69d0762af3b64b080a832b3be5dae45f43ca343dc1e83c114f796bb54ebc0b"
+  },
+  "tests": {
+    "NativeLibraryEdgeDismissTest.kt": {
+      "cases": 6,
+      "sha256": "5d027e5676c7bee46e1562a501937c2a17c3d291b86755591ce9decc2573497b",
+      "status": "not run"
+    },
+    "nativeui/NativeLibraryScrollAccumulatorTest.kt": {
+      "cases": 5,
+      "sha256": "9beaf0aa620fce05aaae6fe27fb9f27aadd632dcf9d6f402db7b13f9da516365",
+      "status": "not run"
+    }
+  },
+  "pull_refresh_integration": "Always-present indicator owner, source nested chain shared by populated/empty branch; source methods implemented by separately reviewed Pull component. Unrun native integration."
+}

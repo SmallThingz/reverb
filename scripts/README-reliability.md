@@ -230,3 +230,20 @@ Each probe has its own `native-*-*/result.json` and synthetic PNG evidence.
 These focused probes do not prove interaction,
 animation, accessibility, whole-screen, or cross-device parity. Review saved images
 as well as machine results, retaining source/APK hashes and current device settings.
+
+The normal Home probes are `native_home_parity` and `native_home_input`, using the
+same isolated native-parity APK and instrumentation component. The static probe
+compares 12 full-content scenes (six synthetic recorder states in light/LTR and
+dark/RTL), including the real top bar and noise. A generated, pinned released
+oracle substitutes only service-presence booleans; it never constructs a recorder.
+Both routes use zero explicit local system insets and `visualizerVisible=false`.
+Exact pixels, repeatability and blob bounds qualify that initial presentation;
+live blob phase and system-inset dispatch remain outside the result.
+
+The input probe checks six own-view finger streams, including expanded tab targets,
+the overlapping direct Clear action, committed/cancelled swipes and RTL. It compares
+exact callback actions and stable final pixels. Three intermediate captures per route
+remain timestamped observations: sequential A/B captures cannot establish synchronized
+frames or continuous smoothness. No physical/system touch injection occurs. Existing
+physical-display/focus guards apply before every synthetic event. Source generation
+and all adapter transformations are retained in the Home fixture provenance.

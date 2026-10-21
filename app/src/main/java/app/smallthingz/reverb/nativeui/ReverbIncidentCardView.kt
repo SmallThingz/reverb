@@ -15,12 +15,15 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
-import android.widget.ImageView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import app.smallthingz.reverb.IncidentPresentation
+import app.smallthingz.reverb.NativeClickPhaseHost
+import app.smallthingz.reverb.NativeClickPhaseEndpoint
+import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingIncident
 import kotlin.math.roundToInt
@@ -90,6 +93,7 @@ internal class ReverbIncidentCardView(
     }
     /** Current scroll recognizer interest, supplied by the containing list for this down. */
     var parentInterestedInDown: (MotionEvent) -> Boolean = { false }
+    var pointerInputRoot: View? = null
     private val bodyInput = createInput(body, this, bodyIndication, checkbox = false)
     private val checkInput = createInput(body.checkTarget, body.checkTarget, checkIndication, checkbox = true)
     private val outerClip = Path()
@@ -233,6 +237,7 @@ internal class ReverbIncidentCardView(
     private fun createInput(target: View, drawHost: View, indication: ReverbRowIndication,
         checkbox: Boolean): ReverbClickController {
         val environment = object : NativeClickEnvironment {
+            override val nativeInputRoot get() = pointerInputRoot
             override val minimumTouchWidthPx get() = 48f * appearance.density.density
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
             override fun admitDown(event: MotionEvent): Boolean {
@@ -302,10 +307,12 @@ internal class ReverbIncidentCardView(
     }
 }
 
-private class IncidentBody(context: Context, initial: IncidentCardAppearance) : ViewGroup(context) {
+private class IncidentBody(context: Context, initial: IncidentCardAppearance) : ViewGroup(context), NativeClickPhaseHost {
+    private var endpoint: NativeClickPhaseEndpoint? = null
+    override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ReverbClickController? = null
+        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     private var appearance = initial
-    private var rowText: String? = null
     private var clickLabel: String? = null
     private var rowBound = false
     private var forwardedCheckGesture = false
@@ -324,15 +331,16 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         clipToPadding = false
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        ViewCompat.setScreenReaderFocusable(this, true)
         listOf(date, summary, cause, runtime, age, description, divider, checkTarget).forEach { addView(it) }
         clear()
     }
 
     private fun label(style: TextStyle) = ReverbParagraphView(context, style, appearance.density,
         appearance.fontResolver, appearance.palette.ink).apply {
-        // combinedClickable merges these labels into the card node, while the nested
-        // checkbox remains its own actionable image node.
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        // Source keeps the original unmerged Text children under its role-less merging card.
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        ViewCompat.setScreenReaderFocusable(this, false)
     }
 
     fun bind(row: IncidentPresentation, canMutate: Boolean) {
@@ -349,8 +357,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         age.visibility = if (row.age.isNotEmpty()) VISIBLE else GONE
         // Empty but non-null descriptions still consume the source Text's line height.
         description.visibility = if (row.description != null) VISIBLE else GONE
-        rowText = listOfNotNull(row.date, row.stopSummary, row.cause.takeIf(String::isNotEmpty),
-            row.runtime.takeIf(String::isNotEmpty), row.age.takeIf(String::isNotEmpty), row.description).joinToString("\n")
         clickLabel = if (canMutate) null else context.getString(R.string.open_options)
         checkTarget.bind(row.incident.acknowledged, canMutate)
         requestLayout()
@@ -358,7 +364,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
 
     fun clear() {
         rowBound = false
-        rowText = null
         clickLabel = null
         listOf(date, summary, cause, runtime, age, description).forEach { it.setText("") }
         details.forEach { it.visibility = GONE }
@@ -488,29 +493,41 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         super.onDetachedFromWindow()
     }
 
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        // Source drawing order: header Column, nested state action, then detail Texts.
+        listOf(date, summary, checkTarget, cause, runtime, age, description).forEach {
+            if (it.visibility == VISIBLE) children.add(it)
+        }
+    }
+
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.className = View::class.java.name
-        info.text = rowText
+        info.text = null
+        info.contentDescription = null
+        ViewCompat.setScreenReaderFocusable(this, true)
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, clickLabel))
     }
 }
 
-private class IncidentCheckTarget(context: Context, initialDensity: Float) : View(context) {
+private class IncidentCheckTarget(context: Context, initialDensity: Float) : ViewGroup(context), NativeClickPhaseHost {
+    private var endpoint: NativeClickPhaseEndpoint? = null
+    override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ReverbClickController? = null
+        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     var geometryChanged: () -> Unit = {}
     private var density = initialDensity
     private var checked = false
     private var tint = 0
-    private var checkedIcon = ReverbIconDrawable(ReverbIcon.Checked, density, tint)
-    private var uncheckedIcon = ReverbIconDrawable(ReverbIcon.Unchecked, density, tint)
+    private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
     private var clickLabel: String? = null
     private var hitGeometry = reverbGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
-    private var hasImageDescription = false
 
     init {
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        ViewCompat.setScreenReaderFocusable(this, true)
+        addView(glyph)
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
@@ -521,28 +538,27 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
 
     fun bind(value: Boolean, canMutate: Boolean) {
         checked = value
-        hasImageDescription = canMutate
-        contentDescription = if (canMutate) context.getString(
+        glyph.contentDescription = if (canMutate) context.getString(
             if (checked) R.string.incident_mark_unchecked else R.string.incident_mark_checked) else null
+        glyph.bind(if (checked) ReverbIcon.Checked else ReverbIcon.Unchecked, tint)
+        glyph.importantForAccessibility = if (canMutate) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO
+        ViewCompat.setScreenReaderFocusable(glyph, false)
         clickLabel = if (canMutate) null else context.getString(R.string.open_options)
         invalidate()
     }
 
-    fun clear() { contentDescription = null; clickLabel = null; hasImageDescription = false }
+    fun clear() { glyph.contentDescription = null; clickLabel = null }
 
     fun setDensity(value: Float) {
         if (density == value) return
         density = value
-        checkedIcon = ReverbIconDrawable(ReverbIcon.Checked, density, tint)
-        uncheckedIcon = ReverbIconDrawable(ReverbIcon.Unchecked, density, tint)
         updateGeometry()
         invalidate()
     }
 
     fun setTint(value: Int) {
         tint = value
-        checkedIcon.setTint(value)
-        uncheckedIcon.setTint(value)
+        glyph.bind(if (checked) ReverbIcon.Checked else ReverbIcon.Unchecked, value)
         invalidate()
     }
 
@@ -593,23 +609,25 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
         super.onDetachedFromWindow()
     }
 
-    override fun onDraw(canvas: Canvas) {
+    override fun onMeasure(w: Int, h: Int) {
         val size = (22f * density).roundToInt()
-        val x = ((width - size) / 2f).roundToInt()
-        val y = ((height - size) / 2f).roundToInt()
-        val icon = if (checked) checkedIcon else uncheckedIcon
-        icon.setLayoutDirection(layoutDirection)
-        icon.setBounds(x, y, x + size, y + size)
-        icon.draw(canvas)
+        glyph.measure(MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY))
+        setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h))
     }
 
-    override fun getAccessibilityClassName(): CharSequence =
-        if (hasImageDescription) ImageView::class.java.name else View::class.java.name
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val x = ((width - glyph.measuredWidth) / 2f).roundToInt()
+        val y = ((height - glyph.measuredHeight) / 2f).roundToInt()
+        glyph.layout(x, y, x + glyph.measuredWidth, y + glyph.measuredHeight)
+    }
+
+    override fun getAccessibilityClassName(): CharSequence = View::class.java.name
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.className = getAccessibilityClassName()
-        // Released source uses a clickable image, not toggleable/checkbox semantics.
+        // Role-less clickable parent; the original22dp described Icon remains a separate child.
         info.isCheckable = false
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, clickLabel))
     }

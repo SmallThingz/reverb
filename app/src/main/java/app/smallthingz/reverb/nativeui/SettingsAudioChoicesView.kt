@@ -101,10 +101,11 @@ internal class SettingsAudioChoicesView(
     private val sampleRateLabel: (Int) -> String,
     private val popup: SettingsAudioPopupHost,
     private val selections: SettingsAudioSelections,
+    inputRoot: () -> View? = { null },
 ) : AutoCloseable {
     val view = ReverbGroupLayout(context, cornerRadiusDp = 16f)
     private var currentPalette = palette
-    private val interactions = OnboardingNativeInteractionsFactory()
+    private val interactions = OnboardingNativeInteractionsFactory(inputRoot)
     private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit) =
         SettingsAudioDropdownView<T>(context, bodySmall, bodyLarge, density, resolver, currentPalette, interactions,
             onBinding = { anchor, content -> popup.update(kind, anchor, content, choose) },
@@ -191,11 +192,13 @@ private class SettingsAudioDropdownView<T>(
     interactions: OnboardingNativeInteractionsFactory,
     private val onBinding: (View, SettingsDropdownContent<T>) -> Unit,
     private val open: (View, SettingsDropdownContent<T>) -> Unit,
-) : ViewGroup(context), AutoCloseable {
+) : ViewGroup(context), app.smallthingz.reverb.NativeClickPhaseHost, AutoCloseable {
     private val title = ReverbParagraphView(context, bodySmall, density, resolver, initialPalette.muted)
     private val selected = ReverbParagraphView(context, bodyLarge, density, resolver, initialPalette.ink)
     private val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialPalette.muted)
     private val input = interactions.row(this)
+    override val nativeClickEndpoint get() = input.pointerEndpoint
+    private var rippleColor = initialPalette.ink
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val divider = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         strokeWidth = 1f
@@ -251,6 +254,7 @@ private class SettingsAudioDropdownView<T>(
         selected.setTextColor(palette.ink)
         arrow.bind(ReverbIcon.ArrowDropDown, palette.muted)
         divider.color = palette.border
+        rippleColor = palette.ink
         input.bind(present, palette.ink)
         onBinding(this, next)
         invalidate()
@@ -322,7 +326,10 @@ private class SettingsAudioDropdownView<T>(
         input.focusChanged(gain)
     }
     override fun onCancelPendingInputEvents() { super.onCancelPendingInputEvents(); input.cancel() }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); input.attached() }
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow(); input.attached()
+        if (!closed) input.bind(present, rippleColor)
+    }
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
     override fun performClick(): Boolean = present && !closed && isAttachedToWindow && super.performClick()
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {

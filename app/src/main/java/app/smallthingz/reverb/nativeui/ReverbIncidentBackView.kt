@@ -12,6 +12,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
 import app.smallthingz.reverb.R
+import app.smallthingz.reverb.NativeClickPhaseHost
+import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -20,13 +22,15 @@ internal class ReverbIncidentBackView(
     context: Context,
     palette: ReverbPalette,
     private var onBack: () -> Unit,
-) : View(context) {
+) : View(context), NativeClickPhaseHost {
+    var pointerInputRoot: View? = null
     private val ownerKey = Any()
     private val clip = Path()
     private val rect = RectF()
     private val icon = ReverbIconDrawable(ReverbIcon.Back, resources.displayMetrics.density, palette.muted)
     private val indication = ReverbRowIndication.install(this, palette.ink, ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+        override val nativeInputRoot get() = pointerInputRoot
         override val minimumTouchWidthPx get() = 48f * resources.displayMetrics.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
@@ -36,6 +40,8 @@ internal class ReverbIncidentBackView(
         override fun interestedParent(event: MotionEvent): Boolean = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, target -> target.set(x, y) })
+
+    override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
 
     init {
         isClickable = true

@@ -180,7 +180,7 @@ private class ReverbTopBarActionLeaf(
     inputRoot: View,
     private val glyph: ReverbIcon,
     description: String,
-) : View(context), NativeClickPhaseHost {
+) : View(context), NativeClickPhaseHost, NativePointerLayerShape {
     private val identity = Any()
     private var click: (() -> Unit)? = null
     private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
@@ -196,6 +196,8 @@ private class ReverbTopBarActionLeaf(
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override fun containsPointerLayer(x: Float, y: Float) =
+        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, 15f).contains(x, y)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         contentDescription = description
@@ -246,7 +248,7 @@ private class ReverbTopBarActionLeaf(
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
-private class ReverbTopBarBrandAction(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context), NativeClickPhaseHost {
+private class ReverbTopBarBrandAction(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape {
     private val identity = Any()
     private val mark = ReverbBrandMarkView(context)
     private val softwareClip = Path()
@@ -263,6 +265,9 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override fun containsPointerLayer(x: Float, y: Float) =
+        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
+            min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
     init {
         isClickable = true
         isFocusable = true

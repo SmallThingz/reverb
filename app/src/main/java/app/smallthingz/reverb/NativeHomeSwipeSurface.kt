@@ -43,8 +43,7 @@ internal fun nativeHomeSwipeSurface(
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(root).local(screen)
         override fun withinLayerBounds(local: Offset) = true
     }
-    root = object : NativePagerTouchRoot(context, coordinates::rootToScreen, coordinates::coordinates,
-        hitLayout, coordinates::begin) {
+    root = object : NativeHomePointerRoot(context, coordinates, hitLayout) {
         init {
             clipChildren = false
             clipToPadding = false
