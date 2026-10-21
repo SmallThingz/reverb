@@ -50,6 +50,16 @@ internal class NativeLibraryPredictiveBack(
     private var activeJob: Job? = null
     private var predictive = false
     private var closed = false
+    /** Main's retained panels use the same released completion marker as inline Library owners. */
+    val commitCompleted: Boolean get() = committed
+
+    /** A new forward drag must not inherit a previous completed predictive dismissal. */
+    fun beginForwardMotion() {
+        if (closed) return
+        committed = false
+        publish()
+    }
+
     private val callback = object : OnBackPressedCallback(false) {
         override fun handleOnBackStarted(backEvent: BackEventCompat) {
             cancelGesture()

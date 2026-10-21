@@ -18,7 +18,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityEventCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
-import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -116,18 +115,12 @@ internal class SettingsCalibrationProgressView(
         }finally {canvas.restoreToCount(save)}
     }
     private fun line(canvas:Canvas,start:Float,end:Float,color:Int) {
-        val rtl=layoutDirection==LAYOUT_DIRECTION_RTL
-        var a=(if(rtl)1f-end else start)*width
-        var b=(if(rtl)1f-start else end)*width
         paint.color=color;paint.strokeWidth=height.toFloat();paint.style=Paint.Style.STROKE
-        if(height>width)paint.strokeCap=Paint.Cap.BUTT
-        else {
-            if(abs(end-start)<=0f)return
-            val radius=height/2f
-            a=a.coerceIn(radius,width-radius);b=b.coerceIn(radius,width-radius)
-            paint.strokeCap=Paint.Cap.ROUND
+        nativeLinearProgressLine(width.toFloat(),height.toFloat(),layoutDirection==LAYOUT_DIRECTION_RTL,
+            start,end) {a,b,y,round->
+            paint.strokeCap=if(round)Paint.Cap.ROUND else Paint.Cap.BUTT
+            canvas.drawLine(a,y,b,y,paint)
         }
-        canvas.drawLine(a,height/2f,b,height/2f,paint)
     }
     override fun createAccessibilityNodeInfo():AccessibilityNodeInfo?=
         if(sourceNode()?.present==false)null else super.createAccessibilityNodeInfo()

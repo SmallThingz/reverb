@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.text.TextStyle
@@ -53,7 +52,7 @@ internal class ReverbIncidentsContentView(
     private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
     private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
     private var accessibilityMembershipChanged: () -> Unit = {}
-    private val list = RecyclerView(context).apply {
+    private val list = ReverbLibraryRecyclerView(context).apply {
         layoutManager = LinearLayoutManager(context)
         adapter = this@ReverbIncidentsContentView.adapter
         itemAnimator = ReverbIncidentItemAnimator(frames, scope, durationScale)
@@ -85,6 +84,9 @@ internal class ReverbIncidentsContentView(
     }
 
     fun observeAccessibilityMembership(changed: () -> Unit) { accessibilityMembershipChanged = changed }
+    /** The source LazyColumn exists only in the nonempty history branch. */
+    val pointerList: ReverbLibraryRecyclerView?
+        get() = list.takeIf { it.visibility == VISIBLE && it.adapter != null }
     fun setStatusBarInsets(insets: Insets) = header.setStatusBarInsets(insets)
     fun semanticsClip(view: View): NativeTextSemanticsClip = when {
         view === this || view === list ||
@@ -186,7 +188,6 @@ private class IncidentsHeader(
     }
     private val noise = ReverbNoiseDrawable(resources, appearance.card.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
     private var insets = Insets.NONE
-    private var delegatedBack = false
 
     init {
         background = noise
@@ -233,22 +234,6 @@ private class IncidentsHeader(
         title.layout(titleX, titleY, titleX + title.measuredWidth, titleY + title.measuredHeight)
     }
 
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            val extraX = max(0f, (48f * appearance.card.density.density - back.width) / 2f)
-            val extraY = max(0f, (48f * appearance.card.density.density - back.height) / 2f)
-            delegatedBack = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER &&
-                event.x >= back.left - extraX && event.x <= back.right + extraX &&
-                event.y >= back.top - extraY && event.y <= back.bottom + extraY &&
-                (event.x < back.left || event.x >= back.right || event.y < back.top || event.y >= back.bottom)
-        }
-        if (!delegatedBack) return super.dispatchTouchEvent(event)
-        val translated = MotionEvent.obtain(event)
-        translated.offsetLocation(-back.left.toFloat(), -back.top.toFloat())
-        val consumed = try { back.dispatchTouchEvent(translated) } finally { translated.recycle() }
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) delegatedBack = false
-        return consumed
-    }
 }
 
 private class IncidentsEmptyContent(

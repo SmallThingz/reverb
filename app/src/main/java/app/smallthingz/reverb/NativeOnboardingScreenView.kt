@@ -44,7 +44,7 @@ internal data class NativeOnboardingViewportSavedState(
  */
 internal class NativeOnboardingScreenView private constructor(
     context: Context,
-    private val environment: ReverbViewEnvironment,
+    private var environment: ReverbViewEnvironment,
     initialState: OnboardingPageContentState,
     private val lifecycleOwner: LifecycleOwner,
     private val actions: OnboardingPageActions,
@@ -53,6 +53,8 @@ internal class NativeOnboardingScreenView private constructor(
     parentScope: CoroutineScope,
     private val dispatcher: OnBackPressedDispatcher,
     private val restored: NativeOnboardingViewportSavedState,
+    externalWindowText: NativeWindowTextAccessibilityOwner?,
+    observeWindowInsets: Boolean,
 ) : NativePagerTouchRoot(
     context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
     pointer.rootLayout, pointer.coordinates::begin,
@@ -113,23 +115,22 @@ internal class NativeOnboardingScreenView private constructor(
     private var previewActions: AutoCloseable? = null
     private var footerActions: AutoCloseable? = null
     private var footerText: AutoCloseable? = null
-    private val windowText = NativeWindowTextAccessibilityOwner(this, NativeTextSemanticsClipPolicy { view ->
-        if (this::viewport.isInitialized && view === viewport)
-            NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
-        else NativeTextSemanticsClip.Unclipped
-    })
-    private val accessibility = NativeOnboardingAccessibility(this, { viewport }, { preview }, footer)
+    private val windowText = externalWindowText ?: NativeWindowTextAccessibilityOwner(
+        this, NativeTextSemanticsClipPolicy(::sourceWindowTextClip))
+    var externalAccessibilityOcclusion: () -> List<android.graphics.Rect> = { emptyList() }
+    private val accessibility = NativeOnboardingAccessibility(this, { viewport }, { preview }, footer,
+        externalOcclusion = { externalAccessibilityOcclusion() })
     private val scrollEvents = windowText.openScrollEvents(scope,
         onScrollGeometryChanged = { invalidate() },
         // Actual native Views own their live focus bounds; there is no copied semantics cache.
         onBatchFinished = {},
     )
     private lateinit var pagerAccessibility: NativeOnboardingPagerAccessibility
-    private val insets = NativeWindowInsetsBinding(this) { delivered ->
+    private val insets = if (observeWindowInsets) NativeWindowInsetsBinding(this) { delivered ->
         val value = delivered.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
             androidx.core.view.WindowInsetsCompat.Type.ime() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
         setSafeDrawingInsets(Rect(value.left, value.top, value.right, value.bottom))
-    }
+    } else null
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackStarted(event: BackEventCompat) {
             beginBack()
@@ -258,6 +259,20 @@ internal class NativeOnboardingScreenView private constructor(
         publishState()
         pointer.retireRemovedClicks()
     }
+
+    /** Activity palette preview keeps this same pager, drafts, gestures and semantic identities. */
+    fun setPalette(palette: ReverbPalette) {
+        if (environment.palette === palette) return
+        environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+        bind(state)
+    }
+
+    /** Shared Activity cursor needs this actual source pager layer outside each page subtree. */
+    fun sourceWindowTextClip(view: View): NativeTextSemanticsClip =
+        if (this::viewport.isInitialized && view === viewport)
+            NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
+                0f, 0f, view.width.toFloat(), view.height.toFloat()))
+        else NativeTextSemanticsClip.Unclipped
 
     fun setSafeDrawingInsets(insets: Rect) {
         if (safeDrawing == insets) return
@@ -446,7 +461,7 @@ internal class NativeOnboardingScreenView private constructor(
         if (closed) return
         closed = true
         backCallback.remove()
-        insets.close()
+        insets?.close()
         cancelPointerInput()
         cancelBack()
         horizontal.close()
@@ -487,9 +502,11 @@ internal class NativeOnboardingScreenView private constructor(
             lifecycleOwner: LifecycleOwner, actions: OnboardingPageActions, onFinish: () -> Unit,
             parentScope: CoroutineScope, dispatcher: OnBackPressedDispatcher,
             restored: NativeOnboardingViewportSavedState = NativeOnboardingViewportSavedState(),
+            externalWindowText: NativeWindowTextAccessibilityOwner? = null,
+            observeWindowInsets: Boolean = true,
         ): NativeOnboardingScreenView = NativeOnboardingScreenView(context, environment, state,
             lifecycleOwner, actions, onFinish, OnboardingPointerGeometry(environment),
-            parentScope, dispatcher, restored)
+            parentScope, dispatcher, restored, externalWindowText, observeWindowInsets)
     }
 }
 

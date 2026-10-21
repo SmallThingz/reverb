@@ -78,7 +78,7 @@ internal class ReverbIncidentCardView(
     context: Context,
     initialAppearance: IncidentCardAppearance,
     private val menuHost: IncidentCardMenuHost,
-) : FrameLayout(context) {
+) : FrameLayout(context), NativePointerLayerShape {
     private var appearance = initialAppearance
     private var binding: Binding? = null
     private var menuCreated = false
@@ -98,6 +98,10 @@ internal class ReverbIncidentCardView(
     private val checkInput = createInput(body.checkTarget, body.checkTarget, checkIndication, checkbox = true)
     private val outerClip = Path()
     private val outerBounds = RectF()
+
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = reverbGroupGeometry(
+        width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = 18f,
+    ).contains(x, y)
 
     private class Binding(
         val row: IncidentPresentation,
@@ -221,7 +225,6 @@ internal class ReverbIncidentCardView(
         cancelPendingInputEvents()
         bodyInput.bind(null)
         checkInput.bind(null)
-        body.cancelInputRouting()
     }
 
     private fun bindInputs() {
@@ -314,8 +317,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     private var appearance = initial
     private var clickLabel: String? = null
-    private var rowBound = false
-    private var forwardedCheckGesture = false
     private val date = label(initial.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
     private val summary = label(initial.bodyMedium)
     private val cause = label(initial.bodyMedium)
@@ -344,7 +345,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
     }
 
     fun bind(row: IncidentPresentation, canMutate: Boolean) {
-        rowBound = true
         date.setText(row.date)
         summary.setText(row.stopSummary)
         cause.setText(row.cause)
@@ -363,7 +363,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
     }
 
     fun clear() {
-        rowBound = false
         clickLabel = null
         listOf(date, summary, cause, runtime, age, description).forEach { it.setText("") }
         details.forEach { it.visibility = GONE }
@@ -440,29 +439,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
         requestLayout()
     }
 
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (!rowBound) return false
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            val x = event.x - checkTarget.left
-            val y = event.y - checkTarget.top
-            val outsideBox = x < 0f || y < 0f || x >= checkTarget.width || y >= checkTarget.height
-            forwardedCheckGesture = outsideBox && checkTarget.acceptsPointer(event, x, y)
-        }
-        if (!forwardedCheckGesture) return super.dispatchTouchEvent(event)
-        // Preserve the true local hotspot; platform TouchDelegate recenters it.
-        val local = MotionEvent.obtain(event)
-        local.offsetLocation(-checkTarget.left.toFloat(), -checkTarget.top.toFloat())
-        try { return checkTarget.dispatchTouchEvent(local) }
-        finally {
-            local.recycle()
-            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                forwardedCheckGesture = false
-            }
-        }
-    }
-
-    fun cancelInputRouting() { forwardedCheckGesture = false }
-
     override fun onTouchEvent(event: MotionEvent): Boolean = input?.touch(event) == true
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
@@ -488,7 +464,6 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
     }
 
     override fun onDetachedFromWindow() {
-        forwardedCheckGesture = false
         input?.detached()
         super.onDetachedFromWindow()
     }
@@ -510,7 +485,8 @@ private class IncidentBody(context: Context, initial: IncidentCardAppearance) : 
     }
 }
 
-private class IncidentCheckTarget(context: Context, initialDensity: Float) : ViewGroup(context), NativeClickPhaseHost {
+private class IncidentCheckTarget(context: Context, initialDensity: Float) : ViewGroup(context), NativeClickPhaseHost,
+    NativePointerLayerShape {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ReverbClickController? = null
@@ -522,6 +498,8 @@ private class IncidentCheckTarget(context: Context, initialDensity: Float) : Vie
     private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
     private var clickLabel: String? = null
     private var hitGeometry = reverbGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
+
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = hitGeometry.contains(x, y)
 
     init {
         isFocusable = true

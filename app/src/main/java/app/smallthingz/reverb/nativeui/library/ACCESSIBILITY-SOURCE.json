@@ -1,0 +1,28 @@
+{
+  "status": "Source integration only; no local compile, host-test execution or device qualification",
+  "released_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source_artifact": {
+    "name": "foundation-android-1.11.2-sources.jar",
+    "sha256": "d54eac267d963b67f75ca60d834d3ac68a7ff720d3db120409aa6a8b31b2c59e",
+    "files": {
+      "commonMain/androidx/compose/foundation/lazy/LazyLayoutSemanticState.kt": "f1bae413134feb6e806be9b775d0d3fef2a8405ee48729d8d7c5b9d982b36bdf",
+      "commonMain/androidx/compose/foundation/lazy/layout/LazyLayoutSemantics.kt": "51232d1ec8591fd613050974f45b631a7621d6acd82f0eecbb3e7ced77010a73"
+    }
+  },
+  "files": {
+    "nativeui/NativeLibraryAccessibilityBinding.kt": "47e1c03ba8277477cf152e22dada560d1f1661d5a193d1b2fe603bac0884223f",
+    "nativeui/NativeLibraryScrollOwner.kt": "b257b95acbffee9e8ac293f368ef84cdf53b9bb50b40383db2b67ef2abc6fcb4",
+    "nativeui/ReverbLibraryScreenContent.kt": "28e344a43b2cc4c18a3f72687416236e2dada05bdeb2fb280af6e052be3b2887",
+    "nativeui/ReverbLibraryRecordingRow.kt": "7cd69fa4a5b03f1b76788c55976f44341b6d2e53866a2465b939b33f561ebd6b",
+    "nativeui/ReverbMergedRowAccessibility.kt": "b3c9e51b8c88ed994a852990c9e8d3d23d5ba579cfcdbbe6f5b50d9ca19dab29",
+    "nativeui/NativePageTextAccessibilityOwner.kt": "d1721a381efcdb3bc577474e3f2f520a1fffbe6f674e83fdb443c2e880d1db7a",
+    "nativeui/ReverbParagraphView.kt": "48d8fc0921b539987381c62e681afcb7cce70caef40651ff008969635057c6a3",
+    "nativeui/ReverbAppTopBarView.kt": "e432030c6a8f67e9678df3d50624dfada678c4d9df08484f806498da7b205937"
+  },
+  "review_corrections": [
+    "Source exposure uses node.present; hidden and visible fields remain node.populate",
+    "Accessible page distance subtracts actual before/after content padding; Library84dp footer is an item, not content padding",
+    "Transparent noninteractive recording wrappers are not semantic parents; selected-only important wrappers remain",
+    "Role-less AppTopBar parent keeps separate description child and shared cursor"
+  ]
+}

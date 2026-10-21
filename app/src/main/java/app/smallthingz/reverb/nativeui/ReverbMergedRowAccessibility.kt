@@ -24,6 +24,8 @@ internal enum class NativeMergedRowRole { BUTTON, SWITCH }
 
 internal interface NativeMergedRowAccessibilityHost {
     val mergedRowAccessibility: ReverbMergedRowAccessibility
+    val mergesAccessibilityDescendants: Boolean get() = true
+    val hasAccessibilitySemanticNode: Boolean get() = true
 }
 
 internal data class NativeMergedRowAccessibilityState(
@@ -31,6 +33,12 @@ internal data class NativeMergedRowAccessibilityState(
     val checked: Boolean?,
     val clickLabel: CharSequence?,
     val orderedChildren: List<View>,
+    val selected: Boolean? = null,
+    val contentDescription: CharSequence? = null,
+    val clickable: Boolean = true,
+    val longClickable: Boolean = false,
+    val longClickLabel: CharSequence? = null,
+    val rolePresent: Boolean = true,
 )
 
 /** Existing row facts, read on demand; no copied text or second semantic/render tree. */
@@ -48,6 +56,12 @@ internal data class NativeMergedRowAccessibilitySnapshot(
     val parentBoundsInScreen: Rect,
     /** Source parent.boundsInRoot rounded before screen mapping; no sibling-occlusion subtraction. */
     val fakeRoleBoundsInScreen: Rect,
+    val selected: Boolean?,
+    val contentDescription: CharSequence?,
+    val clickable: Boolean,
+    val longClickable: Boolean,
+    val longClickLabel: CharSequence?,
+    val rolePresent: Boolean,
 )
 
 /**
@@ -91,6 +105,7 @@ internal class ReverbMergedRowAccessibility(
     private val role: NativeMergedRowRole,
     private val sourceState: () -> NativeMergedRowAccessibilityState,
     private val invokeSourceClick: () -> Boolean,
+    private val invokeSourceLongClick: (() -> Boolean)? = null,
 ) : View.AccessibilityDelegate() {
     val roleView: View = RoleView()
     private var geometry: NativePlainTextViewGeometry? = null
@@ -139,7 +154,8 @@ internal class ReverbMergedRowAccessibility(
         return NativeMergedRowAccessibilitySnapshot(node?.present ?: present, node?.hidden ?: hidden,
             node?.visibleToUser ?: (present && !hidden), state.enabled, state.checked, state.clickLabel,
             state.orderedChildren.filter { sourceChildPresent?.invoke(it) != false }, state.orderedChildren.size,
-            node?.boundsInScreen ?: bounds, bounds)
+            node?.boundsInScreen ?: bounds, bounds, state.selected, state.contentDescription,
+            state.clickable, state.longClickable, state.longClickLabel, state.rolePresent)
     }
 
     fun isNodePresent(): Boolean = host.isAttachedToWindow && snapshot().present
@@ -155,7 +171,7 @@ internal class ReverbMergedRowAccessibility(
         val current = snapshot()
         if (!current.present) return
         outChildren.addAll(current.orderedChildren)
-        if (current.originalChildCount > 0) outChildren.add(roleView)
+        if (current.rolePresent && current.originalChildCount > 0) outChildren.add(roleView)
     }
 
     override fun onInitializeAccessibilityNodeInfo(view: View, info: AccessibilityNodeInfo) {
@@ -164,7 +180,7 @@ internal class ReverbMergedRowAccessibility(
         // Parent action node has no own Text/ContentDescription in the released rows.
         info.className = "android.view.View"
         info.text = null
-        info.contentDescription = null
+        info.contentDescription = current.contentDescription
         val compat = AccessibilityNodeInfoCompat.wrap(info)
         compat.roleDescription = null
         compat.stateDescription = if (role == NativeMergedRowRole.SWITCH) host.context.getString(
@@ -172,15 +188,15 @@ internal class ReverbMergedRowAccessibility(
             else androidx.compose.ui.R.string.state_off) else null
         info.isCheckable = role == NativeMergedRowRole.SWITCH
         info.isChecked = role == NativeMergedRowRole.SWITCH && current.checked == true
-        info.isSelected = false
+        info.isSelected = current.selected == true
         info.isEnabled = current.enabled
-        info.isClickable = true // Source retains OnClick semantics when disabled.
-        info.isLongClickable = false
-        info.isFocusable = current.enabled
+        info.isClickable = current.clickable // Disabled-but-present OnClick remains clickable.
+        info.isLongClickable = current.longClickable
+        info.isFocusable = current.enabled && current.clickable
         info.isFocused = current.enabled && host.isFocused
         info.isImportantForAccessibility = !current.hidden
         info.isVisibleToUser = current.present && current.visibleToUser
-        info.isScreenReaderFocusable = !current.hidden
+        info.isScreenReaderFocusable = !current.hidden && (current.clickable || current.originalChildCount == 0)
         info.maxTextLength = -1
         info.setBoundsInScreen(current.parentBoundsInScreen)
         info.movementGranularities = 0
@@ -189,11 +205,13 @@ internal class ReverbMergedRowAccessibility(
         if (info.isFocusable) info.addAction(if (info.isFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
-        if (current.enabled) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+        if (current.enabled && current.clickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
             AccessibilityNodeInfo.ACTION_CLICK, current.clickLabel))
+        if (current.enabled && current.longClickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+            AccessibilityNodeInfo.ACTION_LONG_CLICK, current.longClickLabel))
         // ViewGroup's super call obtained the exact source children through the public override
         // above. Do not append them again or reintroduce their non-semantic layout wrappers.
-        if (current.originalChildCount == 0) applyRole(info)
+        if (current.rolePresent && current.originalChildCount == 0) applyRole(info)
     }
 
     override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean {
@@ -201,12 +219,14 @@ internal class ReverbMergedRowAccessibility(
         if (!host.isAttachedToWindow || !current.present) return false
         return when (action) {
             AccessibilityNodeInfo.ACTION_CLICK -> {
-                if (!current.enabled) false else {
+                if (!current.enabled || !current.clickable) false else {
                     val result = invokeSourceClick()
                     sendSourceEvent(host, AccessibilityEvent.TYPE_VIEW_CLICKED)
                     result
                 }
             }
+            AccessibilityNodeInfo.ACTION_LONG_CLICK ->
+                current.enabled && current.longClickable && invokeSourceLongClick?.invoke() == true
             AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
             AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS ->
                 super.performAccessibilityAction(view, action, args)
@@ -241,7 +261,7 @@ internal class ReverbMergedRowAccessibility(
 
         override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? {
             val current = snapshot()
-            return if (isAttachedToWindow && current.present && current.originalChildCount > 0)
+            return if (isAttachedToWindow && current.present && current.rolePresent && current.originalChildCount > 0)
                 super.createAccessibilityNodeInfo() else null
         }
 
@@ -277,7 +297,7 @@ internal class ReverbMergedRowAccessibility(
 
         override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
             val current = snapshot()
-            if (!isAttachedToWindow || !current.present || current.originalChildCount == 0) return false
+            if (!isAttachedToWindow || !current.present || !current.rolePresent || current.originalChildCount == 0) return false
             return when (action) {
                 AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS ->

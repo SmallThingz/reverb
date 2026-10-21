@@ -30,7 +30,7 @@ internal data class LibraryRecordingRow(
     val selected: Boolean,
     val selectionActive: Boolean,
     val interactionsEnabled: Boolean,
-    val edges: ReverbRecordingGroupEdges,
+    val edges: ReverbRecordingGroupEdges?,
     val expanded: Boolean = false,
 )
 
@@ -129,6 +129,10 @@ internal class ReverbLibraryRecordingRow(
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         surface.addRow(column, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        body.sourceClick = { activate(); true }
+        body.leading.sourceClick = { activate(); true }
+        body.sourceLongClick = { longClick(leading = false) }
+        body.leading.sourceLongClick = { longClick(leading = true) }
         body.input = bodyInput
         body.leading.input = leadingInput
         body.setOnClickListener { activate() }
@@ -176,6 +180,14 @@ internal class ReverbLibraryRecordingRow(
         selectionMotion?.value?.let(::setFrame)
         scheduleFrame()
     }
+
+    /** Optional slots from the released SavingRecordingCard; ordinary Library rows keep defaults. */
+    fun setSummarySlots(leadingContent: View?, trailingContent: View?) {
+        body.leading.setContent(leadingContent)
+        body.setTrailingContent(trailingContent)
+    }
+    val paragraphLeaves: List<ReverbParagraphView> get() = body.paragraphLeaves
+    val summarySurface: ReverbGroupLayout get() = surface
 
     fun setFrame(frame: LibraryRecordingRowFrame) {
         surface.setPalette(frame.background, frame.border)
@@ -248,11 +260,12 @@ internal class ReverbLibraryRecordingRow(
         val current = row
         val callbacks = actions
         val enabled = current != null && current.interactionsEnabled && callbacks?.activate != null
-        fun bind(target: View, controller: ReverbClickController, leading: Boolean) {
+        fun bind(target: RecordingRowInputTarget, controller: ReverbClickController, leading: Boolean) {
             val long = if (leading) callbacks?.leadingLongClick ?: callbacks?.longClick else callbacks?.longClick
             target.isClickable = enabled
             target.isLongClickable = enabled && long != null
             target.isFocusable = enabled
+            target.refreshSemanticFlags()
             controller.bind(if (!enabled) null else NativeClickBinding(
                 ownerKey = checkNotNull(current).recordingId,
                 enabled = true,
@@ -330,7 +343,35 @@ private class RecordingCardColumn(context: Context, private val body: View) : Vi
 internal interface NativeLibrarySummaryInput : NativeClickPhaseHost {
     val sourceClickPresent: Boolean
 }
-private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(context), NativeLibrarySummaryInput {
+private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(context), NativeLibrarySummaryInput,
+    NativeMergedRowAccessibilityHost {
+    var sourceClick: () -> Boolean = { false }
+    var sourceLongClick: () -> Boolean = { false }
+    protected open fun semanticChildren(): List<View> = emptyList()
+    override val mergesAccessibilityDescendants get() = sourceClickPresent
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        { NativeMergedRowAccessibilityState(true, null, clickLabel, semanticChildren(),
+            selected = selectedSemantic, contentDescription = contentDescription,
+            clickable = isClickable, longClickable = isLongClickable, longClickLabel = longClickLabel,
+            rolePresent = isClickable) },
+        { sourceClick() }, { sourceLongClick() })
+    private val semanticPresent get() = isClickable || selectedSemantic != null || !contentDescription.isNullOrEmpty()
+    override val hasAccessibilitySemanticNode get() = semanticPresent
+    fun refreshSemanticFlags() {
+        importantForAccessibility = if(semanticPresent) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO
+        isScreenReaderFocusable = isClickable || (semanticPresent && semanticChildren().isEmpty())
+        mergedRowAccessibility.roleView.importantForAccessibility =
+            if(isClickable)IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+    }
+    protected fun measureRole() = mergedRowAccessibility.roleView.measure(
+        MeasureSpec.makeMeasureSpec(measuredWidth,MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(measuredHeight,MeasureSpec.EXACTLY))
+    protected fun layoutRole() = mergedRowAccessibility.roleView.layout(0,0,width,height)
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if(semanticPresent && mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
+    override fun addChildrenForAccessibility(out:ArrayList<View>) {
+        if(semanticPresent)mergedRowAccessibility.addChildrenForAccessibility(out)else super.addChildrenForAccessibility(out)
+    }
     private var endpoint: NativeClickPhaseEndpoint? = null
     var input: ReverbClickController? = null
         set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
@@ -342,8 +383,9 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
     init {
         clipChildren = false
         clipToPadding = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        if (Build.VERSION.SDK_INT >= 28) isScreenReaderFocusable = true
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate = mergedRowAccessibility
     }
     override fun onTouchEvent(event: MotionEvent): Boolean = input?.touch(event) == true
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
@@ -364,17 +406,7 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
         input?.focusChanged(isFocused)
     }
     override fun onDetachedFromWindow() { input?.detached(); super.onDetachedFromWindow() }
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = if (isClickable) "android.widget.Button" else View::class.java.name
-        selectedSemantic?.let { info.isSelected = it }
-        if (isClickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
-            AccessibilityNodeInfo.ACTION_CLICK, clickLabel))
-        if (isLongClickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
-            AccessibilityNodeInfo.ACTION_LONG_CLICK, longClickLabel))
-        // Keep separate child text semantics; do not invent a concatenated row string. Native
-        // merged-node traversal/character extras still need the containing list/window adapter.
-    }
+
 }
 
 private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment) : RecordingRowInputTarget(context) {
@@ -385,6 +417,22 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
     private val timestamp = initial.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
     var measured: () -> Unit = {}
     private var textColumnWidth = 0
+    private var trailingContent: View? = null
+    private var hasTimestamp = false
+    val paragraphLeaves = listOf(title, subtitle, timestamp)
+    fun setTrailingContent(view: View?) {
+        if (trailingContent === view) return
+        trailingContent?.let(::removeView)
+        trailingContent = view
+        view?.let(::addView)
+        timestamp.visibility = if (view == null && hasTimestamp) VISIBLE else GONE
+        requestLayout()
+    }
+    override fun semanticChildren(): List<View> = buildList {
+        if(leading.isClickable)add(leading)
+        add(title);add(subtitle)
+        trailingContent?.let(::add) ?: run { if(timestamp.visibility!=GONE)add(timestamp) }
+    }
     private var bodyHeight = 0
     private var textColumnHeight = 0
     init {
@@ -395,7 +443,8 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         title.setText(row.title)
         subtitle.setText(row.subtitle)
         timestamp.setText(row.timestamp ?: "")
-        timestamp.visibility = if (row.timestamp == null) GONE else VISIBLE
+        hasTimestamp = row.timestamp != null
+        timestamp.visibility = if (!hasTimestamp || trailingContent != null) GONE else VISIBLE
         val selectedLabel = context.getString(if (row.selected) R.string.recording_deselect else R.string.recording_select)
         clickLabel = if (row.selectionActive) selectedLabel else context.getString(
             if (row.expanded) R.string.recording_close_player else R.string.recording_open_player)
@@ -414,6 +463,7 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         leading.contentDescription = null
         isClickable = false; isLongClickable = false; isFocusable = false
         leading.isClickable = false; leading.isLongClickable = false; leading.isFocusable = false
+        refreshSemanticFlags();leading.refreshSemanticFlags()
     }
     fun replaceTextIdentities() {
         listOf(title, subtitle, timestamp).forEach { it.replacePlainTextAccessibilityIdentity() }
@@ -442,10 +492,10 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         val innerHeight = (maxHeight.toLong() - top - bottom).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
         val textHeightSpec = if (maxHeight == Int.MAX_VALUE) MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
             else MeasureSpec.makeMeasureSpec(innerHeight, MeasureSpec.AT_MOST)
-        val gap = if (timestamp.visibility == GONE) 0 else minOf(dp(12), innerWidth)
-        if (timestamp.visibility != GONE) timestamp.measure(
-            MeasureSpec.makeMeasureSpec((innerWidth - gap).coerceAtLeast(0), MeasureSpec.AT_MOST), textHeightSpec)
-        textColumnWidth = (innerWidth - gap - if (timestamp.visibility == GONE) 0 else timestamp.measuredWidth).coerceAtLeast(0)
+        val trailing = trailingContent ?: timestamp.takeIf { it.visibility != GONE }
+        val gap = if (trailing == null) 0 else minOf(dp(if (trailingContent == null) 12 else 8), innerWidth)
+        trailing?.measure(MeasureSpec.makeMeasureSpec((innerWidth - gap).coerceAtLeast(0), MeasureSpec.AT_MOST), textHeightSpec)
+        textColumnWidth = (innerWidth - gap - (trailing?.measuredWidth ?: 0)).coerceAtLeast(0)
         val columnSpec = MeasureSpec.makeMeasureSpec(textColumnWidth, MeasureSpec.AT_MOST)
         title.measure(columnSpec, textHeightSpec)
         val subtitleTop = minOf(dp(4), (innerHeight - title.measuredHeight).coerceAtLeast(0))
@@ -453,8 +503,9 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
             (innerHeight - title.measuredHeight - subtitleTop).coerceAtLeast(0), MeasureSpec.AT_MOST)
         subtitle.measure(columnSpec, subtitleHeight)
         textColumnHeight = title.measuredHeight + subtitleTop + subtitle.measuredHeight
-        bodyHeight = maxOf(textColumnHeight, if (timestamp.visibility == GONE) 0 else timestamp.measuredHeight) + top + bottom
+        bodyHeight = maxOf(textColumnHeight, trailing?.measuredHeight ?: 0) + top + bottom
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(maxOf(leading.measuredHeight, bodyHeight), heightMeasureSpec))
+        measureRole()
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         fun center(space: Int, child: Int) = ((space - child) / 2f).roundToInt()
@@ -469,10 +520,11 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         val columnTop = bodyTop + center(innerHeight, textColumnHeight)
         place(title, textStart, columnTop)
         place(subtitle, textStart, columnTop + textColumnHeight - subtitle.measuredHeight)
-        if (timestamp.visibility != GONE) {
-            place(timestamp, width - dp(14) - timestamp.measuredWidth,
-                bodyTop + center(innerHeight, timestamp.measuredHeight))
+        (trailingContent ?: timestamp.takeIf { it.visibility != GONE })?.let { trailing ->
+            place(trailing, width - dp(14) - trailing.measuredWidth,
+                bodyTop + center(innerHeight, trailing.measuredHeight))
         }
+        layoutRole()
         measured()
     }
     override fun onRtlPropertiesChanged(layoutDirection: Int) {
@@ -487,6 +539,15 @@ private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironme
     private var icon = ReverbIconDrawable(ReverbIcon.AudioFile, initial.textDensity.density, initial.palette.ink)
     private var discColor = initial.palette.raised
     private var iconColor = initial.palette.ink
+    private var content: View? = null
+    override fun semanticChildren(): List<View> = listOfNotNull(content)
+    fun setContent(view: View?) {
+        if (content === view) return
+        content?.let(::removeView)
+        content = view
+        view?.let(::addView)
+        requestLayout(); invalidate()
+    }
     init { setWillNotDraw(false) }
     fun setColors(background: Int, tint: Int) {
         discColor = background; iconColor = tint
@@ -501,6 +562,9 @@ private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironme
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         setMeasuredDimension(resolveSize(dp(72), widthMeasureSpec), resolveSize(dp(68), heightMeasureSpec))
+        content?.measure(MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredWidth), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredHeight), MeasureSpec.EXACTLY))
+        measureRole()
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val discWidth = minOf(dp(44), width)
@@ -513,14 +577,22 @@ private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironme
         val iconX = x + ((discWidth - iconWidth) / 2f).roundToInt()
         val iconY = y + ((discHeight - iconHeight) / 2f).roundToInt()
         icon.setBounds(iconX, iconY, iconX + iconWidth, iconY + iconHeight)
+        content?.let { child ->
+            val childX = x + ((discWidth - child.measuredWidth) / 2f).roundToInt()
+            val childY = y + ((discHeight - child.measuredHeight) / 2f).roundToInt()
+            child.layout(childX, childY, childX + child.measuredWidth, childY + child.measuredHeight)
+        }
+        layoutRole()
     }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         paint.color = discColor
         val radius = minOf(22f * environment.textDensity.density, minOf(disc.width(), disc.height()) / 2f)
         canvas.drawRoundRect(disc, radius, radius, paint)
-        icon.layoutDirection = layoutDirection
-        icon.draw(canvas)
+        if (content == null) {
+            icon.layoutDirection = layoutDirection
+            icon.draw(canvas)
+        }
     }
 }
 

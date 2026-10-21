@@ -19,6 +19,8 @@ internal class NativeWindowTextAccessibilityOwner(
     private val hostClips: NativeTextSemanticsClipPolicy,
 ) {
     private val cursor = PlainTextAccessibilityWindowScope(windowRoot)
+    /** Concrete button/permission leaves share this window's existing cursor, never a replacement. */
+    val textWindow: PlainTextAccessibilityWindowScope get() = cursor
     private var scrollEventsToken: Any? = null
     private var scrollEvents: NativeWindowScrollAccessibilityEvents? = null
 
@@ -45,6 +47,12 @@ internal class NativeWindowTextAccessibilityOwner(
         return created
     }
 
+    /** Same window-root transform for direct leaves such as Library toolbar descriptions. */
+    fun contentGeometry(content:ViewGroup,contentClips:NativeTextSemanticsClipPolicy)=
+        NativePlainTextViewGeometry(windowRoot,NativeTextSemanticsClipPolicy { view ->
+            if(view.isWithin(content))contentClips.localClip(view)else hostClips.localClip(view)
+        })
+
     /** Direct binding for another source content subtree; its real Views retain all identities. */
     fun bindContent(
         content: ViewGroup,
@@ -52,9 +60,7 @@ internal class NativeWindowTextAccessibilityOwner(
         sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
         sourceExposure: (View) -> Boolean,
     ): NativePageTextAccessibilityOwner = NativePageTextAccessibilityOwner(
-        content, cursor, NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy { view ->
-            if (view.isWithin(content)) contentClips.localClip(view) else hostClips.localClip(view)
-        }), sourceExposure, sourceNode,
+        content, cursor, contentGeometry(content,contentClips), sourceExposure, sourceNode,
     ).also { it.refresh() }
 
     /** Settings owns the subtree; the top bar reuses this window's text cursor and exact clips. */
@@ -202,7 +208,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
 private fun View.hasMergingRowAncestor(page: View): Boolean {
     var ancestor = parent as? View
     while (ancestor != null) {
-        if (ancestor is NativeMergedRowAccessibilityHost ||
+        if ((ancestor is NativeMergedRowAccessibilityHost && ancestor.mergesAccessibilityDescendants) ||
             androidx.core.view.ViewCompat.isScreenReaderFocusable(ancestor)) return true
         if (ancestor === page) return false
         ancestor = ancestor.parent as? View

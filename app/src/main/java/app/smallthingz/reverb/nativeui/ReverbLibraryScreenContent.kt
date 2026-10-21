@@ -12,6 +12,7 @@ import app.smallthingz.reverb.NativeLibraryCallbacks
 import app.smallthingz.reverb.NativeLibraryController
 import app.smallthingz.reverb.NativeLibraryInput
 import app.smallthingz.reverb.NativeLibraryPresentation
+import app.smallthingz.reverb.NativeRecordingRenameCallbacks
 import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.R
@@ -45,9 +46,9 @@ internal class ReverbLibraryScreenContent(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     initial: NativeLibraryScreenInput,
-    lifecycleOwner: LifecycleOwner,
+    private val lifecycleOwner: LifecycleOwner,
     backDispatcher: OnBackPressedDispatcher,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     frames: MonotonicFrameClock,
     durationScale: () -> Float,
     accessibilityManager: AccessibilityManager?,
@@ -61,6 +62,10 @@ internal class ReverbLibraryScreenContent(
     private var input = initial
     private var presentation: NativeLibraryPresentation? = null
     private var closed = false
+    private class RenameLifetime(val recordingId: String, val sheet: NativeRecordingRenameSheet)
+    private class InfoLifetime(val recordingId: String, val sheet: NativeRecordingInfoSheet)
+    private var renameSheet: RenameLifetime? = null
+    private var infoSheet: InfoLifetime? = null
     private val toolbar = ReverbLibraryToolbarView(context, environment, inputRoot)
     private val body = Body(context)
     private var status: ReverbLibraryStatusView? = null
@@ -134,6 +139,8 @@ internal class ReverbLibraryScreenContent(
         environment = nextEnvironment
         if (environmentChanged) {
             menus.bindPalette(nextEnvironment.palette)
+            renameSheet?.sheet?.bindEnvironment(nextEnvironment)
+            infoSheet?.sheet?.bindEnvironment(nextEnvironment)
             refreshIndicator.bindPalette(nextEnvironment.palette)
             toolbar.setEnvironment(nextEnvironment)
             list.setEnvironment(nextEnvironment)
@@ -202,8 +209,42 @@ internal class ReverbLibraryScreenContent(
             card.bind(environment, notice.message) { owner.undoDelete(notice.window) }
         }
         renderMenu(value)
+        renderSheets(value)
         transientStateChanged(value)
         changedNodes()
+    }
+
+    private fun renderSheets(value: NativeLibraryPresentation) {
+        val rename = value.renameRecording
+        if (renameSheet?.recordingId != rename?.id) {
+            val previous = renameSheet
+            renameSheet = null // Retire before dismissal can reenter callbacks.
+            previous?.sheet?.close()
+        }
+        if (rename != null) {
+            val callbacks = NativeRecordingRenameCallbacks(owner::dismissRename, owner::renamed, owner::renameUncertain)
+            val current = renameSheet
+            if (current == null) {
+                val sheet = NativeRecordingRenameSheet(this, environment, rename, input.owner.active,
+                    lifecycleOwner, scope, callbacks)
+                renameSheet = RenameLifetime(rename.id, sheet)
+                sheet.show()
+            } else current.sheet.bind(rename, input.owner.active, callbacks)
+        }
+        val info = value.infoRecording
+        if (infoSheet?.recordingId != info?.id) {
+            val previous = infoSheet
+            infoSheet = null
+            previous?.sheet?.close()
+        }
+        if (info != null) {
+            val current = infoSheet
+            if (current == null) {
+                val sheet = NativeRecordingInfoSheet(this, environment, info, owner::dismissInfo)
+                infoSheet = InfoLifetime(info.id, sheet)
+                sheet.show()
+            } else current.sheet.bind(info, owner::dismissInfo)
+        }
     }
 
     private fun renderMenu(value: NativeLibraryPresentation) {
@@ -264,6 +305,30 @@ internal class ReverbLibraryScreenContent(
     }
     val emptyViewport: NativeVerticalViewport? get() = status?.emptyViewport
     val listViewport: ReverbLibraryRecyclerView? get() = list.scrollView.takeIf { listVisible }
+    val toolbarAccessibilityRoot: ViewGroup get() = toolbar
+    fun sourceClip(view:View):NativeTextSemanticsClip {
+        var ancestor:View?=view
+        while(ancestor!=null && ancestor!==this) {
+            when(ancestor) {
+                is ReverbAppTopBarView->ancestor.sourceClip(view)?.let{return it}
+                is ReverbTopBarIconAction->ancestor.sourceClip(view)?.let{return it}
+            }
+            ancestor=ancestor.parent as? View
+        }
+        val rectangle={NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
+            0f,0f,view.width.toFloat(),view.height.toFloat()))}
+        return when {
+            view===this || view is ReverbLibraryRecordingRow || view is LibraryExpansionViewport -> rectangle()
+            view===listViewport || view===emptyViewport -> {
+                val extra=(30f*environment.textDensity.density).roundToInt().toFloat()
+                NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(-extra,0f,
+                    view.width+extra,view.height.toFloat()))
+            }
+            view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent===view -> rectangle()
+            view is NativePointerLayerShape && view.clipToOutline -> rectangle()
+            else -> NativeTextSemanticsClip.Unclipped
+        }
+    }
     val bodyPointerView: View get() = body
     val pointerEnvironment: ReverbViewEnvironment get() = environment
     val pointerDismissKey: Any get() = input.dismiss
@@ -287,18 +352,31 @@ internal class ReverbLibraryScreenContent(
     override fun close() {
         if (closed) return
         closed = true
-        fallbackBack.remove()
-        selectionBack.close()
-        menus.close()
-        pull.close()
+        var failure: Throwable? = null
+        fun release(block: () -> Unit) {
+            try { block() } catch (error: Throwable) {
+                if (failure == null) failure = error else failure!!.addSuppressed(error)
+            }
+        }
+        val previousRename = renameSheet
+        val previousInfo = infoSheet
+        renameSheet = null
+        infoSheet = null
+        release { previousRename?.sheet?.close() }
+        release { previousInfo?.sheet?.close() }
+        release(fallbackBack::remove)
+        release(selectionBack::close)
+        release(menus::close)
+        release(pull::close)
         menuLifetimes.clear()
         // Match source rows disposing with screen; accepted mutations retain existing background owners.
-        list.dispose()
-        leases.toList().forEach(NativeLibraryPlayerLease::closePresentation)
+        release(list::dispose)
+        leases.toList().forEach { release(it::closePresentation) }
         leases.clear()
-        owner.close()
-        removeAllViews()
-        changedNodes()
+        release(owner::close)
+        release(::removeAllViews)
+        release(changedNodes)
+        failure?.let { throw it }
     }
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
 

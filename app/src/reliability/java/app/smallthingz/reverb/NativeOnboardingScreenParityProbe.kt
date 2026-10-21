@@ -143,10 +143,15 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
                         onboardingNodeSignature(all[pass][step].second)
                     val sameGeometryAndNodes = signature(0) == signature(1)
                     val stableEvidence = signature(0) == signature(2) && signature(1) == signature(3)
+                    val sameTextGeometry = onboardingTextGeometrySignature(all[0][step].second) ==
+                        onboardingTextGeometrySignature(all[1][step].second)
+                    val sameNodes = onboardingNodeSignature(all[0][step].second) ==
+                        onboardingNodeSignature(all[1][step].second)
                     val passed = listOf(compare, referenceStable, nativeStable).all { it.getLong("different_pixels") == 0L } &&
                         sameGeometryAndNodes && stableEvidence
                     entries.put(JSONObject().put("case", case.name).put("step", step).put("pixels", compare)
                         .put("reference_stability", referenceStable).put("native_stability", nativeStable)
+                        .put("text_geometry_equal", sameTextGeometry).put("canonical_nodes_equal", sameNodes)
                         .put("text_and_nodes_equal", sameGeometryAndNodes).put("evidence_stable", stableEvidence)
                         .put("passed", passed))
                     if (!passed) mismatches++
@@ -181,7 +186,25 @@ private fun showOnboardingScreen(
     host: NativeParityActivity, typography: Typography, case: ScreenParityCase, reference: Boolean,
     saved: Any?, request: () -> Unit, finish: () -> Unit,
 ): ScreenParityRender {
-    check(host.hasWindowFocus())
+    check(host.hasWindowFocus()) {
+        val root = host.fixtureRoot
+        val decor = host.window.decorView
+        "Onboarding QA host lost window focus; stop without reclaiming focus: " + JSONObject()
+            .put("uptime_millis", android.os.SystemClock.uptimeMillis())
+            .put("elapsed_realtime_millis", android.os.SystemClock.elapsedRealtime())
+            .put("case", case.name).put("reference", reference)
+            .put("activity_finishing", host.isFinishing).put("activity_destroyed", host.isDestroyed)
+            .put("lifecycle", host.lifecycle.currentState.name)
+            .put("own_window_focus", host.hasWindowFocus())
+            .put("root_attached", root.isAttachedToWindow).put("root_shown", root.isShown)
+            .put("root_visibility", root.visibility).put("root_window_visibility", root.windowVisibility)
+            .put("root_window_focus", root.hasWindowFocus())
+            .put("root_display", root.display?.displayId ?: JSONObject.NULL)
+            .put("decor_attached", decor.isAttachedToWindow).put("decor_shown", decor.isShown)
+            .put("decor_window_focus", decor.hasWindowFocus())
+            .put("focused_view_class", host.currentFocus?.javaClass?.name ?: JSONObject.NULL)
+            .put("window_token_present", decor.windowToken != null)
+    }
     val config = Configuration(host.resources.configuration).apply {
         fontScale = case.scale
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or

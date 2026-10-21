@@ -36,9 +36,12 @@ Do not claim exact LazyColumn behavior from matching spring constants alone.
 
 ReverbIncidentBackView uses the shared direct click controller and row indication; its circle
 clip, colors and RTL Back glyph come from the released M3 IconButton + explicit Icon tint.
-The header preserves the46→48dp touch-only near-hit route without centering the hotspot.
-Incident-card controller/ripple integration is owned by the native primitives agent; body/checkbox
-routing, parent interception and accessibility must still be exercised on the actual device.
+The shared Main phase hit test preserves the46→48dp touch-only near-hit route without centering
+the hotspot. NativeIncidentsPointerBinding uses actual panel/item matrices, existing card and
+checkbox click endpoints, source circle/card layer shapes and the full Surface pointer shield.
+It reuses NativeLibraryScrollOwner rather than dispatching RV touch/fling, and removes the old
+manual near-hit forwarding paths. Source branches and physical detach retire input lifetimes;
+body/checkbox consumption, parent drag arbitration and accessibility still need actual qualification.
 
 Further integration obligations:
 - Root owns ReliabilityInstrumentation/Gradle registrations and the device fixture.

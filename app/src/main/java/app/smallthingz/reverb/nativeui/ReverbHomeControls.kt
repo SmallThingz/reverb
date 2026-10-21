@@ -364,13 +364,17 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         val inner = (width - dp(12) * 2).coerceAtLeast(0)
         val gap = min(dp(7), (inner - glyph.measuredWidth).coerceAtLeast(0))
         val used = glyph.measuredWidth + gap + label.measuredWidth
-        val start = dp(12) + ((inner - used) / 2f).roundToInt()
-        fun place(child: View, logicalX: Int) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logicalX - child.measuredWidth else logicalX
+        fun place(child: View, beforeChildSize: Int) {
+            val x = dp(12) + nativeCenteredRowChildOffset(inner, used, beforeChildSize)
             val y = ((height - child.measuredHeight) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }
-        place(glyph, start); place(label, start + glyph.measuredWidth + gap)
+        // Source Arrangement.Center reverses children, not already-rounded LTR coordinates.
+        if (layoutDirection == LAYOUT_DIRECTION_RTL) {
+            place(label, 0); place(glyph, label.measuredWidth + gap)
+        } else {
+            place(glyph, 0); place(label, glyph.measuredWidth + gap)
+        }
     }
     override fun getAccessibilityClassName(): CharSequence = "android.widget.TabWidget"
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {

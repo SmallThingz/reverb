@@ -22,7 +22,7 @@ internal class ReverbIncidentBackView(
     context: Context,
     palette: ReverbPalette,
     private var onBack: () -> Unit,
-) : View(context), NativeClickPhaseHost {
+) : View(context), NativeClickPhaseHost, NativePointerLayerShape {
     var pointerInputRoot: View? = null
     private val ownerKey = Any()
     private val clip = Path()
@@ -42,6 +42,11 @@ internal class ReverbIncidentBackView(
     }, ReverbRowIndicationSink(indication) { x, y, target -> target.set(x, y) })
 
     override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
+
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = reverbGroupGeometry(
+        width.toFloat(), height.toFloat(), resources.displayMetrics.density,
+        min(width, height) / (2f * resources.displayMetrics.density),
+    ).contains(x, y)
 
     init {
         isClickable = true

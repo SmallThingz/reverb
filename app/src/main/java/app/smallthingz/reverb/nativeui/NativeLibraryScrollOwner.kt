@@ -11,6 +11,13 @@ import android.view.ViewOutlineProvider
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
+import androidx.compose.animation.core.TargetBasedAnimation
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.MotionDurationScale
+import kotlin.coroutines.coroutineContext
 import androidx.compose.animation.splineBasedDecay
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.MutatorMutex
@@ -41,6 +48,21 @@ import kotlin.math.roundToInt
 /** Actual RV virtualization; native pointer dispatch does not run RV's alternate drag/fling path. */
 internal class ReverbLibraryRecyclerView(context: Context) : RecyclerView(context) {
     var sourceOverscroll: NativeVerticalOverscroll? = null
+    var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
+    var sourceAccessibilityChildren: (() -> List<View>)? = null
+    var sourceSemanticsScrollBy: ((Float) -> Boolean)? = null
+    var sourceAccessibilityEventsBound=false
+    override fun sendAccessibilityEventUnchecked(event:AccessibilityEvent) {
+        if(sourceAccessibilityEventsBound && (event.eventType==AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+            event.eventType==AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))return
+        super.sendAccessibilityEventUnchecked(event)
+    }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if(sourceAccessibilityNode?.invoke()?.present==false)null else super.createAccessibilityNodeInfo()
+    override fun addChildrenForAccessibility(out:ArrayList<View>) {
+        val children=sourceAccessibilityChildren
+        if(children==null)super.addChildrenForAccessibility(out)else out.addAll(children())
+    }
     init {
         overScrollMode = OVER_SCROLL_NEVER
         isNestedScrollingEnabled = false // Shared source nested-scroll chain owns pre/self/post.
@@ -89,6 +111,13 @@ internal class NativeLibraryScrollOwner(
     private var countingConsumption = false
     private var consumedY = 0
     private var closed = false
+    private val semanticsScroll: (Float) -> Boolean = { amount ->
+        val current=scope
+        if(current==null || closed)false else {
+            current.launch { semanticsScrollBy(amount) }
+            true
+        }
+    }
     private sealed interface Event {
         data class Start(val point: Offset) : Event
         data class Delta(val value: Offset) : Event
@@ -137,6 +166,7 @@ internal class NativeLibraryScrollOwner(
 
     init {
         view.sourceOverscroll = overscroll
+        view.sourceSemanticsScrollBy = semanticsScroll
         overscroll.measured(view.width, view.height)
         view.addOnScrollListener(scrollListener)
         view.addOnAttachStateChangeListener(this)
@@ -237,6 +267,26 @@ internal class NativeLibraryScrollOwner(
         if (edge != null) overscroll.finishFling(edge, leftover - after)
     }
 
+    /** Same source semantics path as NativeVerticalScrollOwner, using real RV consumption. */
+    private suspend fun semanticsScrollBy(logicalDelta:Float) {
+        var consumed=0f
+        mutate(MutatePriority.Default) {
+            val animation=TargetBasedAnimation(spring<Float>(),Float.VectorConverter,0f,logicalDelta)
+            var start:Long?=null
+            var finished=false
+            while(!finished) {
+                val scale=coroutineContext[MotionDurationScale]?.scaleFactor?:1f
+                check(scale>=0f)
+                frames.withFrameNanos { time ->
+                    val first=start?:time.also{start=it}
+                    val play=if(scale==0f)animation.durationNanos else ((time-first)/scale).toLong()
+                    consumed+=-dispatch(-(animation.getValueFromNanos(play)-consumed),NativeVerticalScrollSource.USER_INPUT)
+                    finished=animation.isFinishedFromNanos(play)
+                }
+            }
+        }
+    }
+
     /** Source PageUp/PageDown changes one captured viewport under UserInput, without edge pull. */
     fun pageKey(pageDown: Boolean, keyDown: Boolean, ctrl: Boolean): Boolean {
         val current = scope ?: return false
@@ -253,5 +303,6 @@ internal class NativeLibraryScrollOwner(
         onViewDetachedFromWindow(view)
         view.removeOnScrollListener(scrollListener)
         view.sourceOverscroll = null
+        if(view.sourceSemanticsScrollBy===semanticsScroll)view.sourceSemanticsScrollBy=null
     }
 }

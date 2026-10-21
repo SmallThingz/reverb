@@ -62,10 +62,11 @@ import kotlin.math.roundToInt
  */
 internal class ReverbActionSheetDialog(
     private val anchor:View,
-    val environment:ReverbViewEnvironment,
+    initialEnvironment:ReverbViewEnvironment,
     title:String,
     onDismiss:()->Unit,
 ):ComponentDialog(ContextThemeWrapper(anchor.context,androidx.compose.material3.R.style.EdgeToEdgeFloatingDialogWindowTheme)) {
+    var environment=initialEnvironment;private set
     private var onOwnerDismiss=onDismiss
     private var disposed=false
     private val runtime=NativeAboutWindowRuntime()
@@ -132,11 +133,7 @@ internal class ReverbActionSheetDialog(
         }
         if(Build.VERSION.SDK_INT>=29)root.isForceDarkAllowed=false
         updateWindowParameters()
-        val contentColor=ComposeColor(environment.palette.onSurface)
-        val dark=contentColor!=ComposeColor.Transparent&&contentColor.luminance()<=.5f
-        WindowCompat.getInsetsController(actual,actual.decorView).apply {
-            isAppearanceLightStatusBars=dark;isAppearanceLightNavigationBars=dark
-        }
+        updateWindowColors()
         pointer.bind(root,surface,scrim,handle,appContent,dragNode)
         onBackPressedDispatcher.addCallback(this,back)
         anchorLifecycle?.addObserver(lifecycleObserver)
@@ -168,6 +165,17 @@ internal class ReverbActionSheetDialog(
     fun bind(title:String,onDismiss:()->Unit) {
         onOwnerDismiss=onDismiss;appContent.bind(title) {onOwnerDismiss()}
         root.layoutDirection=anchor.layoutDirection;updateWindowParameters()
+    }
+    /** Palette changes update this same Window; density/configuration recreation remains host-owned. */
+    fun bindEnvironment(next:ReverbViewEnvironment) {
+        if(disposed||environment===next)return
+        environment=next
+        contentContext.bindEnvironment(next)
+        surface.bindEnvironment(next)
+        appContent.bindEnvironment(next)
+        handle.bindEnvironment(next)
+        scrim.bindColor(next.palette.scrim)
+        updateWindowColors()
     }
     val contentView:View get()=surface
     val hasCurrentWindowFocus get()=root.isAttachedToWindow&&root.hasWindowFocus()
@@ -213,6 +221,14 @@ internal class ReverbActionSheetDialog(
     private fun applyMotion() {
         if(!state.offset.isNaN())surface.applyMotion(state.offset,
             state.anchors?.minimum?:state.offset,predictive.value)
+    }
+    private fun updateWindowColors() {
+        val actual=requireNotNull(window)
+        val contentColor=ComposeColor(environment.palette.onSurface)
+        val dark=contentColor!=ComposeColor.Transparent&&contentColor.luminance()<=.5f
+        WindowCompat.getInsetsController(actual,actual.decorView).apply {
+            isAppearanceLightStatusBars=dark;isAppearanceLightNavigationBars=dark
+        }
     }
     private fun updateWindowParameters() {
         val flags=(anchor.rootView.layoutParams as?WindowManager.LayoutParams)?.flags?:0
@@ -261,7 +277,7 @@ internal class ReverbActionSheetDialog(
 /** Passed once to concrete body/action owners, without discovering or guessing their input shapes. */
 internal class NativeActionSheetContentContext(
     val inputRoot:NativePagerTouchRoot,
-    val environment:ReverbViewEnvironment,
+    initialEnvironment:ReverbViewEnvironment,
     val runtime:NativeAboutWindowRuntime,
     val nestedScroll:NativeVerticalNestedHost,
     private val pointer:SheetPointerOwner,
@@ -269,6 +285,8 @@ internal class NativeActionSheetContentContext(
     val accessibility:NativeActionSheetAccessibility,
     val scrollEvents:NativeWindowScrollAccessibilityEvents,
 ) {
+    var environment=initialEnvironment;private set
+    internal fun bindEnvironment(next:ReverbViewEnvironment) {environment=next}
     fun hit(view:View,nodes:List<NativeViewPhasePointerNode>,
         children:()->List<NativeViewPointerHitLayout> = {emptyList()},
         minimumTouchTarget:Size=Size(48f*environment.textDensity.density,48f*environment.textDensity.density),
@@ -343,7 +361,7 @@ internal class SheetRoot(
 }
 internal class SheetScrim(context:Context,color:Int,private val action:()->Unit):View(context) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val sourceColor=reverbColorWithAlpha(color,.32f)
+    private var sourceColor=reverbColorWithAlpha(color,.32f)
     var opacity=0f
         set(value) {if(field!=value){field=value;invalidate()}}
     init {
@@ -352,6 +370,10 @@ internal class SheetScrim(context:Context,color:Int,private val action:()->Unit)
         isClickable=true
         isScreenReaderFocusable=true
         setOnClickListener {action()}
+    }
+    fun bindColor(color:Int) {
+        val next=reverbColorWithAlpha(color,.32f)
+        if(sourceColor!=next) {sourceColor=next;invalidate()}
     }
     override fun onDraw(canvas:Canvas) {
         // DrawScope.configurePaint(color,alpha) multiplies source alpha before roundToInt.

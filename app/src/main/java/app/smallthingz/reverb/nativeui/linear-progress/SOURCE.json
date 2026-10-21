@@ -1,0 +1,24 @@
+{
+  "baseline_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source_call": "CaptureScreen.kt:2138 ClearBufferProgressSheet progress-null branch",
+  "material3": "1.4.0",
+  "animation_core": "1.11.2",
+  "source_files": {
+    "InfiniteAnimationPolicy.kt": "8971153b6127fbdbcf9e1cb13fd45d1226d3a84f92fe2099e30ec738eeacdf8e",
+    "InfiniteTransition.kt": "570ff75ce3e826eb0ed0cc14e5db98cabf2f02885afa1f70216aa7cf267fc801",
+    "LinearProgressIndicatorTokens.kt": "e31dd59a029b25a87a057b9d0e3ba914df693b3750bdff41218bb0840e439129",
+    "MotionTokens.kt": "1dcf1e6d82e6613ac0b756318572446ac18d7df39188a94dc4b3281f2678f07e",
+    "ProgressIndicator.kt": "d0e4627fef5b340b1c4750cc69e7857fa0db7a2502d165bd1f17f5797d4af718",
+    "ProgressIndicatorTokens.kt": "b7ebb21e3bfe7721ee6988d79468b01d8af74a5860a8c28480da0750d0b7eb45"
+  },
+  "source_anchors": {
+    "ProgressIndicator.kt": "249\u2013336 indeterminate;399\u2013436 line draw;982\u20131061 tracks/constants",
+    "LinearProgressIndicatorTokens.kt": "27,31 height/gap",
+    "ProgressIndicatorTokens.kt": "22,26 active/track colors",
+    "MotionTokens.kt": "41 easing",
+    "InfiniteTransition.kt": "169\u2013195 reset/scale/skip-to-end suspension",
+    "ValueAnimator.java": "android13-release public duration listener357\u2013399,1798\u20131803"
+  },
+  "tests_run": false,
+  "native_qualified": false
+}

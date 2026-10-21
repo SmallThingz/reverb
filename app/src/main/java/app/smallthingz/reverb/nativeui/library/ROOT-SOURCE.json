@@ -6,14 +6,15 @@
     "NativeLibraryController.kt": "7eff47c05ccf49a07dfcd7ef8bfd47e8b49218f11ee9ad7ffae6c54fe8a0a709",
     "NativeLibraryEdgeDismiss.kt": "0e83e330636ca4e9371d3d72b424933a060564470462faadca39b1121c5a5950",
     "nativeui/NativeLibraryPlayerLease.kt": "e58b61caf446970739657565920a1fe4601dfd3ae3c18acd314e723d4bb982a1",
-    "nativeui/NativeLibraryPointerBinding.kt": "0b7aaa1fa5a187b495ca4d0fdc8f64b8fb799350c83058811e9d0bcb0c85f1e4",
-    "nativeui/NativeLibraryPredictiveBack.kt": "47d4c7020bcf80c8e6b3882e3d8a11cd32a9e282611e4e8d082162cd4b8c3f09",
+    "nativeui/NativeLibraryPointerBinding.kt": "966eef36df54eed7734c2109e96e28379ae78c096ea1dfcc86cda466aa73cca4",
+    "nativeui/NativeLibraryPredictiveBack.kt": "5c6ca3bd8ea55f2f43575fef0de8f88cbdc28ace37c9f1874c5ee06a1bfeccf9",
     "nativeui/NativeLibraryScrollAccumulator.kt": "75061628703afc48f481682763289005553ae5775013f3caad303ec24e6a308c",
-    "nativeui/NativeLibraryScrollOwner.kt": "2cadd34963141b4a65a63ab864eb1ecc0d8f550bed0a25c5d39069a2c6d90fec",
-    "nativeui/ReverbLibraryScreenContent.kt": "4d156fb087a8cd1bb71ca52935c1ae74d57dd9c05534e05ac058848d58f3db1f",
+    "nativeui/NativeLibraryScrollOwner.kt": "b257b95acbffee9e8ac293f368ef84cdf53b9bb50b40383db2b67ef2abc6fcb4",
+    "nativeui/ReverbLibraryScreenContent.kt": "28e344a43b2cc4c18a3f72687416236e2dada05bdeb2fb280af6e052be3b2887",
     "nativeui/NativePointerLayerShape.kt": "af2cdf31a4babb792b36acd7b878b1e794c102ef6d1fc5c2020d3e93f56b3305",
     "nativeui/ReverbLibraryListView.kt": "8eded8d98aa7baa39121aca0dbb59b40f7fb361114da32b2bec78d6d9adde38e",
-    "nativeui/ReverbLibraryRecordingRow.kt": "9b69d0762af3b64b080a832b3be5dae45f43ca343dc1e83c114f796bb54ebc0b"
+    "nativeui/ReverbLibraryRecordingRow.kt": "7cd69fa4a5b03f1b76788c55976f44341b6d2e53866a2465b939b33f561ebd6b",
+    "nativeui/NativeLibraryAccessibilityBinding.kt": "47e1c03ba8277477cf152e22dada560d1f1661d5a193d1b2fe603bac0884223f"
   },
   "tests": {
     "NativeLibraryEdgeDismissTest.kt": {
@@ -27,5 +28,6 @@
       "status": "not run"
     }
   },
-  "pull_refresh_integration": "Always-present indicator owner, source nested chain shared by populated/empty branch; source methods implemented by separately reviewed Pull component. Unrun native integration."
+  "pull_refresh_integration": "Always-present indicator owner, source nested chain shared by populated/empty branch; source methods implemented by separately reviewed Pull component. Unrun native integration.",
+  "accessibility_integration": "Same Main cursor/queue; direct row/text/role/toolbar descriptions plus populated/empty scroll nodes; source reviewed only, no native qualification."
 }

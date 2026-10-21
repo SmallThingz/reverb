@@ -73,6 +73,13 @@ internal class ReverbClickController(
     private val environment: NativeClickEnvironment,
     private val indication: NativeClickIndication,
 ) {
+    init {
+        // AndroidComposeView1.11.2:1064-1070 disables the platform focus overlay. These hosts
+        // replace Compose click nodes and draw their own indication (including source null).
+        // Real AndroidView children such as EditText/wheel/AudioBlobView do not use this adapter.
+        host.defaultFocusHighlightEnabled = false
+    }
+
     private val main = Handler(Looper.getMainLooper())
     private var binding: NativeClickBinding? = null
     private var hapticFeedbackEnabled = true

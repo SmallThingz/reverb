@@ -1,0 +1,24 @@
+{
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source_contracts": {
+    "CaptureScreen.kt": "1087-1150,1887-1917,2076-2200",
+    "RecordingCard.kt": "SavingRecordingCard/RecordingEntityCard and RecordingSummaryCard optional progress/trailingContent",
+    "EnterExitTransition.kt": "animation1.11.2 default fade spring MediumLow and slide IntOffset threshold(1,1)",
+    "ReverbSheet.kt": "released Message/ActionSheet"
+  },
+  "files": {
+    "NativeCaptureSheets.kt": "334d5b54ab57caf81c65741f87e4a0bcb877572d4c26de4c4a880d5eb718a2a3",
+    "NativeCaptureTransientHost.kt": "405442b5dba4a9ea218ddddc4ebce40621347ecebfca492854a6cb755fbe5870",
+    "CaptureSaveStatusMotion.kt": "3feee80007958f27b504ecf8ba3d73e6ef6e6742261c56c1f2b537e19b18a0ab",
+    "CaptureSaveStatusMotionTest.kt": "f7e9d97edcfa254781d2b02b23bee3422f1250b7e01fc21a40dd96414a5cee85",
+    "ReverbLibraryRecordingRow.kt": "7cd69fa4a5b03f1b76788c55976f44341b6d2e53866a2465b939b33f561ebd6b",
+    "LibrarySheetButton.kt": "237be4a06b7401e3b784999fc1e4cafa666a20940ef5da46b687b509e936b5e3"
+  },
+  "status": "integrated native source only; no build/test/device qualification",
+  "review": [
+    "Root: sheet text/branch/action/layout review no finding",
+    "Library: restored copied Button closed guard; optional slots otherwise source-consistent",
+    "Self: preserved RTL plain-label center; avoided redundant unchanged status/progress layouts; retained current semantic parent/role flags",
+    "Onboarding: Capture status text/layout/motion/lifetime review no concrete finding"
+  ]
+}

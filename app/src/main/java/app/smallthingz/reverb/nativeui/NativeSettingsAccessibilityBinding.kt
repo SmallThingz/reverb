@@ -2,6 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import android.view.View
 import android.view.ViewGroup
+import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
 import java.util.IdentityHashMap
 
 /** Finite Settings leases on Main's existing cursor; no second accessibility window owner. */
@@ -9,11 +10,14 @@ internal class NativeSettingsAccessibilityBinding(
     private val content:NativeSettingsScreenContent,
     private val window:NativeWindowTextAccessibilityOwner,
     private val sourceNode:(View)->NativeSourceAccessibilityNode,
+    private val scrollEvents:NativeWindowScrollAccessibilityEvents,
 ):AutoCloseable {
     private val clips=NativeTextSemanticsClipPolicy(content::sourceClip)
     private val topBar=window.bindSettingsTopBar(content.topBar,content,clips,sourceNode)
     private var sectionView:SettingsSectionListView?=null
     private var sections:NativePageTextAccessibilityOwner?=null
+    private var listViewport:ReverbLibraryRecyclerView?=null
+    private var listScroll:NativeLibraryRecyclerAccessibility?=null
     private val progress=IdentityHashMap<SettingsCalibrationProgressView,AutoCloseable>()
     private var closed=false
     fun refresh() {
@@ -26,6 +30,13 @@ internal class NativeSettingsAccessibilityBinding(
                 content.inputAllowed&&!sourceNode(view).hidden
             }}
         }else sections?.refresh()
+        // Settings has only the hydrated LazyColumn. Its pre-hydration Box has no scroll node.
+        val nextViewport=content.listViewport
+        if(listViewport!==nextViewport) {
+            listScroll?.close();listScroll=null
+            listViewport=nextViewport
+            listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents)}
+        }
         val present=IdentityHashMap<SettingsCalibrationProgressView,Boolean>()
         fun visit(view:View) {
             if(view is SettingsCalibrationProgressView)present[view]=true
@@ -44,6 +55,7 @@ internal class NativeSettingsAccessibilityBinding(
             if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)
         }}
         release(topBar::close);release {sections?.close()};sections=null;sectionView=null
+        release {listScroll?.close()};listScroll=null;listViewport=null
         progress.values.forEach {release(it::close)};progress.clear()
         failure?.let {throw it}
     }

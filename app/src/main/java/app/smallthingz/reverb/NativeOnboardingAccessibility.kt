@@ -25,6 +25,7 @@ internal class NativeOnboardingAccessibility(
     private val pager: () -> NativeOnboardingPlacedPagerViewport,
     private val preview: () -> OnboardingPageContentView?,
     private val footer: OnboardingFooterView,
+    private val externalOcclusion: () -> List<Rect> = { emptyList() },
 ) {
     val geometry = NativePlainTextViewGeometry(root, NativeTextSemanticsClipPolicy(::clip))
     private val unclipped = NativePlainTextViewGeometry(root,
@@ -103,6 +104,9 @@ internal class NativeOnboardingAccessibility(
         val result = IdentityHashMap<View, NativeSourceAccessibilityNode>()
         if (!root.isAttachedToWindow || !root.isLaidOut) return result
         val uncovered = Region(0, 0, root.width, root.height)
+        // Same-window siblings after Onboarding (the passive feedback Text) are visited first.
+        // Only source-important, non-hidden semantic bounds subtract; the card background does not.
+        externalOcclusion().forEach { uncovered.op(it, Region.Op.DIFFERENCE) }
 
         fun visit(view: View, remaining: Region, retainOffscreenDescendants: Boolean) {
             if (!view.isAttachedToWindow || view.visibility != View.VISIBLE || remaining.isEmpty) return

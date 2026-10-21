@@ -1,0 +1,16 @@
+{
+  "status": "Integrated native implementation; not compiled, tested, installed, or production routed",
+  "release": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "files": {
+    "NativeAppFeedbackHostView.kt": "2eb786078659b0ed1f02cc9fab099e81ea15961ec0a9a7ff4621431eee5ae621",
+    "NativeAppFeedbackOwner.kt": "92f8bb23b4172a96fbb43e9d357ef4572ec11c3837504957afe79bba26bae645",
+    "NativeFeedbackVisibilityMotion.kt": "36ace427056bda8e5e230cef419149e2d178871cd0a42a439c73a5f9a1729a24",
+    "NativeFeedbackVisibilityMotionTest.kt": "87383b246ad1c6f18902a90d6f66420ed3f36f181a5f82d011c9befad02ff02c"
+  },
+  "reference": {
+    "AppFeedback.kt": "dedfdcf5b6e5a82fedfe4147d7fbcde240cab7a414bd601199a2d86a8e0a0518",
+    "MainActivity.kt": "f52e2af8018c34b5a6a4088d0e41e5b5785cb0f628664c9c3349020bc94e76d7",
+    "EnterExitTransition.kt": "f19ac46d1718bc0e0c96d7f06e643c8a3a52db13c84bd856a956529a2d148198",
+    "AnimatedVisibility.kt": "70781d0163161c64cbef1d472fb1f09fe8bf9158fbc8df9b232816b58612291c"
+  }
+}

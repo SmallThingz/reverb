@@ -49,7 +49,7 @@ internal open class NativeSheetFrame(context: Context) : ViewGroup(context) {
 /** Surface fill is outside the rounded child clip, matching background(shape).clip(shape). */
 internal class NativeSheetSurface(
     context:Context,
-    private val environment:ReverbViewEnvironment,
+    private var environment:ReverbViewEnvironment,
     handle:View,
     val appContent:NativeSheetAppContent,
 ) : NativeSheetFrame(context) {
@@ -68,6 +68,9 @@ internal class NativeSheetSurface(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
         accessibilityPaneTitle=context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_pane_title)
         isScreenReaderFocusable=false
+    }
+    fun bindEnvironment(next:ReverbViewEnvironment) {
+        environment=next;painted.bindEnvironment(next)
     }
     fun applyMotion(offset:Float,minimumAnchor:Float,progress:Float) {
         val value=nativeSheetPredictiveTransform(width.toFloat(),height.toFloat(),offset,
@@ -92,7 +95,7 @@ internal class NativeSheetSurface(
         for(index in outChildren.lastIndex downTo start)if(!present(outChildren[index]))outChildren.removeAt(index)
     }
 
-    internal class PaintedSurface(context:Context,private val env:ReverbViewEnvironment):NativeSheetFrame(context) {
+    internal class PaintedSurface(context:Context,private var env:ReverbViewEnvironment):NativeSheetFrame(context) {
         private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             color=env.palette.surfaceContainerLow
         }
@@ -100,6 +103,12 @@ internal class NativeSheetSurface(
         val clip=SheetClip(context)
         private var radius=0f
         init {setWillNotDraw(false);addView(clip)}
+        fun bindEnvironment(next:ReverbViewEnvironment) {
+            val densityChanged=env.textDensity!=next.textDensity
+            env=next;fill.color=next.palette.surfaceContainerLow
+            if(densityChanged)onSizeChanged(width,height,width,height)
+            invalidate()
+        }
         override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int) {
             val raw=28f*env.textDensity.density
             // CornerBasedShape first normalizes each start/end pair against minDimension;
@@ -184,11 +193,12 @@ internal class NativeSheetSurface(
 /** Released app Column: no inferred weighting, scrolling, safety padding or layout normalization. */
 internal class NativeSheetAppContent(
     context:Context,
-    val environment:ReverbViewEnvironment,
+    private var environment:ReverbViewEnvironment,
     title:String,
     inputRoot:()->View?,
     dismiss:()->Unit,
 ):ViewGroup(context) {
+    private var currentDismiss=dismiss
     val titleView=environment.paragraph(context,title,ReverbTextRole.TITLE_LARGE)
     val close=ReverbStandardIconButtonView(context,environment,inputRoot)
     private val header=Header(context,titleView,close)
@@ -209,9 +219,19 @@ internal class NativeSheetAppContent(
         this.body=body;this.actions=actions;addView(body);addView(actions);requestLayout()
     }
     fun bind(title:String,dismiss:()->Unit) {
+        currentDismiss=dismiss
         titleView.setText(title)
         close.bind(environment,ReverbIcon.Close,context.getString(app.smallthingz.reverb.R.string.close),true,
             environment.palette.onSurfaceVariant,environment.palette.onSurface,dismiss)
+    }
+    fun bindEnvironment(next:ReverbViewEnvironment) {
+        if(environment===next)return
+        val densityChanged=environment.textDensity!=next.textDensity
+        environment=next
+        next.bindParagraphStyle(titleView,ReverbTextRole.TITLE_LARGE)
+        close.bind(next,ReverbIcon.Close,context.getString(app.smallthingz.reverb.R.string.close),true,
+            next.palette.onSurfaceVariant,next.palette.onSurface,currentDismiss)
+        if(densityChanged)requestLayout()
     }
     override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
         val width=MeasureSpec.getSize(widthMeasureSpec)

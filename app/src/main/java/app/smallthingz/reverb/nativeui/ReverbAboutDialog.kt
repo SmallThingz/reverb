@@ -149,7 +149,6 @@ internal class ReverbAboutDialog(
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         } else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
-        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         setTitle("")
         inheritSecurePolicy()
         root.layoutDirection = anchor.layoutDirection
@@ -167,6 +166,9 @@ internal class ReverbAboutDialog(
         root.setViewTreeLifecycleOwner(anchor.findViewTreeLifecycleOwner())
         root.setViewTreeViewModelStoreOwner(anchor.findViewTreeViewModelStoreOwner())
         root.setViewTreeSavedStateRegistryOwner(anchor.findViewTreeSavedStateRegistryOwner())
+        // DialogWrapper installs decor/content before DialogLayout.updateProperties sets width.
+        // PhoneWindow.generateLayout resets a floating window to WRAP_CONTENT during decor creation.
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         setCanceledOnTouchOutside(true)
         // The fallback remains enabled while an explicit exit disables predictive handling.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {

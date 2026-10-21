@@ -11,6 +11,7 @@ import androidx.core.graphics.Insets
 import app.smallthingz.reverb.IncidentHistoryUiState
 import app.smallthingz.reverb.NativeIncidentsRenderer
 import app.smallthingz.reverb.NativeIncidentsScreenOwner
+import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
 import app.smallthingz.reverb.incidentsPanelTranslationX
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -33,8 +34,9 @@ internal class NativeIncidentsScreenView(
     dispatcher: OnBackPressedDispatcher,
     private val inputRoot: View,
     private val windowText: NativeWindowTextAccessibilityOwner,
-    private val sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
+    private val sourceNode: (View) -> NativeSourceAccessibilityNode,
     private val overlayVisibilityChanged: (Boolean) -> Unit = {},
+    private val scrollEvents: NativeWindowScrollAccessibilityEvents,
 ) : ViewGroup(context), NativeIncidentsRenderer, AutoCloseable {
     private var closed = false
     private var state = owner.state
@@ -43,10 +45,23 @@ internal class NativeIncidentsScreenView(
     private var content: ReverbIncidentsContentView? = null
     private var menus: NativeIncidentMenuHost? = null
     private var textLease: NativePageTextAccessibilityOwner? = null
+    private var scrollList: ReverbLibraryRecyclerView? = null
+    private var scrollLease: NativeLibraryRecyclerAccessibility? = null
     private var panelScope: CoroutineScope? = null
     private var backLease: AutoCloseable? = null
     private var renderLease: AutoCloseable? = null
     private var statusBarInsets = Insets.NONE
+    private var pointerMembershipChanged: (() -> Unit)? = null
+
+    val pointerEnvironment: ReverbViewEnvironment get() = environment
+    val pointerContent: ReverbIncidentsContentView? get() = content
+
+    /** One Main-window pointer binding; source mount/branch changes retire its input immediately. */
+    fun observePointerMembership(changed: () -> Unit): AutoCloseable {
+        check(pointerMembershipChanged == null) { "Incidents already has a pointer binding" }
+        pointerMembershipChanged = changed
+        return AutoCloseable { if (pointerMembershipChanged === changed) pointerMembershipChanged = null }
+    }
 
     init {
         clipChildren = false
@@ -103,14 +118,30 @@ internal class NativeIncidentsScreenView(
             shown.setStatusBarInsets(statusBarInsets)
             addView(shown)
             textLease = windowText.bindContent(shown, NativeTextSemanticsClipPolicy(shown::semanticsClip), sourceNode) {
-                !closed && content === shown && (sourceNode?.invoke(it)?.present ?: true)
+                !closed && content === shown && sourceNode(it).present
             }
-            shown.observeAccessibilityMembership { textLease?.refresh() }
+            shown.observeAccessibilityMembership {
+                textLease?.refresh()
+                refreshScrollAccessibility()
+                pointerMembershipChanged?.invoke()
+            }
             shown.bind(state)
         } catch (failure: Throwable) {
             try { unmount() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             throw failure
         }
+    }
+
+    /** The source creates LazyColumn only for nonempty history; loading/empty is a plain Box. */
+    private fun refreshScrollAccessibility() {
+        val next = content?.pointerList
+        if (scrollList === next) return
+        val previous = scrollLease
+        scrollLease = null
+        scrollList = null
+        previous?.close()
+        scrollList = next
+        scrollLease = next?.let { NativeLibraryRecyclerAccessibility(it, sourceNode, scrollEvents) }
     }
 
     /** Delivered by the one main-window NativeWindowInsetsBinding, before child consumption. */
@@ -161,6 +192,8 @@ internal class NativeIncidentsScreenView(
                 if (failure == null) failure = problem else failure!!.addSuppressed(problem)
             }
         }
+        cleanup { pointerMembershipChanged?.invoke() }
+        cleanup { refreshScrollAccessibility() }
         current?.observeAccessibilityMembership {}
         cleanup { textLease?.close() }
         textLease = null

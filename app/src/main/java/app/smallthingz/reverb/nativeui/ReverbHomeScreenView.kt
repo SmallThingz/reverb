@@ -2,9 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.graphics.RectF
-import android.os.Build
 import android.view.View
-import android.view.ViewGroup
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import kotlinx.coroutines.CoroutineScope
 
@@ -20,10 +18,8 @@ internal data class ReverbHomeInsets(
 )
 
 /**
- * Executable ordinary Home surface: unchanged background-noise phase, AppTopBar, and normal capture
- * body. The surrounding navigation/capture owner supplies data, lifecycle and existing operations.
- * Range export, permission recovery, transient save feedback and panel overlays are separate
- * released branches; this normal branch never substitutes fake state or launches their operations.
+ * Existing normal-Home API. Its root now shares the exact same direct-child Scaffold geometry with
+ * Main's permission/range branch host; there is no additional View, renderer or hidden Capture owner.
  */
 internal class ReverbHomeScreenView(
     context: Context,
@@ -37,27 +33,12 @@ internal class ReverbHomeScreenView(
     nativeInputRoot: View,
     animationScope: CoroutineScope,
     onBoundsChanged: (body: View, bodyLocalBounds: RectF, blob: View) -> Unit,
-) : ViewGroup(context), AutoCloseable {
-    private var environment = initialEnvironment
-    private var insets = initialInsets
-    private var navigation = initialNavigation
-    private var hasIncidents = initialHasIncidents
-    private val noise = ReverbNoiseDrawable(resources, environment.palette.surface)
-    private val header = ReverbAppTopBarView(context, environment, nativeInputRoot)
-    private val bodyOwner = ReverbHomeBodyOwner(context, environment, initialState,
+) : ReverbHomeScaffoldView(context, initialEnvironment, initialNavigation, initialHasIncidents,
+    initialInsets, nativeInputRoot), AutoCloseable {
+    private val bodyOwner = ReverbHomeBodyOwner(context, initialEnvironment, initialState,
         initialSelection, initialActions, animationScope, { nativeInputRoot }, onBoundsChanged)
 
-    init {
-        clipChildren = false
-        clipToPadding = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        background = noise
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        addView(header)
-        addView(bodyOwner.view)
-        header.bind(environment, initialHasIncidents, initialNavigation,
-            statusInsetPx = insets.statusTop)
-    }
+    init { setBody(bodyOwner.view) }
 
     fun bind(
         state: ReverbHomeBodyState,
@@ -67,38 +48,14 @@ internal class ReverbHomeScreenView(
         hasIncidents: Boolean,
         nextInsets: ReverbHomeInsets,
     ) {
-        if (insets != nextInsets) { insets = nextInsets; requestLayout() }
-        this.navigation = navigation
-        this.hasIncidents = hasIncidents
-        header.bind(environment, hasIncidents, navigation, statusInsetPx = insets.statusTop)
+        bindShell(navigation, hasIncidents, nextInsets)
         bodyOwner.bind(state, selection, actions)
     }
 
-    fun setEnvironment(value: ReverbViewEnvironment) {
-        environment = value
-        noise.setBackgroundColor(value.palette.surface)
-        header.bind(value, hasIncidents, navigation, statusInsetPx = insets.statusTop)
+    override fun setEnvironment(value: ReverbViewEnvironment) {
+        super.setEnvironment(value)
         bodyOwner.setEnvironment(value)
-        requestLayout()
-    }
-
-    override fun onMeasure(w: Int, h: Int) {
-        val width = MeasureSpec.getSize(w)
-        val height = MeasureSpec.getSize(h)
-        setMeasuredDimension(width, height)
-        header.measure(exact(width), MeasureSpec.makeMeasureSpec(height, MeasureSpec.AT_MOST))
-        val contentWidth = (width - insets.contentLeft - insets.contentRight).coerceAtLeast(0)
-        val contentHeight = (height - header.measuredHeight - insets.contentBottom).coerceAtLeast(0)
-        bodyOwner.view.measure(exact(contentWidth), exact(contentHeight))
-    }
-
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        header.layout(0, 0, width, header.measuredHeight)
-        val body = bodyOwner.view
-        body.layout(insets.contentLeft, header.measuredHeight,
-            insets.contentLeft + body.measuredWidth, header.measuredHeight + body.measuredHeight)
     }
 
     override fun close() = bodyOwner.close()
-    private fun exact(size: Int) = MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY)
 }

@@ -103,7 +103,7 @@ internal class NativeSheetTooltipMotion {
 /** Direct existing-anchor adapter; no extra clickable View or second press/ripple controller. */
 internal class NativeSheetTooltip(
     private val anchor:View,
-    private val environment:ReverbViewEnvironment,
+    private var environment:ReverbViewEnvironment,
     private val runtime:NativeAboutWindowRuntime,
     private val description:String,
 ):AutoCloseable {
@@ -191,6 +191,10 @@ internal class NativeSheetTooltip(
             } finally {animation=null}
         }
     }
+    fun bindEnvironment(next:ReverbViewEnvironment) {
+        if(disposed||environment===next)return
+        environment=next;popup?.bindEnvironment(next)
+    }
     fun dismiss()=target(false)
     fun showFromAccessibility() {scope.launch {show()}}
     fun focusChanged(focused:Boolean) {
@@ -213,7 +217,7 @@ internal class NativeSheetTooltip(
 /** Nonfocusable native sub-panel, using the released Popup flags/position/size rather than TooltipText. */
 private class NativePlainTooltipWindow(
     private val anchor:View,
-    private val environment:ReverbViewEnvironment,
+    private var environment:ReverbViewEnvironment,
     description:String,
     private val dismiss:()->Unit,
 ):NativeSheetFrame(anchor.context),AutoCloseable {
@@ -261,6 +265,12 @@ private class NativePlainTooltipWindow(
         accessibilityPaneTitle=context.getString(androidx.compose.foundation.R.string.tooltip_description)
         bubble.alpha=0f
         bubble.label.isScreenReaderFocusable=true
+    }
+    fun bindEnvironment(next:ReverbViewEnvironment) {
+        if(closed||environment===next)return
+        val densityChanged=environment.textDensity!=next.textDensity
+        environment=next; bubble.bindEnvironment(next)
+        if(densityChanged) {elevation=8f*next.textDensity.density;requestLayout()}
     }
     fun show() {
         check(!added&&!closed);added=true
@@ -328,7 +338,7 @@ private class NativePlainTooltipWindow(
         val hidden=bubble.alpha==0f
         return NativeSourceAccessibilityNode(!bounds.isEmpty,hidden,!hidden&&!bounds.isEmpty,bounds)
     }
-    private class TooltipBubble(context:android.content.Context,private val env:ReverbViewEnvironment,text:String):
+    private class TooltipBubble(context:android.content.Context,private var env:ReverbViewEnvironment,text:String):
         ViewGroup(context) {
         private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             color=env.palette.inverseSurface
@@ -344,6 +354,13 @@ private class NativePlainTooltipWindow(
         init {
             setWillNotDraw(false);clipChildren=false;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
             content.addView(label);clip.addView(content);addView(clip)
+        }
+        fun bindEnvironment(next:ReverbViewEnvironment) {
+            val densityChanged=env.textDensity!=next.textDensity
+            env=next;fill.color=next.palette.inverseSurface
+            next.bindParagraphStyle(label,ReverbTextRole.BODY_SMALL,next.palette.inverseOnSurface)
+            if(densityChanged) {onSizeChanged(width,height,width,height);requestLayout()}
+            invalidate()
         }
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
             val d=env.textDensity.density

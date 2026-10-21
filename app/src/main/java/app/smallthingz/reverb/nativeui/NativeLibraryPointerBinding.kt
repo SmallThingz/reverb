@@ -53,11 +53,18 @@ internal class NativeLibraryPointerBinding(
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = edge.dispatch(event, pass)
         override fun cancel() = edge.restart()
     }
+    // FilesScreen's transparent Scaffold still owns Surface's inert pointerInput(Unit) node.
+    // It admits empty background so lower Main siblings cannot receive the same DOWN hit.
+    private val scaffoldShield = object : NativeViewPhasePointerNode {
+        override val view get() = content
+        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+        override fun cancel() = Unit
+    }
     val layout: NativeViewPointerHitLayout = object : NativeViewPointerHitLayout {
         override val placed get() = !closed && content.isAttachedToWindow && content.isLaidOut && content.visibility == View.VISIBLE
         override val size get() = Size(content.width.toFloat(), content.height.toFloat())
         override val minimumTouchTarget get() = Size(48f * density, 48f * density)
-        override val nodes = emptyList<NativeViewPhasePointerNode>()
+        override val nodes = listOf(scaffoldShield)
         override val childrenInHitOrder: List<NativeViewPointerHitLayout>
             get() { refresh(); return children(content) }
         override fun screenToLocal(screen: Offset) = geometry.coordinates(content).local(screen)

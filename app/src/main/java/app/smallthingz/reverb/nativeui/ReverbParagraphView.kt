@@ -593,7 +593,8 @@ internal class ReverbParagraphView(
         // remain layout-only ancestors, even when a service requests non-important native Views.
         var ancestor = parent as? View
         while (ancestor != null) {
-            if (ancestor is android.view.ViewGroup && ancestor is NativeMergedRowAccessibilityHost) return ancestor
+            if (ancestor is android.view.ViewGroup && ancestor is NativeMergedRowAccessibilityHost &&
+                ancestor.hasAccessibilitySemanticNode) return ancestor
             if (ancestor.isImportantForAccessibility) break
             ancestor = ancestor.parent as? View
         }

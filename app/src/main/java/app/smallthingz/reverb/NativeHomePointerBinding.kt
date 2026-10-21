@@ -5,7 +5,7 @@ import android.view.ViewGroup
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import app.smallthingz.reverb.nativeui.NativePointerLayerShape
-import app.smallthingz.reverb.nativeui.ReverbHomeScreenView
+import app.smallthingz.reverb.nativeui.ReverbHomeScaffoldView
 import java.util.IdentityHashMap
 
 /**
@@ -14,14 +14,22 @@ import java.util.IdentityHashMap
  * under the released Scaffold vertical detector and binds only actual top-bar click leaves.
  */
 internal class NativeHomePointerBinding(
-    private val home: ReverbHomeScreenView,
+    private val home: ReverbHomeScaffoldView,
     private val geometry: NativeWindowPointerCoordinates,
     private val density: () -> Float,
     private val vertical: NativeHomeVerticalDrag,
     private val gestureEnabled: () -> Boolean,
+    private val customLayout: (View) -> NativeViewPointerHitLayout? = { null },
 ) : AutoCloseable {
     private val layouts = IdentityHashMap<View, Layout>()
     private var wasEnabled = gestureEnabled()
+    // Scaffold's Material Surface appends pointerInput(Unit) {} even when Home drag is disabled.
+    // Preserve that non-consuming hit shield over retained Settings behind the Home surface.
+    private val surfaceNode = object : NativeViewPhasePointerNode {
+        override val view: View get() = home
+        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+        override fun cancel() = Unit
+    }
     private val parentNode = object : NativeViewPhasePointerNode {
         override val view: View get() = home
         override val attached get() = home.isAttachedToWindow && gestureEnabled()
@@ -52,7 +60,7 @@ internal class NativeHomePointerBinding(
         layouts.keys.filterNot(::belongs).forEach { layouts.remove(it)?.close() }
     }
 
-    private fun layoutFor(view: View): NativeViewPointerHitLayout =
+    private fun layoutFor(view: View): NativeViewPointerHitLayout = customLayout(view) ?:
         if (view is NativeHomePointerRoot) view.parentPointerLayout(geometry.windowPositionInScreen)
         else layouts.getOrPut(view) { Layout(view) }
 
@@ -66,7 +74,7 @@ internal class NativeHomePointerBinding(
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = Size(48f * density(), 48f * density())
         override val nodes: List<NativeViewPhasePointerNode> get() = when {
-            view === home && gestureEnabled() -> listOf(parentNode)
+            view === home -> if (gestureEnabled()) listOf(parentNode, surfaceNode) else listOf(surfaceNode)
             click != null -> listOf(click)
             else -> emptyList()
         }

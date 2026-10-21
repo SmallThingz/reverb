@@ -29,6 +29,7 @@ internal class ReverbStandardIconButtonView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     inputRoot: () -> View?,
+    private val actionSizeDp: Float = 40f,
 ) : ViewGroup(context) {
     private var environment = initialEnvironment
     private var currentClick: () -> Unit = {}
@@ -100,7 +101,10 @@ internal class ReverbStandardIconButtonView(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val d = environment.textDensity.density
         val outer = (48f * d).roundToInt()
-        val inner = (40f * d).roundToInt()
+        // Released explicit Modifier.size(50.dp), used by Range Close, constrains M3's
+        // later default40dp action to50. Other callers retain the default40dp visual.
+        // A smaller actual parent bound still constrains both axes independently.
+        val inner = (actionSizeDp * d).roundToInt()
         val w = resolveSize(outer, widthMeasureSpec); val h = resolveSize(outer, heightMeasureSpec)
         visual.measure(exact(min(w, inner)), exact(min(h, inner)))
         setMeasuredDimension(w, h)

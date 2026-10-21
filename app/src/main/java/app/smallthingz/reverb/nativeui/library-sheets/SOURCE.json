@@ -1,0 +1,48 @@
+{
+  "status": "Integrated source candidate; not compiled, tested or installed by this lane; production route unchanged",
+  "release": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "files": {
+    "LibrarySheetActions.kt": "ae77faa219d0a5dc7e62709bdb1fc2bb82bfe4134bd46476fb49cbabc9720a27",
+    "LibrarySheetButton.kt": "7183b2b65bb8959d719a6b223ef44a26f095080d68d5f717884b9e48b3e27529",
+    "NativeEditableConnectionActions.kt": "8bfbcca8abdf5c14c1cf08dcff70f90c33fc839ffd2ceea6119a41884f46de54",
+    "NativeRecordingInfoSheet.kt": "04791ceba583aae7d61544f94b34211759b6280a1ce988b3003630c731512b0d",
+    "NativeRecordingRenameOwner.kt": "ca86489a66f58ef15fa133a878df30db743a900a207873c5fbbae19196451e3e",
+    "NativeRecordingRenameSheet.kt": "a26bc36eac5711f0de617f14efe7077b4f484715b3f076123eb85f02391fed1d",
+    "NativeRenameFieldMetrics.kt": "634ad5cc32340cf8190b9e20e760deda8d56a2ebb99e47f9c48edd87c97a1114",
+    "ReverbRecordingInfoBody.kt": "de5301ccd33f164b0a489caef8eb985688e5dffd5a4a5b653b8858cd9d08591c",
+    "ReverbRenameFieldView.kt": "c4456a71d326e7f54f9711536ec4f1c38476da0c724e1adf05188b2e08cfd73e",
+    "ReverbSingleLineInputView.kt": "b66eae6155c19d57b4d497379329e5648170d86c4bd8dc976a5dae74fa27d291"
+  },
+  "tests": {
+    "NativeRenameFieldMetricsTest.kt": "1da83bf07b27f2390b6487622e2886c23aedecaae9269dc15e5af7a6072c6dc9"
+  },
+  "reference": {
+    "AndroidComposeViewAccessibilityDelegateCompat.android.kt": "29616ea6501cf785d0de5c2ae325df09c58504683cc54b7576efb84b2a892e62",
+    "Button.kt": "c379b30a478b84c2b16669f0a7f7e1f48292886c88b70f9bd4569d8221c06355",
+    "CoreTextFieldSemanticsModifier.kt": "28f9d594506fcce1df1d1a9e6ce17ba471b3faeaa423a3da8c685395e53463f3",
+    "FilesScreen.kt": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371",
+    "NativeAndroidInteropNode.kt": "97594756b0bfcf3a44b4bc00a68ad6775b951bd21c3a1c80016add058dcc4b82",
+    "OutlinedTextField.kt": "685cb81ec3cc5810fae0d7b1cfb51c4fe9616aa75b14152940b2a1fb38bf29ca",
+    "OutlinedTextFieldTokens.kt": "3369cca54a8a13da3e9556d0540d8f689c7227633654150c122a2278be5c41f9",
+    "ReverbSheet.kt": "779692a1a2dff21a57dbff75ab12d3db10d3d688bc1058bbac95aeb97c5c6e3f",
+    "SettingsRetentionInputView.kt": "4083c436b181d95aeb4a63082b5aca8cffcb52efedcfc4ab841ad14f342cbedd",
+    "TextFieldDefaults.kt": "af48a8583e6fd024d405ba97ebfa6eac9c53cbe7d1729550924b124398a1e4fd",
+    "TextFieldImpl.kt": "44847f7a0456d1e5a5f68e0202d8393aa7b14710c2064de6158d6fe3f65f6f63",
+    "TextFieldSelectionManager.kt": "a0e394831b6c624c0893ef17a78d33cd2ebbb8f328d8b2b881036c065ff4a323",
+    "animation-core-AnimateAsState.kt": "659ace7c824ade5698cf3189378c429c8d627aba40466d4b29092b365f3ed092",
+    "foundation-Border.kt": "4a90fa89c443e9d6f8fa18210a6bc11aba573acb0a974f438a0d03138000f3b0",
+    "foundation-KeyMapping.android.kt": "dbf8fabdd6b3cc42eaf3cb4a230c721483709bf3c6448bbc808fe5ee554c239d",
+    "foundation-KeyMapping.kt": "19e9b0de767953792e201ea7b2270b2dcf886b2a667e23cc7187fb93f4d0028b",
+    "foundation-RecordingInputConnection.android.kt": "7e610de087c8c55406360a00d795fe755065f41ceb412eb95e401642c938ac55",
+    "foundation-TextFieldCursor.kt": "2350afe22d3461be98989261cda0924b95ebf5b85ddfd7eabcc2d3c149139db0",
+    "foundation-TextFieldKeyInput.kt": "c9b0fecbb73ee77c26a8654d80a86cb4c2cd6ae0f21b945fe2723ae99ea37f3e",
+    "material3-MotionScheme.kt": "08babdb1e678944f415bf31119b0d7a44006a93662853627f1298fb079e1f01b",
+    "ui-text-RecordingInputConnection.android.kt": "6ee165a1197364128938a6d386bb21ad8f50efdaf502ac6b1243e479f0e18443"
+  },
+  "migration_reference_note": "SettingsRetentionInputView and NativeAndroidInteropNode are exact current native-hosts source inputs, not released0.1.2 files. Original released/pinned sources remain separately retained.",
+  "shared_policy_tests": "NativeEditableConnectionActionsTest: four tests integrated and owned by Settings lane, not executed here",
+  "host_integration": {
+    "ReverbLibraryScreenContent.kt": "b5be3337aa62d4b087b12a10b8558ba26e366d104cc184b865cf10b048399775",
+    "NativeLibraryPointerBinding.kt": "966eef36df54eed7734c2109e96e28379ae78c096ea1dfcc86cda466aa73cca4"
+  }
+}

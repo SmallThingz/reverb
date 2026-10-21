@@ -32,13 +32,24 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
             val descriptions = node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
             val position = node.positionInRoot
             val bounds = node.boundsInRoot
-            raw.put(JSONObject().put("source_semantics_id", node.id)
+            val attached = node.layoutInfo.isAttached
+            val placed = node.layoutInfo.isPlaced
+            val rawNode = JSONObject().put("source_semantics_id", node.id)
                 .put("texts", JSONArray(strings)).put("descriptions", JSONArray(descriptions))
+                .put("attached", attached).put("placed", placed)
+                .put("deactivated", node.layoutInfo.isDeactivated)
                 .put("position", JSONArray(listOf(position.x.toDouble(), position.y.toDouble())))
                 .put("size", JSONArray(listOf(node.size.width, node.size.height)))
                 .put("clipped_bounds", JSONArray(listOf(bounds.left.toDouble(), bounds.top.toDouble(),
-                    bounds.right.toDouble(), bounds.bottom.toDouble()))))
-            if (strings.size == 1) {
+                    bounds.right.toDouble(), bounds.bottom.toDouble())))
+            if (!attached || !placed) rawNode.put("text_geometry_excluded_reason",
+                "Source layout is not attached and placed; retained prefetch geometry is not rendered")
+            raw.put(rawNode)
+            // getAllSemanticsNodes includes attached precomposed/premeasured pager pages.
+            // LayoutInfo.isPlaced includes all parents; the actual source accessibility map
+            // likewise excludes unplaced nodes (SemanticsOwner1.11.2:254–260). Keep every raw
+            // node above, and do not exclude placed alpha-zero, hidden, clipped or offscreen text.
+            if (strings.size == 1 && attached && placed) {
                 val layouts = mutableListOf<TextLayoutResult>()
                 node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
                 val layout = layouts.singleOrNull()
