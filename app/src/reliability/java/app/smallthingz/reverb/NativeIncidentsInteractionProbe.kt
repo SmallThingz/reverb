@@ -351,8 +351,8 @@ private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativePari
                 return evidence
             } catch (pending: IncidentMenuWindowNotPublished) {
                 // Root and window info use separate accessibility Binder/cache queries. This
-                // read-only wait covers only missing metadata, never wrong ownership/focus,
-                // an unexpected replacement window, absent labels, or a failed user action.
+                // read-only wait covers missing metadata and the observed zero-focus handoff
+                // between own windows. It never admits input, another owner, or a replacement popup.
                 val windows = nativeParityOnMain(instrumentation) {
                     incidentLocalWindowInventory()
                 }
@@ -361,11 +361,23 @@ private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativePari
                 if (!readiness.has("first_pending")) readiness.put("first_pending", observation)
                 readiness.put("last_pending", observation).put("accepted", false)
                 try {
-                    val focused = (0 until windows.length()).map(windows::getJSONObject).filter {
-                        it.getBoolean("attached") && it.getBoolean("shown") && it.getBoolean("focused")
-                    }.single()
-                    check(focused.getString("package") == host.packageName && focused.getInt("uid") == Process.myUid() &&
-                        focused.getInt("display_id") == 0) { "Own physical popup focus was lost while metadata was pending" }
+                    val visible = (0 until windows.length()).map(windows::getJSONObject).filter {
+                        it.getBoolean("attached") && it.getBoolean("shown")
+                    }
+                    check(visible.isNotEmpty() && visible.all {
+                        it.getString("package") == host.packageName && it.getInt("uid") == Process.myUid() &&
+                            it.getInt("display_id") == 0
+                    }) { "Own physical popup windows changed while metadata was pending" }
+                    val focused = visible.filter { it.getBoolean("focused") }
+                    observation.put("local_focused_count", focused.size)
+                    check(focused.size <= 1) { "Ambiguous local popup focus while metadata was pending" }
+                    if (focused.isEmpty()) {
+                        // This is readiness only: currentIncidentMenu must still observe the pinned
+                        // popup's focused physical window and exact labels before this loop returns.
+                        readiness.put("focus_handoff_reads", readiness.optInt("focus_handoff_reads") + 1)
+                        if (!readiness.has("first_focus_handoff")) readiness.put("first_focus_handoff", observation)
+                        readiness.put("last_focus_handoff", observation)
+                    }
                 } catch (focusFailure: Throwable) {
                     try {
                         recordIncidentFocusFailure(readiness, observation, focusFailure)

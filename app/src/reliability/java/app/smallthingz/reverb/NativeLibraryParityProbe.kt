@@ -626,12 +626,28 @@ internal class LibraryParityBoard(
         }
         settle(instrumentation)
         record("seek-paused"); capture("seek-paused")
-        nativeParityOnMain(instrumentation) { openPlaybackMenu(compose) }
-        awaitPlaybackWindow(instrumentation, "Trim menu") {
+        val menuEvidence = JSONObject().put("action_submitted", false)
+        checkpoint("menu-readiness", menuEvidence)
+        val menuTransition = nativeParityOnMain(instrumentation) {
+            val transition = NativeLibraryWindowTransition(host, playbackGuard(), menuEvidence)
+            menuEvidence.put("action_submitted", JSONObject.NULL)
+            openPlaybackMenu(compose)
+            menuEvidence.put("action_submitted", true)
+            transition
+        }
+        awaitPlaybackWindow(instrumentation, "Trim menu", menuTransition) {
             hasPlaybackText(compose, context.getString(R.string.trim_recording))
         }
-        nativeParityOnMain(instrumentation) { clickPlaybackText(compose, context.getString(R.string.trim_recording)) }
-        awaitPlaybackWindow(instrumentation, "inline Trim controls") {
+        val trimEvidence = JSONObject().put("action_submitted", false)
+        checkpoint("trim-controls-readiness", trimEvidence)
+        val trimTransition = nativeParityOnMain(instrumentation) {
+            val transition = NativeLibraryWindowTransition(host, playbackGuard(), trimEvidence)
+            trimEvidence.put("action_submitted", JSONObject.NULL)
+            clickPlaybackText(compose, context.getString(R.string.trim_recording))
+            trimEvidence.put("action_submitted", true)
+            transition
+        }
+        awaitPlaybackWindow(instrumentation, "inline Trim controls", trimTransition) {
             host.hasWindowFocus() && hasPlaybackText(compose, context.getString(R.string.trim_save_copy)) &&
                 hasPlaybackText(compose, context.getString(R.string.cancel))
         }
@@ -708,13 +724,23 @@ internal class LibraryParityBoard(
             check(row.isEnabled && row.performLongClick())
         }
     }
-    private fun awaitPlaybackWindow(instrumentation: Instrumentation, label: String, ready: () -> Boolean) {
+    private fun awaitPlaybackWindow(instrumentation: Instrumentation, label: String,
+                                    transition: NativeLibraryWindowTransition, ready: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 15_000L
         while (true) {
-            val root = nativeParityOnMain(instrumentation) { playbackGuard() }
-            if (nativeParityOnMain(instrumentation, ready)) return
+            val observed = nativeParityOnMain(instrumentation) {
+                val root = transition.focusedRoot()
+                val readyNow = root != null && run {
+                    check(playbackGuard() === root) { "Playback focus changed during readiness observation" }
+                    ready()
+                }
+                if (readyNow) transition.accepted(checkNotNull(root))
+                root to readyNow
+            }
+            if (observed.second) return
             check(SystemClock.uptimeMillis() < deadline) { "Playback fixture timed out: $label" }
-            awaitNativeParityDraw(instrumentation, root)
+            if (observed.first == null) Thread.sleep(16)
+            else awaitNativeParityDraw(instrumentation, checkNotNull(observed.first))
         }
     }
     private fun isPlaying(compose: Boolean): Boolean = if (compose) sourceNodes().any {

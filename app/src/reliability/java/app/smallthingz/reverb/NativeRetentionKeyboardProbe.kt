@@ -399,12 +399,23 @@ private class RetentionKeyboardGuard(
             val (node, labelNode) = checkNotNull(resolved) { "Expected one current editable '$label', observed 0" }
             check(node.refresh()) { "Editable node became stale before action/observation" }
             if (labelNode != node) check(labelNode.refresh()) { "Editable label became stale before action/observation" }
-            check(labelNode.contentDescription?.toString() == label && labelNode.isEnabled && labelNode.isVisibleToUser)
-            check(node.windowId == window.id && node.packageName?.toString() == host.packageName)
             val labelBounds = Rect().also(labelNode::getBoundsInScreen)
             val bounds = Rect().also(node::getBoundsInScreen)
+            observation.put("refreshed_label", JSONObject().put("window_id", labelNode.windowId)
+                .put("package", labelNode.packageName?.toString() ?: JSONObject.NULL)
+                .put("description", labelNode.contentDescription?.toString() ?: JSONObject.NULL)
+                .put("enabled", labelNode.isEnabled).put("visible", labelNode.isVisibleToUser)
+                .put("bounds", labelBounds.array()))
+                .put("refreshed_editor", JSONObject().put("window_id", node.windowId)
+                    .put("package", node.packageName?.toString() ?: JSONObject.NULL)
+                    .put("editable", node.isEditable).put("enabled", node.isEnabled)
+                    .put("visible", node.isVisibleToUser).put("focused", node.isFocused)
+                    .put("bounds", bounds.array()))
+            check(labelNode.contentDescription?.toString() == label && labelNode.isEnabled && labelNode.isVisibleToUser)
+            check(node.windowId == window.id && node.packageName?.toString() == host.packageName)
             check(node.isEditable && node.isEnabled && node.isVisibleToUser && !bounds.isEmpty)
-            check(!labelBounds.isEmpty && bounds.contains(labelBounds)) { "Editable label moved outside its editor" }
+            // Synthetic Compose description nodes use layout bounds; the editor uses adjusted
+            // touch bounds. Their fresh parent relation, not rectangle containment, binds the label.
             // Compose exports the exact label as a child of the editable semantics node. Native
             // EditText exports it on the editor itself. Revalidate only that observed ancestry;
             // never choose an unrelated editor by text, class, or screen position.

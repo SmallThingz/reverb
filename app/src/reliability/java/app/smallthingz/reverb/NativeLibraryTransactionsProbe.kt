@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -87,6 +88,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("passed", false)
     val cases = JSONArray()
     result.put("cases", cases)
+    val windowTransitions = JSONArray().also { result.put("window_transitions", it) }
     var host: NativeParityActivity? = null
     var board: TransactionBoard? = null
     var fixtures: TransactionFixtures? = null
@@ -122,7 +124,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             ledger.admit()
             val records = ledger.create()
             val current = nativeParityOnMain(instrumentation) {
-                TransactionBoard(activity, compose, records) { board = it }
+                TransactionBoard(activity, compose, records, windowTransitions) { board = it }
             }
             current.awaitReady(instrumentation, records.map { it.id }.toSet())
             fun capture(name: String, settle: Boolean = true) {
@@ -304,12 +306,14 @@ private class TransactionBoard(
     private val host: NativeParityActivity,
     private val compose: Boolean,
     private val records: List<RecordingEntity>,
+    private val windowTransitions: JSONArray,
     onOwned: (TransactionBoard) -> Unit,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_NO
     }
-    private val context = host.createConfigurationContext(configuration)
+    // Keep the actual Activity base for ordinary dialog window tokens while overriding resources.
+    private val context = ContextThemeWrapper(host, 0).apply { applyOverrideConfiguration(configuration) }
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
     private val colors = dynamicLightColorScheme(context)
     private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
@@ -335,6 +339,7 @@ private class TransactionBoard(
     private var nativeScope: CoroutineScope? = null
     private var native: ReverbLibraryScreenContent? = null
     private var closed = false
+    private var pendingWindowTransition: NativeLibraryWindowTransition? = null
     var visibleIds: Set<String> = emptySet()
         private set
     private val accessibility = NativeActivityAccessibilityManager(context)
@@ -411,10 +416,25 @@ private class TransactionBoard(
     fun await(i: Instrumentation, label: String, timeout: Long = 15_000L, predicate: () -> Boolean) {
         val end = SystemClock.uptimeMillis() + timeout
         while (true) {
-            val root = nativeParityOnMain(i) { guard(); focusRoot() }
-            if (nativeParityOnMain(i, predicate)) return
+            val observed = nativeParityOnMain(i) {
+                checkAsync()
+                val transition = pendingWindowTransition
+                val root = if (transition != null) transition.focusedRoot() else { guard(); focusRoot() }
+                val readyNow = root != null && run {
+                    guard()
+                    check(focusRoot() === root)
+                    predicate()
+                }
+                if (readyNow) {
+                    transition?.accepted(checkNotNull(root))
+                    pendingWindowTransition = null
+                }
+                root to readyNow
+            }
+            if (observed.second) return
             check(SystemClock.uptimeMillis() < end) { "Transaction timeout: $label" }
-            awaitNativeParityDraw(i, root)
+            if (observed.first == null) Thread.sleep(16)
+            else awaitNativeParityDraw(i, checkNotNull(observed.first))
         }
     }
     fun waitFrame(i: Instrumentation) {
@@ -452,12 +472,26 @@ private class TransactionBoard(
     }
     fun click(i: Instrumentation, label: String) = nativeParityOnMain(i) {
         guard()
+        val transitionEvidence = if (label in listOf(R.string.recording_info, R.string.rename_recording,
+                R.string.close, R.string.cancel, R.string.delete_recording).map(context::getString)) {
+            beginWindowTransition(label)
+        } else null
+        transitionEvidence?.put("action_submitted", JSONObject.NULL)
         if (compose) {
             val match = nodes().single { label in textOf(it) &&
                 it.config.getOrNull(SemanticsProperties.Disabled) == null &&
                 it.config.getOrNull(SemanticsActions.OnClick)?.action != null }
             check(match.config.getOrNull(SemanticsActions.OnClick)!!.action!!.invoke())
         } else check(nativeAction(label).performClick())
+        transitionEvidence?.put("action_submitted", true)
+    }
+    private fun beginWindowTransition(action: String): JSONObject {
+        check(pendingWindowTransition == null) { "Previous owned UI transition has not reached readiness" }
+        val evidence = JSONObject().put("renderer", if (compose) "compose" else "native")
+            .put("action", action).put("action_submitted", false)
+        windowTransitions.put(evidence)
+        pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence)
+        return evidence
     }
     fun clickLabels(i: Instrumentation): List<String> = nativeParityOnMain(i) {
         guard()
@@ -480,6 +514,8 @@ private class TransactionBoard(
         awaitActivity(i)
         nativeParityOnMain(i) {
             guard()
+            val transitionEvidence = beginWindowTransition("open recording menu")
+            transitionEvidence.put("action_submitted", JSONObject.NULL)
             if (compose) {
                 val label = context.getString(R.string.open_options)
                 val row = nodes().single { title in textOf(it) &&
@@ -494,6 +530,7 @@ private class TransactionBoard(
                 }.distinct().single()
                 check(row.isEnabled && row.isShown && row.performLongClick())
             }
+            transitionEvidence.put("action_submitted", true)
         }
         awaitText(i, context.getString(R.string.recording_info))
     }
