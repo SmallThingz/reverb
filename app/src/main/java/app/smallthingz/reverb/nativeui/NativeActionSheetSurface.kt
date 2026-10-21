@@ -146,21 +146,21 @@ internal class NativeSheetSurface(
         }
     }
     internal class SheetInsets(context:Context):NativeSheetFrame(context) {
-        var top=0;private set
-        var bottom=0;private set
+        var contentTop=0;private set
+        var contentBottom=0;private set
         fun update(top:Int,bottom:Int):Boolean {
-            if(this.top==top&&this.bottom==bottom)return false
-            this.top=top;this.bottom=bottom;requestLayout();return true
+            if(contentTop==top&&contentBottom==bottom)return false
+            contentTop=top;contentBottom=bottom;requestLayout();return true
         }
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
             val maximum=MeasureSpec.getSize(heightMeasureSpec)
-            val constrained=max(0,maximum-top-bottom)
+            val constrained=max(0,maximum-contentTop-contentBottom)
             val child=getChildAt(0)
             child.measure(widthMeasureSpec,MeasureSpec.makeMeasureSpec(constrained,MeasureSpec.AT_MOST))
-            setMeasuredDimension(child.measuredWidth,resolveSize(child.measuredHeight+top+bottom,heightMeasureSpec))
+            setMeasuredDimension(child.measuredWidth,resolveSize(child.measuredHeight+contentTop+contentBottom,heightMeasureSpec))
         }
         override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-            getChildAt(0).let {it.layout(0,top,it.measuredWidth,top+it.measuredHeight)}
+            getChildAt(0).let {it.layout(0,contentTop,it.measuredWidth,contentTop+it.measuredHeight)}
         }
     }
     internal class SheetColumn(context:Context,val handle:View,val content:View):ViewGroup(context) {
