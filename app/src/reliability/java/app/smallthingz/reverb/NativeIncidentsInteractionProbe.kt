@@ -87,7 +87,7 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
             val menu = awaitIncidentMenu(instrumentation, activity, mainWindow, menuReadiness)
             run.put("menu", menu)
             captureIncidentMenu(instrumentation, activity, menu.getInt("window_id"), directory,
-                "$renderer-menu", pictures)
+                "$renderer-menu", pictures, run)
             clickIncidentMenuDelete(instrumentation, activity, menu.getInt("window_id"))
             awaitIncidentCondition(instrumentation, activity, "memory delete and own-window return",
                 returningWindows = setOf(mainWindow, menu.getInt("window_id"))) {
@@ -454,7 +454,7 @@ private fun recordIncidentFocusFailure(readiness: JSONObject, first: JSONObject,
 }
 
 private fun captureIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity, window: Int,
-                                directory: File, name: String, pictures: MutableMap<String, File>) {
+                                directory: File, name: String, pictures: MutableMap<String, File>, run: JSONObject) {
     val bounds = nativeParityOnMain(instrumentation) {
         val location = IntArray(2); host.fixtureRoot.getLocationOnScreen(location)
         Rect(location[0], location[1], location[0] + host.fixtureRoot.width, location[1] + host.fixtureRoot.height)
@@ -479,6 +479,11 @@ private fun captureIncidentMenu(instrumentation: Instrumentation, host: NativePa
             if (stable >= 2) {
                 val file = File(directory, "$name.png")
                 saveNativeParityBitmap(directory, file.name, crop); pictures[name] = file
+                currentIncidentMenu(instrumentation, host, window).first.recycle()
+                run.put("menu_text_geometry", nativeParityOnMain(instrumentation) {
+                    incidentMenuTextGeometry(host, window)
+                })
+                currentIncidentMenu(instrumentation, host, window).first.recycle()
                 return
             }
             Thread.sleep(32)

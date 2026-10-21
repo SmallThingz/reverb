@@ -109,7 +109,12 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         cases.put(entry)
         var failure: Throwable? = null
         try { body(entry); entry.put("passed", true) }
-        catch (error: Throwable) { failure = error; entry.put("error", android.util.Log.getStackTraceString(error)); throw error }
+        catch (error: Throwable) {
+            failure = error
+            entry.put("failure_inventory", board?.failureInventory(instrumentation) ?: JSONObject.NULL)
+            entry.put("error", android.util.Log.getStackTraceString(error))
+            throw error
+        }
         finally { transactionWrite(directory, result, failure) }
     }
     try {
@@ -136,34 +141,42 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 val expected = listOf(R.string.rename_recording, R.string.recording_info,
                     R.string.share_recording, R.string.trim_recording, R.string.delete_recording, R.string.multi_select)
                     .map(context::getString)
-                check(current.clickLabels(instrumentation) == expected) { "Menu label/order/enabled mismatch" }
+                val actualMenu = current.clickLabels(instrumentation)
+                entry.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actualMenu))
+                check(actualMenu == expected) { "Menu label/order/enabled mismatch" }
                 capture("menu")
                 current.click(instrumentation, context.getString(R.string.recording_info))
-                current.awaitText(instrumentation, context.getString(R.string.recording_details_started))
                 val labels = listOf(R.string.recording_details_started, R.string.recording_details_duration,
                     R.string.recording_details_size, R.string.recording_details_codec,
                     R.string.recording_details_mime, R.string.recording_details_storage,
-                    R.string.recording_details_location).map(context::getString)
+                    R.string.recording_details_location).map { context.getString(it).removeSuffix(":") }
+                // Both released Info rows and the native body render labels without their resource colon.
+                entry.put("info_labels", JSONArray(labels))
+                current.awaitText(instrumentation, labels.first())
                 val actual = current.textLabels(instrumentation)
+                entry.put("actual_info_labels", JSONArray(actual))
                 check(labels.all(actual::contains))
                 check(records[0].displayName in actual)
                 capture("info")
                 current.click(instrumentation, context.getString(R.string.close))
                 current.awaitActivity(instrumentation)
                 ledger.requireUnchanged()
-                entry.put("menu_labels", JSONArray(expected)).put("info_labels", JSONArray(labels))
             }
             recordCase(renderer, "rename-draft-and-commit") { entry ->
                 current.openMenu(instrumentation, records[0].displayName)
                 current.click(instrumentation, context.getString(R.string.rename_recording))
                 current.awaitEditor(instrumentation)
-                check(current.raw(instrumentation) == records[0].displayName.substringBeforeLast('.'))
+                val initialRaw = current.raw(instrumentation)
+                entry.put("initial_raw", initialRaw)
+                check(initialRaw == records[0].displayName.substringBeforeLast('.'))
                 capture("rename-initial")
                 // This is the existing invalid-draft case, also retaining the source raw-newline contract.
                 current.setRaw(instrumentation, "bad\nname")
                 current.click(instrumentation, context.getString(R.string.rename_recording))
                 current.awaitText(instrumentation, context.getString(R.string.rename_recording_illegal_chars))
-                check(current.raw(instrumentation) == "bad\nname")
+                val invalidRaw = current.raw(instrumentation)
+                entry.put("invalid_raw", invalidRaw)
+                check(invalidRaw == "bad\nname")
                 capture("rename-invalid-newline")
                 current.click(instrumentation, context.getString(R.string.cancel))
                 current.awaitActivity(instrumentation)
@@ -171,7 +184,9 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 current.openMenu(instrumentation, records[0].displayName)
                 current.click(instrumentation, context.getString(R.string.rename_recording))
                 current.awaitEditor(instrumentation)
-                check(current.raw(instrumentation) == records[0].displayName.substringBeforeLast('.')) {
+                val reopenedRaw = current.raw(instrumentation)
+                entry.put("reopened_raw", reopenedRaw)
+                check(reopenedRaw == records[0].displayName.substringBeforeLast('.')) {
                     "Cancelled Rename draft leaked into reopened editor"
                 }
                 current.setRaw(instrumentation, "Library transaction renamed")
@@ -506,7 +521,23 @@ private class TransactionBoard(
     }
     fun textLabels(i: Instrumentation) = nativeParityOnMain(i) {
         guard()
-        if (compose) nodes(false).flatMap(::textOf) else nativeParagraphs().map { it.getText().toString() }
+        currentTextLabels()
+    }
+    private fun currentTextLabels() = if (compose) nodes(false).flatMap(::textOf)
+        else nativeParagraphs().map { it.getText().toString() }
+    /** Diagnostics only: retain the primary failure, and never read a foreign/unfocused window. */
+    fun failureInventory(i: Instrumentation): JSONObject = try {
+        nativeParityOnMain(i) {
+            guard()
+            val root = focusRoot()
+            JSONObject().put("available", true).put("renderer", if (compose) "compose" else "native")
+                .put("uptime_ms", SystemClock.uptimeMillis()).put("root_identity", System.identityHashCode(root))
+                .put("root_class", root.javaClass.name).put("package", root.context.packageName)
+                .put("display_id", root.display.displayId).put("window_focused", root.hasWindowFocus())
+                .put("labels", JSONArray(currentTextLabels()))
+        }
+    } catch (diagnosticError: Throwable) {
+        JSONObject().put("available", false).put("reason", android.util.Log.getStackTraceString(diagnosticError))
     }
     fun hasText(text: String): Boolean = if (compose) nodes(false).any { text in textOf(it) }
         else nativeParagraphs().any { it.getText().toString() == text }

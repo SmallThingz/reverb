@@ -350,18 +350,40 @@ private class RetentionKeyboardGuard(
         requireNativeParityHost(instrumentation, host)
         check(host.applicationInfo.uid == android.os.Process.myUid()) { "QA host UID changed" }
         val windows = instrumentation.uiAutomation.windows
-        check(windows.isNotEmpty()) { "No actual accessible windows after explicit test-service setup" }
         val roots = mutableListOf<AccessibilityNodeInfo>()
         val labelPaths = mutableListOf<List<AccessibilityNodeInfo>>()
+        val windowInventory = JSONArray()
+        evidence.put("last_window_discovery", JSONObject()
+            .put("uptime_ms", SystemClock.uptimeMillis()).put("uid", host.applicationInfo.uid)
+            .put("package", host.packageName).put("expected_window_id", expectedWindowId ?: JSONObject.NULL)
+            .put("windows", windowInventory))
         try {
-            val own = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.displayId == 0 }
-                .mapNotNull { window ->
-                    window.root?.also(roots::add)?.takeIf {
-                        it.packageName?.toString() == host.packageName
-                    }?.let { window to it }
-                }
-            check(own.size == 1 && own.single().first.isFocused) { "Own physical application window is not uniquely focused" }
-            val (window, root) = own.single()
+            val observed = windows.map { window ->
+                val root = window.root?.also(roots::add)
+                windowInventory.put(JSONObject().put("window_id", window.id)
+                    .put("type", window.type).put("display_id", window.displayId)
+                    .put("focused", window.isFocused).put("active", window.isActive)
+                    .put("layer", window.layer).put("title", window.title?.toString() ?: JSONObject.NULL)
+                    .put("bounds", Rect().also(window::getBoundsInScreen).array())
+                    .put("root_window_id", root?.windowId ?: JSONObject.NULL)
+                    .put("root_package", root?.packageName?.toString() ?: JSONObject.NULL)
+                    .put("root_class", root?.className?.toString() ?: JSONObject.NULL)
+                    .put("own_package", root?.packageName?.toString() == host.packageName))
+                window to root
+            }
+            check(windows.isNotEmpty()) { "No actual accessible windows after explicit test-service setup" }
+            // Selection handles/toolbars may add nonfocused application windows. The editor's
+            // pinned, uniquely focused physical host owns input; total application-window count
+            // is not an ownership or focus invariant.
+            val focused = observed.filter { (window, _) ->
+                window.type == AccessibilityWindowInfo.TYPE_APPLICATION && window.displayId == 0 && window.isFocused
+            }
+            check(focused.size == 1) { "Physical application window is not uniquely focused" }
+            val (window, nullableRoot) = focused.single()
+            val root = checkNotNull(nullableRoot) { "Focused application window has no current root" }
+            check(root.packageName?.toString() == host.packageName && root.windowId == window.id) {
+                "Focused physical application window does not belong to the QA host"
+            }
             expectedWindowId?.let { check(window.id == it) { "Editable application window changed" } }
             val inventory = JSONArray()
             val observation = JSONObject().put("uptime_ms", SystemClock.uptimeMillis())

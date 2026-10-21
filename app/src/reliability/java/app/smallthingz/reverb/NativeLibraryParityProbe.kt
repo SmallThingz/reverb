@@ -35,6 +35,8 @@ import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
@@ -426,8 +428,9 @@ internal class LibraryParityBoard(
                 false, true, LibraryScaffoldInsets(), {}, {}, {}, {})
             val content = ReverbLibraryScreenContent(context, environment, input, nativeLifecycle,
                 host.onBackPressedDispatcher, scope, frames, ValueAnimator::getDurationScale,
-                null, host.fixtureRoot, noNested, {}, {})
+                null, nativeHost, noNested, nativeHost::refreshPointerNodes, {})
             native = content // Own it before attachment, whose callbacks can fail.
+            nativeHost.bindPointerContent(content, frames, scope)
             content.layoutDirection = referenceHost.layoutDirection
             nativeHost.layoutDirection = referenceHost.layoutDirection
             nativeHost.addView(content, FrameLayout.LayoutParams(-1, -1))
@@ -616,6 +619,7 @@ internal class LibraryParityBoard(
                 try {
                     val handled = host.fixtureRoot.dispatchTouchEvent(event)
                     result.put(if (action == MotionEvent.ACTION_DOWN) "down_handled" else "up_handled", handled)
+                    result.put(if (action == MotionEvent.ACTION_DOWN) "after_down" else "after_up", playbackState(compose))
                     check(handled) { "Owned waveform tap was not handled: $action" }
                 } finally { event.recycle() }
             }
@@ -874,8 +878,8 @@ internal class LibraryParityBoard(
         fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
             if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         } }
-        release { native?.close() }
         release { nativeHost.close() }
+        release { native?.close() }
         release { nativeScope?.cancel() }
         release { reference.disposeComposition() }
         release { nativeLifecycle.close() }
@@ -885,10 +889,15 @@ internal class LibraryParityBoard(
     }
 }
 
-/** The same focus-owner hooks as NativeActivityContentView, without an Activity or data owner. */
-private class LibraryNativeFocusRoot(context: Context) : FrameLayout(context), AutoCloseable {
+/** The production phase dispatcher and focus hooks on the existing fixture FrameLayout. */
+private class LibraryNativeFocusRoot(
+    context: Context,
+    private val pointer: LibraryFixturePointerGeometry = LibraryFixturePointerGeometry(),
+) : NativePagerTouchRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
+    pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable {
     private var focus: NativeSourceFocusPolicy? = null
     init {
+        pointer.root = this
         isFocusable = true
         isFocusableInTouchMode = true
         defaultFocusHighlightEnabled = false
@@ -918,7 +927,38 @@ private class LibraryNativeFocusRoot(context: Context) : FrameLayout(context), A
         focus?.beforeMeasure()
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
-    override fun close() { focus?.close() }
+    fun bindPointerContent(content: ReverbLibraryScreenContent, frames: MonotonicFrameClock, scope: CoroutineScope) {
+        check(pointer.binding == null) { "Library fixture already owns its phase binding" }
+        pointer.binding = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
+    }
+    fun refreshPointerNodes() { pointer.binding?.refresh() }
+    override fun close() {
+        var failure: Throwable? = null
+        fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
+            if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+        } }
+        release { cancelPointerInput() }
+        release { pointer.binding?.close() }
+        pointer.binding = null
+        release { focus?.close() }
+        failure?.let { throw it }
+    }
+}
+
+/** No independent hit policy: the production Library binding supplies the entire child tree. */
+private class LibraryFixturePointerGeometry {
+    lateinit var root: View
+    var binding: NativeLibraryPointerBinding? = null
+    val coordinates = NativeWindowPointerCoordinates { root }
+    val layout = object : NativeViewPointerHitLayout {
+        override val placed get() = root.isAttachedToWindow && root.isLaidOut && root.visibility == View.VISIBLE
+        override val size get() = Size(root.width.toFloat(), root.height.toFloat())
+        override val minimumTouchTarget get() = Size.Zero
+        override val nodes: List<NativeViewPhasePointerNode> get() = emptyList()
+        override val childrenInHitOrder get() = binding?.let { listOf(it.layout) }.orEmpty()
+        override fun screenToLocal(screen: Offset) = coordinates.coordinates(root).local(screen)
+        override fun withinLayerBounds(local: Offset) = true
+    }
 }
 
 private fun libraryViews(root: View): List<View> = buildList {
