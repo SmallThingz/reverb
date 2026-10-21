@@ -419,13 +419,33 @@ private class AboutFixture private constructor(
     }
     fun awaitDismissed() {
         check(dismissed.await(6, TimeUnit.SECONDS)) { "About owner dismissal not delivered" }
-        // Await Compose owner removal before checking the Activity; never force/dismiss foreign UI.
+        // Dialog detachment and Activity window-focus delivery are separate platform callbacks.
+        // Observe both before the unchanged input guard; never request focus or dismiss foreign UI.
+        var observedRemoval = false
         repeat(30) {
-            val removed = nativeParityOnMain(instrumentation) { !window.decorView.isAttachedToWindow }
-            if (removed) { requireNativeParityHost(instrumentation, activity); return }
+            val ready = nativeParityOnMain(instrumentation) {
+                check(!closed && !activity.isFinishing && activity.fixtureRoot.isAttachedToWindow &&
+                    activity.fixtureRoot.isShown &&
+                    activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY) {
+                    "Own QA Activity disappeared while observing About dismissal; stop without reclaiming focus"
+                }
+                val removed = !window.decorView.isAttachedToWindow
+                if (removed && !observedRemoval) {
+                    observedRemoval = true
+                    mark("own_dialog_removed")
+                }
+                removed && activity.hasWindowFocus()
+            }
+            if (ready) {
+                requireNativeParityHost(instrumentation, activity)
+                mark("own_activity_focus_returned")
+                return
+            }
             awaitAboutFrame(instrumentation)
         }
-        error("Dismiss callback was delivered but the own About Window remained attached")
+        error(if (observedRemoval)
+            "Own About Window detached but QA Activity focus did not return within30 frames; no focus requested"
+        else "Dismiss callback was delivered but the own About Window remained attached")
     }
 
     fun windowSnapshot() = nativeParityOnMain(instrumentation) {

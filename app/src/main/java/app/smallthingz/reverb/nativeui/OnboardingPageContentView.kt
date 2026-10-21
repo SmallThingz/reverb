@@ -88,14 +88,12 @@ internal class OnboardingPageContentView(
         OnboardingAudioRow(context, typography, density, resolver, initialPalette, interactions) else null
     private val silence = if (page == 2)
         OnboardingAudioRow(context, typography, density, resolver, initialPalette, interactions) else null
-    private val compressionWarning = if (page == 2) label(context, typography.bodySmall, density, resolver,
-        R.string.flac_pcm_required, initialPalette.onSurfaceVariant).apply {
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-        } else null
-    private val silenceWarning = if (page == 2) label(context, typography.bodySmall, density, resolver,
-        R.string.silence_invalid_settings, initialPalette.error).apply {
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-        } else null
+    private val compressionWarning = if (page == 2) OnboardingPaddedLabel(context,
+        label(context, typography.bodySmall, density, resolver,
+            R.string.flac_pcm_required, initialPalette.onSurfaceVariant), density) else null
+    private val silenceWarning = if (page == 2) OnboardingPaddedLabel(context,
+        label(context, typography.bodySmall, density, resolver,
+            R.string.silence_invalid_settings, initialPalette.error), density) else null
 
     init {
         require(page in 0..2)
@@ -278,3 +276,37 @@ private class OnboardingPageColumn(context: Context) : ViewGroup(context) {
 private fun label(context: Context, style: TextStyle, density: Density, resolver: FontFamily.Resolver,
                   text: Int, color: Int): ReverbParagraphView =
     ReverbParagraphView(context, style, density, resolver, color).apply { setText(context.getString(text)) }
+
+/**
+ * Source Modifier.padding sits outside Text semantics. Keeping that inset on the paragraph itself
+ * draws correctly but incorrectly enlarges the exposed Text bounds. This wrapper owns only the
+ * original14/8dp layout inset; the real original label/cursor remains the child node.
+ */
+private class OnboardingPaddedLabel(
+    context: Context,
+    private val label: ReverbParagraphView,
+    density: Density,
+) : ViewGroup(context) {
+    private val horizontalInset = (14f * density.density).roundToInt()
+    private val verticalInset = (8f * density.density).roundToInt()
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        clipChildren = false
+        clipToPadding = false
+        addView(label)
+    }
+    fun setTextColor(color: Int) = label.setTextColor(color)
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        fun inset(spec: Int, amount: Int): Int =
+            if (MeasureSpec.getMode(spec) == MeasureSpec.UNSPECIFIED) unspecified()
+            else MeasureSpec.makeMeasureSpec((MeasureSpec.getSize(spec) - amount).coerceAtLeast(0),
+                MeasureSpec.getMode(spec))
+        label.measure(inset(widthMeasureSpec, horizontalInset * 2), inset(heightMeasureSpec, verticalInset * 2))
+        setMeasuredDimension(resolveSize(label.measuredWidth + horizontalInset * 2, widthMeasureSpec),
+            resolveSize(label.measuredHeight + verticalInset * 2, heightMeasureSpec))
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        label.layout(horizontalInset, verticalInset,
+            horizontalInset + label.measuredWidth, verticalInset + label.measuredHeight)
+    }
+}

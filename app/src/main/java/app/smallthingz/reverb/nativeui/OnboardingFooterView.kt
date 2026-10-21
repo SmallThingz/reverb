@@ -119,10 +119,10 @@ internal class OnboardingFooterView(
     private var buttonHeight = 0
     private var backWidth = 0
     private var continueWidth = 0
-    private val back = FooterButton(context, false, labelLarge, textDensity, resolver, interactions) {
+    private val back = FooterButton(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver, interactions) {
         actions?.back?.invoke()
     }
-    private val next = FooterButton(context, true, labelLarge, textDensity, resolver, interactions) {
+    private val next = FooterButton(context, true, reverbButtonTextStyle(labelLarge), textDensity, resolver, interactions) {
         actions?.continueOrFinish?.invoke()
     }
 
@@ -185,8 +185,9 @@ internal class OnboardingFooterView(
     }
 
     fun bindTypography(labelLarge: TextStyle, textDensity: Density, resolver: FontFamily.Resolver) {
-        back.bindTypography(labelLarge, textDensity, resolver)
-        next.bindTypography(labelLarge, textDensity, resolver)
+        val inherited = reverbButtonTextStyle(labelLarge)
+        back.bindTypography(inherited, textDensity, resolver)
+        next.bindTypography(inherited, textDensity, resolver)
         requestLayout()
     }
 
@@ -348,6 +349,9 @@ private class FooterButton(
         setWillNotDraw(false)
         isClickable = true
         isFocusable = true
+        // AndroidComposeView disables the framework highlight; the source indication below owns
+        // keyboard focus feedback. Drawing both would add a second rectangular focus layer.
+        defaultFocusHighlightEnabled = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         outlineProvider = capsuleOutline

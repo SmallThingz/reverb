@@ -50,12 +50,13 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
     val directory = File(instrumentation.targetContext.filesDir, "native-onboarding-screen-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val entries = JSONArray()
+    val nativeFocusChecks = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "8be65c8c589678c3a5393d4cb7a73489af942e3a04cf0958845bbad5fc4c72a9")
         .put("dispatch", "own-window semantic click callbacks; no synthetic physical input")
         .put("comparison", "exact unmasked ARGB and existing complete payload signatures; raw trees retained")
         .put("unqualified", JSONArray(listOf("gesture/frame-phase parity", "TalkBack delivery", "system permission UI")))
-        .put("cases", entries).put("passed", false)
+        .put("cases", entries).put("native_focus_checks", nativeFocusChecks).put("passed", false)
     var host: NativeParityActivity? = null
     var active: ScreenParityRender? = null
     var failure: Throwable? = null
@@ -129,6 +130,9 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
                     click(R.string.onboarding_back)
                     capture("back0", 0)
                     check(requests == 0 && finishes == 0) { "Navigation accidentally requested permission or Finish" }
+                    if (!reference) nativeFocusChecks.put(nativeParityOnMain(instrumentation) {
+                        verifyOnboardingExplicitFooterFocus(checkNotNull(active)).put("case", case.name).put("pass", pass)
+                    })
                     nativeParityOnMain(instrumentation) { active?.close(); active = null }
                 }
                 for (step in all[0].indices) {
@@ -234,6 +238,25 @@ private fun showOnboardingScreen(
     }
     host.fixtureRoot.addView(rendered.view, FrameLayout.LayoutParams(-1, -1))
     return rendered
+}
+
+/** After the unmodified raster/tree sequence, ensure implicit-focus suppression did not disable
+ * actual keyboard focus. Touch-mode admission is preserved, not changed to manufacture a pass. */
+private fun verifyOnboardingExplicitFooterFocus(render: ScreenParityRender): JSONObject {
+    val label = render.view.context.getString(R.string.onboarding_continue)
+    val button = onboardingViewDescendants(render.view).single { view ->
+        view is NativeMergedRowAccessibilityHost && onboardingViewDescendants(view)
+            .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+    }
+    check(button.isEnabled && button.isFocusable)
+    check(!button.defaultFocusHighlightEnabled) { "Source indication must be the sole focus highlight" }
+    check(!button.isFocused) { "Semantic navigation must not implicitly focus a footer button" }
+    val touchMode = button.isInTouchMode
+    val requested = if (!touchMode) button.requestFocus() else null
+    if (!touchMode) check(requested == true && button.isFocused) { "Explicit keyboard focus was suppressed" }
+    return JSONObject().put("implicit_focus_absent", true).put("default_focus_highlight", false)
+        .put("touch_mode", touchMode).put("explicit_focus_accepted", requested ?: JSONObject.NULL)
+        .put("explicit_focus_qualification", if (touchMode) "not attempted in touch mode" else "accepted")
 }
 
 private fun invokeOnboardingSemanticClick(render: ScreenParityRender, label: String) {

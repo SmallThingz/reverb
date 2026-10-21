@@ -366,7 +366,8 @@ internal class OnboardingAudioRow(
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         toggle.measure(exact(dp(52)), exact(dp(32)))
-        title.measure(atMost((width - dp(14) * 2 - dp(12) - toggle.measuredWidth).coerceAtLeast(0)), unspecified())
+        // Released Text owns Modifier.weight(1f), whose fill=true fixes its entire allocated width.
+        title.measure(exact((width - dp(14) * 2 - dp(12) - toggle.measuredWidth).coerceAtLeast(0)), unspecified())
         val desired = max(dp(64), dp(8) * 2 + max(title.measuredHeight, toggle.measuredHeight))
         setMeasuredDimension(resolveSize(width, w), resolveSize(desired, h))
         mergedRowAccessibility.roleView.measure(exact(measuredWidth), exact(measuredHeight))

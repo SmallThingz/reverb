@@ -158,10 +158,21 @@ class NativeSpringFineSeekStateTest {
         val secondHeld = change(2, 100f, 60f, true, true)
         h.send(NativeDragPointerEvent(listOf(firstUp, secondHeld), Offset.Zero))
         assertFalse(h.state.dragging)
-        h.send(NativeDragPointerEvent(listOf(change(3, 260f, 60f, true, false)), Offset.Zero))
+        h.send(NativeDragPointerEvent(listOf(
+            change(2, 100f, 60f, true, true), change(3, 260f, 60f, true, false),
+        ), Offset.Zero))
         assertFalse(h.state.dragging)
-        h.send(NativeDragPointerEvent(listOf(change(2, 100f, 60f, false, true)), Offset.Zero))
+        h.send(NativeDragPointerEvent(listOf(
+            change(2, 100f, 60f, false, true), change(3, 260f, 60f, true, true),
+        ), Offset.Zero))
+        assertFalse(h.state.dragging)
+        assertEquals(1, h.events.count { it.endsWith(":begin") })
+        h.send(NativeDragPointerEvent(listOf(change(3, 260f, 60f, false, true)), Offset.Zero))
         h.send(event(266f, 60f, true, false))
+        // No animation frame has returned the puck from x=266 yet: this DOWN is ON the puck.
+        // Source waits for radial slop before beginning the next fine-adjust drag.
+        assertFalse(h.state.dragging)
+        h.send(event(200f, 60f, true, true, previous = Offset(266f, 60f)))
         assertTrue(h.state.dragging)
         assertEquals(2, h.events.count { it.endsWith(":begin") })
     }

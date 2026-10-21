@@ -87,4 +87,19 @@ class ReverbParagraphStylesTest {
             assertSame(ReverbParagraphStyles[role], ReverbParagraphStyles[role])
         }
     }
+
+    @Test fun footerDefaultTextInheritsMaterialParagraphFieldsWithoutChangingExplicitRoles() {
+        val fresh = ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]
+        val footer = reverbButtonTextStyle(fresh)
+        val pinnedMaterial = Typography().bodyLarge
+        assertEquals(pinnedMaterial.platformStyle, footer.platformStyle)
+        assertEquals(pinnedMaterial.lineHeightStyle, footer.lineHeightStyle)
+        assertEquals(14.sp, footer.fontSize)
+        assertEquals(20.sp, footer.lineHeight)
+        assertEquals(FontWeight.SemiBold, footer.fontWeight)
+        assertEquals(0.1.sp, footer.letterSpacing)
+        assertNull(footer.fontFamily)
+        assertNull(fresh.platformStyle)
+        assertNull(fresh.lineHeightStyle)
+    }
 }

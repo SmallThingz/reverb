@@ -56,6 +56,14 @@ internal class NativeOnboardingScreenView private constructor(
     context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
     pointer.rootLayout, pointer.coordinates::begin,
 ), AutoCloseable {
+    override fun focusableViewAvailable(view: View) {
+        // Source clickables are virtual Compose focus nodes: enabling Back does not announce a new
+        // Android child to ViewRoot and steal focus after a semantic click. Explicit requestFocus
+        // and keyboard traversal still use the existing native focus path. Real AndroidView widgets
+        // retain their platform availability behavior.
+        if (view !is NativeClickPhaseHost) super.focusableViewAvailable(view)
+    }
+
     private val ownerJob = SupervisorJob(parentScope.coroutineContext[Job])
     // Caller supplies the ONE reviewed native window runtime: preserve its lifecycle-gated frame
     // clock and duration-scale context. Replacing either with raw AndroidUiDispatcher is incorrect.
