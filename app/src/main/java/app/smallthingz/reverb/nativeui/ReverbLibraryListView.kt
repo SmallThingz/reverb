@@ -68,7 +68,7 @@ internal class ReverbLibraryListView(
 ) : FrameLayout(context) {
     private var environment = initialEnvironment
     private var currentActions = actions
-    private var state: LibraryNativeListState? = null
+    private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
     private var currentRecordingIds = emptySet<String>()
     private var blockedRecordingIds = emptySet<String>()
     private var pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
@@ -123,13 +123,17 @@ internal class ReverbLibraryListView(
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
-        if (state == value) return
-        state = value.copy(items = value.items.toList(), selectedIds = value.selectedIds.toSet(),
-            activeMutationIds = value.activeMutationIds.toSet(), localOperationBusyIds = value.localOperationBusyIds.toSet())
-        val sampled = checkNotNull(state)
-        currentRecordingIds = sampled.items.mapNotNull { (it as? LibraryListItem.Recording)?.recording?.id }.toSet()
-        blockedRecordingIds = sampled.activeMutationIds + sampled.localOperationBusyIds
-        rowAdapter.submit(sampled)
+        val update = rowUpdates.submit(value.items, NativeLibraryRowState(
+            selectedIds = value.selectedIds,
+            selectionActive = value.selectionActive,
+            blockedIds = value.activeMutationIds + value.localOperationBusyIds,
+            expandedRecordingId = value.expandedOwner?.recordingId,
+            expandedOwner = value.expandedOwner,
+            trimRequestRecordingId = value.trimRequestRecordingId,
+            screenActive = value.screenActive,
+        )) ?: return
+        blockedRecordingIds = checkNotNull(rowUpdates.current).blockedIds
+        rowAdapter.submit(value.items, update)
     }
 
     /** Called once when this source branch consumes its restored rememberLazyListState slot. */
@@ -162,7 +166,7 @@ internal class ReverbLibraryListView(
     fun clearListComposition() {
         forEachRecordingHolder { it.retire() }
         rowAdapter.clear()
-        state = null
+        rowUpdates.clear()
         currentRecordingIds = emptySet()
         blockedRecordingIds = emptySet()
         // Old detached holders can survive until the next RV layout. A new source branch must save
@@ -194,6 +198,7 @@ internal class ReverbLibraryListView(
         val header: String? = null,
         val compactHeader: Boolean = false,
         val recording: RecordingEntity? = null,
+        val edges: ReverbRecordingGroupEdges? = null,
         val row: LibraryRecordingRow? = null,
         val expandedOwner: InlinePlaybackRowOwner? = null,
         val trimRequested: Boolean = false,
@@ -203,40 +208,33 @@ internal class ReverbLibraryListView(
 
     private inner class LibraryRowsAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         private var entries = emptyList<Entry>()
+        private var recordingsById = emptyMap<String, Entry>()
         private var nextStableId = 0L
         init { setHasStableIds(true) }
 
-        fun submit(value: LibraryNativeListState) {
+        fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate) {
+            if (update.catalogChanged) submitCatalog(items)
+            // Only bound visible rows need a transient update. Cached/prefetched holders sample the
+            // latest state when attached, so selection-mode changes never invalidate the full catalog.
+            forEachRecordingHolder { holder ->
+                holder.binding?.recording?.id?.let { id ->
+                    if (update.affects(id)) refresh(holder)
+                }
+            }
+        }
+
+        private fun submitCatalog(items: List<LibraryListItem>) {
             val previous = entries
             val ids = previous.associate { it.key to it.stableId }
-            val next = value.items.mapIndexed { index, item ->
+            val next = items.mapIndexed { index, item ->
                 val key = libraryListItemKey(item)
                 val id = ids[key] ?: nextStableId++
                 when (item) {
                     is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
-                    is LibraryListItem.Recording -> {
-                        val recording = item.recording
-                        val selected = recording.id in value.selectedIds
-                        val expanded = value.expandedOwner?.recordingId == recording.id
-                        val row = LibraryRecordingRow(
-                            recordingId = recording.id,
-                            title = recording.displayName,
-                            subtitle = formatSavedRecordingDuration(context, recording.durationMillis) +
-                                " \u2022 " + formatShortFileSize(recording.sizeBytes),
-                            timestamp = formatRecordingStartTimestamp(context, recording.startedAtMillis),
-                            selected = selected,
-                            selectionActive = value.selectionActive,
-                            interactionsEnabled = recording.id !in blockedRecordingIds,
-                            edges = ReverbRecordingGroupEdges(
-                                first = value.items.getOrNull(index - 1) !is LibraryListItem.Recording,
-                                last = value.items.getOrNull(index + 1) !is LibraryListItem.Recording),
-                            expanded = expanded,
-                        )
-                        Entry(key, id, recording = recording, row = row,
-                            expandedOwner = value.expandedOwner?.takeIf { expanded },
-                            trimRequested = value.trimRequestRecordingId == recording.id,
-                            screenActive = value.screenActive)
-                    }
+                    is LibraryListItem.Recording -> Entry(key, id, recording = item.recording,
+                        edges = ReverbRecordingGroupEdges(
+                            first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
+                            last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
                 }
             }
             // Released LazyColumn always appends item { Spacer(Modifier.height(84.dp)) }.
@@ -250,13 +248,43 @@ internal class ReverbLibraryListView(
                     previous[oldItemPosition] == withFooter[newItemPosition]
             })
             entries = withFooter
+            recordingsById = withFooter.mapNotNull { entry -> entry.recording?.id?.let { it to entry } }.toMap()
+            currentRecordingIds = recordingsById.keys
             diff.dispatchUpdatesTo(this)
+        }
+
+        private fun presentation(entry: Entry): Entry {
+            val recording = checkNotNull(entry.recording)
+            val state = checkNotNull(rowUpdates.current)
+            val expanded = state.expandedRecordingId == recording.id
+            return entry.copy(row = LibraryRecordingRow(
+                recordingId = recording.id,
+                title = recording.displayName,
+                subtitle = formatSavedRecordingDuration(context, recording.durationMillis) +
+                    " \u2022 " + formatShortFileSize(recording.sizeBytes),
+                timestamp = formatRecordingStartTimestamp(context, recording.startedAtMillis),
+                selected = recording.id in state.selectedIds,
+                selectionActive = state.selectionActive,
+                interactionsEnabled = recording.id !in state.blockedIds,
+                edges = checkNotNull(entry.edges),
+                expanded = expanded,
+            ), expandedOwner = state.expandedOwner?.takeIf { expanded },
+                trimRequested = state.trimRequestRecordingId == recording.id,
+                screenActive = state.screenActive)
+        }
+
+        private fun refresh(holder: RecordingHolder) {
+            val id = holder.binding?.recording?.id ?: return
+            val entry = recordingsById[id]
+            if (entry == null) holder.retire()
+            else if (holder.boundRevision != rowUpdates.revision) holder.bind(presentation(entry))
         }
 
         fun rebindAll() { notifyItemRangeChanged(0, itemCount) }
         fun clear() {
             val count = entries.size
             entries = emptyList()
+            recordingsById = emptyMap()
             if (count > 0) notifyItemRangeRemoved(0, count)
         }
         override fun getItemCount() = entries.size
@@ -282,7 +310,7 @@ internal class ReverbLibraryListView(
             if (entry.footer) {
                 holder.itemView.layoutParams = RecyclerView.LayoutParams(LayoutParams.MATCH_PARENT,
                     (84f * environment.textDensity.density).roundToInt())
-            } else if (holder is RecordingHolder) holder.bind(entry) else {
+            } else if (holder is RecordingHolder) holder.bind(presentation(entry)) else {
                 (holder.itemView as ReverbLibraryHeaderView).apply {
                     setEnvironment(environment)
                     bind(checkNotNull(entry.header), entry.compactHeader)
@@ -290,7 +318,12 @@ internal class ReverbLibraryListView(
             }
         }
         override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
-            (holder as? RecordingHolder)?.presentationAttached(true)
+            (holder as? RecordingHolder)?.let {
+                // RecyclerView can attach a cached holder without another onBindViewHolder call.
+                // Refresh before restoring preview admission, including an outgoing collapse lease.
+                refresh(it)
+                it.presentationAttached(true)
+            }
         }
         override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
             (holder as? RecordingHolder)?.presentationAttached(false)
@@ -304,6 +337,8 @@ internal class ReverbLibraryListView(
     private inner class RecordingHolder(val row: ReverbLibraryRecordingRow) : RecyclerView.ViewHolder(row) {
         var binding: Entry? = null
             private set
+        var boundRevision = -1L
+            private set
         private var expansion: LibraryInlineExpansionLease? = null
         private var expansionToken: Any? = null
         private var attached = false
@@ -312,6 +347,7 @@ internal class ReverbLibraryListView(
         fun bind(entry: Entry) {
             if (binding?.key != entry.key) retire()
             binding = entry
+            boundRevision = rowUpdates.revision
             row.setEnvironment(environment)
             val model = checkNotNull(entry.row)
             row.bind(model, guardedActions.copy(
@@ -358,6 +394,7 @@ internal class ReverbLibraryListView(
         fun retire() {
             releaseExpansion()
             binding = null
+            boundRevision = -1L
             row.unbind()
         }
     }
