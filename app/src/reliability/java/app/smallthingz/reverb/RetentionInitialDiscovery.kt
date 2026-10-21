@@ -44,3 +44,33 @@ internal fun verifyRetentionInitialDiscoveryChecks(): List<String> {
     }
     return checks
 }
+
+/** Resolve the one exact label only through its observed self/ancestor chain. */
+internal fun <T : Any> retentionEditableLabelTarget(
+    labelPaths: List<List<T>>,
+    isEditable: (T) -> Boolean,
+): Pair<T, T>? {
+    check(labelPaths.size <= 1) { "Editable field label is ambiguous: ${labelPaths.size}" }
+    val path = labelPaths.singleOrNull() ?: return null
+    check(path.isNotEmpty()) { "Editable label path is empty" }
+    val editor = checkNotNull(path.asReversed().firstOrNull(isEditable)) {
+        "Exact field label has no editable self or ancestor"
+    }
+    return editor to path.last()
+}
+
+/** Covers the retained Compose child-label tree and the native direct-label tree. */
+internal fun verifyRetentionEditableLabelChecks(): List<String> {
+    check(retentionEditableLabelTarget(listOf(listOf(0, 1))) { it == 1 } == (1 to 1))
+    check(retentionEditableLabelTarget(listOf(listOf(0, 1, 2))) { it == 1 } == (1 to 2))
+    check(retentionEditableLabelTarget(listOf(listOf(0, 1, 2, 3))) { it == 1 || it == 2 } == (2 to 3))
+    check(retentionEditableLabelTarget<Int>(emptyList()) { true } == null)
+    check(runCatching {
+        retentionEditableLabelTarget(listOf(listOf(0, 1, 2), listOf(0, 1, 3))) { it == 1 }
+    }.exceptionOrNull() is IllegalStateException)
+    check(runCatching {
+        retentionEditableLabelTarget(listOf(listOf(0, 2))) { it == 1 }
+    }.exceptionOrNull() is IllegalStateException)
+    return listOf("native_direct_label", "compose_label_child", "nearest_editable_ancestor",
+        "absent_label_pending", "duplicate_labels_same_editor_rejected", "unrelated_editor_rejected")
+}

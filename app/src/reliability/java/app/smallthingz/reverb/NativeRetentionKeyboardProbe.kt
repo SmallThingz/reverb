@@ -56,6 +56,7 @@ internal fun verifyNativeRetentionKeyboardParity(
     try {
         writeRetentionKeyboardEvidence(directory, result, null)
         result.put("initial_discovery_regressions", JSONArray(verifyRetentionInitialDiscoveryChecks()))
+        result.put("target_resolution_regressions", JSONArray(verifyRetentionEditableLabelChecks()))
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { interactiveWindows = it }
         val activity = launchNativeParityActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -351,7 +352,7 @@ private class RetentionKeyboardGuard(
         val windows = instrumentation.uiAutomation.windows
         check(windows.isNotEmpty()) { "No actual accessible windows after explicit test-service setup" }
         val roots = mutableListOf<AccessibilityNodeInfo>()
-        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        val labelPaths = mutableListOf<List<AccessibilityNodeInfo>>()
         try {
             val own = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.displayId == 0 }
                 .mapNotNull { window ->
@@ -368,7 +369,8 @@ private class RetentionKeyboardGuard(
                 .put("display_id", window.displayId).put("uid", host.applicationInfo.uid)
                 .put("package", host.packageName).put("nodes", inventory)
             evidence.put("last_discovery", observation)
-            fun visit(node: AccessibilityNodeInfo) {
+            fun visit(node: AccessibilityNodeInfo, ancestors: List<AccessibilityNodeInfo>) {
+                val path = ancestors + node
                 inventory.put(JSONObject().put("window_id", node.windowId)
                     .put("package", node.packageName?.toString() ?: JSONObject.NULL)
                     .put("class", node.className?.toString() ?: JSONObject.NULL)
@@ -378,26 +380,51 @@ private class RetentionKeyboardGuard(
                     .put("visible", node.isVisibleToUser).put("focused", node.isFocused)
                     .put("bounds", Rect().also(node::getBoundsInScreen).array())
                     .put("child_count", node.childCount))
-                if (node.isEditable && node.contentDescription?.toString() == label) nodes += node
+                if (node.contentDescription?.toString() == label) labelPaths += path
                 for (index in 0 until node.childCount) {
                     val child = checkNotNull(node.getChild(index)) { "Editable tree changed while reading child $index" }
                     roots += child
-                    visit(child)
+                    visit(child, path)
                 }
             }
-            visit(root)
-            observation.put("matching_targets", nodes.size)
+            visit(root, emptyList())
+            observation.put("matching_labels", labelPaths.size)
+            val resolved = retentionEditableLabelTarget(labelPaths) { it.isEditable }
+            val matchingTargets = if (resolved == null) 0 else 1
+            observation.put("matching_targets", matchingTargets)
             if (initialDiscovery != null &&
-                !initialDiscovery.ready(window.id, nodes.size, SystemClock.uptimeMillis())) {
+                !initialDiscovery.ready(window.id, matchingTargets, SystemClock.uptimeMillis())) {
                 throw RetentionInitialTargetNotPublished()
             }
-            check(nodes.size == 1) { "Expected one current editable '$label', observed ${nodes.size}" }
-            val node = nodes.single()
+            val (node, labelNode) = checkNotNull(resolved) { "Expected one current editable '$label', observed 0" }
             check(node.refresh()) { "Editable node became stale before action/observation" }
+            if (labelNode != node) check(labelNode.refresh()) { "Editable label became stale before action/observation" }
+            check(labelNode.contentDescription?.toString() == label && labelNode.isEnabled && labelNode.isVisibleToUser)
             check(node.windowId == window.id && node.packageName?.toString() == host.packageName)
+            val labelBounds = Rect().also(labelNode::getBoundsInScreen)
             val bounds = Rect().also(node::getBoundsInScreen)
             check(node.isEditable && node.isEnabled && node.isVisibleToUser && !bounds.isEmpty)
-            check(node.contentDescription?.toString() == label)
+            check(!labelBounds.isEmpty && bounds.contains(labelBounds)) { "Editable label moved outside its editor" }
+            // Compose exports the exact label as a child of the editable semantics node. Native
+            // EditText exports it on the editor itself. Revalidate only that observed ancestry;
+            // never choose an unrelated editor by text, class, or screen position.
+            var current = labelNode
+            var reachedEditor = false
+            var parentSteps = 0
+            for (expected in labelPaths.single().asReversed()) {
+                check(current == expected && current.windowId == window.id &&
+                    current.packageName?.toString() == host.packageName) { "Editable label ancestry changed" }
+                if (current.isEditable) {
+                    check(current == node) { "Nearest editable label ancestor changed" }
+                    reachedEditor = true
+                    break
+                }
+                current = checkNotNull(current.parent) { "Editable label lost its editor ancestor" }.also(roots::add)
+                parentSteps++
+            }
+            check(reachedEditor) { "Editable label no longer belongs to its editor" }
+            observation.put("label_parent_steps", parentSteps).put("label_bounds", labelBounds.array())
+                .put("editable_bounds", bounds.array())
             expectedWindowId?.let { check(node.windowId == it) { "Editable window changed before action" } }
             val identity = "window:${node.windowId}:label:$label:class:${node.className}:" +
                 if (Build.VERSION.SDK_INT >= 33) node.uniqueId.orEmpty() else ""

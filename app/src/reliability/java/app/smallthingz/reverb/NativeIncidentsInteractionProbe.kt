@@ -5,6 +5,8 @@ import android.app.Instrumentation
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
 import android.view.Choreographer
@@ -18,6 +20,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -350,30 +354,91 @@ private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativePari
                 // read-only wait covers only missing metadata, never wrong ownership/focus,
                 // an unexpected replacement window, absent labels, or a failed user action.
                 val windows = nativeParityOnMain(instrumentation) {
-                    JSONArray().apply {
-                        WindowInspector.getGlobalWindowViews().forEach { view ->
-                            put(JSONObject().put("class", view.javaClass.name)
-                                .put("package", view.context.packageName)
-                                .put("uid", view.context.applicationInfo.uid)
-                                .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
-                                .put("focused", view.hasWindowFocus()).put("display_id", view.display?.displayId))
-                        }
-                    }
+                    incidentLocalWindowInventory()
                 }
                 val observation = pending.observation.put("uptime_ms", SystemClock.uptimeMillis())
                     .put("local_windows", windows)
                 if (!readiness.has("first_pending")) readiness.put("first_pending", observation)
                 readiness.put("last_pending", observation).put("accepted", false)
-                val focused = (0 until windows.length()).map(windows::getJSONObject).filter {
-                    it.getBoolean("attached") && it.getBoolean("shown") && it.getBoolean("focused")
-                }.single()
-                check(focused.getString("package") == host.packageName && focused.getInt("uid") == Process.myUid() &&
-                    focused.getInt("display_id") == 0) { "Own physical popup focus was lost while metadata was pending" }
+                try {
+                    val focused = (0 until windows.length()).map(windows::getJSONObject).filter {
+                        it.getBoolean("attached") && it.getBoolean("shown") && it.getBoolean("focused")
+                    }.single()
+                    check(focused.getString("package") == host.packageName && focused.getInt("uid") == Process.myUid() &&
+                        focused.getInt("display_id") == 0) { "Own physical popup focus was lost while metadata was pending" }
+                } catch (focusFailure: Throwable) {
+                    try {
+                        recordIncidentFocusFailure(readiness, observation, focusFailure)
+                    } catch (diagnosticFailure: Throwable) {
+                        if (diagnosticFailure !== focusFailure) focusFailure.addSuppressed(diagnosticFailure)
+                    }
+                    throw focusFailure // A later focus handoff never turns this failed admission into input.
+                }
             }
         }
         Thread.sleep(16)
     }
     error("Own Incidents menu did not appear; do not repeat long-click")
+}
+
+/** Main-thread, in-process View observations only; no global window/dispatcher query. */
+private fun incidentLocalWindowInventory() = JSONArray().apply {
+    WindowInspector.getGlobalWindowViews().forEach { view ->
+        put(JSONObject().put("class", view.javaClass.name).put("package", view.context.packageName)
+            .put("uid", view.context.applicationInfo.uid).put("attached", view.isAttachedToWindow)
+            .put("shown", view.isShown).put("focused", view.hasWindowFocus())
+            .put("display_id", view.display?.displayId))
+    }
+}
+
+/** Failure-only diagnostics: bounded caller wait, cancelled own callback, original failure retained. */
+private fun recordIncidentFocusFailure(readiness: JSONObject, first: JSONObject, failure: Throwable) {
+    val started = SystemClock.uptimeMillis()
+    val samples = JSONArray().put(first)
+    val trace = JSONObject().put("first_failure_uptime_ms", started).put("budget_ms", 500)
+        .put("first_failure", failure.stackTraceToString()).put("samples", samples)
+        .put("outcome", "original focus failure retained; no admission retry or input")
+    readiness.put("focus_failure_timeline", trace)
+    val lock = Any()
+    val complete = CountDownLatch(1)
+    val handler = Handler(Looper.getMainLooper())
+    var active = true
+    var diagnosticFailure: Throwable? = null
+    lateinit var sample: Runnable
+    sample = Runnable {
+        if (!synchronized(lock) { active }) return@Runnable
+        try {
+            val observed = JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                .put("local_windows", incidentLocalWindowInventory())
+            synchronized(lock) {
+                if (!active) return@Runnable
+                samples.put(observed)
+                val remaining = started + 500L - SystemClock.uptimeMillis()
+                if (remaining > 0L) check(handler.postDelayed(sample, minOf(40L, remaining)))
+                else complete.countDown()
+            }
+        } catch (error: Throwable) {
+            synchronized(lock) { if (active) diagnosticFailure = error }
+            complete.countDown()
+        }
+    }
+    try {
+        check(handler.post(sample))
+        complete.await(maxOf(0L, started + 500L - SystemClock.uptimeMillis()), TimeUnit.MILLISECONDS)
+    } catch (error: Throwable) {
+        synchronized(lock) { diagnosticFailure = error }
+    } finally {
+        synchronized(lock) {
+            active = false
+            handler.removeCallbacks(sample)
+            trace.put("elapsed_ms", SystemClock.uptimeMillis() - started)
+                .put("callback_cancelled", true)
+            diagnosticFailure?.let {
+                trace.put("diagnostic_error", it.stackTraceToString())
+                if (it !== failure) failure.addSuppressed(it)
+            }
+        }
+    }
 }
 
 private fun captureIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity, window: Int,
