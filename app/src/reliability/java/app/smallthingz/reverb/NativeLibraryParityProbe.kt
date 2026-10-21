@@ -77,7 +77,7 @@ internal fun verifyNativeLibraryParity(instrumentation: Instrumentation, report:
         .put("comparison", "Exact full-content ARGB and ABAB repeatability; no tolerance or masking")
         .put("scope", "Actual FilesScreen and native root/owner: empty, grouped populated, selection, paused expanded player; physical fixture viewport with safe-drawing insets consumed by parent")
         .put("limits", "Programmatic source actions and native View actions; no pointer, accessibility-service traversal, keyboard, popup, playback, trim, deletion or Main navigation qualification")
-        .put("cases", cases).put("passed", false)
+        .put("cases", cases).put("player_preparation", JSONArray()).put("passed", false)
     val fixtures = LibraryOwnedFixtures(context, directory)
     var host: NativeParityActivity? = null
     var board: LibraryParityBoard? = null
@@ -140,7 +140,7 @@ internal fun verifyNativeLibraryParity(instrumentation: Instrumentation, report:
             current.selectFirst(instrumentation)
             compare(activity, current, "selected-$suffix")
             current.clearSelection(instrumentation)
-            current.expandFirstPaused(instrumentation)
+            current.expandFirstPaused(instrumentation, result.getJSONArray("player_preparation"))
             compare(activity, current, "expanded-paused-$suffix")
             nativeParityOnMain(instrumentation) { current.assertNoPlayback(); current.close(); board = null }
         }
@@ -467,26 +467,52 @@ internal class LibraryParityBoard(
             }
         }
     }
-    fun expandFirstPaused(instrumentation: Instrumentation) {
+    fun expandFirstPaused(instrumentation: Instrumentation, preparation: JSONArray) {
         for (compose in listOf(true, false)) {
+            val entry = JSONObject().put("renderer", if (compose) "compose" else "native")
+                .put("action_submitted", false).put("ready", false)
+            preparation.put(entry)
             requireNativeParityHost(instrumentation, host)
             nativeParityOnMain(instrumentation) { show(compose) }
             awaitNativeParityDraw(instrumentation, if (compose) reference else checkNotNull(native))
             // Both routes receive their genuine action while RESUMED. Pause this fixture owner
             // synchronously before async preparation/recomposition can submit source auto-start.
             nativeParityOnMain(instrumentation) {
+                entry.put("action_submitted", JSONObject.NULL)
                 invokeRecording(compose, longClick = false)
+                entry.put("action_submitted", true)
                 if (compose) sourceLifecycle.pause() else nativeLifecycle.pause()
             }
             awaitCondition(instrumentation, "paused player preparation") {
                 assertNoPlayback()
-                if (compose) sourceExpanded && sourceNodes().any {
-                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(context.getString(R.string.player_play)) == true &&
-                        it.config.getOrNull(SemanticsProperties.Disabled) == null &&
+                val playLabel = context.getString(R.string.player_play)
+                // Released clickable Box owns OnClick; its child Icon owns the description.
+                // Read their merged action node, as invokeDescription does. Unmerged geometry
+                // and passive description observers elsewhere must remain unmerged.
+                val playNodes = sourceNodes(merged = true).filter {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(playLabel) == true
+                }
+                val nativePresentation = native?.activePlayerLeases()?.singleOrNull()?.currentPresentation
+                entry.put("source_expanded", sourceExpanded)
+                    .put("source_lifecycle", sourceLifecycle.lifecycle.currentState.name)
+                    .put("native_lifecycle", nativeLifecycle.lifecycle.currentState.name)
+                    .put("source_play_nodes", JSONArray(playNodes.map { node ->
+                        JSONObject().put("click_action", node.config.getOrNull(SemanticsActions.OnClick)?.action != null)
+                            .put("enabled", node.config.getOrNull(SemanticsProperties.Disabled) == null)
+                            .put("placed", node.layoutInfo.isPlaced).put("bounds", node.boundsInWindow.toString())
+                    }))
+                    .put("native_lease_count", native?.activePlayerLeases()?.size ?: 0)
+                    .put("native_prepared", nativePresentation?.state?.prepared ?: JSONObject.NULL)
+                    .put("native_waveform_loading", nativePresentation?.waveformLoading ?: JSONObject.NULL)
+                    .put("native_playing", nativePresentation?.state?.isPlaying ?: JSONObject.NULL)
+                val ready = if (compose) sourceExpanded && playNodes.any {
+                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
                         it.config.getOrNull(SemanticsActions.OnClick) != null
-                } else native?.activePlayerLeases()?.singleOrNull()?.currentPresentation?.let {
+                } else nativePresentation?.let {
                     it.state.prepared && !it.waveformLoading && !it.state.isPlaying
                 } == true
+                entry.put("ready", ready)
+                ready
             }
         }
         settle(instrumentation)
@@ -758,8 +784,8 @@ internal class LibraryParityBoard(
             check(action.isEnabled && action.performClick())
         }
     }
-    private fun sourceNodes() = libraryViews(reference).filterIsInstance<ViewRootForTest>()
-        .single().semanticsOwner.getAllSemanticsNodes(false)
+    private fun sourceNodes(merged: Boolean = false) = libraryViews(reference).filterIsInstance<ViewRootForTest>()
+        .single().semanticsOwner.getAllSemanticsNodes(merged)
     fun assertNoPlayback() {
         check(sourceNodes().none {
             it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(context.getString(R.string.player_pause)) == true

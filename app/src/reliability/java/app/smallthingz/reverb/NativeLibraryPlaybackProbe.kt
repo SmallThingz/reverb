@@ -16,7 +16,7 @@ internal fun verifyNativeLibraryPlayback(instrumentation: Instrumentation, repor
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("scope", "One Light/LTR pair: prepared expanded player, initial autoplay, explicit Play/progress/Pause, paused waveform seek, actual menu Trim and Cancel")
         .put("limits", "Visible progress plus native presentation; no audible-output measurement, exact scheduler timing, first-display-frame claim, native detached-bind order claim, Save or capture. Settled seek/Trim/Cancel pixels compared exactly.")
-        .put("cases", cases).put("comparisons", comparisons).put("passed", false)
+        .put("cases", cases).put("comparisons", comparisons).put("player_preparation", JSONArray()).put("passed", false)
     val fixtures = LibraryOwnedFixtures(context, directory)
     var host: NativeParityActivity? = null
     var board: LibraryParityBoard? = null
@@ -35,7 +35,7 @@ internal fun verifyNativeLibraryPlayback(instrumentation: Instrumentation, repor
         val current = nativeParityOnMain(instrumentation) { LibraryParityBoard(activity, false, records) }
         board = current
         current.awaitInitial(instrumentation)
-        current.expandFirstPaused(instrumentation)
+        current.expandFirstPaused(instrumentation, result.getJSONArray("player_preparation"))
         for (compose in listOf(true, false)) {
             val renderer = if (compose) "compose" else "native"
             val checkpoints = JSONArray()
