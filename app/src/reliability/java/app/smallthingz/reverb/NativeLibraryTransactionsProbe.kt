@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.Choreographer
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
@@ -58,6 +59,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
@@ -444,12 +447,26 @@ private class TransactionBoard(
                     transition?.accepted(checkNotNull(root))
                     pendingWindowTransition = null
                 }
-                root to readyNow
+                Triple(root, readyNow, transition != null)
             }
             if (observed.second) return
             check(SystemClock.uptimeMillis() < end) { "Transaction timeout: $label" }
-            if (observed.first == null) Thread.sleep(16)
+            // An outgoing dialog may detach after this observation and never draw again.
+            // Observe transition readiness on the next frame without requiring that retired root.
+            if (observed.third) awaitTransitionFrame(i, end, label)
+            else if (observed.first == null) Thread.sleep(16)
             else awaitNativeParityDraw(i, checkNotNull(observed.first))
+        }
+    }
+    private fun awaitTransitionFrame(i: Instrumentation, deadline: Long, label: String) {
+        val frame = CountDownLatch(1)
+        val callback = Choreographer.FrameCallback { frame.countDown() }
+        nativeParityOnMain(i) { Choreographer.getInstance().postFrameCallback(callback) }
+        try {
+            val remaining = (deadline - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+            check(frame.await(remaining, TimeUnit.MILLISECONDS)) { "Transaction timeout: $label" }
+        } finally {
+            nativeParityOnMain(i) { Choreographer.getInstance().removeFrameCallback(callback) }
         }
     }
     fun waitFrame(i: Instrumentation) {

@@ -95,6 +95,7 @@ internal fun incidentMenuTextGeometry(host: NativeParityActivity, expectedWindow
                 val density = ReverbParagraphView::class.java.getDeclaredField("density")
                     .apply { isAccessible = true }.get(text) as Density
                 val paragraph = checkNotNull(text.currentParagraph)
+                entry.put("draw_paragraph_state", incidentDrawParagraphState(paragraph))
                 entry.put("style", style.toString()).put("density", density.density.toDouble())
                     .put("font_scale", density.fontScale.toDouble()).put("direction", text.layoutDirection)
                     .put("paragraph", incidentParagraphGeometry(paragraph.width, paragraph.height,
@@ -155,6 +156,7 @@ private fun incidentSourceDrawCache(semantics: Any): JSONObject {
             return result
         }
         result.put("paragraph_class", paragraph.javaClass.name)
+            .put("draw_paragraph_state", incidentDrawParagraphState(paragraph))
             .put("paragraph", incidentParagraphGeometry(paragraph.width, paragraph.height,
                 paragraph.maxIntrinsicWidth, paragraph.firstBaseline, paragraph.lastBaseline,
                 paragraph.lineCount, paragraph::getLineLeft, paragraph::getLineRight, paragraph::getLineBaseline))
@@ -163,6 +165,7 @@ private fun incidentSourceDrawCache(semantics: Any): JSONObject {
         try {
             val intrinsics = checkNotNull(field(cache, "paragraphIntrinsics"))
             result.put("intrinsics_class", intrinsics.javaClass.name)
+                .put("cache_intrinsics_identity", System.identityHashCode(intrinsics))
                 .put("resolved_intrinsics_style", field(intrinsics, "style")?.toString() ?: JSONObject.NULL)
         } catch (unavailable: Throwable) {
             result.put("intrinsics_style_unavailable", unavailable.stackTraceToString())
@@ -170,6 +173,38 @@ private fun incidentSourceDrawCache(semantics: Any): JSONObject {
         result.put("complete", true)
     } catch (failure: Throwable) {
         result.put("failure", failure.stackTraceToString())
+    }
+    return result
+}
+
+/** Observe the objects actually held by the draw Paragraph, independently of mutable cache fields. */
+private fun incidentDrawParagraphState(paragraph: Paragraph): JSONObject {
+    val result = JSONObject().put("paragraph_identity", System.identityHashCode(paragraph))
+        .put("paragraph_class", paragraph.javaClass.name).put("complete", false)
+    fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name)
+        .apply { isAccessible = true }.get(owner)
+    try {
+        if (paragraph.javaClass.name != "androidx.compose.ui.text.AndroidParagraph") {
+            result.put("unavailable", "Current draw Paragraph is not the pinned AndroidParagraph")
+            return result
+        }
+        val intrinsics = checkNotNull(field(paragraph, "paragraphIntrinsics"))
+        result.put("intrinsics_identity", System.identityHashCode(intrinsics))
+            .put("intrinsics_class", intrinsics.javaClass.name)
+            .put("intrinsics_style", field(intrinsics, "style")?.toString() ?: JSONObject.NULL)
+            .put("text_direction_heuristic", field(intrinsics, "textDirectionHeuristic") ?: JSONObject.NULL)
+        val wrapper = checkNotNull(field(paragraph, "layout"))
+        result.put("layout_wrapper_class", wrapper.javaClass.name)
+        val layout = field(wrapper, "layout") as android.text.Layout
+        result.put("platform_layout_class", layout.javaClass.name)
+            .put("platform_layout_width", layout.width)
+            .put("platform_layout_alignment", layout.alignment.toString())
+            .put("platform_paragraph_direction", layout.getParagraphDirection(0))
+            .put("platform_line_left", layout.getLineLeft(0).toDouble())
+            .put("platform_line_right", layout.getLineRight(0).toDouble())
+        result.put("complete", true)
+    } catch (unavailable: Throwable) {
+        result.put("unavailable", unavailable.stackTraceToString())
     }
     return result
 }
