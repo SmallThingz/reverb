@@ -30,12 +30,22 @@ class NativeIndeterminateLinearMotionTest {
         assertTrue(motion.secondTail in 0f..1f)
     }
 
-    @Test fun fullCycleRepeatsWithoutChangingTheStagger() {
+    @Test fun fullCyclePreservesStaggerAndSourceClockQuantization() {
         val motion = NativeIndeterminateLinearMotion()
         motion.frame(0, 1f)
+        motion.frame(ms(699), 1f)
+        val previousMillisecond = listOf(motion.firstHead, motion.firstTail, motion.secondHead, motion.secondTail)
         motion.frame(ms(700), 1f)
         val values = listOf(motion.firstHead, motion.firstTail, motion.secondHead, motion.secondTail)
+        // Pinned InfiniteTransition divides Long elapsed time by Float durationScale before
+        // toLong: 2450ms rounds down to 2,449,999,872ns. After the 1750ms repeat, the
+        // keyframe engine truncates 699,999,872ns to 699ms, exactly as the released UI does.
+        assertEquals(2_449_999_872L, (ms(2450) / 1f).toLong())
         motion.frame(ms(2450), 1f)
+        assertEquals(previousMillisecond,
+            listOf(motion.firstHead, motion.firstTail, motion.secondHead, motion.secondTail))
+        // One microsecond past that rounding boundary, all four tracks repeat the 700ms sample.
+        motion.frame(ms(2450) + 1_000L, 1f)
         assertEquals(values, listOf(motion.firstHead, motion.firstTail, motion.secondHead, motion.secondTail))
     }
 

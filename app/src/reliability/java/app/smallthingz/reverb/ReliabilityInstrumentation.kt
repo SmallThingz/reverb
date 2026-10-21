@@ -32,7 +32,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
                 "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
-                "native_library_parity", "native_range_parity",
+                "native_library_parity", "native_range_parity", "native_content_restoration",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
@@ -51,6 +51,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_parity") {
                 executed++
                 verifyNativeLibraryParity(this, report)
+            } else if (requestedTest == "native_content_restoration") {
+                executed++
+                verifyNativeContentRestoration(this, report)
             } else if (requestedTest == "native_range_parity") {
                 executed++
                 verifyNativeRangeParity(this, report)
