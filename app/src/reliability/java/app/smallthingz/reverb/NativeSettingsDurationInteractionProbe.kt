@@ -37,7 +37,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
             val view = SettingsNotificationSaveView(host, state.value, parent.environment, { parent.inputRoot },
                 host.lifecycle, interaction, ::enabled, ::seconds, { state.value.editRevision })
             update = { view.bind(state.value, parent.environment) }
-            view.callbacks(::seconds, { state.value.editRevision }, update)
+            view.callbacks(::seconds, { state.value.editRevision }) { update() }
             SettingsInteractionNativeContent(view, { update = {}; view.close() })
         })
         fun checkpoint(name: String) = suite.capture(name, { callbacks.toList() }, { JSONObject()

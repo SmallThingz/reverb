@@ -218,6 +218,9 @@ private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(
 
     init {
         orientation = VERTICAL
+        // Surface clips this entire content layer. Its Column does not additionally clip each
+        // Row to its layout bounds; ViewGroup's default would set that on every child RenderNode.
+        clipChildren = false
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {

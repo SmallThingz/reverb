@@ -33,6 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
@@ -48,6 +50,9 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
@@ -322,15 +327,35 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
         try { scope?.cancel() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
         throw error
     }
+    // getGlobalVisibleRect does not account for RenderNode outline clips (AOSP ViewGroup's
+    // getChildVisibleRect). Use the existing source clip mapper for the asserted layout bounds,
+    // and keep the platform result below as separately labelled raw evidence.
+    val nativeGeometry = if (reference) null else NativePlainTextViewGeometry(root,
+        NativeTextSemanticsClipPolicy { view ->
+            val group = view.parent as? ReverbGroupLayout
+            if (view === viewport || (group != null && group.getChildAt(0) === view))
+                NativeTextSemanticsClip.Rectangle(ComposeRect(
+                    0f, 0f, view.width.toFloat(), view.height.toFloat()))
+            else NativeTextSemanticsClip.Unclipped
+        })
     return IconClipRender(root, {
         val geometry = if (reference) checkNotNull(iconGeometry) else {
             val icon = checkNotNull(nativeIcon)
             val position = IntArray(2).also(icon::getLocationInWindow)
-            val clipped = Rect()
-            check(icon.getGlobalVisibleRect(clipped))
+            val rawVisible = Rect()
+            check(icon.getGlobalVisibleRect(rawVisible))
+            val captured = checkNotNull(checkNotNull(nativeGeometry).capture(
+                icon, Offset.Zero, ComposeRect(0f, 0f, icon.width.toFloat(), icon.height.toFloat())))
+            // This fixture's ordinary root has no transform; preserve the source window space.
+            val rootPosition = IntArray(2).also(root::getLocationInWindow)
+            val clipped = captured.visibleBoundsInRoot.translate(
+                Offset(rootPosition[0].toFloat(), rootPosition[1].toFloat()))
             JSONObject().put("position", JSONArray(position.toList()))
                 .put("size", JSONArray(listOf(icon.width, icon.height)))
                 .put("clipped", JSONArray(listOf(clipped.left, clipped.top, clipped.right, clipped.bottom)))
+                .put("clipped_basis", "source viewport/group clip layers via NativePlainTextViewGeometry")
+                .put("raw_get_global_visible_rect", JSONArray(listOf(
+                    rawVisible.left, rawVisible.top, rawVisible.right, rawVisible.bottom)))
         }
         JSONObject().put("reference", reference).put("icon_geometry", geometry)
             .put("native_view_tree", iconClipViewTree(root))

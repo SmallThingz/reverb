@@ -228,7 +228,12 @@ internal class SettingsInteractionSuite(
                     views.put(JSONObject().put("class", view.javaClass.name)
                         .put("identity", System.identityHashCode(view)).put("width", view.width)
                         .put("height", view.height).put("visibility", view.visibility)
-                        .put("alpha", view.alpha.toDouble()).put("attached", view.isAttachedToWindow))
+                        .put("alpha", view.alpha.toDouble()).put("attached", view.isAttachedToWindow)
+                        .put("focused", view.isFocused).put("has_focus", view.hasFocus())
+                        .put("focusable", view.isFocusable).put("touch_focusable", view.isFocusableInTouchMode)
+                        .put("default_focus_highlight", view.defaultFocusHighlightEnabled)
+                        .put("pressed", view.isPressed).put("hovered", view.isHovered)
+                        .put("in_touch_mode", view.isInTouchMode))
                 }
                 JSONObject().put("uptime_ms", SystemClock.uptimeMillis()).put("views", views)
             })
@@ -344,6 +349,11 @@ internal class SettingsInteractionRender(
                 pointer = routing
                 root = NativePagerTouchRoot(activity, geometry::rootToScreen, geometry::coordinates,
                     routing.layout, geometry::begin, mouseButtons = true)
+                // Match the released AndroidComposeView and actual NativeActivityContentView
+                // before attaching children; controls retain their normal keyboard focus policy.
+                root.isFocusable = true
+                root.isFocusableInTouchMode = true
+                root.defaultFocusHighlightEnabled = false
                 inputRoot = root
                 board.addView(root, FrameLayout.LayoutParams(-1, -1))
                 val leaf = createNative(this).also { native = it }
@@ -473,15 +483,29 @@ internal class SettingsInteractionRender(
         val nodes = JSONArray()
         if (reference) sourceNodes().forEach { node -> nodes.put(JSONObject().put("names", JSONArray(names(node)))
             .put("disabled", node.config.getOrNull(SemanticsProperties.Disabled) != null)
+            .put("focused", node.config.getOrNull(SemanticsProperties.Focused))
             .put("bounds", node.boundsInRoot.toString())) }
         else settingsInteractionViews(board).forEach { view -> view.createAccessibilityNodeInfo()?.let { info ->
             try { if (info.isVisibleToUser) { val bounds = Rect(); info.getBoundsInScreen(bounds)
                 nodes.put(JSONObject().put("text", info.text?.toString()).put("description", info.contentDescription?.toString())
-                    .put("enabled", info.isEnabled).put("checked", info.isChecked).put("bounds", bounds.toShortString()))
+                    .put("enabled", info.isEnabled).put("checked", info.isChecked).put("bounds", bounds.toShortString())
+                    .put("focused", info.isFocused).put("accessibility_focused", info.isAccessibilityFocused)
+                    .put("view_focused", view.isFocused).put("view_pressed", view.isPressed)
+                    .put("view_hovered", view.isHovered).put("default_focus_highlight", view.defaultFocusHighlightEnabled))
             } } finally { @Suppress("DEPRECATION") info.recycle() }
         } }
+        val focused = activity.window.decorView.findFocus()
         return JSONObject().put("nodes", nodes).put("dark", true).put("density", density.density.toDouble())
             .put("font_scale", density.fontScale.toDouble())
+            .put("focus", JSONObject().put("window_focused", activity.hasWindowFocus())
+                .put("in_touch_mode", board.isInTouchMode)
+                .put("native_class", focused?.javaClass?.name)
+                .put("native_identity", focused?.let { System.identityHashCode(it) })
+                .put("native_description", focused?.contentDescription?.toString())
+                .put("input_root_focused", inputRoot.isFocused)
+                .put("input_root_focusable", inputRoot.isFocusable)
+                .put("input_root_touch_focusable", inputRoot.isFocusableInTouchMode)
+                .put("input_root_default_highlight", inputRoot.defaultFocusHighlightEnabled))
     }
     override fun close() {
         if (closed) return
