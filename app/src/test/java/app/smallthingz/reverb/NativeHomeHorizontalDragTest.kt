@@ -36,6 +36,22 @@ class NativeHomeHorizontalDragTest {
         assertEquals("end",h.events.last())
     }
 
+    @Test fun secondaryMouseDownUsesAndroidAwaitFirstDownAdmission() {
+        val h = Harness()
+        fun mouse(x: Float, oldX: Float, down: Boolean = false, up: Boolean = false) =
+            NativeDragPointerChange(7, 0L, Offset(x, 0f), Offset(oldX, 0f),
+                !up, !down, PointerType.Mouse, Offset(x, 0f))
+        val down = mouse(0f, 0f, down = true).also { it.consume() }
+        val event = NativeDragPointerEvent(listOf(down), Offset.Zero, primaryMouseButtonPressed = false)
+        assertFalse(event.isDown()) // The shared draggable helper remains intentionally stricter.
+        NativePointerPass.entries.forEach { h.detector.dispatch(event, it) }
+        h.frame(mouse(1f, 0f))
+        assertEquals(listOf("start", "delta"), h.events)
+        assertEquals(1f - 10f / 144f, h.amounts.single(), 0f)
+        h.frame(mouse(1f, 1f, up = true))
+        assertEquals("end", h.events.last())
+    }
+
     @Test fun finalPassConsumptionLosesGestureWithoutDraggablePickup() {
         val h = Harness()
         h.frame(change(0f,down=true))

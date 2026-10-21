@@ -45,8 +45,10 @@ internal class NativeHomeHorizontalDrag(
             return
         }
         when (state) {
-            State.DOWN -> if (event.isDown()) {
+            State.DOWN -> if (event.changes.isNotEmpty() && event.changes.all { it.changedToDown }) {
                 // awaitFirstDown(requireUnconsumed=false), including a clickable's consumed DOWN.
+                // Android's firstDownRefersToPrimaryMouseButtonOnly actual is false. Do not use
+                // draggable's primary-button-only admission shared by NativeDragPointerRouter.
                 val down = event.changes.first()
                 pointerId = down.id
                 accumulated = 0f

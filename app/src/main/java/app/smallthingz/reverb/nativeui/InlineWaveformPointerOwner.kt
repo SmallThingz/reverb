@@ -44,7 +44,9 @@ internal class InlineWaveformPointerOwner {
                 if (event.changes.none { it.pressed }) awaitAllUp = false
                 return
             }
-            if (!event.isDown()) return
+            // awaitFirstDown on Android accepts every mouse button; unlike the draggable
+            // awaitPrimaryFirstDown helper, it imposes no primary-button restriction.
+            if (event.changes.isEmpty() || event.changes.any { !it.changedToDown }) return
             val down = event.changes.first()
             awaitAllUp = true
             if (!current.key.prepared || live.saving || width <= 0) return

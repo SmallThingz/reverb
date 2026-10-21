@@ -191,9 +191,9 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
             used += before
             val remaining = max(0, maxHeight - used)
             val fixed = when (child) { timeline -> dp(128f); fineSeek -> dp(if (state?.trimMode == true) 104f else 120f); else -> null }
-            val hs = if (fixed != null) exact(if (bounded) min(fixed, remaining) else fixed)
-                else if (bounded) atMost(remaining) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
-            child.measure(if (child === error) atMost(availableWidth) else exact(availableWidth), hs)
+            val hs = if (fixed != null) libraryPlayerExact(if (bounded) min(fixed, remaining) else fixed)
+                else if (bounded) libraryPlayerAtMost(remaining) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            child.measure(if (child === error) libraryPlayerAtMost(availableWidth) else libraryPlayerExact(availableWidth), hs)
             used += child.measuredHeight
             if (child === heading) used += dp(5f)
         }
@@ -255,9 +255,9 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec); val height = MeasureSpec.getSize(heightMeasureSpec)
-        waveform.measure(exact(width), exact(height))
+        waveform.measure(libraryPlayerExact(width), libraryPlayerExact(height))
         val visualWidth = min(width, (12f * environment.textDensity.density).roundToInt())
-        first.measure(exact(visualWidth), exact(height)); second?.measure(exact(visualWidth), exact(height))
+        first.measure(libraryPlayerExact(visualWidth), libraryPlayerExact(height)); second?.measure(libraryPlayerExact(visualWidth), libraryPlayerExact(height))
         setMeasuredDimension(width, height)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -306,8 +306,8 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        start.measure(atMost(width), heightMeasureSpec.toAtMost())
-        end.measure(atMost(max(0, width - start.measuredWidth)), heightMeasureSpec.toAtMost())
+        start.measure(libraryPlayerAtMost(width), heightMeasureSpec.toAtMost())
+        end.measure(libraryPlayerAtMost(max(0, width - start.measuredWidth)), heightMeasureSpec.toAtMost())
         setMeasuredDimension(width, resolveSize(max(start.measuredHeight, end.measuredHeight), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -389,6 +389,6 @@ private class PlayerBoundary(private val label: ReverbParagraphView, private val
     }
 }
 
-private fun exact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun atMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
-private fun Int.toAtMost(): Int = if (View.MeasureSpec.getMode(this) == View.MeasureSpec.UNSPECIFIED) this else atMost(View.MeasureSpec.getSize(this))
+private fun libraryPlayerExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
+private fun libraryPlayerAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
+private fun Int.toAtMost(): Int = if (View.MeasureSpec.getMode(this) == View.MeasureSpec.UNSPECIFIED) this else libraryPlayerAtMost(View.MeasureSpec.getSize(this))

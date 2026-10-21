@@ -92,4 +92,19 @@ class InlineWaveformPointerOwnerTest {
         assertEquals(listOf("begin:12.0/100.0"), latest)
     }
 
+    @Test fun secondaryMouseDownIsAdmittedWithoutPrimaryButtonRestriction() {
+        val calls = mutableListOf<String>(); val owner = InlineWaveformPointerOwner()
+        owner.bind(binding(calls))
+        val down = NativeDragPointerEvent(listOf(NativeDragPointerChange(7, 1L,
+            Offset(36f, 0f), Offset.Zero, true, false, PointerType.Mouse, Offset(36f, 0f))),
+            Offset.Zero, primaryMouseButtonPressed = false)
+        owner.dispatch(down, 100)
+        assertTrue(down.changes.single().consumed)
+        val up = NativeDragPointerEvent(listOf(NativeDragPointerChange(7, 2L,
+            Offset(36f, 0f), Offset(36f, 0f), false, true, PointerType.Mouse, Offset(36f, 0f))),
+            Offset.Zero, primaryMouseButtonPressed = false)
+        owner.dispatch(up, 100)
+        assertEquals(listOf("begin:36.0/100.0", "finish:true"), calls)
+    }
+
 }

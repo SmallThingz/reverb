@@ -196,7 +196,7 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
         }
         override fun onDraw(canvas:Canvas) {
             paint.color=track.value.toArgb();canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
-            paint.color=Color(environment.palette.onSurface).copy(alpha=overlay.value).toArgb()
+            paint.color=Color(environment.palette.onSurface).copy(alpha=this@WakeSwitch.overlay.value).toArgb()
             canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
         }
         override fun draw(canvas:Canvas) {

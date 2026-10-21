@@ -35,8 +35,8 @@ import kotlin.math.min
 internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(context) {
     // This existing clipped content is also the retained-pointer phase owner. Android's ordinary
     // rectangular child dispatch cannot reach a 40dp tab's source-expanded 48dp touch target.
-    protected val inputCoordinates = NativeWindowPointerCoordinates { content }
-    private val inputLayout = object : NativeViewPointerHitLayout {
+    protected val inputCoordinates: NativeWindowPointerCoordinates = NativeWindowPointerCoordinates { content }
+    private val inputLayout: NativeViewPointerHitLayout = object : NativeViewPointerHitLayout {
         override val placed get() = content.isAttachedToWindow && content.visibility == VISIBLE
         override val size get() = Size(width.toFloat(), height.toFloat())
         override val minimumTouchTarget get() = Size.Zero
@@ -45,7 +45,7 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
         override fun screenToLocal(screen: Offset) = inputCoordinates.coordinates(content).local(screen)
         override fun withinLayerBounds(local: Offset) = contains(local.x, local.y)
     }
-    protected val content = ControlContent(context, inputCoordinates, inputLayout)
+    protected val content: ControlContent = ControlContent(context, inputCoordinates, inputLayout)
     protected abstract fun childHitLayouts(): List<NativeViewPointerHitLayout>
     private val fill = Paint(FLAGS)
     private val borderPaint = Paint(FLAGS)

@@ -38,7 +38,7 @@ internal class ReverbHomeBodyOwner(
     private val motion = ReverbHomeBufferMotion(initialSelection)
     private var pointerKey = initialSelection to initialState.saving
     private var closed = false
-    private val detector = NativeHomeHorizontalDrag(
+    private val detector: NativeHomeHorizontalDrag = NativeHomeHorizontalDrag(
         touchSlop = { ViewConfiguration.get(context).scaledTouchSlop.toFloat() },
         onStart = { motion.dragStarted(); render() },
         onDelta = { amount ->
@@ -48,7 +48,7 @@ internal class ReverbHomeBodyOwner(
         onEnd = { motion.dragEnded(frames.durationScale); render(); requestFrame() },
         onCancel = { motion.dragCancelled(frames.durationScale); render(); requestFrame() },
     )
-    private val blobInput = object : NativeClickEnvironment {
+    private val blobInput: NativeClickEnvironment = object : NativeClickEnvironment {
         override val nativeInputRoot get() = this@ReverbHomeBodyOwner.nativeInputRoot()
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -63,7 +63,7 @@ internal class ReverbHomeBodyOwner(
                     Size(minimumTouchWidthPx,minimumTouchHeightPx)).isFinite()
         }
     }
-    private val presentationActions = ReverbHomeActions(
+    private val presentationActions: ReverbHomeActions = ReverbHomeActions(
         selectBuffer = { next ->
             motion.requestSelection(next, frames.durationScale)
             render(); requestFrame()
@@ -75,12 +75,12 @@ internal class ReverbHomeBodyOwner(
         clearBuffer = { actions.clearBuffer(it) },
         openLibrary = { actions.openLibrary() },
     )
-    val view = ReverbHomeBodyView(context, initialEnvironment, nativeInputRoot, blobInput, animationScope,
+    val view: ReverbHomeBodyView = ReverbHomeBodyView(context, initialEnvironment, nativeInputRoot, blobInput, animationScope,
         swipeSurfaceFactory = { blob -> nativeHomeSwipeSurface(
             context, blob, blob.nativeClickEndpoint, detector,
             minimumTarget = { 48f * environment.textDensity.density },
         ) }, onBoundsChanged = onBoundsChanged)
-    private val frames = HomeFrameLoop(view, animationScope, { !closed && motion.running }) { time, scale ->
+    private val frames: HomeFrameLoop = HomeFrameLoop(view, animationScope, { !closed && motion.running }) { time, scale ->
         val commit = motion.frame(time, scale)
         render()
         if (commit != null) actions.selectBuffer(commit)

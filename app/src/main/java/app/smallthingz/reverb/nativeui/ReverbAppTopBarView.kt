@@ -75,7 +75,7 @@ internal class ReverbAppTopBarView(
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val size = dp(46f)
-        for (index in 0 until childCount) getChildAt(index).measure(exact(size), exact(size))
+        for (index in 0 until childCount) getChildAt(index).measure(appTopBarExact(size), appTopBarExact(size))
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(statusInset + dp(barHeight), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -159,7 +159,7 @@ internal class ReverbTopBarIconAction(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val outer = ((if (selectionWrapper) 48f else 46f) * density).roundToInt()
         val visual = (46f * density).roundToInt()
-        surface.measure(exact(visual), exact(visual))
+        surface.measure(appTopBarExact(visual), appTopBarExact(visual))
         setMeasuredDimension(resolveSize(outer, widthMeasureSpec), resolveSize(outer, heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -319,8 +319,8 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
-private fun exact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun atMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
+private fun appTopBarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
+private fun appTopBarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
 
 private fun isActivationKey(code: Int): Boolean = when (code) {
     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,

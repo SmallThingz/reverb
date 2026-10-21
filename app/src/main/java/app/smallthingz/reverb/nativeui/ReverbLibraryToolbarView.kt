@@ -108,7 +108,7 @@ internal class ReverbLibraryToolbarView(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = (66f * environment.textDensity.density).roundToInt()
-        for (index in 0 until childCount) getChildAt(index).measure(exact(width), exact(height))
+        for (index in 0 until childCount) getChildAt(index).measure(libraryToolbarExact(width), libraryToolbarExact(height))
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(height, heightMeasureSpec))
     }
 
@@ -148,9 +148,9 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val size = dp(48f)
-        listOf(close, share, delete).forEach { it.measure(exact(size), exact(size)) }
+        listOf(close, share, delete).forEach { it.measure(libraryToolbarExact(size), libraryToolbarExact(size)) }
         val available = max(0, width - dp(16f) - dp(16f) - size * 3 - dp(16f))
-        title.measure(exact(available), atMost(dp(66f)))
+        title.measure(libraryToolbarExact(available), libraryToolbarAtMost(dp(66f)))
         setMeasuredDimension(width, resolveSize(dp(66f), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -166,8 +166,8 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
 }
 
 
-private fun exact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun atMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
+private fun libraryToolbarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
+private fun libraryToolbarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
 
 private fun isActivationKey(code: Int): Boolean = when (code) {
     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,

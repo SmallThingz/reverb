@@ -50,9 +50,9 @@ internal class ReverbTimelineMarkerView(context: Context, private var environmen
         // Pinned Box propagates relaxed minimum constraints to both child Boxes.
         innerWidth = min(width, dp(if (cursor) 10f else 8f))
         innerHeight = (height * (RANGE_WAVEFORM_SETTLED_ENVELOPE_FRACTION + .02f)).roundToInt().coerceIn(0, height)
-        line.measure(exact(min(innerWidth, dp(if (active) 1.4f else 1f))), exact(innerHeight))
-        grip.measure(exact(min(innerWidth, dp(if (cursor) 6f else 8f))),
-            exact(min(innerHeight, dp(if (cursor) 6f else 28f))))
+        line.measure(timelineMarkerExact(min(innerWidth, dp(if (active) 1.4f else 1f))), timelineMarkerExact(innerHeight))
+        grip.measure(timelineMarkerExact(min(innerWidth, dp(if (cursor) 6f else 8f))),
+            timelineMarkerExact(min(innerHeight, dp(if (cursor) 6f else 28f))))
         setMeasuredDimension(width, height)
     }
 
@@ -99,4 +99,4 @@ internal class ReverbTimelineMarkerView(context: Context, private var environmen
     }
 }
 
-private fun exact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
+private fun timelineMarkerExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)

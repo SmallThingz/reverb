@@ -34,18 +34,18 @@
     }
   ],
   "files": {
-    "ReverbLibraryPlayerView.kt": "3bf4d8300e8b52bfa62bb4571b054457680fdc0239bec1aaed9fd71f5a5dddeb",
-    "ReverbLibraryPlayerControls.kt": "0cf34c53a9b0f53700a1ca2ab0ef34224f34dadc5b00f06a7ec22ddb871bc0d6",
-    "ReverbTimelineMarkerView.kt": "f235a864476530841b90c7136c3db66669385907fa27efb8d05f3a81d3f28dd9",
-    "InlineWaveformPointerOwner.kt": "65d00ec7949720803d1c547ae0ec117a4563cde19ee49517988a142440ce6a09",
+    "ReverbLibraryPlayerView.kt": "a2608a0f3846ccf06c42abd9e4c38037c3fdff13b08c44ae54cc8f8fb3548e5a",
+    "ReverbLibraryPlayerControls.kt": "b22c9989b7f774be936afb722736192bb67c9a542eee1a1eaf00d48af859f3b1",
+    "ReverbTimelineMarkerView.kt": "99916de4d25b8d24ff025ce151925b9b7f50717ac1d1ca90ca3f3ba59c0e563f",
+    "InlineWaveformPointerOwner.kt": "ae73ebde086fff8982b2eac2864950c55b1469f2c67743275eb36f16adeeb11b",
     "NativeInlineWaveformMotion.kt": "318c39ada50dbf4a9b7bb3e4a86040ed9292e82923815726fdc2ceb146f4eb6d",
     "../NativeRecordingInlinePlayerController.kt": "3a520abc7f886eae9e8f65315b48d1c959a6921d6b0d419f1c6b2f629ad39302"
   },
   "tests": {
     "InlineWaveformPointerOwnerTest.kt": {
-      "cases": 7,
-      "status": "not run",
-      "sha256": "e0d7222ae7b7b78afb64de02bd225c7936f53646099c068f57d872e0fb09ad3d"
+      "cases": 8,
+      "status": "not run; build-hosts1 failed compilation before tests; new secondary-mouse regression added afterward",
+      "sha256": "b10d860711ad4244e215d164b9f56e044c180113ea28f80b8a68649edee50987"
     }
   }
 }

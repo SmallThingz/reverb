@@ -40,9 +40,9 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val hs = heightMeasureSpec.toAtMost()
         val size = min(width, dp(17f))
-        icon.measure(exact(size), if (View.MeasureSpec.getMode(hs) == MeasureSpec.UNSPECIFIED) exact(dp(17f)) else exact(min(dp(17f), MeasureSpec.getSize(hs))))
-        title.measure(atMost(max(0, width - icon.measuredWidth - dp(7f))), hs)
-        duration.measure(atMost(max(0, width - icon.measuredWidth - dp(7f) - title.measuredWidth)), hs)
+        icon.measure(libraryPlayerControlsExact(size), if (View.MeasureSpec.getMode(hs) == MeasureSpec.UNSPECIFIED) libraryPlayerControlsExact(dp(17f)) else libraryPlayerControlsExact(min(dp(17f), MeasureSpec.getSize(hs))))
+        title.measure(libraryPlayerControlsAtMost(max(0, width - icon.measuredWidth - dp(7f))), hs)
+        duration.measure(libraryPlayerControlsAtMost(max(0, width - icon.measuredWidth - dp(7f) - title.measuredWidth)), hs)
         setMeasuredDimension(width, resolveSize(max(icon.measuredHeight, max(title.measuredHeight, duration.measuredHeight)), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -70,8 +70,8 @@ internal class PlayerTrimButtons(context: Context, private var environment: Reve
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        cancel.measure(atMost(width), heightMeasureSpec.toAtMost())
-        save.measure(atMost(max(0, width - cancel.measuredWidth - dp(8f))), heightMeasureSpec.toAtMost())
+        cancel.measure(libraryPlayerControlsAtMost(width), heightMeasureSpec.toAtMost())
+        save.measure(libraryPlayerControlsAtMost(max(0, width - cancel.measuredWidth - dp(8f))), heightMeasureSpec.toAtMost())
         setMeasuredDimension(width, resolveSize(max(cancel.measuredHeight, save.measuredHeight), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -186,9 +186,9 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
         val height = max(0, MeasureSpec.getSize(heightMeasureSpec) - vertical - vertical)
         val leading: View = spinner ?: glyph ?: label
         val iconSize = dp(18f)
-        leading.measure(exact(min(width, iconSize)), exact(if (bounded) min(height, iconSize) else iconSize))
-        label.measure(atMost(max(0, width - leading.measuredWidth - dp(if (save) 7f else 6f))),
-            if (bounded) atMost(height) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        leading.measure(libraryPlayerControlsExact(min(width, iconSize)), libraryPlayerControlsExact(if (bounded) min(height, iconSize) else iconSize))
+        label.measure(libraryPlayerControlsAtMost(max(0, width - leading.measuredWidth - dp(if (save) 7f else 6f))),
+            if (bounded) libraryPlayerControlsAtMost(height) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
         setMeasuredDimension(resolveSize(horizontal + horizontal + leading.measuredWidth + dp(if (save) 7f else 6f) + label.measuredWidth, widthMeasureSpec),
             resolveSize(vertical + vertical + max(leading.measuredHeight, label.measuredHeight), heightMeasureSpec))
     }
@@ -230,9 +230,9 @@ private class PlayerGlyph(context: Context, private var environment: ReverbViewE
     override fun onDraw(canvas: Canvas) { drawable.draw(canvas) }
 }
 
-private fun exact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun atMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
-private fun Int.toAtMost(): Int = if (View.MeasureSpec.getMode(this) == View.MeasureSpec.UNSPECIFIED) this else atMost(View.MeasureSpec.getSize(this))
+private fun libraryPlayerControlsExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
+private fun libraryPlayerControlsAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
+private fun Int.toAtMost(): Int = if (View.MeasureSpec.getMode(this) == View.MeasureSpec.UNSPECIFIED) this else libraryPlayerControlsAtMost(View.MeasureSpec.getSize(this))
 private fun activationKey(code: Int): Boolean = when (code) {
     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
     else -> false
