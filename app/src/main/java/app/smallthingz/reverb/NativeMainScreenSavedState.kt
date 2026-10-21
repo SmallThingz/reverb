@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import android.os.Bundle
+import app.smallthingz.reverb.nativeui.NativeLibrarySavedScrollPosition
+import app.smallthingz.reverb.nativeui.NativeListSavedPosition
 import app.smallthingz.reverb.nativeui.SettingsListSavedPosition
 
 /** Only released rememberSaveable payloads. Library snapshots, selection, Undo and motion are absent. */
@@ -11,6 +13,9 @@ internal data class NativeMainScreenSavedState(
     val directoryPicker: List<Any>? = null,
     val tileEditor: List<Any>? = null,
     val settingsPosition: SettingsListSavedPosition? = null,
+    val libraryPosition: NativeLibrarySavedScrollPosition? = null,
+    val incidentsPosition: NativeListSavedPosition? = null,
+    val aboutScrollPosition: Int? = null,
 ) {
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean("settings", navigation.showSettings)
@@ -27,6 +32,18 @@ internal data class NativeMainScreenSavedState(
         settingsPosition?.let {
             putIntArray("settings_position", intArrayOf(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset))
         }
+        libraryPosition?.let { position ->
+            putBundle("library_position", Bundle().apply {
+                position.listPosition?.let {
+                    putIntArray("list", intArrayOf(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset))
+                }
+                position.emptyScrollPosition?.let { putInt("empty", it) }
+            })
+        }
+        incidentsPosition?.let {
+            putIntArray("incidents_position", intArrayOf(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset))
+        }
+        aboutScrollPosition?.let { putInt("about_scroll", it) }
     }
 
     companion object {
@@ -40,12 +57,19 @@ internal data class NativeMainScreenSavedState(
                 return raw as List<Any>
             }
             val position = bundle.getIntArray("settings_position")
+            fun listPosition(raw: IntArray?): NativeListSavedPosition? =
+                raw?.takeIf { it.size == 2 }?.let { NativeListSavedPosition(it[0], it[1]) }
+            val library = bundle.getBundle("library_position")
             return NativeMainScreenSavedState(
                 NativeMainSavedNavigation(bundle.getBoolean("settings"), bundle.getInt("buffer_target", -1),
                     bundle.getBoolean("about"), bundle.getBoolean("incidents"), bundle.getBoolean("library")),
                 if (bundle.containsKey("capture_buffer")) bundle.getInt("capture_buffer") else null,
                 values("settings_draft"), values("directory_picker"), values("tile_editor"),
                 position?.takeIf { it.size == 2 }?.let { SettingsListSavedPosition(it[0], it[1]) },
+                library?.let { NativeLibrarySavedScrollPosition(listPosition(it.getIntArray("list")),
+                    if (it.containsKey("empty")) it.getInt("empty") else null) },
+                listPosition(bundle.getIntArray("incidents_position")),
+                if (bundle.containsKey("about_scroll")) bundle.getInt("about_scroll") else null,
             )
         }
     }

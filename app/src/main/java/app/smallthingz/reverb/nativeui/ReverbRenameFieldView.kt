@@ -244,7 +244,7 @@ internal class ReverbRenameFieldView(
         info.isEnabled=true;info.isFocusable=true;info.isFocused=editor.isFocused
         info.isClickable=true;info.isLongClickable=true;info.isScreenReaderFocusable=true
         info.isContentInvalid=error!=null
-        info.error=if(error!=null)context.getString(androidx.compose.material3.R.string.default_error_message)else null
+        info.error=if(error!=null)context.getString(androidx.compose.ui.R.string.default_error_message)else null
         AccessibilityNodeInfoCompat.wrap(info).stateDescription=
             if(editor.length()==0 && error.isNullOrEmpty())context.getString(androidx.compose.ui.R.string.state_empty)else null
         info.addAction(if(editor.isFocused)AccessibilityNodeInfo.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.ACTION_FOCUS)

@@ -1,0 +1,26 @@
+{
+  "range_renderer_suffix_sha256": "95d015effa1b5b4c317172fa6d5df4079af778bec3cf1a29db8a5579d4c1d5a5",
+  "renderer_suffix_byte_equal": true,
+  "actual_shared_file_pins": {
+    "app/src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt": {
+      "released_sha256": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+      "active_sha256": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+      "byte_equal": true
+    },
+    "app/src/main/java/app/smallthingz/reverb/RangeDurationWheelView.kt": {
+      "released_sha256": "fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a",
+      "active_sha256": "fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a",
+      "byte_equal": true
+    },
+    "app/src/main/java/app/smallthingz/reverb/ReverbTheme.kt": {
+      "released_sha256": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
+      "active_sha256": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
+      "byte_equal": true
+    }
+  },
+  "proposal_files": {
+    "NativeRangeParityProbe.kt": "c400a7421af27906a9bb0159b349f9ff2bb8afc315a465ad9e6812255fdafed2",
+    "ReleasedRangeFixtureOracle.kt": "cf325e83be5dfacc7a48725a5210d36fcf5f971d1c4617ca5843c65f5011b73b"
+  },
+  "executed": "source checks only; no Kotlin compile, device, build or tracked edit"
+}

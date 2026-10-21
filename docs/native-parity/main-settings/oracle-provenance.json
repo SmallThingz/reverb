@@ -1,0 +1,24 @@
+{
+  "release_commit": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source_git_path": "app/src/main/java/app/smallthingz/reverb/MainActivity.kt",
+  "source_snapshot": "/home/a/kotlin/reverb/.tmp/native-views-20261021/main-parity-proposal/MainActivity-v0.1.2.kt",
+  "source_sha256": "700410262137f40c16c327cc040b64f53de05ceebd8b14b9dd4d18f48cde5c15",
+  "source_body_sha256": "21ff9d00cdf3e42955c1c93f51959cb3541f052de2aff5ca89b716f157aaf421",
+  "oracle_sha256": "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f",
+  "replacements": [
+    [
+      "private fun MainScreen(",
+      "internal fun ReleasedMainScreenParityOracle("
+    ],
+    [
+      "MainPanelDragTarget",
+      "MainParityOracleDragTarget"
+    ],
+    [
+      "PANEL_SETTLE_DURATION_MS",
+      "MAIN_PARITY_ORACLE_SETTLE_DURATION_MS"
+    ]
+  ],
+  "injected_state_hooks": false,
+  "correction": "Prior proposal incorrectly copied active IncidentHistoryController extraction. This oracle now preserves the exact v0.1.2 MainScreen body, including its original incident state/controller logic; no adapter or body substitution."
+}

@@ -77,6 +77,7 @@ internal fun verifyNativeAboutParity(instrumentation: Instrumentation, report: S
         .put("oracle", "Unchanged released AboutDialog called directly; zero source substitutions")
         .put("comparison", "Exact ARGB; no masks/tolerance; short case constrains both own windows to240dp")
         .put("physical_input_injected", false)
+        .put("scene_labels", "Requested palette/configuration only; actual rendered colors are retained separately")
         .put("motion_phase_qualified", false)
         .put("limits", "Own-window synthetic dispatch and read-only semantics; actual system predictive dispatch, TalkBack and stopped/resumed Activity remain separate")
         .put("cases", entries)
@@ -251,6 +252,7 @@ private class AboutFixture private constructor(
 ) : AutoCloseable {
     val renderer get() = if (compose) "compose" else "native"
     val trace = JSONArray()
+    private val sceneConfiguration = JSONObject()
     var dismissCount = 0
         private set
     private val dismissed = CountDownLatch(1)
@@ -316,10 +318,31 @@ private class AboutFixture private constructor(
             // Activity remains the base Context, preserving its ordinary Window token/lifecycle.
             val local = ContextThemeWrapper(activity, 0).apply { applyOverrideConfiguration(configuration) }
             val density = Density(local.resources.displayMetrics.density, configuration.fontScale)
-            val typography = Typography()
+            val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
+                .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
             val colors = if (Build.VERSION.SDK_INT >= 31) {
                 if (case.dark) dynamicDarkColorScheme(local) else dynamicLightColorScheme(local)
             } else if (case.dark) darkColorScheme() else lightColorScheme()
+            val expectedNight = if (case.dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            val resolvedNight = local.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            val nativePalette = ReverbPalette.resolve(local, case.dark)
+            fun argb(value: Int) = value.toLong() and 0xffffffffL
+            sceneConfiguration.put("requested_dark", case.dark).put("requested_night", expectedNight)
+                .put("resolved_night", resolvedNight)
+                .put("activity_night", activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+                .put("surface_argb", argb(colors.surface.toArgb()))
+                .put("surface_high_argb", argb(colors.surfaceContainerHigh.toArgb()))
+                .put("surface_highest_argb", argb(colors.surfaceContainerHighest.toArgb()))
+                .put("on_surface_argb", argb(colors.onSurface.toArgb()))
+                .put("native_surface_high_argb", argb(nativePalette.surfaceContainerHigh))
+                .put("native_on_surface_argb", argb(nativePalette.onSurface))
+                .put("launcher_background_argb", argb(local.getColor(R.color.launcher_background)))
+                .put("launcher_main_argb", argb(local.getColor(R.color.launcher_main)))
+                .put("typography", "Exact release ReverbTypography, same as Home/onboarding probes")
+            trace.put(JSONObject().put("event", "scene_configuration").put("values", sceneConfiguration))
+            check(resolvedNight == expectedNight) { "Own configured About scene did not retain the requested night qualifier" }
+            check(nativePalette.surfaceContainerHigh == colors.surfaceContainerHigh.toArgb() &&
+                nativePalette.onSurface == colors.onSurface.toArgb()) { "About supplied palettes disagree before rendering" }
             activity.fixtureRoot.removeAllViews()
             activity.fixtureRoot.setBackgroundColor(colors.background.toArgb())
             val anchor = if (compose) ComposeView(local) else View(local)
@@ -485,6 +508,11 @@ private class AboutFixture private constructor(
             .put("requested_width", a.width).put("requested_height", a.height)
             .put("status_inset_top", decor.rootWindowInsets?.systemWindowInsetTop ?: -1)
             .put("navigation_inset_bottom", decor.rootWindowInsets?.systemWindowInsetBottom ?: -1)
+            .put("scene_configuration", JSONObject(sceneConfiguration.toString()))
+            .put("window_context_night", window.context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+            .put("decor_context_night", decor.context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+            .put("window_theme_is_light", aboutThemeLightFlag(window.context))
+            .put("decor_background", aboutBackgroundEvidence(decor.background))
     }
     fun semanticSnapshot() = nativeParityOnMain(instrumentation) {
         if (compose) JSONArray(composeRoot().semanticsOwner.getAllSemanticsNodes(false).map { node ->
@@ -683,4 +711,20 @@ private fun awaitAboutFrame(instrumentation: Instrumentation) {
     val frame = CountDownLatch(1)
     nativeParityOnMain(instrumentation) { Choreographer.getInstance().postFrameCallback { frame.countDown() } }
     check(frame.await(5, TimeUnit.SECONDS)) { "About fixture frame callback timed out" }
+}
+
+/** Read-only source conditions used by Android16 ViewRootImpl.determineForceDarkType. */
+private fun aboutThemeLightFlag(context: android.content.Context): Any {
+    val id = context.resources.getIdentifier("isLightTheme", "attr", "android")
+    if (id == 0) return JSONObject.NULL
+    val value = android.util.TypedValue()
+    return if (context.theme.resolveAttribute(id, value, true)) value.data != 0 else JSONObject.NULL
+}
+private fun aboutBackgroundEvidence(drawable: android.graphics.drawable.Drawable?): JSONObject {
+    val evidence = JSONObject().put("class", drawable?.javaClass?.name ?: JSONObject.NULL)
+    if (drawable is android.graphics.drawable.ColorDrawable)
+        evidence.put("argb", drawable.color.toLong() and 0xffffffffL)
+    if (drawable is android.graphics.drawable.InsetDrawable)
+        evidence.put("inset_child", aboutBackgroundEvidence(drawable.drawable))
+    return evidence
 }

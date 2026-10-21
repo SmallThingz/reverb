@@ -37,7 +37,9 @@ internal class NativeIncidentsScreenView(
     private val sourceNode: (View) -> NativeSourceAccessibilityNode,
     private val overlayVisibilityChanged: (Boolean) -> Unit = {},
     private val scrollEvents: NativeWindowScrollAccessibilityEvents,
+    restoredPosition: NativeListSavedPosition? = null,
 ) : ViewGroup(context), NativeIncidentsRenderer, AutoCloseable {
+    private val savedPosition = NativeIncidentsSavedPosition(restoredPosition)
     private var closed = false
     private var state = owner.state
     private var progress = owner.openProgress
@@ -55,6 +57,9 @@ internal class NativeIncidentsScreenView(
 
     val pointerEnvironment: ReverbViewEnvironment get() = environment
     val pointerContent: ReverbIncidentsContentView? get() = content
+
+    /** Pending unconsumed restore survives initial loading; closed/empty consumed lists do not. */
+    fun savePosition(): NativeListSavedPosition? = content?.savePosition() ?: savedPosition.save()
 
     /** One Main-window pointer binding; source mount/branch changes retire its input immediately. */
     fun observePointerMembership(changed: () -> Unit): AutoCloseable {
@@ -113,7 +118,7 @@ internal class NativeIncidentsScreenView(
             menus = menuOwner
             val shown = ReverbIncidentsContentView(context, appearance(), menuOwner,
                 incidentContentActions(context, owner.history), owner::requestBack, frames, scope,
-                { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, inputRoot)
+                { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, inputRoot, savedPosition)
             content = shown
             shown.setStatusBarInsets(statusBarInsets)
             addView(shown)

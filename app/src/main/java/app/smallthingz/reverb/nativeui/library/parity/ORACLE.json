@@ -1,0 +1,31 @@
+{
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source": "app/src/main/java/app/smallthingz/reverb/FilesScreen.kt",
+  "source_sha256": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371",
+  "renames": {
+    "isLibraryDismissEdge": "ReleasedLibraryisLibraryDismissEdge",
+    "finishLibraryExpandedBack": "ReleasedLibraryfinishLibraryExpandedBack",
+    "ListItem": "ReleasedLibraryListItem",
+    "deletionBatchFailed": "ReleasedLibrarydeletionBatchFailed",
+    "shouldHandoffPendingDeletionsToBackground": "ReleasedLibraryshouldHandoffPendingDeletionsToBackground",
+    "runCommittedRecordingRename": "ReleasedLibraryrunCommittedRecordingRename",
+    "RenameUiCallbackGate": "ReleasedLibraryRenameUiCallbackGate",
+    "RenameResultReceiver": "ReleasedLibraryRenameResultReceiver",
+    "recordingsAfterForegroundDeletion": "ReleasedLibraryrecordingsAfterForegroundDeletion",
+    "releaseCompletedForegroundDeletionTargets": "ReleasedLibraryreleaseCompletedForegroundDeletionTargets",
+    "librarySnapshotWithoutWaveformTrust": "ReleasedLibrarylibrarySnapshotWithoutWaveformTrust",
+    "libraryEmptyStateVisible": "ReleasedLibrarylibraryEmptyStateVisible",
+    "LibraryUndoNotice": "ReleasedLibraryLibraryUndoNotice",
+    "FilesScreen": "ReleasedLibraryFilesScreen",
+    "LibrarySelectionAction": "ReleasedLibraryLibrarySelectionAction",
+    "EmptyState": "ReleasedLibraryEmptyState",
+    "HeaderItem": "ReleasedLibraryHeaderItem",
+    "RecordingItem": "ReleasedLibraryRecordingItem",
+    "RenameRecordingDialog": "ReleasedLibraryRenameRecordingDialog",
+    "RecordingInfoDialogContent": "ReleasedLibraryRecordingInfoDialogContent",
+    "RecordingInfoRow": "ReleasedLibraryRecordingInfoRow",
+    "buildListItems": "ReleasedLibrarybuildListItems"
+  },
+  "generated_sha256": "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489",
+  "transformation": "Identifier renames only; Kotlin strings/comments and function bodies retained. No state or timing hook."
+}

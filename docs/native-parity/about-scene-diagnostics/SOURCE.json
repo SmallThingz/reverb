@@ -1,0 +1,16 @@
+{
+  "status": "Integrated reliability fixture correction; build/device pending",
+  "retained_failure": "hosts7 light-full requested scene, both canvases dark; actual window width mismatch fixed separately",
+  "retained_system_settings": {
+    "ui_night_mode": "2",
+    "accessibility_force_invert_color_enabled": "1"
+  },
+  "source_configuration": "NIGHT_NO and light palette supplied explicitly to both branches; no demonstrated wrong scene selector",
+  "platform_source": "AOSP Android16 ViewRootImpl.java2087\u20132108: ForceInvert ignores developer opt-outs and configuration.uiMode; chooses inversion from actual window theme/background. Retained receipt lacks actual supplied ARGB/decor background proof, so exact runtime cause remains unconfirmed.",
+  "correction": "Replace generic Typography() with actual released ReverbTypography. Add requested/resolved configuration, supplied role/resource ARGB, actual window context/theme/background evidence and pre-render equality checks. No palette adjustments, system mutations, oracle edits or force-invert workaround.",
+  "before_sha256": "8e0e090a051b4ab0c0d9d4ae8cc3f702ad5e6f70817eab1b5a187dbbf8e4bb90",
+  "proposal_sha256": "6ba156e4cee7a48951a9c18ee587a2879b31b53bb2776b2a4d370081cdcc8412",
+  "runtime_limits": "Next paired run must report actual resolved/raster evidence; scene labels alone are not light/dark appearance qualification. Existing frozen results remain failed.",
+  "platform_source_url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r1/core/java/android/view/ViewRootImpl.java",
+  "platform_source_sha256": "e85a8e51911fbec1f5cdbf80bfc7714e82e7e56b0257e65819e8b11bb82f4687"
+}

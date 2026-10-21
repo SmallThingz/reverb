@@ -1,0 +1,30 @@
+{
+  "reviewer": "native_settings_audit",
+  "timestamp_utc": "2026-10-21T12:50:54.604031+00:00",
+  "kind": "bounded independent source review",
+  "hashes": {
+    "fixture/NativeLibraryParityProbe.kt": "f7308b49be674b86febee898a278f6e7a6ba4c0ae59b947ea5d6c4c0855cf5eb",
+    "fixture/ReleasedLibraryFilesScreen.kt": "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489",
+    "reference/FilesScreen.kt": "b6a22c09f0d65a734e70250b9e54702a019c2c3a48dcf74670fde9c6da4e2371",
+    "generate_oracle.py": "f31d682bbacc16e65bbe388481bad42feab9551d9ec387af28629a6beb5eeaf8",
+    "ORACLE.json": "405af1c191e63c606654c0cb897ed99d7cb957ac5e297e6519adac39545b579a"
+  },
+  "oracle_reconstructed_from_release": true,
+  "reviewed": [
+    "Exact QA package/plain Application and app-private recording-directory admission",
+    "Empty file/catalog/refreshed baseline before fixture creation, no reset",
+    "Identity-bound cleanup and preservation of incomplete or changed files",
+    "Independent source/native LifecycleOwners paused synchronously before asynchronous player auto-start",
+    "No playback/export/trim/delete UI actions in this fixture",
+    "Exact ABAB stability and truthful final result including cleanup failure"
+  ],
+  "resolved_findings": [
+    "Partial board construction now disposes Composition, lifecycle owners and attached Views under the original failure; native content is owned before attachment callbacks"
+  ],
+  "remaining_findings": [],
+  "limits": [
+    "No build or device execution",
+    "No playback, pointer, traversal, keyboard or continuous-motion qualification",
+    "Fixture results remain pending"
+  ]
+}

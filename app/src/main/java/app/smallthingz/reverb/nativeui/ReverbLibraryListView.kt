@@ -71,7 +71,19 @@ internal class ReverbLibraryListView(
     private var state: LibraryNativeListState? = null
     private var currentRecordingIds = emptySet<String>()
     private var blockedRecordingIds = emptySet<String>()
-    private val layout = LinearLayoutManager(context, RecyclerView.VERTICAL, false)
+    private var pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
+    private val layout = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
+        override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
+            if (!state.isPreLayout) pendingPosition.pendingForPlacement(state.itemCount)?.let { target ->
+                scrollToPositionWithOffset(target.firstVisibleItemIndex, -target.firstVisibleItemScrollOffset)
+            }
+            super.onLayoutChildren(recycler, state)
+        }
+        override fun onLayoutCompleted(state: RecyclerView.State) {
+            super.onLayoutCompleted(state)
+            if (!state.isPreLayout) pendingPosition.placed(placedPosition())
+        }
+    }
     private val rowAdapter = LibraryRowsAdapter()
     private val list = ReverbLibraryRecyclerView(context).apply {
         layoutManager = layout
@@ -120,6 +132,23 @@ internal class ReverbLibraryListView(
         rowAdapter.submit(sampled)
     }
 
+    /** Called once when this source branch consumes its restored rememberLazyListState slot. */
+    fun restorePosition(position: NativeListSavedPosition) {
+        pendingPosition.request(position)
+        // Catalog membership can change again before measurement. Normalize against the actual
+        // layout count there, keeping this exact saved request until placement publishes its result.
+        list.requestLayout()
+    }
+
+    fun savePosition(): NativeListSavedPosition = pendingPosition.save(placedPosition())
+
+    private fun placedPosition(): NativeListSavedPosition? {
+        val index = layout.findFirstVisibleItemPosition()
+        if (index == RecyclerView.NO_POSITION) return null
+        val item = layout.findViewByPosition(index) ?: return null
+        return NativeListSavedPosition(index, (list.paddingTop - layout.getDecoratedTop(item)).coerceAtLeast(0))
+    }
+
     /** Source DropdownMenu remains separately owned; this supplies its current attached row anchor. */
     fun attachedRecordingAnchor(recordingId: String): View? {
         var result: View? = null
@@ -136,6 +165,9 @@ internal class ReverbLibraryListView(
         state = null
         currentRecordingIds = emptySet()
         blockedRecordingIds = emptySet()
+        // Old detached holders can survive until the next RV layout. A new source branch must save
+        // its fresh zero state instead of reading those stale positions during that interval.
+        pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
         layout.scrollToPositionWithOffset(0, 0)
     }
 

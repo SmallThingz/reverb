@@ -88,14 +88,15 @@ internal class NativeMainScreenView private constructor(
     private var lastSaveFeedbackVisible: Boolean? = null
     private var measuredFeedbackBottom = Int.MIN_VALUE
     private var captureRestorationAvailable = true
+    private var pendingAboutScrollPosition = restored?.aboutScrollPosition
 
     // Registration order is the released Settings, Incidents, Library sequence.
     private val settingsMotion = NativeMainPanelMotion(navigation.showSettings, scope, dispatcher,
         lifecycleOwner, ::motionChanged)
-    private val incidentsOwner = NativeIncidentsScreenOwner(context, scope, navigation.showIncidents,
+    private val incidentsOwner: NativeIncidentsScreenOwner = NativeIncidentsScreenOwner(context, scope, navigation.showIncidents,
         onBackRequested = { navigate { closeIncidents() } },
         onAlertChanged = { alert -> hasIncidentAlert = alert; requestRender() })
-    private var hasIncidentAlert = incidentsOwner.state.history.hasAlert
+    private var hasIncidentAlert: Boolean = incidentsOwner.state.history.hasAlert
     private val source = NativeMainAccessibility(windowRoot, this, { drawOrder }, ::ownNodeHidden,
         ::sourceClip, minimumTouch = { view ->
             val sourceClick = view is NativeClickPhaseHost &&
@@ -109,7 +110,7 @@ internal class NativeMainScreenView private constructor(
         overlayVisibilityChanged = { visible ->
             navigation.bindIncidentsOverlayVisibility(visible)
             requestRender()
-        }, scrollEvents = scrollEvents)
+        }, scrollEvents = scrollEvents, restoredPosition = restored?.incidentsPosition)
     private val libraryMotion = NativeMainPanelMotion(navigation.showLibrary, scope, dispatcher,
         lifecycleOwner, ::motionChanged)
     private val home = ReverbHomeScaffoldView(context, environment, homeNavigation(), hasIncidentAlert,
@@ -200,6 +201,9 @@ internal class NativeMainScreenView private constructor(
         settings?.owner?.saveDirectoryPicker() ?: restored?.directoryPicker,
         settings?.owner?.saveTileEditor() ?: restored?.tileEditor,
         settings?.savePosition() ?: restored?.settingsPosition,
+        library?.saveScrollPosition() ?: restored?.libraryPosition,
+        incidents.savePosition(),
+        about?.scrollPosition() ?: pendingAboutScrollPosition,
     )
 
     private fun navigate(action: NativeMainNavigationState.() -> Unit) {
@@ -287,7 +291,7 @@ internal class NativeMainScreenView private constructor(
         val content = ReverbLibraryScreenContent(context, environment, libraryInput(),
             lifecycleOwner, dispatcher, scope, frames,
             { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, accessibilityManager,
-            this, noNestedScroll, ::libraryNodesChanged, {})
+            this, noNestedScroll, ::libraryNodesChanged, {}, restoredScrollPosition = restored?.libraryPosition)
         library = content
         libraryLayer = NativeMainLibraryLayer(context, environment, content).also(::addView)
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
@@ -411,7 +415,9 @@ internal class NativeMainScreenView private constructor(
             val dismiss = { navigate { closeAbout() } }
             val current = about
             if (current == null) {
-                about = ReverbAboutDialog(windowRoot, appearance, dismiss).also { it.show() }
+                val created = ReverbAboutDialog(windowRoot, appearance, pendingAboutScrollPosition ?: 0, dismiss)
+                pendingAboutScrollPosition = null
+                about = created.also { it.show() }
             } else current.updateAppearance(appearance, dismiss)
         } else { about?.dismiss(); about = null }
     }

@@ -41,6 +41,21 @@ allprojects {
                     'src/main/java/app/smallthingz/reverb/ReverbTheme.kt': 'a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1',
                 ]
                 inputs.files(homeOracleSources.keySet().collect { file(it) })
+                // Full release Main/Library entries are mechanically renamed, never reconstructed.
+                // Shared render leaves retain their exact release bytes (visibility-only exception below).
+                def screenOracleSources = [
+                    'src/reliability/java/app/smallthingz/reverb/ReleasedMainScreenParityOracle.kt': '614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f',
+                    'src/main/java/app/smallthingz/reverb/SettingsScreen.kt': 'bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc',
+                    'src/reliability/java/app/smallthingz/reverb/ReleasedRangeFixtureOracle.kt': 'cf325e83be5dfacc7a48725a5210d36fcf5f971d1c4617ca5843c65f5011b73b',
+                    'src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt': '161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c',
+                    'src/main/java/app/smallthingz/reverb/RangeDurationWheelView.kt': 'fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a',
+                    'src/reliability/java/app/smallthingz/reverb/ReleasedLibraryFilesScreen.kt': 'eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489',
+                    'src/main/java/app/smallthingz/reverb/RecordingCard.kt': '85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42',
+                ]
+                inputs.files(screenOracleSources.keySet().collect { file(it) })
+                def rangeRendererSource = file('src/main/java/app/smallthingz/reverb/RangeExportEditor.kt')
+                def inlinePlayerSource = file('src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt')
+                inputs.files(rangeRendererSource, inlinePlayerSource)
                 def onboardingScreenOracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt')
                 inputs.file(onboardingScreenOracle)
                 inputs.files(settingsSource, chromeSource, iconsSource)
@@ -63,6 +78,28 @@ allprojects {
                         if (sha256(file(relative).bytes) != expected) {
                             throw new GradleException('Released Home oracle changed: ' + relative)
                         }
+                    }
+                    screenOracleSources.each { relative, expected ->
+                        if (sha256(file(relative).bytes) != expected) {
+                            throw new GradleException('Released Main/Range/Library oracle changed: ' + relative)
+                        }
+                    }
+                    def rangeText = rangeRendererSource.getText('UTF-8')
+                    def rangeStart = rangeText.indexOf('@Composable\ninternal fun RangeExportHomeContent(')
+                    def fineSeekStart = rangeText.indexOf('internal fun SpringFineSeekControl(')
+                    if (rangeStart < 0 || fineSeekStart < rangeStart ||
+                        sha256(rangeText.substring(rangeStart).getBytes('UTF-8')) !=
+                            '95d015effa1b5b4c317172fa6d5df4079af778bec3cf1a29db8a5579d4c1d5a5' ||
+                        sha256(rangeText.substring(fineSeekStart).getBytes('UTF-8')) !=
+                            'd9cbc224692db6c34fcca6c516f074b65621945e2d46a5cc7aebf531857f9a7e') {
+                        throw new GradleException('Released range/FineSeek render suffix changed')
+                    }
+                    def normalizedPlayer = inlinePlayerSource.getText('UTF-8')
+                        .replace('internal data class InlinePlayerMediaSource(', 'private data class InlinePlayerMediaSource(')
+                        .replace('internal fun openInlinePlayerMediaSource(', 'private fun openInlinePlayerMediaSource(')
+                    if (sha256(normalizedPlayer.getBytes('UTF-8')) !=
+                            'be40d98c8b619c4920ca5b102ad8d38b6d0a7239bca6ed3a08110cce56f78423') {
+                        throw new GradleException('Released inline-player oracle changed beyond the two visibility seams')
                     }
                     if (sha256(onboardingScreenOracle.bytes) !=
                             '8be65c8c589678c3a5393d4cb7a73489af942e3a04cf0958845bbad5fc4c72a9') {

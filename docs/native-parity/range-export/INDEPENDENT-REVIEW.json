@@ -1,0 +1,31 @@
+{
+  "timestamp_utc": "2026-10-21T12:47:21.941693+00:00",
+  "reviewer": "native_settings_audit",
+  "kind": "bounded independent source review",
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "hashes": {
+    "NativeRangeParityProbe.kt": "c400a7421af27906a9bb0159b349f9ff2bb8afc315a465ad9e6812255fdafed2",
+    "ReleasedRangeFixtureOracle.kt": "cf325e83be5dfacc7a48725a5210d36fcf5f971d1c4617ca5843c65f5011b73b",
+    "generate_oracle.py": "361e1744426f59110c61e65fd9ed7ded5cba41d42848476dbbb7d210387dd87b",
+    "ORACLE.json": "3ead02b6ee3a54caed2b027e90cb7a3e55a31c381d910506cd8138b0b68878c9"
+  },
+  "mechanical_oracle_reconstruction_equal": true,
+  "reviewed": [
+    "Pinned source extraction with one read-only state observer",
+    "QA-owned integer known-signal store and distinct parent snapshot leases",
+    "Actual completed waveform and paused readiness",
+    "Discrete existing duration action only, no playback/export",
+    "Exact ABAB raster stability and state equality",
+    "Primary and secondary failure preservation"
+  ],
+  "resolved_findings": [
+    "First parent lease now released if second acquisition fails; partially initialized board retires Composition and Views",
+    "Outer board/root/activity cleanup now independently attempted and secondary failures suppressed"
+  ],
+  "remaining_findings": [],
+  "qualification": [
+    "No build or device execution",
+    "No opening frame-phase or playback/export qualification",
+    "Real fixture outcome remains pending"
+  ]
+}

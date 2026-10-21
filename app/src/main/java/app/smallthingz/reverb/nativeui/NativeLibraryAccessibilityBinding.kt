@@ -139,8 +139,8 @@ internal class NativeLibraryRecyclerAccessibility(
             info.isClickable=false;info.isLongClickable=false;info.isScreenReaderFocusable=false
             info.isSelected=false;info.isCheckable=false;info.isChecked=false
             info.isScrollable=current.maximum>0f
-            info.collectionInfo=AccessibilityNodeInfoCompat.CollectionInfoCompat.obtain(
-                view.adapter?.itemCount?:0,1,false)
+            info.setCollectionInfo(AccessibilityNodeInfoCompat.CollectionInfoCompat.obtain(
+                view.adapter?.itemCount?:0,1,false))
             info.actionList.toList().forEach(info::removeAction)
             info.addAction(if(view.isAccessibilityFocused)
                 AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLEAR_ACCESSIBILITY_FOCUS

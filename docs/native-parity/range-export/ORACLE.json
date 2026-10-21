@@ -1,0 +1,24 @@
+{
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "source": "app/src/main/java/app/smallthingz/reverb/RangeExportEditor.kt",
+  "source_sha256": "79954eb9fdd0926eb685c07db1df3fe9d4ecd3dacfb8c74a60e0e3c44414bc65",
+  "selected_released_spans_sha256": [
+    "2be19a23ad6bdf03f97963b1a406a00529ac0e16b8cd78e0f2d06521084dc200",
+    "b40a3b6e5e87425c19f0767368df27a28d6b2290de6921afddcdc558e5d4bb31",
+    "baa676e7f7f2e06c2b6b97fbe707f55ec6ad6852515b9c296306288f89d61b0b"
+  ],
+  "generated_oracle_sha256": "cf325e83be5dfacc7a48725a5210d36fcf5f971d1c4617ca5843c65f5011b73b",
+  "transformations": [
+    "Copy released imports and nine marker/time-label constants; prefix constants to avoid source-set identifier collisions",
+    "Copy complete RangeExportHomeContent and its private wheel/timeline/bar/time-label/fine-adjust/controls leaves; prefix only those top-level function identifiers",
+    "Keep actual released internal RangeTimelineMarkerVisual and SpringFineSeekControl calls; no clone of their renderer",
+    "Add ONE reliability-only read-only fixtureStateObserver parameter and SideEffect(state) callback after state creation; no mutation, layout, source condition, effect key or animation change"
+  ],
+  "baseline_file_pins": {
+    "app/src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": "79954eb9fdd0926eb685c07db1df3fe9d4ecd3dacfb8c74a60e0e3c44414bc65",
+    "app/src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+    "app/src/main/java/app/smallthingz/reverb/RangeDurationWheelView.kt": "fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a",
+    "app/src/main/java/app/smallthingz/reverb/ReverbTheme.kt": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1"
+  },
+  "production_files_modified": false
+}

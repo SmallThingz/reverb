@@ -45,6 +45,7 @@ internal class ReverbIncidentsContentView(
     scope: CoroutineScope,
     durationScale: () -> Float,
     inputRoot: View,
+    private val savedPosition: NativeIncidentsSavedPosition = NativeIncidentsSavedPosition(),
 ) : ViewGroup(context) {
     private var appearance = initialAppearance
     private val backgroundNoise = ReverbNoiseDrawable(resources, initialAppearance.card.palette.surface)
@@ -52,8 +53,24 @@ internal class ReverbIncidentsContentView(
     private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
     private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
     private var accessibilityMembershipChanged: () -> Unit = {}
-    private val list = ReverbLibraryRecyclerView(context).apply {
-        layoutManager = LinearLayoutManager(context)
+    private val manager: LinearLayoutManager = object : LinearLayoutManager(context) {
+        override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
+            if (!state.isPreLayout) {
+                savedPosition.pendingForPlacement(state.itemCount)?.let { position ->
+                    scrollToPositionWithOffset(position.firstVisibleItemIndex, -position.firstVisibleItemScrollOffset)
+                }
+            }
+            super.onLayoutChildren(recycler, state)
+        }
+        override fun onLayoutCompleted(state: RecyclerView.State) {
+            super.onLayoutCompleted(state)
+            if (!state.isPreLayout && state.itemCount > 0) {
+                currentListPosition()?.let(savedPosition::placed)
+            }
+        }
+    }
+    private val list: ReverbLibraryRecyclerView = ReverbLibraryRecyclerView(context).apply {
+        layoutManager = manager
         adapter = this@ReverbIncidentsContentView.adapter
         itemAnimator = ReverbIncidentItemAnimator(frames, scope, durationScale)
         clipToPadding = false
@@ -87,6 +104,17 @@ internal class ReverbIncidentsContentView(
     /** The source LazyColumn exists only in the nonempty history branch. */
     val pointerList: ReverbLibraryRecyclerView?
         get() = list.takeIf { it.visibility == VISIBLE && it.adapter != null }
+    /** Same index/offset values as LazyListState.Saver; pending restore wins before placement. */
+    fun savePosition(): NativeListSavedPosition? = savedPosition.save(currentListPosition())
+
+    private fun currentListPosition(): NativeListSavedPosition? {
+        if (list.visibility != VISIBLE || list.adapter == null) return null
+        val index = manager.findFirstVisibleItemPosition()
+        if (index == RecyclerView.NO_POSITION) return null
+        val item = manager.findViewByPosition(index) ?: return null
+        return NativeListSavedPosition(index, (list.paddingTop - manager.getDecoratedTop(item)).coerceAtLeast(0))
+    }
+
     fun setStatusBarInsets(insets: Insets) = header.setStatusBarInsets(insets)
     fun semanticsClip(view: View): NativeTextSemanticsClip = when {
         view === this || view === list ||
@@ -103,7 +131,11 @@ internal class ReverbIncidentsContentView(
         if (hasRows) {
             if (list.adapter == null) list.adapter = adapter
             adapter.submit(state)
+            savedPosition.enterList()?.let { position ->
+                manager.scrollToPositionWithOffset(position.firstVisibleItemIndex, -position.firstVisibleItemScrollOffset)
+            }
         } else {
+            savedPosition.leaveList()
             // Match removal of LazyColumn from composition, including owned popup/input disposal.
             list.itemAnimator?.endAnimations()
             adapter.disposeVisible(list)
@@ -152,6 +184,7 @@ internal class ReverbIncidentsContentView(
 
     /** Root owner calls this when the source overlay leaves composition at fully closed progress. */
     fun dispose() {
+        savedPosition.leaveList()
         list.itemAnimator?.endAnimations()
         adapter.disposeVisible(list)
         list.adapter = null

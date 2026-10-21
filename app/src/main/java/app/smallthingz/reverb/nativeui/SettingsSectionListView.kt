@@ -8,9 +8,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.roundToInt
 
-/** Same two integers as released LazyListState.Saver; item keys preserve the live anchor separately. */
-internal data class SettingsListSavedPosition(val firstVisibleItemIndex:Int,val firstVisibleItemScrollOffset:Int)
-
 internal interface NativeSettingsSection:AutoCloseable {
     val view:View
     /** Reads the current screen snapshot; never performs persistence or canonicalization. */
@@ -33,7 +30,19 @@ internal class SettingsSectionListView(
     restored:SettingsListSavedPosition?=null,
     private val onStructureChanged:()->Unit={},
 ):FrameLayout(context),AutoCloseable {
-    private val manager=LinearLayoutManager(context,RecyclerView.VERTICAL,false)
+    private val pendingPosition=SettingsPendingScrollPosition(restored)
+    private val manager:LinearLayoutManager=object:LinearLayoutManager(context,RecyclerView.VERTICAL,false) {
+        override fun onLayoutChildren(recycler:RecyclerView.Recycler,state:RecyclerView.State) {
+            if(!state.isPreLayout)pendingPosition.pendingForPlacement(state.itemCount)?.let {
+                super.scrollToPositionWithOffset(it.firstVisibleItemIndex,-it.firstVisibleItemScrollOffset)
+            }
+            super.onLayoutChildren(recycler,state)
+        }
+        override fun onLayoutCompleted(state:RecyclerView.State) {
+            super.onLayoutCompleted(state)
+            if(!state.isPreLayout)pendingPosition.placed(placedPosition())
+        }
+    }
     private val rows=Rows(restricted)
     val viewport:ReverbLibraryRecyclerView get()=list
     private val list=ReverbLibraryRecyclerView(context).apply {
@@ -48,7 +57,6 @@ internal class SettingsSectionListView(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(list,LayoutParams(-1,-1))
         applyPadding()
-        restored?.let {manager.scrollToPositionWithOffset(it.firstVisibleItemIndex,-it.firstVisibleItemScrollOffset)}
     }
     fun bind(restricted:Boolean,next:ReverbViewEnvironment) {
         check(!closed)
@@ -60,11 +68,14 @@ internal class SettingsSectionListView(
         // Released effect calls scrollToItem2/1 immediately when the focus-buffer owner changes.
         val index=SettingsSectionKey.retentionIndex(rows.restricted)
         list.stopScroll()
+        pendingPosition.request(SettingsListSavedPosition(index,0))
         manager.scrollToPositionWithOffset(index,0)
     }
-    fun savePosition():SettingsListSavedPosition {
+    fun savePosition():SettingsListSavedPosition = pendingPosition.save(placedPosition())
+
+    private fun placedPosition():SettingsListSavedPosition? {
         val index=manager.findFirstVisibleItemPosition()
-        if(index==RecyclerView.NO_POSITION)return SettingsListSavedPosition(0,0)
+        if(index==RecyclerView.NO_POSITION)return null
         val item=manager.findViewByPosition(index)
         val offset=if(item==null)0 else (list.paddingTop-manager.getDecoratedTop(item)).coerceAtLeast(0)
         return SettingsListSavedPosition(index,offset)
@@ -94,7 +105,10 @@ internal class SettingsSectionListView(
             if(value)notifyItemInserted(0)else notifyItemRemoved(0)
             if(anchor!=null&&offset!=null) {
                 val index=keys.indexOf(anchor)
-                if(index>=0)manager.scrollToPositionWithOffset(index,offset)
+                if(index>=0) {
+                    pendingPosition.request(SettingsListSavedPosition(index,(-offset).coerceAtLeast(0)))
+                    manager.scrollToPositionWithOffset(index,offset)
+                }
             }
         }
         fun bindAttached() {

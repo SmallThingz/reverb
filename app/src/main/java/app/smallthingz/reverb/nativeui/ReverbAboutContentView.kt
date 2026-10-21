@@ -74,20 +74,23 @@ internal class ReverbAboutContentView private constructor(
     private val versionName: String,
     requestDismiss: () -> Unit,
     private val runtime: NativeAboutWindowRuntime,
+    initialScrollPosition: Int,
     private val input: AboutInputGeometry,
 ) : NativePagerTouchRoot(context, input::rootToScreen, input::coordinates, input.rootHit, input::prepare) {
     constructor(context: Context, initialAppearance: AboutContentAppearance, versionName: String,
-                requestDismiss: () -> Unit, runtime: NativeAboutWindowRuntime) :
-        this(context, initialAppearance, versionName, requestDismiss, runtime,
+                requestDismiss: () -> Unit, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int = 0) :
+        this(context, initialAppearance, versionName, requestDismiss, runtime, initialScrollPosition,
             AboutInputGeometry(initialAppearance.density.density))
     private var appearance = initialAppearance
     private var navigation = Insets.NONE
     private var status = Insets.NONE
     private var linkError: String? = null
-    private val surface = AboutSurface(context, initialAppearance, runtime)
+    private val surface = AboutSurface(context, initialAppearance, runtime, initialScrollPosition)
     private val content = AboutColumn(context, initialAppearance, versionName, requestDismiss, ::openRepository)
     val predictiveMotionTarget: View get() = surface
     private var accessibilityOwner: AboutContentAccessibilityOwner? = null
+
+    fun scrollPosition(): Int = surface.viewport.saveScrollPosition()
 
     fun bindWindowAccessibility(windowRoot: View) {
         check(accessibilityOwner == null) { "About content already has its native Window cursor" }
@@ -176,6 +179,7 @@ internal fun createReverbAboutContent(
     appearance: AboutContentAppearance,
     requestDismiss: () -> Unit,
     runtime: NativeAboutWindowRuntime,
+    initialScrollPosition: Int = 0,
 ): ReverbAboutContentView {
     val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
@@ -183,20 +187,20 @@ internal fun createReverbAboutContent(
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0)
     }
-    return ReverbAboutContentView(context, appearance, info.versionName.orEmpty(), requestDismiss, runtime)
+    return ReverbAboutContentView(context, appearance, info.versionName.orEmpty(), requestDismiss, runtime, initialScrollPosition)
 }
 
 private const val ABOUT_REPOSITORY_URL = "https://github.com/SmallThingz/reverb"
 private const val ABOUT_REPOSITORY_LABEL = "SmallThingz/reverb"
 
-private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeAboutWindowRuntime) : ViewGroup(context) {
+private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int) : ViewGroup(context) {
     private val fill = Paint(ABOUT_PAINT_FLAGS)
     private val path = Path()
     private val bounds = RectF()
     private val radii = FloatArray(8)
     private val clipped = AboutSurfaceContentClip(context)
     private val noise = ReverbNoiseDrawable(resources)
-    val viewport = NativeVerticalViewport(context, NativeVerticalScrollState(), appearance.density,
+    val viewport = NativeVerticalViewport(context, NativeVerticalScrollState(initialScrollPosition), appearance.density,
         runtime.frames, runtime.scope, object : NativeVerticalNestedHost {
             // This dialog's scroll container has no scrollable ancestor; window motion is not nested scroll.
             override fun preScroll(availableY: Float, source: NativeVerticalScrollSource) = 0f

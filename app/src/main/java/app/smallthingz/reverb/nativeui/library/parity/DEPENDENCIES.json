@@ -1,0 +1,32 @@
+{
+  "RecordingCard.kt": {
+    "sha256": "85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42",
+    "scope": "whole source equals release"
+  },
+  "ProgressiveWaveform.kt": {
+    "sha256": "161a7086e1d49222626e2b725868fb8eb1f2489781733eb6df3e59d9822b904c",
+    "scope": "whole source equals release"
+  },
+  "AppTopBar.kt": {
+    "sha256": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+    "scope": "whole source equals release"
+  },
+  "AppIcons.kt": {
+    "sha256": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+    "scope": "whole source equals release"
+  },
+  "ReverbTheme.kt": {
+    "sha256": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
+    "scope": "whole source equals release"
+  },
+  "RecordingInlinePlayer.kt": {
+    "sha256": "51fbad74e0027adee055ec1a52abb03286e501604fbe531b99b45d1ca4be8627",
+    "released_sha256": "be40d98c8b619c4920ca5b102ad8d38b6d0a7239bca6ed3a08110cce56f78423",
+    "scope": "whole source equals release after two private-to-internal visibility changes only"
+  },
+  "RangeExportEditor.kt": {
+    "suffix_sha256": "d9cbc224692db6c34fcca6c516f074b65621945e2d46a5cc7aebf531857f9a7e",
+    "suffix_start": "internal fun SpringFineSeekControl(",
+    "scope": "FineSeek composable and following helpers byte-identical to release; unrelated range state owner outside oracle suffix"
+  }
+}

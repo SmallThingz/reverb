@@ -37,7 +37,7 @@ internal class NativeActionSheetAccessibility(
         leases+=app.close.bindAccessibility(cursor,geometry) {view->
             sourceNode(view,if(view===app.close.visual)app.close.minimumTouchTargetPx else 0f)
         }
-        handle.sourceNode={sourceNode(handle,48f*app.environment.textDensity.density)}
+        handle.sourceNode={sourceNode(handle,app.minimumTouchTargetPx)}
         handle.mark.sourceNode={sourceNode(handle.mark)}
         surface.sourceChildPresent={view->when {
             view is NativeMergedRowAccessibilityHost->view.mergedRowAccessibility.isNodePresent()

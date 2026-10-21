@@ -1,0 +1,17 @@
+{
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "shared_render_sources_byte_equal_to_release": true,
+  "full_file_pins": {
+    "app/src/main/java/app/smallthingz/reverb/SettingsScreen.kt": "bff24a7b03c52f3235bca98d5c2c4da78a2f7ed369bcdb9c9195e2a8d66c92cc",
+    "app/src/main/java/app/smallthingz/reverb/AppTopBar.kt": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+    "app/src/main/java/app/smallthingz/reverb/ReverbTheme.kt": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1"
+  },
+  "oracle_sha256": "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f",
+  "probe_sha256": "568029d24df9f7845c6f2fea362b4ad77a92f7b7d3317f9bce9709efe9eaa518",
+  "changes_after_reviews": [
+    "Exact original release oracle replaces incorrectly selected active-body oracle.",
+    "PASS/result success occurs only after all cleanup and evidence persistence; primary failures keep suppressed cleanup/write errors.",
+    "Native frame runtime follows actual Activity ON_START/ON_STOP and retires observer."
+  ],
+  "executed": "Mechanical hash/source verification only; Kotlin/device unrun"
+}

@@ -182,9 +182,14 @@ private class CaptureStatusBranch(
 ) : ViewGroup(context), NativeMergedRowAccessibilityHost, AutoCloseable {
     private val row = ReverbLibraryRecordingRow(context, environment, scope, host.inputRoot)
     private val frames = requireNotNull(scope.coroutineContext[MonotonicFrameClock])
-    private val progress = if (saving) ReverbIncidentLoadingView(context, environment.palette.primary,
-        frames, scope, { scope.coroutineContext[androidx.compose.ui.MotionDurationScale]?.scaleFactor ?: 1f },
-        strokeWidthDp = 2.5f) else null
+    private val progress: ReverbIncidentLoadingView? = if (saving) object : ReverbIncidentLoadingView(
+        context, environment.palette.primary, frames, scope,
+        { scope.coroutineContext[androidx.compose.ui.MotionDurationScale]?.scaleFactor ?: 1f },
+        strokeWidthDp = 2.5f,
+    ) {
+        override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+            if (host.sourceNode(this).present) super.createAccessibilityNodeInfo() else null
+    } else null
     private var cancel: ReverbStandardIconButtonView? = null
     private var cancelNode: NativeClickPhaseNode? = null
     private var cancelLease: AutoCloseable? = null
@@ -248,8 +253,6 @@ private class CaptureStatusBranch(
             }
         }
         progress?.accessibilityDelegate = object : View.AccessibilityDelegate() {
-            override fun createAccessibilityNodeInfo(view: View): AccessibilityNodeInfo? =
-                if (host.sourceNode(view).present) super.createAccessibilityNodeInfo(view) else null
             override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean = when (action) {
                 AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> super.performAccessibilityAction(view, action, args)

@@ -207,6 +207,7 @@ internal class NativeSheetAppContent(
     private var topBody=0
     private var topActions=0
     private val density get()=environment.textDensity.density
+    val minimumTouchTargetPx:Float get()=48f*density
     init {
         clipChildren=false;clipToPadding=false;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         background=ReverbNoiseDrawable(resources)

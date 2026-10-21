@@ -56,12 +56,14 @@ internal class ReverbLibraryScreenContent(
     nested: NativeVerticalNestedHost,
     private val changedNodes: () -> Unit,
     private val transientStateChanged: (NativeLibraryPresentation) -> Unit,
+    restoredScrollPosition: NativeLibrarySavedScrollPosition? = null,
 ) : ViewGroup(context), AutoCloseable {
     private val animationScope = CoroutineScope(scope.coroutineContext + frames)
     private var environment = initialEnvironment
     private var input = initial
     private var presentation: NativeLibraryPresentation? = null
     private var closed = false
+    private val scrollRestoration = NativeLibraryScrollRestoration(restoredScrollPosition)
     private class RenameLifetime(val recordingId: String, val sheet: NativeRecordingRenameSheet)
     private class InfoLifetime(val recordingId: String, val sheet: NativeRecordingInfoSheet)
     private var renameSheet: RenameLifetime? = null
@@ -152,6 +154,11 @@ internal class ReverbLibraryScreenContent(
         if (insetsChanged) requestLayout()
     }
 
+    fun saveScrollPosition(): NativeLibrarySavedScrollPosition = scrollRestoration.save(
+        currentList = if (listVisible) list.savePosition() else null,
+        currentEmpty = if (bodyMode == LibraryBodyMode.EMPTY) status?.emptyScrollPosition else null,
+    )
+
     private fun currentRecording(id: String): RecordingEntity? =
         presentation?.recordings?.firstOrNull { it.id == id }
 
@@ -178,6 +185,7 @@ internal class ReverbLibraryScreenContent(
             else -> null
         }
         if (mode == null) {
+            val restoredList = if (!listVisible) scrollRestoration.consumeList() else null
             if (!listVisible) {
                 status?.let(body::removeView)
                 status = null
@@ -186,6 +194,7 @@ internal class ReverbLibraryScreenContent(
                 listVisible = true
             }
             list.submit(value.list)
+            restoredList?.let(list::restorePosition)
         } else {
             if (listVisible) {
                 // Real source branch disposal, unlike a hidden retained screen.
@@ -194,8 +203,10 @@ internal class ReverbLibraryScreenContent(
                 listVisible = false
             }
             val current = status ?: makeStatus().also { status = it; body.addView(it, 0) }
+            val restoredEmpty = if (mode == LibraryBodyMode.EMPTY && bodyMode != LibraryBodyMode.EMPTY)
+                scrollRestoration.consumeEmpty() else null
             bodyMode = mode
-            current.bind(mode) { owner.refresh(showSpinner = true) }
+            current.bind(mode, restoredEmpty) { owner.refresh(showSpinner = true) }
         }
         val notice = value.undo
         if (notice == null) {

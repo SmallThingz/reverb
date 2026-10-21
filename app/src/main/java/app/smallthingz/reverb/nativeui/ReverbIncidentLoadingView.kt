@@ -28,7 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Released indeterminate indicator: Incidents defaults to a 2dp round stroke; Library supplies 4dp. */
-internal class ReverbIncidentLoadingView(
+internal open class ReverbIncidentLoadingView(
     context: Context,
     color: Int,
     private val frames: MonotonicFrameClock,

@@ -32,6 +32,7 @@ internal class ReverbLibraryStatusView(
     private var viewport: NativeVerticalViewport? = null
     private var emptyScrollState: NativeVerticalScrollState? = null
     val emptyViewport: NativeVerticalViewport? get() = viewport
+    val emptyScrollPosition: Int? get() = emptyScrollState?.save()
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -40,7 +41,7 @@ internal class ReverbLibraryStatusView(
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
 
-    fun bind(next: LibraryBodyMode, onRetry: () -> Unit) {
+    fun bind(next: LibraryBodyMode, restoredScrollPosition: Int? = null, onRetry: () -> Unit) {
         retry = onRetry
         if (mode != next) {
             removeAllViews()
@@ -50,7 +51,7 @@ internal class ReverbLibraryStatusView(
             val column = LibraryStatusColumn(context, environment, next, nativeInputRoot, frames, parentScope, durationScale) { retry() }
             body = column
             if (next == LibraryBodyMode.EMPTY) {
-                val scroll = NativeVerticalScrollState()
+                val scroll = NativeVerticalScrollState(restoredScrollPosition ?: 0)
                 emptyScrollState = scroll
                 viewport = NativeVerticalViewport(context, scroll, environment.textDensity, frames, parentScope, nested).also {
                     it.setContent(column)

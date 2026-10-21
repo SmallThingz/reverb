@@ -49,8 +49,12 @@ import kotlin.math.roundToInt
 internal class ReverbAboutDialog(
     private val anchor: View,
     appearance: AboutContentAppearance,
+    restoredScrollPosition: Int,
     onDismiss: () -> Unit,
 ) : ComponentDialog(ContextThemeWrapper(anchor.context, androidx.compose.ui.R.style.FloatingDialogWindowTheme)) {
+    constructor(anchor: View, appearance: AboutContentAppearance, onDismiss: () -> Unit) :
+        this(anchor, appearance, 0, onDismiss)
+
     private var currentOnDismiss = onDismiss
     private val visibilityMotion = ReverbAboutVisibilityMotion()
     private val predictiveMotion = ReverbAboutPredictiveMotion()
@@ -74,7 +78,7 @@ internal class ReverbAboutDialog(
             else -> Unit
         }
     }
-    private val content = createReverbAboutContent(context, appearance, ::requestDismiss, runtime).apply {
+    private val content = createReverbAboutContent(context, appearance, ::requestDismiss, runtime, restoredScrollPosition).apply {
         alpha = 0f
     }
     private val root = AboutWindowRoot(context, requireNotNull(window), content) {
@@ -189,6 +193,9 @@ internal class ReverbAboutDialog(
             }
         })
     }
+
+    /** ScrollState.Saver contains only the current integer, including before the first measure. */
+    fun scrollPosition(): Int = content.scrollPosition()
 
     fun updateAppearance(appearance: AboutContentAppearance, onDismiss: () -> Unit) {
         currentOnDismiss = onDismiss
