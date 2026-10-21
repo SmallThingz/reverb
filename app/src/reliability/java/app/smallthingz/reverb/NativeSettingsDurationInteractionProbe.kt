@@ -134,14 +134,14 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         for ((index, buffer) in listOf(ReverbService.BufferSlot.ONE_SHOT, ReverbService.BufferSlot.LOOPING,
             ReverbService.BufferSlot.ONE_SHOT).withIndex()) {
             suite.main { tile.click(host.getString(if (buffer == ReverbService.BufferSlot.ONE_SHOT)
-                R.string.buffer_one_shot else R.string.buffer_looping)) }
+                R.string.buffer_one_shot else R.string.buffer_loop)) }
             suite.await("selected buffer publication") { target.buffer == buffer }
             suite.observeDraws("tile-buffer-$index")
             suite.main { check(tile.wheel() === originalWheel) { "Buffer choice recreated the existing duration wheel" } }
             tileCheckpoint("tile-buffer-$index")
         }
         suite.main {
-            tile.click(host.getString(R.string.buffer_looping))
+            tile.click(host.getString(R.string.buffer_loop))
             tile.click(host.getString(R.string.buffer_one_shot))
             check(target.buffer == ReverbService.BufferSlot.ONE_SHOT)
             check(tile.wheel() === originalWheel)

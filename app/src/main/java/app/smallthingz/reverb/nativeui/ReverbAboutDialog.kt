@@ -307,6 +307,10 @@ private class AboutWindowRoot(
     init {
         clipChildren = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        // Released AndroidComposeView owns initial native window focus before child controls.
+        isFocusable = true
+        isFocusableInTouchMode = true
+        defaultFocusHighlightEnabled = false
         addView(content)
         ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
             insetForChild(insets) { l, t, r, b -> insets.inset(l, t, r, b) }

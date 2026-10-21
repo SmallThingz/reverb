@@ -39,6 +39,22 @@ internal fun interface NativeTextSemanticsClipPolicy {
     fun localClip(view: View): NativeTextSemanticsClip?
 }
 
+/** Optional source graphicsLayer math for a specifically known ported native layer. */
+internal fun interface NativeTextSemanticsTransformPolicy {
+    /** Fill target and return true only for that source layer; false keeps native View.matrix. */
+    fun populate(view: View, target: Matrix): Boolean
+}
+
+/** Exactly the existing one Matrix per ancestor; no extra renderer or transform cache. */
+internal fun nativeTextSemanticsMatrix(
+    view: View,
+    policy: NativeTextSemanticsTransformPolicy? = null,
+): Matrix = Matrix().also { target ->
+    populateNativeTextSemanticsTransform(target,
+        sourceTransform = { policy?.populate(view, it) == true },
+        backendTransform = { it.setFrom(view.matrix) })
+}
+
 /**
  * Direct on-demand geometry capture for an existing native root. No View is retained in a returned
  * snapshot, no global listener is installed, and no work runs on draw/frame callbacks.
@@ -53,6 +69,9 @@ internal fun interface NativeTextSemanticsClipPolicy {
 internal class NativePlainTextViewGeometry(
     private val root: View,
     private val clips: NativeTextSemanticsClipPolicy,
+    // Explicit source content layer at root coordinates, not an implicit native viewport clip.
+    private val rootContentClip: (() -> Rect)? = null,
+    private val transformPolicy: NativeTextSemanticsTransformPolicy? = null,
 ) {
     fun capture(
         label: View,
@@ -71,11 +90,12 @@ internal class NativePlainTextViewGeometry(
                 NativeTextSemanticsClip.Unclipped -> null
                 is NativeTextSemanticsClip.Rectangle -> local.bounds
             }
-            // Native View matrix includes pivot/scale/rotation/translation properties. Parent
+            // Known source graphicsLayer nodes can retain their semantic matrix arithmetic. All
+            // other native View matrices include their actual transform properties. Parent
             // scroll belongs to the placement edge (AOSP View.transformMatrixToGlobal), not the
             // child's transform. Keep placement separate to retain the source arithmetic order.
             layers += NativeTextGeometryLayer(
-                Matrix().apply { setFrom(current.matrix) },
+                nativeTextSemanticsMatrix(current, transformPolicy),
                 Offset(
                     current.left.toFloat() - parent.scrollX.toFloat(),
                     current.top.toFloat() - parent.scrollY.toFloat(),
@@ -86,6 +106,7 @@ internal class NativePlainTextViewGeometry(
         }
         val mapped = mapNativePlainTextGeometry(
             originalParagraphOriginInView, originalSemanticsBoundsInView, layers,
+            rootContentClip = rootContentClip?.invoke(),
         )
         val screen = captureRootToScreen(root, windowPositionInScreen)
         return PlainTextAccessibilityGeometry(

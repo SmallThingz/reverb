@@ -56,8 +56,13 @@ internal class NativeActivityContentView(
             else -> onboarding?.sourceWindowTextClip(view) ?: NativeTextSemanticsClip.Unclipped
         }
     }
-    private val textGeometry = NativePlainTextViewGeometry(this, hostClip)
-    private val windowText = NativeWindowTextAccessibilityOwner(this, hostClip)
+    private val hostTextTransforms = NativeTextSemanticsTransformPolicy { view, target ->
+        onboarding?.sourceTextTransforms?.populate(view, target) == true
+    }
+    private val textGeometry = NativePlainTextViewGeometry(this, hostClip,
+        transformPolicy = hostTextTransforms)
+    private val windowText = NativeWindowTextAccessibilityOwner(this, hostClip,
+        transformPolicy = hostTextTransforms)
     private val insets = NativeWindowInsetsBinding(this) { value ->
         windowInsets = value
         deliverInsets()

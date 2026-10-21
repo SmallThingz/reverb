@@ -14,6 +14,7 @@ import androidx.activity.OnBackPressedDispatcher
 import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.*
@@ -115,11 +116,14 @@ internal class NativeOnboardingScreenView private constructor(
     private var previewActions: AutoCloseable? = null
     private var footerActions: AutoCloseable? = null
     private var footerText: AutoCloseable? = null
+    val sourceTextTransforms = NativeTextSemanticsTransformPolicy(::populateSourceTextTransform)
     private val windowText = externalWindowText ?: NativeWindowTextAccessibilityOwner(
-        this, NativeTextSemanticsClipPolicy(::sourceWindowTextClip))
+        this, NativeTextSemanticsClipPolicy(::sourceWindowTextClip),
+        rootContentClip = { androidx.compose.ui.geometry.Rect(0f, 0f, width.toFloat(), height.toFloat()) },
+        transformPolicy = sourceTextTransforms)
     var externalAccessibilityOcclusion: () -> List<android.graphics.Rect> = { emptyList() }
     private val accessibility = NativeOnboardingAccessibility(this, { viewport }, { preview }, footer,
-        externalOcclusion = { externalAccessibilityOcclusion() })
+        externalOcclusion = { externalAccessibilityOcclusion() }, transformPolicy = sourceTextTransforms)
     private val scrollEvents = windowText.openScrollEvents(scope,
         onScrollGeometryChanged = { invalidate() },
         // Actual native Views own their live focus bounds; there is no copied semantics cache.
@@ -267,12 +271,20 @@ internal class NativeOnboardingScreenView private constructor(
         bind(state)
     }
 
-    /** Shared Activity cursor needs this actual source pager layer outside each page subtree. */
+    /** Actual source Surface and pager clips outside each page subtree, including shared Activity ownership. */
     fun sourceWindowTextClip(view: View): NativeTextSemanticsClip =
-        if (this::viewport.isInitialized && view === viewport)
+        if (view === this || (this::viewport.isInitialized && view === viewport))
             NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
                 0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else NativeTextSemanticsClip.Unclipped
+
+    /** Only this known port of the preview graphicsLayer overrides semantic transform math. */
+    private fun populateSourceTextTransform(view: View, target: Matrix): Boolean {
+        if (view !== preview) return false
+        populateOnboardingPreviewSemanticTransform(target, view.width, view.height,
+            view.translationX, view.translationY, view.scaleX, view.scaleY)
+        return true
+    }
 
     fun setSafeDrawingInsets(insets: Rect) {
         if (safeDrawing == insets) return

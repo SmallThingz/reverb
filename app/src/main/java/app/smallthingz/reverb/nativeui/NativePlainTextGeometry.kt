@@ -43,18 +43,25 @@ internal data class NativeMappedPlainTextGeometry(
  * Each transformed rectangle becomes an axis-aligned rectangle before the next ancestor clip.
  * Combining all matrices then clipping once is not equivalent under rotation/skew.
  *
- * The root's own clip is deliberately absent: boundsInRoot stops AT root coordinates.
+ * The native root is normally only a coordinate boundary. Some hosts also implement an explicit
+ * source content layer below the platform semantics root (for example Onboarding's Surface).
+ * Only that owner-supplied rootContentClip clips mapped bounds; paragraph origin stays unclipped.
  */
 internal fun mapNativePlainTextGeometry(
     originalParagraphOrigin: Offset,
     originalSemanticsBounds: Rect,
     layers: List<NativeTextGeometryLayer>,
+    rootContentClip: Rect? = null,
 ): NativeMappedPlainTextGeometry {
     var position = originalParagraphOrigin
     var bounds = if (originalSemanticsBounds.isEmpty) Rect.Zero else originalSemanticsBounds
     for (layer in layers) {
         position = layer.mapPosition(position) // position is not clipped.
         if (!bounds.isEmpty) bounds = layer.mapBounds(bounds)
+    }
+    if (rootContentClip != null && !bounds.isEmpty) {
+        val clipped = bounds.intersect(rootContentClip)
+        bounds = if (clipped.isEmpty) Rect.Zero else clipped
     }
     return NativeMappedPlainTextGeometry(position, bounds)
 }
@@ -63,4 +70,14 @@ internal fun mapNativePlainTextGeometry(
 internal class NativeTextRootToScreen(transformToWindow: Matrix, private val windowPosition: Offset) {
     private val matrix = Matrix(transformToWindow.values.copyOf())
     fun map(point: Offset): Offset = matrix.map(point) + windowPosition
+}
+
+/** Select a known source semantic transform; unknown native layers keep their actual backend map.
+ * Inline callbacks fill the already-owned Matrix, without allocating per-capture wrapper lambdas. */
+internal inline fun populateNativeTextSemanticsTransform(
+    target: Matrix,
+    sourceTransform: (Matrix) -> Boolean,
+    backendTransform: (Matrix) -> Unit,
+) {
+    if (!sourceTransform(target)) backendTransform(target)
 }

@@ -499,7 +499,7 @@ internal class IncidentsParityBoard(
         focusTrace.put(JSONObject().put("stage", stage).put("uptime_ms", SystemClock.uptimeMillis())
             .put("own_window_focus", host.hasWindowFocus()).put("touch_mode", host.fixtureRoot.isInTouchMode)
             .put("current", describe(host.fixtureRoot.findFocus()))
-            .put("old", describe(old)).put("new", describe(next))
+            .put("old", describe(old)).put("new", describe(next)))
     }
 
     private fun requireStaticRootFocus() {

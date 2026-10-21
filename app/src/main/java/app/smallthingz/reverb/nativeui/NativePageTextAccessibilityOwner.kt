@@ -17,7 +17,12 @@ import java.util.IdentityHashMap
 internal class NativeWindowTextAccessibilityOwner(
     private val windowRoot: View,
     private val hostClips: NativeTextSemanticsClipPolicy,
+    private val rootContentClip: (() -> Rect)? = null,
+    private val transformPolicy: NativeTextSemanticsTransformPolicy? = null,
 ) {
+    private fun geometry(clips: NativeTextSemanticsClipPolicy) =
+        NativePlainTextViewGeometry(windowRoot, clips, rootContentClip, transformPolicy)
+
     private val cursor = PlainTextAccessibilityWindowScope(windowRoot)
     /** Concrete button/permission leaves share this window's existing cursor, never a replacement. */
     val textWindow: PlainTextAccessibilityWindowScope get() = cursor
@@ -49,7 +54,7 @@ internal class NativeWindowTextAccessibilityOwner(
 
     /** Same window-root transform for direct leaves such as Library toolbar descriptions. */
     fun contentGeometry(content:ViewGroup,contentClips:NativeTextSemanticsClipPolicy)=
-        NativePlainTextViewGeometry(windowRoot,NativeTextSemanticsClipPolicy { view ->
+        geometry(NativeTextSemanticsClipPolicy { view ->
             if(view.isWithin(content))contentClips.localClip(view)else hostClips.localClip(view)
         })
 
@@ -69,7 +74,7 @@ internal class NativeWindowTextAccessibilityOwner(
         contentRoot: ViewGroup,
         contentClips: NativeTextSemanticsClipPolicy,
         sourceNode: (View) -> NativeSourceAccessibilityNode,
-    ): AutoCloseable = bar.bindAccessibility(cursor, NativePlainTextViewGeometry(windowRoot,
+    ): AutoCloseable = bar.bindAccessibility(cursor, geometry(
         NativeTextSemanticsClipPolicy { view ->
             if (view.isWithin(contentRoot)) contentClips.localClip(view) else hostClips.localClip(view)
         }), sourceNode)
@@ -80,7 +85,7 @@ internal class NativeWindowTextAccessibilityOwner(
         contentRoot: ViewGroup,
         contentClips: NativeTextSemanticsClipPolicy,
         exposed: () -> Boolean,
-    ): AutoCloseable = progress.bindAccessibility(NativePlainTextViewGeometry(windowRoot,
+    ): AutoCloseable = progress.bindAccessibility(geometry(
         NativeTextSemanticsClipPolicy { view ->
             if (view.isWithin(contentRoot)) contentClips.localClip(view) else hostClips.localClip(view)
         }), exposed)
@@ -88,7 +93,7 @@ internal class NativeWindowTextAccessibilityOwner(
     /** Exact two-button footer; content clip is the source Surface layer, not its rounded ink. */
     fun bindFooter(footer: OnboardingFooterView, sourceNode: ((View) -> NativeSourceAccessibilityNode)? = null,
                    sourceExposure: (View) -> Boolean): AutoCloseable =
-        footer.bindAccessibility(cursor, NativePlainTextViewGeometry(windowRoot,
+        footer.bindAccessibility(cursor, geometry(
             NativeTextSemanticsClipPolicy { view ->
                 when {
                     footer.clipsAccessibilityTextAt(view) -> NativeTextSemanticsClip.Rectangle(
@@ -116,7 +121,7 @@ internal class NativeWindowTextAccessibilityOwner(
         require(sourceScrollViewport.isWithin(page)) { "Source viewport must belong to this page" }
         return NativePageTextAccessibilityOwner(
         page, cursor,
-        NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy { view ->
+        geometry( NativeTextSemanticsClipPolicy { view ->
             when {
                 view === sourceScrollViewport ->
                     NativeTextSemanticsClip.Rectangle(Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))

@@ -551,6 +551,10 @@ private class AboutFixture private constructor(
         JSONObject().put("x", location[0]).put("y", location[1]).put("width", decor.width).put("height", decor.height)
             .put("gravity", a.gravity).put("flags", a.flags).put("soft_input_mode", a.softInputMode)
             .put("requested_width", a.width).put("requested_height", a.height)
+            .put("in_touch_mode", decor.isInTouchMode)
+            .put("focused_native_view_class", decor.findFocus()?.javaClass?.name)
+            .put("focused_native_view_identity", decor.findFocus()?.let(System::identityHashCode))
+            .put("focused_native_view_description", decor.findFocus()?.contentDescription?.toString())
             .put("status_inset_top", decor.rootWindowInsets?.systemWindowInsetTop ?: -1)
             .put("navigation_inset_bottom", decor.rootWindowInsets?.systemWindowInsetBottom ?: -1)
             .put("scene_configuration", JSONObject(sceneConfiguration.toString()))
@@ -564,6 +568,7 @@ private class AboutFixture private constructor(
             JSONObject().put("description", node.config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString())
                 .put("text", node.config.getOrNull(SemanticsProperties.Text)?.joinToString())
                 .put("click", node.config.getOrNull(SemanticsActions.OnClick) != null)
+                .put("focused", node.config.getOrNull(SemanticsProperties.Focused) ?: JSONObject.NULL)
                 .put("bounds", node.boundsInWindow.toString())
         }) else JSONArray(aboutDescendants(window.decorView).map { view ->
             val info = view.createAccessibilityNodeInfo()
@@ -573,6 +578,8 @@ private class AboutFixture private constructor(
                 JSONObject().put("class", info.className?.toString()).put("text", info.text?.toString())
                     .put("description", info.contentDescription?.toString()).put("visible", info.isVisibleToUser)
                     .put("important", info.isImportantForAccessibility).put("click", info.isClickable)
+                    .put("focused", info.isFocused).put("accessibility_focused", info.isAccessibilityFocused)
+                    .put("view_focused", view.isFocused).put("view_hovered", view.isHovered).put("view_pressed", view.isPressed)
                     .put("bounds", bounds.toShortString())
             } finally { @Suppress("DEPRECATION") info.recycle() }
         })

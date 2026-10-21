@@ -6,8 +6,6 @@ import android.os.Build
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Matrix
-import androidx.compose.ui.graphics.setFrom
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -16,12 +14,15 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsTransformPolicy
+import app.smallthingz.reverb.nativeui.nativeTextSemanticsMatrix
 import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Main-thread geometry read only; never inserts modifiers into the generated source oracle. */
 internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSONObject {
+    val semanticTransforms = (content as? NativeOnboardingScreenView)?.sourceTextTransforms
     val text = mutableListOf<JSONObject>()
     val raw = JSONArray()
     if (reference) {
@@ -81,7 +82,7 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
                     pointInFixture(view, content, Offset(
                         view.paddingLeft.toFloat() - view.scrollX,
                         view.paddingTop.toFloat() - view.scrollY,
-                    )),
+                    ), semanticTransforms),
                     (view.width - view.paddingLeft - view.paddingRight).coerceAtLeast(0),
                     (view.height - view.paddingTop - view.paddingBottom).coerceAtLeast(0),
                     paragraph?.firstBaseline, paragraph?.lastBaseline, paragraph?.lineCount,
@@ -91,6 +92,9 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
     }
     check(text.isNotEmpty()) { "No text geometry; an empty fixture is not parity evidence" }
     return JSONObject().put("reference", reference).put("raw", raw)
+        .put("raw_coordinate_basis", if (reference) "compose_semantics" else "android_view_matrix")
+        .put("text_coordinate_basis", if (reference) "compose_semantics"
+            else if (semanticTransforms != null) "native_source_semantics_for_known_layers" else "android_view_matrix")
         .put("text_layouts", JSONArray(text.sortedBy(::geometrySortKey)))
 }
 
@@ -117,13 +121,14 @@ private fun textGeometry(
 private fun geometrySortKey(node: JSONObject): String =
     node.getString("text") + "\u0000" + node.getDouble("y") + "\u0000" + node.getDouble("x")
 
-/** Float point mapping, following actual native parent-scroll/placement/matrix edges. */
-private fun pointInFixture(view: View, fixture: View, point: Offset): Offset {
+/** Raw diagnostics keep backend matrices; text inventory may use the production semantic policy. */
+private fun pointInFixture(view: View, fixture: View, point: Offset,
+                           transformPolicy: NativeTextSemanticsTransformPolicy? = null): Offset {
     var current = view
     var position = point
     while (current !== fixture) {
         val parent = current.parent as? View ?: error("Native text left its captured fixture")
-        position = Matrix().apply { setFrom(current.matrix) }.map(position) +
+        position = nativeTextSemanticsMatrix(current, transformPolicy).map(position) +
             Offset(current.left.toFloat() - parent.scrollX, current.top.toFloat() - parent.scrollY)
         current = parent
     }

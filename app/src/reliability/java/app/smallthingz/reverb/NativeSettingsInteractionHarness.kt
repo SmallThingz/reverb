@@ -79,7 +79,7 @@ internal class SettingsInteractionSuite(
         .put("scope", "Paired released/native control leaves; own-root synthetic dispatch; no recorder/persistence")
         .put("unqualified", JSONArray(listOf("full Settings list arbitration", "physical input dispatch",
             "TalkBack delivery", "live calibration/audio edges", "durable Settings Save", "system tiles")))
-    private val records = mutableListOf<List<Pair<File, JSONObject>>>()
+    private val records = mutableListOf<MutableList<Pair<File, JSONObject>>>()
     private var host: NativeParityActivity? = null
     private var current: SettingsInteractionRender? = null
     private val prefs = getRecorderPreferences(context)

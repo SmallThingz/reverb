@@ -10,6 +10,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.BackEventCompat
 import androidx.compose.material3.Typography
 import androidx.compose.ui.geometry.Rect as ComposeRect
@@ -19,7 +20,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.state.ToggleableState
 import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import app.smallthingz.reverb.nativeui.OnboardingPageContentView
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
@@ -217,39 +217,48 @@ private class OnboardingInputRoute(
     }
 
     private fun control(label: String): JSONObject? {
-        val boundary = pagerBounds()
-        if (reference) {
-            val roots = descendants(view).filterIsInstance<ViewRootForTest>().single()
-            val candidates = roots.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true).filter {
-                it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == label } == true &&
-                    it.config.getOrNull(SemanticsProperties.ToggleableState) != null
-            }.filter { intersectionArea(it.boundsInWindow.relativeTo(view), boundary) > 0f }
-            if (candidates.isEmpty()) return null
-            check(candidates.size == 1)
-            val node = candidates.single()
-            return JSONObject().put("enabled", node.config.getOrNull(SemanticsProperties.Disabled) == null)
-                .put("checked", node.config[SemanticsProperties.ToggleableState] == ToggleableState.On)
-                .put("bounds", node.boundsInWindow.relativeTo(view).array())
+        // Both routes read the actual exposed AccessibilityNodeInfo, including adjusted bounds.
+        // Raw source semantics can retain unplaced pager pages and pre-occlusion preview bounds;
+        // those remain in geometry evidence but are not an exposed control observation.
+        val matches = if (reference) {
+            val root = descendants(view).filterIsInstance<ViewRootForTest>().single()
+            val provider = checkNotNull(root.view.accessibilityNodeProvider)
+            root.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                .filter { it.layoutInfo.isAttached && it.layoutInfo.isPlaced }
+                .filter { node ->
+                    node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == label } &&
+                        node.config.getOrNull(SemanticsProperties.ToggleableState) != null
+                }.mapNotNull { node -> observedControl(provider.createAccessibilityNodeInfo(node.id)) }
+        } else {
+            descendants(view).filterIsInstance<NativeMergedRowAccessibilityHost>().mapNotNull { candidate ->
+                val target = candidate as View
+                if (descendants(target).filterIsInstance<ReverbParagraphView>().none { it.getText() == label })
+                    return@mapNotNull null
+                observedControl(target.createAccessibilityNodeInfo())
+            }.toList()
         }
-        val candidates = descendants(view).filter { candidate ->
-            candidate is NativeMergedRowAccessibilityHost && descendants(candidate)
-                .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
-        }.toList()
-        val observed = candidates.mapNotNull { candidate ->
-            val node = candidate.createAccessibilityNodeInfo() ?: return@mapNotNull null
-            try {
-                if (!node.isVisibleToUser || !node.isCheckable) return@mapNotNull null
-                val bounds = Rect().also(node::getBoundsInScreen)
-                val rootPosition = IntArray(2).also(view::getLocationOnScreen)
-                val rect = ComposeRect((bounds.left-rootPosition[0]).toFloat(), (bounds.top-rootPosition[1]).toFloat(),
-                    (bounds.right-rootPosition[0]).toFloat(), (bounds.bottom-rootPosition[1]).toFloat())
-                if (intersectionArea(rect, boundary) <= 0f) return@mapNotNull null
-                JSONObject().put("enabled", node.isEnabled).put("checked", node.isChecked).put("bounds", rect.array())
-            } finally { node.recycle() }
-        }
-        if (observed.isEmpty()) return null
-        check(observed.size == 1)
-        return observed.single()
+        if (matches.isEmpty()) return null
+        check(matches.size == 1) { "Expected one exposed control for $label, found ${matches.size}" }
+        return matches.single()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun observedControl(info: AccessibilityNodeInfo?): JSONObject? {
+        if (info == null) return null
+        try {
+            if (!info.isVisibleToUser || !info.isCheckable) return null
+            check(info.packageName?.toString() == host.packageName) { "Foreign control in own fixture" }
+            val screen = Rect().also(info::getBoundsInScreen)
+            val origin = IntArray(2).also(view::getLocationOnScreen)
+            val bounds = ComposeRect((screen.left-origin[0]).toFloat(),(screen.top-origin[1]).toFloat(),
+                (screen.right-origin[0]).toFloat(),(screen.bottom-origin[1]).toFloat())
+            // A predictive preview is exposed beside the translated foreground pager. The fixture
+            // viewport, rather than the moving foreground rectangle, admits both actual branches.
+            val boundary = ComposeRect(0f,0f,view.width.toFloat(),view.height.toFloat())
+            if (intersectionArea(bounds,boundary) <= 0f) return null
+            return JSONObject().put("enabled",info.isEnabled).put("checked",info.isChecked)
+                .put("bounds",bounds.array())
+        } finally { info.recycle() }
     }
 
     private fun snapshot(): JSONObject {

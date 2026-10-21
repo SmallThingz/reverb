@@ -9,6 +9,7 @@ import android.graphics.Region
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.unit.roundToIntRect
 import app.smallthingz.reverb.nativeui.*
@@ -26,10 +27,13 @@ internal class NativeOnboardingAccessibility(
     private val preview: () -> OnboardingPageContentView?,
     private val footer: OnboardingFooterView,
     private val externalOcclusion: () -> List<Rect> = { emptyList() },
+    private val transformPolicy: NativeTextSemanticsTransformPolicy? = null,
 ) {
-    val geometry = NativePlainTextViewGeometry(root, NativeTextSemanticsClipPolicy(::clip))
+    val geometry = NativePlainTextViewGeometry(root, NativeTextSemanticsClipPolicy(::clip),
+        rootContentClip = { ComposeRect(0f, 0f, root.width.toFloat(), root.height.toFloat()) },
+        transformPolicy = transformPolicy)
     private val unclipped = NativePlainTextViewGeometry(root,
-        NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
+        NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped }, transformPolicy = transformPolicy)
 
     private fun clip(view: View): NativeTextSemanticsClip = when {
         view === pager() || view is NativeVerticalViewport ||
@@ -92,12 +96,57 @@ internal class NativeOnboardingAccessibility(
         var ancestor = view.parent as? View
         while (ancestor != null && ancestor !== root) {
             if (ancestor is NativeVerticalViewport || ancestor === pager()) {
-                val bounds = nativeBringIntoViewLocalRect(ancestor, view, localBounds(view)) ?: return false
+                var bounds = boundsInAncestor(view, ancestor, localBounds(view)) ?: return false
+                val shown = preview()
+                if (shown != null && ancestor === shown.sourceVerticalViewport) {
+                    // Source preview semantics precede graphicsLayer on the same layout. Its
+                    // scroll-parent coordinates stay BEFORE the preview transform; descendants
+                    // include that transform when localBoundingBoxOf(..., false) maps into it.
+                    bounds = boundsInAncestor(ancestor, shown, bounds) ?: return false
+                    bounds = nativeTextSemanticsMatrix(shown, transformPolicy).map(bounds)
+                }
                 return bounds != bounds.intersect(ComposeRect(0f, 0f, ancestor.width.toFloat(), ancestor.height.toFloat()))
             }
             ancestor = ancestor.parent as? View
         }
         return false
+    }
+
+    private fun boundsInAncestor(view: View, ancestor: View, initial: ComposeRect): ComposeRect? {
+        var current = view
+        var bounds = initial
+        while (current !== ancestor) {
+            val parent = current.parent as? View ?: return null
+            bounds = nativeTextSemanticsMatrix(current, transformPolicy).map(bounds).translate(Offset(
+                (current.left - parent.scrollX).toFloat(), (current.top - parent.scrollY).toFloat()))
+            current = parent
+        }
+        return bounds
+    }
+
+    private fun touchBoundsInRoot(view: View): ComposeRect? {
+        // AndroidComposeView's minimumTouchTargetSize is48dp. Every source merging row here has
+        // OnClick even while disabled, so SemanticsModifierNode uses touchBoundsInRoot.
+        val minimum = Size(48f * root.resources.displayMetrics.density,
+            48f * root.resources.displayMetrics.density)
+        var bounds = nativeOnboardingMinimumTouchBounds(
+            Size(view.width.toFloat(), view.height.toFloat()), minimum)
+        var current = view
+        while (current !== root) {
+            val parent = current.parent as? View ?: return null
+            if (clip(current) is NativeTextSemanticsClip.Rectangle) {
+                bounds = nativeOnboardingClipTouchBounds(bounds,
+                    Size(current.width.toFloat(), current.height.toFloat()), minimum)
+                if (bounds.isEmpty) return ComposeRect.Zero
+            }
+            bounds = nativeTextSemanticsMatrix(current, transformPolicy).map(bounds).translate(Offset(
+                (current.left - parent.scrollX).toFloat(), (current.top - parent.scrollY).toFloat()))
+            current = parent
+        }
+        // This View is also the source full-size Surface content layer. The native platform root
+        // and that source layer share coordinates, but the source layer still clips touch bounds.
+        return nativeOnboardingClipTouchBounds(bounds,
+            Size(root.width.toFloat(), root.height.toFloat()), minimum)
     }
 
     private fun capture(): IdentityHashMap<View, NativeSourceAccessibilityNode> {
@@ -114,8 +163,10 @@ internal class NativeOnboardingAccessibility(
             val full = unclipped.capture(view, Offset.Zero, localBounds(view)) ?: return
             // Pinned addDescendantsOfPartiallyOffscreenNode uses unclipped bounds only when the
             // clipped child is wholly empty, retaining its Text/cursor but visibleToUser=false.
-            val touch = if (retainOffscreenDescendants && mapped.visibleBoundsInRoot.isEmpty)
-                full.visibleBoundsInRoot else mapped.visibleBoundsInRoot
+            val clippedTouch = if (view is NativeMergedRowAccessibilityHost)
+                touchBoundsInRoot(view) ?: return else mapped.visibleBoundsInRoot
+            val touch = if (retainOffscreenDescendants && clippedTouch.isEmpty)
+                full.visibleBoundsInRoot else clippedTouch
             val rounded = touch.roundToIntRect()
             val bounds = Rect(rounded.left, rounded.top, rounded.right, rounded.bottom)
             val available = Region(bounds)
