@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <instrumentation
         android:name="app.smallthingz.reverb.ReliabilityInstrumentation"
         android:targetPackage="${applicationId}"
         android:functionalTest="true" />
-    <application>
+    <application
+        android:name="${reliabilityApplicationClass}"
+        android:label="${reliabilityAppLabel}"
+        tools:replace="android:name,android:label">
+        <activity
+            android:name="app.smallthingz.reverb.MainActivity"
+            android:enabled="${reliabilityMainEnabled}" />
+        <activity
+            android:name="app.smallthingz.reverb.NativeParityActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Reverb" />
         <provider
             android:name="app.smallthingz.reverb.ReliabilityDocumentsProvider"
             android:authorities="${applicationId}.reliability.documents"

@@ -1,0 +1,277 @@
+{
+  "baseline": "3e16f8ddb78dca15df4b436d34d330801ce83ffd",
+  "appIconsSha256": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+  "generatorSha256": "1664cf0de7c12d4ab62079760cb1e7c9ac66b339bb4e24a349270df43d48ec8a",
+  "artifacts": [
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/material/material-icons-core-android/1.7.8/material-icons-core-android-1.7.8-sources.jar",
+      "sha256": "14db888d2f698178799a4c18a58bb134b3e98063c6748c443b339044e0145432",
+      "bytes": 284036
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/compose/material/material-icons-extended-android/1.7.8/material-icons-extended-android-1.7.8-sources.jar",
+      "sha256": "77b7e782a519a3e074fc91e09d59334ac1b815edd87d2e89c0c9ca7c95678e93",
+      "bytes": 12086044
+    }
+  ],
+  "glyphCount": 32,
+  "pathCount": 33,
+  "upstreamCommandCount": 827,
+  "sources": [
+    {
+      "glyph": "settings",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Settings.kt",
+      "sha256": "91251f59989ac0ef77a96f2ff1f63f9923207b0acdbd84c250f9daa97836324a",
+      "paths": 1,
+      "commands": 46
+    },
+    {
+      "glyph": "incidents",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Warning.kt",
+      "sha256": "85113cd90ba56402bed881e4a66debba59dfe00067a1a71be8be7fdb4bc9227b",
+      "paths": 1,
+      "commands": 22
+    },
+    {
+      "glyph": "share",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Share.kt",
+      "sha256": "4517d030b64eeaf17849551c1bbe3bad161e8548f09d9a667f2d41d7f7754ffa",
+      "paths": 1,
+      "commands": 22
+    },
+    {
+      "glyph": "copy",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/ContentCopy.kt",
+      "sha256": "6c65c47081187902f62d9f57fc78ee21f05446b4b213b0a5212613bc8f2c24da",
+      "paths": 1,
+      "commands": 29
+    },
+    {
+      "glyph": "delete",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Delete.kt",
+      "sha256": "2674c077dc5d2ef5d836cdd5bc074fe67b5cc17c90b57b6550bd270f9cdc70aa",
+      "paths": 1,
+      "commands": 24
+    },
+    {
+      "glyph": "edit",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Edit.kt",
+      "sha256": "cc1e204ad78532e98ab9699f6a0f1dc48c584603e2cac93e02e62ad32f99c228",
+      "paths": 1,
+      "commands": 18
+    },
+    {
+      "glyph": "info",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Info.kt",
+      "sha256": "b313240fd6fca07a9038aeed04cbf52616c828adbbe3e35807ca7cc32f326b4b",
+      "paths": 1,
+      "commands": 20
+    },
+    {
+      "glyph": "close",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Close.kt",
+      "sha256": "183f41b004e80106e116bbe58a195335af07ace9fa12cb3ef91510d0099bbf7a",
+      "paths": 1,
+      "commands": 18
+    },
+    {
+      "glyph": "trim",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/ContentCut.kt",
+      "sha256": "9004a82bc791aed777ddd670db22fcde2342a6e4cde1ddb68d1ca2ef0968e77b",
+      "paths": 1,
+      "commands": 46
+    },
+    {
+      "glyph": "back",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/automirrored/rounded/ArrowBack.kt",
+      "sha256": "34f96675fe75dd5e62a079f5a9d4fc811acc4cac7d6289dc242a0ca7c94f24a4",
+      "paths": 1,
+      "commands": 15
+    },
+    {
+      "glyph": "check",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Check.kt",
+      "sha256": "a20b550779642c562a5bb61cebf52d1adc9ac7ee886b133bc4f7802136cc6876",
+      "paths": 1,
+      "commands": 11
+    },
+    {
+      "glyph": "checked",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/CheckCircle.kt",
+      "sha256": "38e3fe2d8325838faed07bdcca5a658aa03306a2f95ed057d96dc432dd3f892b",
+      "paths": 1,
+      "commands": 17
+    },
+    {
+      "glyph": "unchecked",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/RadioButtonUnchecked.kt",
+      "sha256": "cfca39d0b27866d00f8e2bfaa42512f1ef1e7d8c857df1129bcfa9a3ce884520",
+      "paths": 1,
+      "commands": 12
+    },
+    {
+      "glyph": "multiSelect",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/SelectAll.kt",
+      "sha256": "bae4eaddded82c0cb6aaf122d046b52406e9d48ebb7b0685bf755078a638c193",
+      "paths": 1,
+      "commands": 108
+    },
+    {
+      "glyph": "play",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/PlayArrow.kt",
+      "sha256": "9e96f82b44cc2c43b155c06f95cae12c9605fced0fa4ef1e52594528be687f06",
+      "paths": 1,
+      "commands": 8
+    },
+    {
+      "glyph": "pause",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Pause.kt",
+      "sha256": "dca601bad598d99b9cc77941ffea60c1621488d7683ae8fe1f52c11f321c7c9c",
+      "paths": 1,
+      "commands": 16
+    },
+    {
+      "glyph": "save",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Save.kt",
+      "sha256": "6643f849548c074f1c8c712390d5b12fdbbbb85359abac92d60b1c8b9b04acdd",
+      "paths": 1,
+      "commands": 26
+    },
+    {
+      "glyph": "library",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/automirrored/rounded/FormatListBulleted.kt",
+      "sha256": "b011727f8468c294cbacc0e92f103af3284014bc221f8807110fbc181bc2c3bc",
+      "paths": 1,
+      "commands": 42
+    },
+    {
+      "glyph": "audioFile",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/AudioFile.kt",
+      "sha256": "3704f01eb6cbf3fb6e0d3cd458cac79bb88bad0b1c78db1c65dd45d5609aa7dd",
+      "paths": 1,
+      "commands": 31
+    },
+    {
+      "glyph": "capture",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/GraphicEq.kt",
+      "sha256": "6b486a0e1afa8aeca807ecc456dc35bd9da6bea6122963a4086247d6e3f902aa",
+      "paths": 1,
+      "commands": 40
+    },
+    {
+      "glyph": "looping",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Loop.kt",
+      "sha256": "8f8d2aa77673f7ca98fe1833fcae5a41541a7a2d236b429bfa3ba610091939df",
+      "paths": 1,
+      "commands": 30
+    },
+    {
+      "glyph": "reset",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/RestartAlt.kt",
+      "sha256": "69f13a06ff57c948b4497437e1ecdde598283246bf460657c3730340cf7cc980",
+      "paths": 2,
+      "commands": 28
+    },
+    {
+      "glyph": "folder",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Folder.kt",
+      "sha256": "8fc6b098f2ca6a58f71cb640ef08fc6578d476e6376a2475910dd34be665b991",
+      "paths": 1,
+      "commands": 13
+    },
+    {
+      "glyph": "undo",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/automirrored/rounded/Undo.kt",
+      "sha256": "80e66ebc6a11de478ec70cbd023c455c42539c68f25f58fa7382028a35f937de",
+      "paths": 1,
+      "commands": 15
+    },
+    {
+      "glyph": "backgroundWarning",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/GppMaybe.kt",
+      "sha256": "cb9f5b6fd5eb0313892d22edf85aeeeccfa915342079ef4f5215e0596b5009c9",
+      "paths": 1,
+      "commands": 31
+    },
+    {
+      "glyph": "themeSystem",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Devices.kt",
+      "sha256": "f104d9fec546f387558cc6f07b1a07b66f7ff8306e48dd910d06f6dcc6f00e1e",
+      "paths": 1,
+      "commands": 32
+    },
+    {
+      "glyph": "themeLight",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/LightMode.kt",
+      "sha256": "52686725250b4b9d6a49c5f838ed45402f75acf56bdd86c82c15368326719203",
+      "paths": 1,
+      "commands": 71
+    },
+    {
+      "glyph": "themeDark",
+      "artifact": "extended",
+      "path": "commonMain/androidx/compose/material/icons/rounded/DarkMode.kt",
+      "sha256": "01ae3303519c48a829b9604369a4d0de23e5a42deb42c0bcf16cdef2a90facbd",
+      "paths": 1,
+      "commands": 10
+    },
+    {
+      "glyph": "arrowDropDown",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/ArrowDropDown.kt",
+      "sha256": "0b1ffa90e5dcf3c7301541e823491d41b461a4043a151bc0bd6aa528569fbb70",
+      "paths": 1,
+      "commands": 8
+    },
+    {
+      "glyph": "add",
+      "artifact": "core",
+      "path": "commonMain/androidx/compose/material/icons/rounded/Add.kt",
+      "sha256": "bdbeafeec823bf55730da580bca6b9b1fed018298d463bbdeee3ceb05c394cb7",
+      "paths": 1,
+      "commands": 18
+    },
+    {
+      "glyph": "exportRange",
+      "path": "app/src/main/java/app/smallthingz/reverb/AppIcons.kt",
+      "sha256": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+      "paths": 1,
+      "commands": 11
+    },
+    {
+      "glyph": "oneShot",
+      "path": "app/src/main/java/app/smallthingz/reverb/AppIcons.kt",
+      "sha256": "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273",
+      "paths": 1,
+      "commands": 7
+    }
+  ],
+  "generatedSha256": "df966d079cbe44a22531b37adbec7a84184f685bddbf0c113ae52f1423f838d0"
+}

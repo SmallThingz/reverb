@@ -163,3 +163,70 @@ verified synthetic identity. This case also asserts that the default fingerprint
 path still reads the complete payload for final/destructive verification. Repeated
 pre-publication proof reuse requires the same native descriptor revision, not just
 provider metadata. Run the identical fixture on baseline and candidate builds.
+
+## Released Compose versus native Views
+
+Use only the actual connected Android phone, after current activity admission. The
+UI-only build has the separate package `app.smallthingz.reverb.nativeparity.reliability`,
+a plain Application, and a disabled normal launcher Activity. It neither replaces the
+user's Reverb package nor an existing reliability package. No microphone, media, or
+notification grants are needed. It does not initialize the recorder, settings, or
+incident recovery; Android may still initialize isolated QA providers and directories.
+
+```sh
+./gradlew -I scripts/reliability.gradle -PreverbNativeParity=true :app:assembleReliability
+adb -s "$ANDROID_SERIAL" install -r app/build/outputs/apk/reliability/app-reliability.apk
+adb -s "$ANDROID_SERIAL" shell am instrument -w -e test native_font_notifications \
+  app.smallthingz.reverb.nativeparity.reliability/app.smallthingz.reverb.ReliabilityInstrumentation
+adb -s "$ANDROID_SERIAL" shell am instrument -w -e test native_group_parity \
+  app.smallthingz.reverb.nativeparity.reliability/app.smallthingz.reverb.ReliabilityInstrumentation
+adb -s "$ANDROID_SERIAL" shell am instrument -w -e test native_text_parity \
+  app.smallthingz.reverb.nativeparity.reliability/app.smallthingz.reverb.ReliabilityInstrumentation
+adb -s "$ANDROID_SERIAL" shell am instrument -w -e test native_icon_parity \
+  app.smallthingz.reverb.nativeparity.reliability/app.smallthingz.reverb.ReliabilityInstrumentation
+```
+
+The build pins the released v0.1.2 group/divider implementation, chrome, and AppIcons source.
+`native_group_parity` calls those actual Compose functions, then the native group,
+with the same explicit bounds and synthetic rows. It checks light/dark palettes,
+LTR/RTL, current/160dpi local contexts and 240/319dp widths (bounded by the actual
+viewport). These are local View configurations on the physical device; system
+settings and display density are not changed. All palette roles and fallback colors
+are compared to Compose; a separate API31 mapping oracle is reported when available.
+The latter does not claim execution on an older Android device.
+
+After layout and draw/frame completion, PixelCopy captures each implementation twice
+at the same app-content bounds. Every ARGB pixel participates: there is no mask or
+tolerance, including border antialiasing and one-physical-pixel dividers. Both repeat
+captures must also match. Unique `native-group-parity-*/result.json` directories in
+the QA package's files directory contain exact differing-pixel counts, bounds,
+maximum channel delta, pixel hashes and four PNGs per case. Preserve failed cases.
+The final instrumentation `RESULT tests=... failures=0` is required; ADB success
+alone is not a pass. PixelCopy failure, lost focus, or missing draws stop qualification
+without reclaiming focus. No injected touch or keyboard input is used.
+
+The separate text probe uses the released typography and callback-free Material3
+Text as its oracle, with a separately raster-checked callback route for metrics.
+Its six light/dark and font-scale 1/1.5/2 scenes compare exact pixels, baselines,
+line counts, and measured dimensions against the native paragraph View.
+
+Run `native_font_notifications` alone in a fresh instrumentation process, before
+any Compose rendering. It asserts the pinned GlobalSnapshotManager has never
+started, then exercises attached asynchronous font completion, detached completion
+and reattachment, and completion before paragraph registration. Built-in typefaces
+and a controlled loader avoid downloads or permissions. Automatic layout/draw must
+occur before any post-completion capture invalidation; the fixture never manually
+applies snapshots. Detached assertions cover observable invalidation, not private
+callback counts. Two synthetic font-read state cases additionally test tracked versus
+unrelated write scheduling, scope disposal, and the bridge's read-to-registration
+handoff. That helper race is not a private ParagraphIntrinsics race hook. This is
+native-host lifecycle evidence, not a text raster oracle.
+
+The icon probe compares 32 released vectors with reused native Drawables through
+grow/shrink/rectangle/retint-alpha/return states at current/160/280dpi. It checks
+exact pixels, repeatability, and the pinned framework Fit/centering geometry.
+Each probe has its own `native-*-*/result.json` and synthetic PNG evidence.
+
+These focused probes do not prove interaction,
+animation, accessibility, whole-screen, or cross-device parity. Review saved images
+as well as machine results, retaining source/APK hashes and current device settings.

@@ -1,13 +1,53 @@
 // Opt-in, isolated on-device reliability tests. Never replaces the user's Reverb install.
 allprojects {
     plugins.withId('com.android.application') {
+        def parityOnly = providers.gradleProperty('reverbNativeParity')
+            .map { it.toBoolean() }.getOrElse(false)
         android {
             buildTypes {
                 reliability {
                     initWith debug
-                    applicationIdSuffix '.reliability'
+                    applicationIdSuffix parityOnly ? '.nativeparity.reliability' : '.reliability'
                     matchingFallbacks = ['debug']
+                    manifestPlaceholders += [
+                        reliabilityApplicationClass: parityOnly ?
+                            'android.app.Application' : 'app.smallthingz.reverb.ReverbApplication',
+                        reliabilityAppLabel: parityOnly ? 'Reverb native parity' : '@string/app_name',
+                        reliabilityMainEnabled: parityOnly ? 'false' : 'true',
+                    ]
                 }
+            }
+        }
+        if (parityOnly) {
+            def oracleCheck = tasks.register('verifyNativeParityOracle') {
+                def settingsSource = file('src/main/java/app/smallthingz/reverb/SettingsScreen.kt')
+                def chromeSource = file('src/main/java/app/smallthingz/reverb/AppSurfaceStyle.kt')
+                def iconsSource = file('src/main/java/app/smallthingz/reverb/AppIcons.kt')
+                inputs.files(settingsSource, chromeSource, iconsSource)
+                doLast {
+                    def source = settingsSource.getText('UTF-8')
+                    def start = source.indexOf('@Composable\ninternal fun SettingsAudioGroup(')
+                    def end = source.indexOf('@Composable\nprivate fun <T> SettingsDropdown(', start)
+                    if (start < 0 || end <= start) {
+                        throw new GradleException('Released group oracle declarations were moved or removed')
+                    }
+                    def sha256 = { byte[] bytes ->
+                        java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+                    }
+                    if (sha256(source.substring(start, end).getBytes('UTF-8')) !=
+                            '807f2fdde7f224c91153de4b74c5c03c0713bdf41689a58c984951fad1d51952' ||
+                        sha256(chromeSource.bytes) !=
+                            '6291bd9706506e050f0007a17fedd34968c551205eca9c6eb9230fcec1ad6187' ||
+                        sha256(iconsSource.bytes) !=
+                            'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273') {
+                        throw new GradleException(
+                            'Native parity oracle changed from released v0.1.2; do not qualify against a rewritten reference'
+                        )
+                    }
+                }
+            }
+            tasks.matching { it.name == 'preReliabilityBuild' }.configureEach {
+                dependsOn oracleCheck
             }
         }
     }
