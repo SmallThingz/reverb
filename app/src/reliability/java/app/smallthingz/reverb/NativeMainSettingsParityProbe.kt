@@ -407,11 +407,14 @@ private fun verifyMainSettingsPageKeyDispatch(
     fun focusSnapshot(target: View): JSONObject {
         val bounds = Rect()
         val visible = target.getGlobalVisibleRect(bounds)
+        val location = IntArray(2).also(target::getLocationOnScreen)
         val focused = root.findFocus()
         return JSONObject().put("enabled", target.isEnabled).put("focusable", target.isFocusable)
             .put("attached_to_window", target.isAttachedToWindow).put("shown", target.isShown)
             .put("globally_visible", visible)
             .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+            .put("unclipped_screen_bounds", JSONArray(listOf(location[0], location[1],
+                location[0] + target.width, location[1] + target.height)))
             .put("in_touch_mode", target.isInTouchMode).put("target_focused", focused === target)
             .put("current_focus_class", focused?.javaClass?.name ?: JSONObject.NULL)
             .put("current_focus_identity", focused?.let(System::identityHashCode) ?: JSONObject.NULL)
@@ -474,8 +477,56 @@ private fun verifyMainSettingsPageKeyDispatch(
             // The wrapper owns layout; its existing pointerView owns focus, accessibility and keys.
             mainParityViews(settings).filterIsInstance<CompressionSliderView>().single().pointerView.also {
                 slider = it
-                requestTargetFocus(it, "compression_slider")
             }
+        }
+        val preparation = JSONObject().put("method", "View.requestRectangleOnScreen(local rectangle, immediate=true)")
+            .put("scope", "Visible target setup for key dispatch; focus-only automatic scrolling remains unqualified")
+        result.put("slider_preparation", preparation)
+        fun ancestry(): JSONArray = JSONArray().also { rows ->
+            var view: View? = focusedSlider
+            while (view != null) {
+                val current = view
+                rows.put(JSONObject().put("class", current.javaClass.name)
+                    .put("bounds_in_parent", JSONArray(listOf(current.left, current.top, current.right, current.bottom)))
+                    .put("scroll", JSONArray(listOf(current.scrollX, current.scrollY)))
+                    .put("alpha", current.alpha).put("layout_requested", current.isLayoutRequested)
+                    .put("clip_children", (current as? ViewGroup)?.clipChildren ?: JSONObject.NULL)
+                    .put("clip_to_padding", (current as? ViewGroup)?.clipToPadding ?: JSONObject.NULL)
+                    .put("clip_to_outline", current.clipToOutline))
+                if (current === viewport) break
+                view = current.parent as? View
+            }
+        }
+        // RECORDING is one tall item. Its top can be on screen while the later slider is clipped.
+        // A stable list anchor also does not establish that the source expansion has finished.
+        var expansionSettled = false
+        for (frame in 0 until 100) {
+            requireNativeParityHost(instrumentation, host)
+            awaitNativeParityDraw(instrumentation, render.board)
+            expansionSettled = main {
+                val compression = mainParityViews(settings).filterIsInstance<SettingsOutputCompressionView>().single()
+                val expansion = mainParityViews(compression).filterIsInstance<SettingsExpansionView>().single()
+                val content = expansion.content?.view
+                preparation.put("observed_frames", frame + 1).put("expansion_ancestry", ancestry())
+                content != null && content.height > 0 && expansion.height == content.height &&
+                    content.alpha == 1f && !expansion.isLayoutRequested && !viewport.isLayoutRequested &&
+                    viewport.scrollState == RecyclerView.SCROLL_STATE_IDLE
+            }
+            if (expansionSettled) break
+        }
+        check(expansionSettled) { "Compression expansion did not settle within 100 observed frames" }
+        main {
+            preparation.put("before", focusSnapshot(focusedSlider)).put("before_ancestry", ancestry())
+            val local = Rect(0, 0, focusedSlider.width, focusedSlider.height)
+            preparation.put("requested_local_bounds", JSONArray(listOf(local.left, local.top, local.right, local.bottom)))
+            preparation.put("request_attempted", true)
+            preparation.put("request_return", focusedSlider.requestRectangleOnScreen(local, true))
+        }
+        settledPosition()
+        main {
+            preparation.put("after", focusSnapshot(focusedSlider)).put("after_ancestry", ancestry())
+            check(focusedSlider.getGlobalVisibleRect(Rect())) { "Compression slider setup did not expose the real target" }
+            requestTargetFocus(focusedSlider, "compression_slider")
         }
         settledPosition()
         val sliderEvents = ArrayList<Pair<Int, Int>>()

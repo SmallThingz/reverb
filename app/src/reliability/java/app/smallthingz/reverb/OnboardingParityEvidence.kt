@@ -278,6 +278,8 @@ internal fun onboardingNativeNodeEvidence(
     try {
         check(root.packageName?.toString() == activity.packageName) { "Focused root is not the QA package" }
         visit(root, 0, emptyList())
+        check(canonical.any { !it.isNull("text") }) { "No accessible text; do not credit an empty node tree" }
+        requireNativeParityHost(instrumentation, activity)
     } catch (error: Throwable) {
         // A missing native child remains a hard failure. Retain the exact parent/path and all
         // already-read nodes instead of dropping the failing capture or filtering null children.
@@ -294,8 +296,6 @@ internal fun onboardingNativeNodeEvidence(
         @Suppress("DEPRECATION")
         root.recycle()
     }
-    check(canonical.any { !it.isNull("text") }) { "No accessible text; do not credit an empty node tree" }
-    requireNativeParityHost(instrumentation, activity)
     return JSONObject().put("raw", raw).put("canonical", JSONArray(canonical.sortedBy { item ->
         item.optString("text") + "\u0000" + item.optString("description") + "\u0000" +
             item.getJSONArray("bounds").toString() + "\u0000" + item.optString("class")
