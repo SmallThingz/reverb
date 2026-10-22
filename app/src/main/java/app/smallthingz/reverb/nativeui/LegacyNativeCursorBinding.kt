@@ -12,7 +12,7 @@ internal fun legacyNativeCursorBinding(context: Context, thicknessPx: Float, col
     if (Build.VERSION.SDK_INT == 28) LegacyNativeCursorBinding(context, thicknessPx, color) else null
 
 internal class LegacyNativeCursorBinding(base: Context, thicknessPx: Float, color: Int) {
-    private val cursor = NativeEditableCursorDrawable(thicknessPx, color)
+    val cursor = NativeEditableCursorDrawable(thicknessPx, color)
     private val cursorResources = CursorResources(base.resources, cursor)
 
     // ContextWrapper retains the original theme, services, package, configuration-context access

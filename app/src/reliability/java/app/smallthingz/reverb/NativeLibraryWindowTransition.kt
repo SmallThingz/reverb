@@ -16,12 +16,16 @@ import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class NativeLibraryInfoTooltip(
+internal enum class NativeLibrarySheetScene { INFO, RENAME }
+
+internal data class NativeLibrarySheetTooltip(
     val compose: Boolean,
     val label: String,
-    val infoLabels: List<String>,
+    val scene: NativeLibrarySheetScene,
+    val requiredLabels: List<String>,
     val recordingTitles: List<String>,
-    val closeLabel: String,
+    val dismissLabel: String,
+    val confirmLabel: String? = null,
 )
 
 /** Read-only readiness for one explicit own UI transition; never a substitute for an input guard. */
@@ -29,8 +33,9 @@ internal class NativeLibraryWindowTransition(
     private val host: NativeParityActivity,
     private val origin: View,
     private val evidence: JSONObject,
-    private val observeInfoAuxiliaryOverlap: Boolean = false,
-    private val infoTooltip: NativeLibraryInfoTooltip? = null,
+    private val observeSheetAuxiliaryOverlap: Boolean = false,
+    private val sheetTooltip: NativeLibrarySheetTooltip? = null,
+    private val allowInitialTooltipReadiness: Boolean = false,
 ) {
     private val main = host.window.decorView
     private val initial = visibleRoots()
@@ -40,13 +45,14 @@ internal class NativeLibraryWindowTransition(
     private val initialAuxiliary: View?
 
     init {
+        check(!allowInitialTooltipReadiness || sheetTooltip?.scene == NativeLibrarySheetScene.RENAME)
         check(initial.filter(View::hasWindowFocus).single() === origin) { "UI transition origin lost focus" }
         val extra = initial.filter { it !== main && it !== origin }
         check(extra.size <= 1) { "Unrelated own windows before UI transition" }
         initialAuxiliary = extra.singleOrNull()?.also {
             val detail = auxiliaryObservation(it)
-            requireInfoTooltip(it, origin, detail)
-            evidence.put("initial_info_tooltip", detail)
+            requireSheetTooltip(it, origin, detail)
+            evidence.put("initial_sheet_tooltip", detail)
         }
         evidence.put("origin_identity", System.identityHashCode(origin))
             .put("main_identity", System.identityHashCode(main)).put("accepted", false)
@@ -67,25 +73,25 @@ internal class NativeLibraryWindowTransition(
         val focused = roots.filter(View::hasWindowFocus)
         check(focused.size <= 1) { "Ambiguous focus during owned UI transition" }
         if (initialAuxiliary != null) {
-            check(added.isEmpty()) { "Unexpected new window while closing the classified Info scene" }
+            check(added.isEmpty()) { "Unexpected new window during the classified sheet action" }
         }
         if (added.size > 1) {
-            // Info and its keyboard tooltip can appear before the very first readiness read.
+            // A sheet and its keyboard tooltip can appear before the very first readiness read.
             // Pin only the unique focused incoming Decor after validating the complete pair below.
             val pinned = popup ?: added.singleOrNull {
                 it.hasWindowFocus() && it.javaClass.name == "com.android.internal.policy.DecorView"
             }
             val extra = added.singleOrNull { it !== pinned }
             // Material3 retains its drag-handle tooltip while the handle has keyboard focus.
-            // Recognize only that anchored, noninteractive tooltip on the complete focused Info sheet.
-            check(observeInfoAuxiliaryOverlap && pinned != null && added.size == 2 &&
+            // Recognize only that anchored, noninteractive tooltip on the complete focused sheet.
+            check(observeSheetAuxiliaryOverlap && pinned != null && added.size == 2 &&
                 pinned in added && focused.singleOrNull() === pinned && origin !in roots &&
                 pinned.javaClass.name == "com.android.internal.policy.DecorView" &&
                 extra != null && extra.javaClass.name == expectedTooltipClass() &&
                 !extra.hasWindowFocus()) { "Ambiguous new windows during owned UI transition" }
             val knownExtra = checkNotNull(extra)
             check(auxiliary == null || auxiliary === knownExtra) {
-                "Owned nonfocused Info auxiliary window was replaced before readiness"
+                "Owned nonfocused sheet tooltip was replaced before readiness"
             }
             auxiliary = knownExtra
             val detail = auxiliaryObservation(knownExtra)
@@ -94,7 +100,7 @@ internal class NativeLibraryWindowTransition(
             }
             evidence.put("last_auxiliary_observation", detail)
                 .put("auxiliary_overlap_reads", evidence.optInt("auxiliary_overlap_reads") + 1)
-            requireInfoTooltip(knownExtra, checkNotNull(pinned), detail)
+            requireSheetTooltip(knownExtra, checkNotNull(pinned), detail)
             if (popup == null) {
                 popup = pinned
                 evidence.put("popup_identity", System.identityHashCode(pinned))
@@ -103,8 +109,16 @@ internal class NativeLibraryWindowTransition(
             return pinned
         }
         if (initialAuxiliary != null && initialAuxiliary in roots) {
-            // Close must retire the known tooltip too; never accept the main scene beneath it.
-            evidence.put("outgoing_info_tooltip_reads", evidence.optInt("outgoing_info_tooltip_reads") + 1)
+            if (allowInitialTooltipReadiness && focused.singleOrNull() === origin) {
+                // Invalid Rename keeps its sheet and tooltip. Observe the same complete scene;
+                // the caller's exact error/editor predicate still decides readiness, not this helper.
+                val detail = auxiliaryObservation(initialAuxiliary)
+                requireSheetTooltip(initialAuxiliary, origin, detail)
+                evidence.put("retained_sheet_tooltip", detail)
+                return origin
+            }
+            // Close/Cancel must retire the known tooltip; never accept the main scene beneath it.
+            evidence.put("outgoing_sheet_tooltip_reads", evidence.optInt("outgoing_sheet_tooltip_reads") + 1)
             return null
         }
         popup?.let { pinned ->
@@ -124,77 +138,107 @@ internal class NativeLibraryWindowTransition(
         return focused.single()
     }
 
-    private fun requireInfoTooltip(root: View, info: View, detail: JSONObject) {
-        val expected = checkNotNull(infoTooltip) { "Unclassified auxiliary window" }
+    private fun requireSheetTooltip(root: View, info: View, detail: JSONObject) {
+        val expected = checkNotNull(sheetTooltip) { "Unclassified auxiliary window" }
         check(info.javaClass.name == "com.android.internal.policy.DecorView" && info.hasWindowFocus() &&
             root.javaClass.name == expectedTooltipClass() && !root.hasWindowFocus()) {
-            "Auxiliary is not attached to the focused Info scene"
+            "Auxiliary is not attached to the focused sheet scene"
         }
         val parameters = checkNotNull(root.layoutParams as? WindowManager.LayoutParams)
         check(parameters.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL &&
             parameters.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) {
-            "Info auxiliary has unexpected window type or focusability"
+            "Sheet auxiliary has unexpected window type or focusability"
         }
         val anchor = tooltipAnchor(root)
-        check(anchor.isAttachedToWindow && anchor.rootView === info) { "Info tooltip has a different anchor" }
+        check(anchor.isAttachedToWindow && anchor.rootView === info) { "Sheet tooltip has a different anchor" }
         if (!expected.compose) {
             check(anchor.javaClass.name == "app.smallthingz.reverb.nativeui.NativeSheetDragHandle") {
-                "Native Info tooltip anchor is not the sheet drag handle"
+                "Native Sheet tooltip anchor is not the sheet drag handle"
             }
         }
         check(!detail.has("content_unavailable") && !detail.getBoolean("descendant_walk_capped") &&
-            detail.getJSONArray("native_text").length() == 0) { "Unreadable Info tooltip content" }
+            detail.getJSONArray("native_text").length() == 0) { "Unreadable Sheet tooltip content" }
         fun nodes(view: View, merged: Boolean = false) = ownedViews(view).filterIsInstance<ViewRootForTest>().flatMap {
             it.semanticsOwner.getAllSemanticsNodes(merged)
         }
         val labels: List<String>
-        val closeCount: Int
+        val actionCount: (String, Boolean) -> Int
+        val editableCount: Int
         if (expected.compose) {
             check(detail.getJSONArray("semantics_labels").let {
                 it.length() == 1 && it.getString(0) == expected.label
             } && detail.getJSONArray("paragraph_labels").length() == 0) {
-                "Info auxiliary is not the localized Compose drag-handle tooltip"
+                "Sheet auxiliary is not the localized Compose drag-handle tooltip"
             }
             check(nodes(root).none {
                 it.config.getOrNull(SemanticsActions.OnClick) != null ||
                     it.config.getOrNull(SemanticsActions.OnLongClick) != null ||
                     it.config.getOrNull(SemanticsActions.SetText) != null
-            }) { "Info tooltip unexpectedly contains an action" }
+            }) { "Sheet tooltip unexpectedly contains an action" }
             labels = nodes(info).flatMap { it.config.getOrNull(SemanticsProperties.Text)?.map { text -> text.text }.orEmpty() }
-            closeCount = nodes(info, merged = true).count {
-                expected.closeLabel in it.config.getOrNull(SemanticsProperties.Text)?.map { text -> text.text }.orEmpty() &&
-                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
-                    it.config.getOrNull(SemanticsActions.OnClick)?.action != null
+            val merged = nodes(info, merged = true)
+            actionCount = { label, enabledOnly ->
+                merged.count {
+                    label in it.config.getOrNull(SemanticsProperties.Text)?.map { text -> text.text }.orEmpty() &&
+                        (!enabledOnly || it.config.getOrNull(SemanticsProperties.Disabled) == null) &&
+                        it.config.getOrNull(SemanticsActions.OnClick)?.action != null
+                }
+            }
+            editableCount = merged.count {
+                it.config.getOrNull(SemanticsActions.SetText)?.action != null &&
+                    it.config.getOrNull(SemanticsProperties.EditableText) != null &&
+                    it.config.getOrNull(SemanticsProperties.Disabled) == null
             }
         } else {
             check(detail.getJSONArray("paragraph_labels").let {
                 it.length() == 1 && it.getString(0) == expected.label
             } && detail.getJSONArray("semantics_labels").length() == 0 &&
                 ownedViews(root).none { it.isClickable || it.isLongClickable }) {
-                "Info auxiliary is not the noninteractive native drag-handle tooltip"
+                "Sheet auxiliary is not the noninteractive native drag-handle tooltip"
             }
-            val paragraphs = ownedViews(info).filterIsInstance<ReverbParagraphView>().filter(View::isShown)
+            val views = ownedViews(info)
+            val paragraphs = views.filterIsInstance<ReverbParagraphView>().filter(View::isShown)
             labels = paragraphs.map { it.getText().toString() }
-            closeCount = paragraphs.filter { it.getText().toString() == expected.closeLabel }.mapNotNull { leaf ->
-                var action: View? = leaf
-                while (action != null && !action.isClickable) action = action.parent as? View
-                action
-            }.distinct().count { it.isEnabled && it.isShown }
+            actionCount = { label, enabledOnly ->
+                paragraphs.filter { it.getText().toString() == label }.mapNotNull { leaf ->
+                    var action: View? = leaf
+                    while (action != null && !action.isClickable) action = action.parent as? View
+                    action
+                }.distinct().count { it.isShown && (!enabledOnly || it.isEnabled) }
+            }
+            editableCount = views.count { view ->
+                view.isShown && view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES &&
+                    view.createAccessibilityNodeInfo()?.let { it.isEditable && it.isEnabled } == true
+            }
         }
-        check(expected.infoLabels.all(labels::contains) && expected.recordingTitles.count(labels::contains) == 1 &&
-            closeCount == 1) { "Tooltip anchor is not the complete expected Info scene" }
-        detail.put("classification", if (expected.compose) "material3-info-drag-handle-tooltip" else "native-info-drag-handle-tooltip")
+        check(expected.requiredLabels.all(labels::contains)) { "Tooltip anchor has the wrong sheet labels" }
+        when (expected.scene) {
+            NativeLibrarySheetScene.INFO -> check(expected.recordingTitles.count(labels::contains) == 1 &&
+                editableCount == 0 && actionCount(expected.dismissLabel, true) == 1) {
+                "Tooltip anchor is not the complete expected Info scene"
+            }
+            NativeLibrarySheetScene.RENAME -> check(editableCount == 1 &&
+                actionCount(expected.dismissLabel, false) == 1 &&
+                actionCount(checkNotNull(expected.confirmLabel), false) == 1) {
+                "Tooltip anchor is not the unique Rename editor and actions"
+            }
+        }
+        // Rename can temporarily disable its actions while committing. This observer never invokes
+        // them: the existing input path independently requires the unique enabled action each time.
+        detail.put("classification", (if (expected.compose) "material3-" else "native-") +
+            expected.scene.name.lowercase() + "-drag-handle-tooltip")
             .put("classification_anchor_identity", System.identityHashCode(info))
+            .put("classified_editable_count", editableCount)
     }
 
-    private fun expectedTooltipClass(): String = if (checkNotNull(infoTooltip).compose)
+    private fun expectedTooltipClass(): String = if (checkNotNull(sheetTooltip).compose)
         "androidx.compose.ui.window.PopupLayout" else "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow"
 
     private fun tooltipAnchor(root: View): View {
         val field = when (root.javaClass.name) {
             "androidx.compose.ui.window.PopupLayout" -> "composeView"
             "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow" -> "anchor"
-            else -> error("Unrecognized Info tooltip class")
+            else -> error("Unrecognized Sheet tooltip class")
         }
         return root.javaClass.getDeclaredField(field).apply { isAccessible = true }.get(root) as View
     }

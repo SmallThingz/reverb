@@ -12,6 +12,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
@@ -99,6 +100,8 @@ internal class SettingsRetentionInputView private constructor(
         context, initialEnvironment, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary))
     private var environment = initialEnvironment
+    private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
+        2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
     private var initialized = false
     private var applyingOwner = false
     private var previousOwnerText: String? = null
@@ -232,6 +235,17 @@ internal class SettingsRetentionInputView private constructor(
         focusPending = false
         readCurrentRaw = null
         onRawChanged = null
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        cursorDrawable.beginTextDraw()
+        try {
+            super.onDraw(canvas)
+            // Released BasicTextField draws its cursor after drawContent, above glyph edges.
+            cursorDrawable.drawAfterText(canvas, compoundPaddingLeft, extendedPaddingTop)
+        } finally {
+            cursorDrawable.endTextDraw()
+        }
     }
 
     override fun scrollTo(x: Int, y: Int) {
@@ -502,8 +516,8 @@ internal class SettingsRetentionInputView private constructor(
         highlightColor = (environment.palette.primary and 0x00ffffff) or (0x66 shl 24)
         lineHeightSpan = RetentionLineHeightSpan(metrics.lineHeightPx)
         if (Build.VERSION.SDK_INT >= 29) {
-            textCursorDrawable = NativeEditableCursorDrawable(
-                2f * environment.textDensity.density, environment.palette.primary)
+            cursorDrawable.bind(2f * environment.textDensity.density, environment.palette.primary)
+            textCursorDrawable = cursorDrawable
         } else {
             legacyCursor?.bind(2f * environment.textDensity.density, environment.palette.primary)
         }

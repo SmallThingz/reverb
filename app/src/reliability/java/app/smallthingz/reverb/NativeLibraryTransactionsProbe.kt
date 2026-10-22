@@ -522,20 +522,27 @@ private class TransactionBoard(
         val evidence = JSONObject().put("renderer", if (compose) "compose" else "native")
             .put("action", action).put("action_submitted", false)
         windowTransitions.put(evidence)
+        val infoAction = action in listOf(R.string.recording_info, R.string.close).map(context::getString)
+        val renameAction = action in listOf(R.string.rename_recording, R.string.cancel).map(context::getString)
+        val tooltip = if (infoAction || renameAction) NativeLibrarySheetTooltip(
+            compose,
+            context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_drag_handle_description),
+            if (infoAction) NativeLibrarySheetScene.INFO else NativeLibrarySheetScene.RENAME,
+            if (infoAction) listOf(R.string.recording_info, R.string.recording_details_started,
+                R.string.recording_details_duration, R.string.recording_details_size,
+                R.string.recording_details_codec, R.string.recording_details_mime,
+                R.string.recording_details_storage, R.string.recording_details_location)
+                .map { context.getString(it).removeSuffix(":") }
+            else listOf(R.string.rename_recording, R.string.cancel).map(context::getString),
+            if (infoAction) records.map { it.displayName } else emptyList(),
+            context.getString(if (infoAction) R.string.close else R.string.cancel),
+            if (renameAction) context.getString(R.string.rename_recording) else null,
+        ) else null
         pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence,
-            observeInfoAuxiliaryOverlap = action == context.getString(R.string.recording_info),
-            infoTooltip = if (action in listOf(R.string.recording_info, R.string.close).map(context::getString)) {
-                NativeLibraryInfoTooltip(
-                    compose,
-                    context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_drag_handle_description),
-                    listOf(R.string.recording_info, R.string.recording_details_started,
-                        R.string.recording_details_duration, R.string.recording_details_size,
-                        R.string.recording_details_codec, R.string.recording_details_mime,
-                        R.string.recording_details_storage, R.string.recording_details_location)
-                        .map { context.getString(it).removeSuffix(":") },
-                    records.map { it.displayName }, context.getString(R.string.close),
-                )
-            } else null)
+            observeSheetAuxiliaryOverlap = action in listOf(R.string.recording_info, R.string.rename_recording)
+                .map(context::getString),
+            sheetTooltip = tooltip,
+            allowInitialTooltipReadiness = action == context.getString(R.string.rename_recording))
         return evidence
     }
     fun clickLabels(i: Instrumentation): List<String> = nativeParityOnMain(i) {

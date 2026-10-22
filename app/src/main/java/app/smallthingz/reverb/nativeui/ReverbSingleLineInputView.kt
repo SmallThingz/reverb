@@ -14,6 +14,7 @@ package app.smallthingz.reverb.nativeui
 import app.smallthingz.reverb.R
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
@@ -100,6 +101,8 @@ internal class ReverbSingleLineInputView private constructor(
         context, initialEnvironment, initialConfiguration, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor))
     private var environment = initialEnvironment
+    private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
+        2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor)
     private var initialized = false
     private var applyingOwner = false
     private var previousOwnerText: String? = null
@@ -222,6 +225,17 @@ internal class ReverbSingleLineInputView private constructor(
         onRawChanged = null
         onDone = null
         onNativeFocusChanged = null
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        cursorDrawable.beginTextDraw()
+        try {
+            super.onDraw(canvas)
+            // Released BasicTextField draws its cursor after drawContent, above glyph edges.
+            cursorDrawable.drawAfterText(canvas, compoundPaddingLeft, extendedPaddingTop)
+        } finally {
+            cursorDrawable.endTextDraw()
+        }
     }
 
     override fun scrollTo(x: Int, y: Int) {
@@ -526,9 +540,8 @@ internal class ReverbSingleLineInputView private constructor(
         val lineStyle = resolved.lineHeightStyle ?: LineHeightStyle.Default
         lineHeightSpan = NativeEditableLineHeightSpan(heightPx, lineStyle)
         if (Build.VERSION.SDK_INT >= 29) {
-            // Pinned foundation cursor floors its 2dp stroke. Native Editor placement/blink/handles still
-            // need actual A/B proof; this public drawable only supplies its color and nominal width.
-            textCursorDrawable = NativeEditableCursorDrawable(2f * density.density, configuration.cursorColor)
+            cursorDrawable.bind(2f * density.density, configuration.cursorColor)
+            textCursorDrawable = cursorDrawable
             textSelectHandle?.mutate()?.setTint(configuration.selectionHandleColor)
             textSelectHandleLeft?.mutate()?.setTint(configuration.selectionHandleColor)
             textSelectHandleRight?.mutate()?.setTint(configuration.selectionHandleColor)
