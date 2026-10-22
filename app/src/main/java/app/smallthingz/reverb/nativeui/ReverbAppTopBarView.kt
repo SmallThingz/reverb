@@ -32,7 +32,7 @@ internal data class ReverbAppTopBarActions(
     val back: (() -> Unit)? = null,
 )
 
-/** Direct released AppTopBar.kt geometry; caller supplies the already-resolved status-bar inset. */
+/** Released geometry with the approved Home-only start Incidents action; caller resolves status insets. */
 internal class ReverbAppTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
@@ -40,6 +40,9 @@ internal class ReverbAppTopBarView(
 ) : ReverbTopBarActionRoutingGroup(context) {
     private var environment = initialEnvironment
     private var back: ReverbTopBarIconAction? = null
+    private var incidentAction: (() -> Unit)? = null
+    private var incidentAlert = false
+    private var incidentsSuppressed = false
     private val incidents = ReverbTopBarIconAction(context, environment, nativeInputRoot, ReverbIcon.Incidents, R.string.open_incidents, false)
     private val settings = ReverbTopBarIconAction(context, environment, nativeInputRoot, ReverbIcon.Settings, R.string.open_settings, false)
     private val brand = ReverbTopBarBrandAction(context, environment, nativeInputRoot)
@@ -71,14 +74,31 @@ internal class ReverbAppTopBarView(
             back!!.bind(value, true, value.palette.muted, value.palette.border, onBack)
         }
         settings.bind(value, true, value.palette.muted, value.palette.border, actions.settings)
-        val tint = if (hasIncidents) value.palette.error else value.palette.muted
-        incidents.bind(value, true, tint,
-            if (hasIncidents) reverbColorWithAlpha(tint, .55f) else value.palette.border, actions.incidents)
+        incidentAction = actions.incidents
+        incidentAlert = hasIncidents
+        bindIncidents()
         brand.bind(value, actions.brand)
         refreshAccessibilityBack?.invoke()
         touchDensity = value.textDensity.density
         if (layoutChanged) requestLayout()
     }
+
+    /** The retained Home bar must not expose an action behind Library, including its selection bar. */
+    fun setIncidentsSuppressed(value: Boolean) {
+        if (incidentsSuppressed == value) return
+        incidentsSuppressed = value
+        bindIncidents()
+    }
+
+    private fun bindIncidents() {
+        val action = incidentAction ?: return
+        val visible = back == null && !incidentsSuppressed
+        incidents.visibility = if (visible) VISIBLE else GONE
+        val tint = if (incidentAlert) environment.palette.error else environment.palette.muted
+        incidents.bind(environment, visible, tint,
+            if (incidentAlert) reverbColorWithAlpha(tint, .55f) else environment.palette.border, action)
+    }
+
     /** Same window cursor and source geometry as the enclosing Home/Library screen. */
     fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
         geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode,
@@ -179,7 +199,7 @@ internal class ReverbAppTopBarView(
         }
         back?.let { logical(it, inset) }
         logical(settings, width - inset - size)
-        logical(incidents, width - inset - dp(56f) - size)
+        logical(incidents, inset)
         val bx = ((width - size) / 2f).roundToInt()
         // This View is the inner visual Surface; the source's outer size remains46dp.
         val visualOffset = nativeMinimumInteractiveVisualOffset(size, dp(48f))

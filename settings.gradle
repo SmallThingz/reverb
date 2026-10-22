@@ -1,3 +1,6 @@
 rootProject.name = 'Reverb'
 include ':app'
+if (!file('native-ui/build.gradle').isFile()) {
+    throw new GradleException('Run python3 scripts/bootstrap-native-ui.py to initialize the pinned native-ui repository.')
+}
 include ':native-ui'

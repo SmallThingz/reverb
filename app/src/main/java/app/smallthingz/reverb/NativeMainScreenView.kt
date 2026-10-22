@@ -433,6 +433,7 @@ internal class NativeMainScreenView private constructor(
 
     private fun applyMotion(bindToolbar: Boolean) {
         home.translationY = settingsMotion.panelProgress * height
+        home.topBar.setIncidentsSuppressed(navigation.showLibrary || libraryMotion.panelProgress > 0f)
         settings?.alpha = if (settingsMotion.panelProgress > 0f || navigation.showSettings) 1f else .01f
         libraryLayer?.bind(environment, statusInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
         val toolbarVisible = !navigation.showSettings && libraryMotion.panelProgress > 0f && !navigation.librarySelectionActive

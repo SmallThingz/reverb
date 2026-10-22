@@ -78,6 +78,7 @@ internal fun verifyNativeLibraryParity(instrumentation: Instrumentation, report:
     val cases = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489")
+        .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("comparison", "Exact full-content ARGB and ABAB repeatability; no tolerance or masking")
         .put("scope", "Actual FilesScreen and native root/owner: empty, grouped populated, selection, paused expanded player; physical fixture viewport with safe-drawing insets consumed by parent")
         .put("limits", "Programmatic source actions and native View actions; no pointer, accessibility-service traversal, keyboard, popup, playback, trim, deletion or Main navigation qualification")

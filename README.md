@@ -5,7 +5,7 @@
 
 ![android](https://img.shields.io/badge/android-28%2B-3ddc84?logo=android&logoColor=0f172a)
 ![kotlin](https://img.shields.io/badge/kotlin-2.3.0-7c3aed?logo=kotlin&logoColor=ffffff)
-![material](https://img.shields.io/badge/ui-Material%203-2563eb)
+![native](https://img.shields.io/badge/ui-Native%20Views-2563eb)
 
 [<img src="https://f-droid.org/badge/get-it-on.svg" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/app.smallthingz.reverb/)
 
@@ -40,6 +40,14 @@ Forked from `Echo`, now reworked and shipped as `Reverb`.
 ## 🛠️ Build
 
 ```bash
+python3 scripts/bootstrap-native-ui.py
 ./gradlew :app:assembleDebug
 ./gradlew :app:assembleRelease
 ```
+
+The native UI library is a separate Git repository pinned as `native-ui`.
+The bootstrap command verifies and restores it from the committed offline bundle;
+it does not fetch from a network or overwrite local library changes. Use the same
+step after a plain clone, in a fresh CI checkout or in a source archive. The bundled
+locator uses this bootstrap flow, not `git clone --recurse-submodules` or generic
+`git submodule update --init`. See [Native UI](docs/native-ui.md).

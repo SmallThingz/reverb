@@ -23,7 +23,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 internal val AppTopBarContentHeight = 66.dp
+internal const val APP_TOP_BAR_APPROVED_REFERENCE_CHANGE =
+    "Incidents occupies Home logical start and is absent from Library; brand and Settings geometry unchanged"
 
+/** Released reference with the approved Home-only start Incidents placement exception. */
 @Composable
 internal fun AppTopBar(
     onBrandClick: () -> Unit,
@@ -33,6 +36,7 @@ internal fun AppTopBar(
     onBackClick: (() -> Unit)? = null,
     applyStatusBarPadding: Boolean = true,
     barHeight: Dp = AppTopBarContentHeight,
+    showIncidents: Boolean = true,
 ) {
     val chrome = appChrome()
     val noiseBrush = rememberAppNoiseBrush(APP_NOISE_SEED_TOP_BAR)
@@ -69,16 +73,18 @@ internal fun AppTopBar(
             )
         }
 
-        val incidentColor = if (hasIncidents) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        TopBarAction(
-            icon = AppIcons.incidents,
-            contentDescription = stringResource(R.string.open_incidents),
-            onClick = onIncidentsClick,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 56.dp),
-            tint = incidentColor,
-            borderColor = if (hasIncidents) incidentColor.copy(alpha = 0.55f) else chrome.border,
-        )
+        if (onBackClick == null && showIncidents) {
+            val incidentColor = if (hasIncidents) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            TopBarAction(
+                icon = AppIcons.incidents,
+                contentDescription = stringResource(R.string.open_incidents),
+                onClick = onIncidentsClick,
+                modifier = Modifier.align(Alignment.CenterStart),
+                tint = incidentColor,
+                borderColor = if (hasIncidents) incidentColor.copy(alpha = 0.55f) else chrome.border,
+            )
+        }
         TopBarAction(
             icon = AppIcons.settings,
             contentDescription = stringResource(R.string.open_settings),

@@ -62,7 +62,8 @@
   `RecordingIncidentStore.recordUnexpectedError*`. Do not create incidents for modeled outcomes such as cancellation,
   permission denial, validation rejection, normal provider/file unavailability, lifecycle teardown rejection, or other
   failures the current operation explicitly expects and reports as a normal result.
-- The Incidents button sits immediately left of Settings and uses a warning/error glyph. A durably armed,
+- The Incidents button occupies the Home top bar's start slot (left in LTR), is hidden throughout Library and its
+  transitions, and uses a warning/error glyph. Brand remains centered and Settings at end. A durably armed,
   actually-running capture session may be suppressed only by an explicit known-capture-stop transition; a persisted
   disabled-listening preference is not proof that the already-armed session stopped. Persistence/audio failures that
   actually halt an armed capture are interruption incidents, not known stops. Transparent AudioRecord/config restarts

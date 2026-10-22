@@ -117,6 +117,7 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
     val cases = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "5acd675302d79e1aad10f5ec603fce7d631b164834c7cd9e0773bfdc5ab5b5c1")
+        .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("comparison", "Exact full-content ARGB and ABAB repeatability; no masking/tolerance")
         .put("scope", "Normal Home top bar/noise/body; explicit zero local system insets; full physical fixture viewport")
         .put("limits", "visualizerVisible=false preserves initial blob pixels only; no live audio phase, permission/range/save feedback, navigation overlays or system-inset dispatch qualification")
@@ -474,6 +475,7 @@ private fun verifyNativeHomeInputParity(
     val entries = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("scope", "Synthetic touch dispatch to the actual own-view roots; no physical/system injected input")
+        .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("motion_limit", "Sequential reference/native captures have independent clocks; request/callback wall times are not presentation timestamps. Intermediate images are retained, not used to claim frame parity.")
         .put("cases", entries).put("passed", false)
     var host: NativeParityActivity? = null
@@ -800,6 +802,7 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
     val result = JSONObject().put("selector", "native_home_accessibility")
         .put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "f364a4f9b2a48f45bbe004e02958431d2df3898d9aa42f95ec92f100a3cc84af")
+        .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("scope", "Actual standalone Home platform nodes; native production source mapper and text binding; selected/unselected tabs, service-ready/unready, LTR/RTL")
         .put("limits", "No TalkBack delivery, full Activity/recorder, overlay occlusion, pixel or motion-phase claim; no system setting changes. isFocused is retained raw and checked direct-versus-platform, but not compared across standalone renderers: this fixture lacks Main's unsolicited-focus suppression. Focusability and complete advertised actions remain exact comparisons.")
         .put("cases", cases).put("passed", false)

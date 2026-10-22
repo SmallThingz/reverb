@@ -123,7 +123,9 @@ private fun verifyNativeMainSettingsParity(
     val comparisons = JSONArray()
     val radioComparisons = JSONArray()
     val result = JSONObject()
-        .put("oracle_sha256", "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f")
+        .put("baseline_oracle_sha256", "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f")
+        .put("oracle_sha256", "d9fea75a0477ae83a31e57417f3bdb8f3af45a35b567954d03dc3bc7992d8dac")
+        .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("dispatch", "Own focused QA window semantic actions; no physical input or permission request")
         .put("scope", "Main -> Settings -> opposite theme preview -> Undo -> Back")
         .put("unqualified", JSONArray(listOf("physical gesture/frame-phase parity", "TalkBack delivery",
@@ -619,7 +621,7 @@ private fun cleanupMainParity(render: MainSettingsParityRender?, host: NativePar
 }
 
 @OptIn(ExperimentalComposeViewContextApi::class)
-private class MainSettingsParityRender(
+internal class MainSettingsParityRender(
     private val activity: NativeParityActivity,
     val reference: Boolean,
     private val initialMode: AppThemeMode,

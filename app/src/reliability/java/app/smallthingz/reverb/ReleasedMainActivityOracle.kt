@@ -1308,6 +1308,7 @@ private fun MainScreen(
                         showSettings = true
                     },
                     hasIncidents = hasIncidentAlert,
+                    showIncidents = !showLibrary && libraryPanelProgress <= 0f,
                 )
             },
         ) { innerPadding ->

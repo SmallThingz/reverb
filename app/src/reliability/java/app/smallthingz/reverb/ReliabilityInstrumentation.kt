@@ -45,6 +45,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
                 "native_home_input_common_grain", "native_main_settings_parity_common_grain",
                 "native_library_admission",
+                "native_main_incidents_visibility",
                 "native_home_accessibility",
                 "native_onboarding_audio_flow",
                 "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
@@ -125,6 +126,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_admission") {
                 executed++
                 verifyNativeLibraryAdmissionRegression(this, report)
+            } else if (requestedTest == "native_main_incidents_visibility") {
+                executed++
+                verifyNativeMainIncidentsVisibility(this, report)
             } else if (requestedTest == "native_library_parity") {
                 executed++
                 verifyNativeLibraryParity(this, report)

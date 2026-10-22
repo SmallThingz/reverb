@@ -1,0 +1,3 @@
+[submodule "native-ui"]
+	path = native-ui
+	url = third_party/native-ui.bundle

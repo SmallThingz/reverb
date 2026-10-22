@@ -17,6 +17,35 @@ The compatibility reference is released **v0.1.2**, commit `3e16f8ddb78dca15df4b
 
 Reuse is ordinary Kotlin construction and direct binding. `environment.paragraph(...)` returns the actual paragraph View; `ReverbGroupLayout.addRow(...)` attaches actual child Views. Shared shapes, icon paths, noise, indications, switches, buttons, viewports and sheets live in `nativeui/`. There is no separate UI-description tree to interpret or reconcile.
 
+The reusable primitives and inline construction DSL live in the independent
+`native-ui` Git repository. Reverb pins its commit as a Git submodule while keeping
+the Gradle project name `:native-ui` and namespace `app.smallthingz.nativeui`.
+`third_party/native-ui.json` binds that commit and the SHA-256 of the accompanying
+compact Git bundle. No unpublished remote URL or absolute sibling path is needed.
+
+After a plain clone, or in a fresh CI checkout or source archive, run:
+
+```sh
+python3 scripts/bootstrap-native-ui.py
+./gradlew :app:assembleDebug
+```
+
+The bootstrap verifies the bundle and the parent gitlink (when Git metadata is
+present), checks out the pinned commit offline, and preserves conflicting or dirty
+library work by refusing to replace it. `--check` verifies an existing checkout.
+It writes no global Git configuration. Ordinary Gradle development builds do not
+reject intentional library edits; source/release qualification pins the exact tree
+separately. The library's own wrapper supports independent builds and tests; when
+included in Reverb it inherits the existing Android/Kotlin toolchain classloader.
+The bundled locator is supported by this bootstrap, not generic recursive clone
+or `git submodule update --init` commands.
+
+To update the library, commit its change in the independent repository, export a
+full bundle containing that commit, update the bundle checksum and commit in the
+pin file, and stage the matching `native-ui` gitlink in Reverb. Keep all four inputs
+together. A published remote can replace the bundled locator in a later explicit
+publication change; this extraction does not publish one.
+
 ## Window services and input
 
 The Activity owns one `NativeAboutWindowRuntime` (also used outside About), one window text/accessibility owner, and one inset listener. Screen children receive those services. Separate dialog/popup windows own the corresponding window lifetime. The shared scroll-accessibility queue belongs to the window; a component must not create a second text cursor, inset observer or event queue for the same host.
@@ -39,6 +68,12 @@ Released Compose renderers are retained in `app/src/reliability`, including `Rel
 
 ## Retained dependencies and performance
 
-The Views deliberately retain low-level AndroidX `Paragraph`/font layout, snapshot notifications, geometry and animation math, plus required Material resources. For example, `ReverbParagraphView` observes asynchronous font resolution without creating a Composition. These dependencies and the Compose compiler configuration have not been removed merely because production composable renderers moved out.
+The production Views use the `native-ui` library's source-derived text/font,
+geometry, animation and construction primitives. Required resources and upstream
+attribution remain in source. Annotation and emoji2 are internal library
+dependencies, and coroutines remains an API dependency. Production has no Compose
+or Material3 UI runtime or Compose compiler plugin; the released-renderer comparison
+lane enables Compose only for QA. The four pinned data-only legacy Parcelable reader
+classes retain their old names solely to import saved state and are not a UI runtime.
 
 Direct View reuse removes the added renderer/reconciliation layer by construction; it is **not a measured zero-overhead claim**. View allocation, text shaping, snapshots, callbacks and animation still cost work. APK size, startup, memory, frame timing and input latency require measurements against the exact reference artifact; source scans and passing host tests cannot establish them.

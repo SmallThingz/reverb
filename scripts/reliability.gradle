@@ -111,9 +111,9 @@ allprojects {
                     if (splitSha256(splitSourceMapFile.bytes) != '441a3c805dadb0711e79b72d132cf4151c431eaa1f63b8a393c7c104442f90e0') {
                         throw new GradleException('Native renderer split manifest changed')
                     }
-                    // Native backends change namespaces; QA keeps pinned old implementations.
-                    // Invert only declared mechanical seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != 'be124a0680033b389d3529d63b80b39e2b62c9e1eb3262bb92412b0f7eb56a68') {
+                    // Native backends change namespaces; approved Incidents reference exceptions are explicit.
+                    // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
+                    if (splitSha256(backendSourceMapFile.bytes) != 'aa4a11183f26b700513a4a8aa6b38771fc18bacc260447d22674682516918233') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]

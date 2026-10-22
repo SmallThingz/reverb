@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "purpose": "Finite inverse namespace/symbol and QA-only helper extraction; original release expected bytes unchanged",
+  "purpose": "Finite inverse namespace/symbol, QA-only helper extraction, and explicit approved reference exceptions; original release expected bytes unchanged",
   "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
   "normalizations": {
     "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
@@ -304,16 +304,23 @@
       ]
     },
     "src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt": {
-      "compiled_sha256": "7857319317e19065888ef4f2e287137dcf9259544da201f4bf1940d16d653d7e",
+      "compiled_sha256": "b2cbee6aa0326f73c788c58c744d0cacac49bf57e5e16a5e0a169b37292a98d2",
       "normalized_sha256": "beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090",
       "inverse": [
+        {
+          "from": "                    showIncidents = !showLibrary && libraryPanelProgress <= 0f,\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "LegacyOnboardingNavigationState",
           "to": "OnboardingNavigationState",
           "count": 1,
           "word": true
         }
-      ]
+      ],
+      "approved_reference_change": "Latest user request: hide retained Home Incidents throughout Library and its transitions. Invert only that added parameter for original release provenance."
     },
     "src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt": {
       "compiled_sha256": "3e2fcffb3e492a87c50db7ecd615700f4533f9fcf470808a89fdc7a21bc02e38",
@@ -488,6 +495,50 @@
           "word": false
         }
       ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedMainScreenParityOracle.kt": {
+      "compiled_sha256": "d9fea75a0477ae83a31e57417f3bdb8f3af45a35b567954d03dc3bc7992d8dac",
+      "normalized_sha256": "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f",
+      "inverse": [
+        {
+          "from": "                    showIncidents = !showLibrary && libraryPanelProgress <= 0f,\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        }
+      ],
+      "approved_reference_change": "Latest user request: hide retained Home Incidents throughout Library and its transitions. Invert only that added parameter for original release provenance."
+    },
+    "src/reliability/java/app/smallthingz/reverb/AppTopBar.kt": {
+      "compiled_sha256": "ecb427b2ca4378cdea39a7ff1519c436c652558d8d719876657e3c7a24521de8",
+      "normalized_sha256": "99b9f06505865ab5c72a454801e5be78fdb9e2263b1a3c01f0846111a43f5670",
+      "inverse": [
+        {
+          "from": "internal const val APP_TOP_BAR_APPROVED_REFERENCE_CHANGE =\n    \"Incidents occupies Home logical start and is absent from Library; brand and Settings geometry unchanged\"\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "/** Released reference with the approved Home-only start Incidents placement exception. */\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    showIncidents: Boolean = true,\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        if (onBackClick == null && showIncidents) {\n            val incidentColor = if (hasIncidents) MaterialTheme.colorScheme.error\n                else MaterialTheme.colorScheme.onSurfaceVariant\n            TopBarAction(\n                icon = AppIcons.incidents,\n                contentDescription = stringResource(R.string.open_incidents),\n                onClick = onIncidentsClick,\n                modifier = Modifier.align(Alignment.CenterStart),\n                tint = incidentColor,\n                borderColor = if (hasIncidents) incidentColor.copy(alpha = 0.55f) else chrome.border,\n            )\n        }\n",
+          "to": "        val incidentColor = if (hasIncidents) MaterialTheme.colorScheme.error\n            else MaterialTheme.colorScheme.onSurfaceVariant\n        TopBarAction(\n            icon = AppIcons.incidents,\n            contentDescription = stringResource(R.string.open_incidents),\n            onClick = onIncidentsClick,\n            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 56.dp),\n            tint = incidentColor,\n            borderColor = if (hasIncidents) incidentColor.copy(alpha = 0.55f) else chrome.border,\n        )\n",
+          "count": 1,
+          "word": false
+        }
+      ],
+      "approved_reference_change": "Latest user request: Incidents occupies logical start on Home and is absent from Library. Invert only documented exception declarations and exact Incidents block; original palette, brand, Settings and comparison criteria unchanged."
     }
   },
   "references": {
