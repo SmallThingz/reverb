@@ -326,16 +326,33 @@ internal class FlacAudioFileWriter(
 private class ChannelMediaSource(private val channel: FileChannel) : MediaDataSource() {
     override fun getSize(): Long = channel.size()
     override fun close() = Unit // The identity-bound outer owner closes the descriptor.
-    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
-        if (position < 0 || offset < 0 || size < 0 || offset > buffer.size - size) throw IOException("Invalid media read")
-        if (size == 0) return 0
-        if (position >= channel.size()) return -1
-        return channel.read(ByteBuffer.wrap(buffer, offset, minOf(size.toLong(), channel.size() - position).toInt()), position)
-    }
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int =
+        readFlacChannelAt(channel, position, buffer, offset, size)
+}
+
+internal fun readFlacChannelAt(channel: FileChannel, position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+    if (position < 0 || offset < 0 || size < 0 || offset > buffer.size - size) throw IOException("Invalid media read")
+    if (size == 0) return 0
+    val fileSize = channel.size()
+    if (position >= fileSize) return -1
+    return channel.read(ByteBuffer.wrap(buffer, offset, minOf(size.toLong(), fileSize - position).toInt()), position)
+}
+
+internal fun consumeFlacPcmBuffer(
+    source: ByteBuffer,
+    scratch: ByteArray?,
+    consume: (ByteArray, Int, Int) -> Unit,
+): ByteArray {
+    val count = source.remaining()
+    val bytes = scratch?.takeIf { it.size >= count } ?: ByteArray(count)
+    source.get(bytes, 0, count)
+    consume(bytes, 0, count)
+    return bytes
 }
 
 internal interface FlacPcmVerificationSource : Closeable {
     val info: FlacInfo
+    /** The array is borrowed until consume returns; only its offset/count slice is valid. */
     fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit)
 }
 
@@ -349,6 +366,7 @@ internal class FlacPcmDecoder(
     // A waveform pass seeks once per bucket; retain bounded raw buffers across those reads.
     private val rawBuffer by lazy { ByteBuffer.allocate(65536 * info.channelCount * 2) }
     private val rawScratch by lazy { ByteArray(rawBuffer.capacity()) }
+    private var codecScratch: ByteArray? = null
     private var rawBlockStart = -1L
     private var rawBlockFrames = 0
     internal var rawBlockDecodeCount = 0L
@@ -435,8 +453,8 @@ internal class FlacPcmDecoder(
                     if (take > 0) {
                         output.position(bufferInfo.offset + skip * frameBytes)
                         output.limit(bufferInfo.offset + (skip + take) * frameBytes)
-                        val bytes = ByteArray(take * frameBytes); output.get(bytes)
-                        consume(bytes, 0, bytes.size); copied += take
+                        codecScratch = consumeFlacPcmBuffer(output, codecScratch, consume)
+                        copied += take
                     }
                     outputEnd = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                 }
@@ -523,6 +541,7 @@ internal class FlacPcmDecoder(
     override fun close() {
         if (closed) return
         closed = true
+        codecScratch = null
         var error = closePreservingPrimaryFailure(null) { codec?.release() }
         error = closePreservingPrimaryFailure(error) { extractor.release() }
         if (error != null) throw error

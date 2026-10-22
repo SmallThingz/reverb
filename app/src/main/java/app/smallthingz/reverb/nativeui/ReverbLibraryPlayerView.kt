@@ -20,6 +20,7 @@ import app.smallthingz.reverb.formatPlaybackTime
 import app.smallthingz.reverb.formatRangeTimeInput
 import app.smallthingz.reverb.inlineTrimBoundaryLimits
 import app.smallthingz.reverb.inlineTrimBoundaryProgressMillis
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -291,24 +292,45 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
 }
 
+private val playerTimeTypography =
+    ReverbParagraphStyles[ReverbTextRole.BODY_SMALL].copy(fontFamily = FontFamily.Monospace)
+
+/** Match the formatter's exact units, including its Double rounding before flooring trim tenths. */
+internal fun libraryPlayerTimeDisplayUnit(millis: Int, trimMode: Boolean): Long =
+    if (trimMode) floor((millis / 1000.0).coerceAtLeast(0.0) * 10.0).toLong()
+    else (millis.coerceAtLeast(0) / 1000).toLong()
+
 private class PlayerTimes(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
     val start = environment.paragraph(context, "", ReverbTextRole.BODY_SMALL)
     val end = environment.paragraph(context, "", ReverbTextRole.BODY_SMALL)
     private val startBoundary = PlayerBoundary(start, InlineFineSeekTarget.TRIM_START)
     private val endBoundary = PlayerBoundary(end, InlineFineSeekTarget.TRIM_END)
+    private var lastTrimMode: Boolean? = null
+    private var lastStartUnit = Long.MIN_VALUE
+    private var lastEndUnit = Long.MIN_VALUE
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(start); addView(end) }
     fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
+        val modeChanged = lastTrimMode != state.trimMode
+        val typographyChanged = lastTrimMode == null || environment !== value
         environment = value
         fun bindText(label: ReverbParagraphView, first: Boolean) {
             val target = if (first) InlineFineSeekTarget.TRIM_START else InlineFineSeekTarget.TRIM_END
-            label.setText(if (state.trimMode) formatRangeTimeInput((if (first) state.trimStartMillis else state.trimEndMillis) / 1000.0)
-                else formatPlaybackTime(if (first) state.positionMillis else state.durationMillis))
-            label.setTypography(ReverbParagraphStyles[ReverbTextRole.BODY_SMALL].copy(fontFamily = FontFamily.Monospace),
-                value.textDensity, value.sharedFontResolver)
+            val millis = if (state.trimMode) {
+                if (first) state.trimStartMillis else state.trimEndMillis
+            } else if (first) state.positionMillis else state.durationMillis
+            val unit = libraryPlayerTimeDisplayUnit(millis, state.trimMode)
+            if (modeChanged || unit != (if (first) lastStartUnit else lastEndUnit)) {
+                label.setText(if (state.trimMode) formatRangeTimeInput(millis / 1000.0) else formatPlaybackTime(millis))
+                if (first) lastStartUnit = unit else lastEndUnit = unit
+            }
+            if (typographyChanged) {
+                label.setTypography(playerTimeTypography, value.textDensity, value.sharedFontResolver)
+            }
             label.setTextColor(if (state.trimMode) { if (state.fineSeekTarget == target) value.palette.primary else value.palette.ink }
                 else if (first) value.palette.ink else value.palette.muted)
         }
         bindText(start, true); bindText(end, false)
+        lastTrimMode = state.trimMode
         startBoundary.bind(state, actions); endBoundary.bind(state, actions)
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

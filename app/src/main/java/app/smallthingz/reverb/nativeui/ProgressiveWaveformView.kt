@@ -37,7 +37,7 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
     defStyleAttr: Int = 0,
 ) : View(context, attrs, defStyleAttr) {
     private val waveformPath = Path()
-    private val geometry = ProgressiveWaveformGeometry()
+    private val contour = ProgressiveWaveformContourCache()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var waveform: ProgressiveWaveformData? = null
     private var frame: ProgressiveWaveformFrame? = null
@@ -56,7 +56,7 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
     fun setWaveform(value: ProgressiveWaveformData?) {
         if (waveform === value) return
         waveform = value
-        if (value != null) geometry.prepare(value.detail.size)
+        if (value != null) contour.prepare(value.detail.size) else contour.clear()
         invalidate()
     }
 
@@ -141,7 +141,7 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
         val detailGate = waveformSmoothStep(((morph - 0.86f) / 0.12f).coerceIn(0f, 1f))
         val effectiveVisibleCoarse = availableCoarse * coarseGate
         val effectiveVisibleDetail = minOf(availableDetail * detailGate, effectiveVisibleCoarse)
-        val pointCount = geometry.update(
+        val contourChanged = contour.update(
             data = data,
             visibleCoarseFraction = effectiveVisibleCoarse,
             visibleDetailFraction = effectiveVisibleDetail,
@@ -150,21 +150,24 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
             width = w,
             height = h,
         )
+        val pointCount = contour.pointCount
         if (pointCount == 0) return
 
-        waveformPath.rewind()
         val centerY = h * 0.5f
-        val renderDenominator = (pointCount - 1).coerceAtLeast(1).toFloat()
-        for (point in 0 until pointCount) {
-            val x = w * point.toFloat() / renderDenominator
-            val y = centerY - geometry.amplitudeAt(point)
-            if (point == 0) waveformPath.moveTo(x, y) else waveformPath.lineTo(x, y)
+        if (contourChanged) {
+            waveformPath.rewind()
+            val renderDenominator = (pointCount - 1).coerceAtLeast(1).toFloat()
+            for (point in 0 until pointCount) {
+                val x = w * point.toFloat() / renderDenominator
+                val y = centerY - contour.amplitudeAt(point)
+                if (point == 0) waveformPath.moveTo(x, y) else waveformPath.lineTo(x, y)
+            }
+            for (point in pointCount - 1 downTo 0) {
+                val x = w * point.toFloat() / renderDenominator
+                waveformPath.lineTo(x, centerY + contour.amplitudeAt(point))
+            }
+            waveformPath.close()
         }
-        for (point in pointCount - 1 downTo 0) {
-            val x = w * point.toFloat() / renderDenominator
-            waveformPath.lineTo(x, centerY + geometry.amplitudeAt(point))
-        }
-        waveformPath.close()
 
         val builtRight = w * effectiveVisibleCoarse.coerceIn(0f, 1f)
         val detailRight = w * effectiveVisibleDetail.coerceIn(0f, 1f)

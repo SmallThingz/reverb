@@ -45,12 +45,15 @@ internal fun writeConvertedRecordingCopy(
             val writer = createRecordingAudioWriter(context, output, format, layout.sampleRate,
                 layout.channelCount, sampleFormat, level)
             writer.use {
+                var convertedPcm8: ByteArray? = null
                 fun consume(bytes: ByteArray, offset: Int, count: Int) {
                     checkCancelled()
                     if (sampleFormat == PcmSampleFormat.PCM_16 && layout.sampleFormat == PcmSampleFormat.PCM_8) {
-                        val converted = ByteArray(count * 2)
+                        val convertedCount = count * 2
+                        val converted = convertedPcm8?.takeIf { it.size >= convertedCount }
+                            ?: ByteArray(convertedCount).also { convertedPcm8 = it }
                         repeat(count) { i -> converted[i * 2 + 1] = ((bytes[offset + i].toInt() and 255) - 128).toByte() }
-                        writer.write(converted, 0, converted.size)
+                        writer.write(converted, 0, convertedCount)
                     } else writer.write(bytes, offset, count)
                 }
                 if (isFlac) {

@@ -297,18 +297,22 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         }
         val weightedMean = weightedSum / weight
         var energy = 0.0
+        // This floating-point residual is frequency-independent, but need not be exactly zero.
+        var centeredWeightedSum = 0.0
         for (i in 0 until frames) {
             val value = samples[i] - weightedMean
             energy += analysisWindow[pad + i] * value * value
+            centeredWeightedSum += analysisWindow[pad + i] * value
         }
         if (energy <= 1e-24) return
         // The two edges are independent. A quiet low-frequency companion must
         // not prevent a dominant near-Nyquist tone from being calibrated.
-        if (low && calibrateEdgeTone(channel, frames, weightedMean, energy, low = true)) return
-        if (high && calibrateEdgeTone(channel, frames, weightedMean, energy, low = false)) return
+        if (low && calibrateEdgeTone(channel, frames, weightedMean, energy, weight, centeredWeightedSum, low = true)) return
+        if (high && calibrateEdgeTone(channel, frames, weightedMean, energy, weight, centeredWeightedSum, low = false)) return
     }
 
-    private fun calibrateEdgeTone(channel: Int, frames: Int, mean: Double, energy: Double, low: Boolean): Boolean {
+    private fun calibrateEdgeTone(channel: Int, frames: Int, mean: Double, energy: Double,
+                                  weight: Double, centeredWeightedSum: Double, low: Boolean): Boolean {
         val binWidth = sampleRate.toDouble() / size
         var left = if (low) 0.1 else sampleRate / 2.0 - (edgeBins + 1) * binWidth
         var right = if (low) (edgeBins + 1) * binWidth else sampleRate / 2.0 - 0.00001
@@ -321,7 +325,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         var best = 0
         var bestEnergy = -1.0
         for (segment in 0..segments) {
-            fitTone(start + span * segment / segments, frames, mean)
+            fitTone(start + span * segment / segments, frames, mean, weight, centeredWeightedSum)
             if (fittedEnergy > bestEnergy) {
                 bestEnergy = fittedEnergy
                 best = segment
@@ -332,10 +336,10 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         val ratio = 0.6180339887498949
         var a = right - ratio * (right - left)
         var b = left + ratio * (right - left)
-        fitTone(a, frames, mean)
+        fitTone(a, frames, mean, weight, centeredWeightedSum)
         var energyA = fittedEnergy; var powerA = fittedPower
         var cosineA = fittedCosine; var sineA = fittedSine
-        fitTone(b, frames, mean)
+        fitTone(b, frames, mean, weight, centeredWeightedSum)
         var energyB = fittedEnergy; var powerB = fittedPower
         var cosineB = fittedCosine; var sineB = fittedSine
         repeat(32) {
@@ -343,13 +347,13 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                 right = b; b = a; energyB = energyA; powerB = powerA
                 cosineB = cosineA; sineB = sineA
                 a = right - ratio * (right - left)
-                fitTone(a, frames, mean); energyA = fittedEnergy; powerA = fittedPower
+                fitTone(a, frames, mean, weight, centeredWeightedSum); energyA = fittedEnergy; powerA = fittedPower
                 cosineA = fittedCosine; sineA = fittedSine
             } else {
                 left = a; a = b; energyA = energyB; powerA = powerB
                 cosineA = cosineB; sineA = sineB
                 b = left + ratio * (right - left)
-                fitTone(b, frames, mean); energyB = fittedEnergy; powerB = fittedPower
+                fitTone(b, frames, mean, weight, centeredWeightedSum); energyB = fittedEnergy; powerB = fittedPower
                 cosineB = fittedCosine; sineB = fittedSine
             }
         }
@@ -360,7 +364,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         val explained = max(energyA, energyB)
         if (explained <= 0.0 || !power.isFinite()) return false
         if (low && hz < SILENCE_MIN_HZ) {
-            fitTone(SILENCE_MIN_HZ.toDouble(), frames, mean)
+            fitTone(SILENCE_MIN_HZ.toDouble(), frames, mean, weight, centeredWeightedSum)
             // Noise can move a boundary tone slightly outside the supported band.
             // Keep the boundary interpretation only when it explains the same data.
             val uncertainty = 9.0 * (energy - explained).coerceAtLeast(0.0) / (frames - 3)
@@ -438,19 +442,16 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         }
     }
 
-    private fun fitTone(hz: Double, frames: Int, mean: Double) {
+    private fun fitTone(hz: Double, frames: Int, mean: Double, weight: Double, centeredWeightedSum: Double) {
         val angle = 2 * PI * hz / sampleRate
         val stepCos = cos(angle); val stepSin = sin(angle)
         var c = 1.0; var s = 0.0
         var cc = 0.0; var ss = 0.0; var cs = 0.0
         var sumC = 0.0; var sumS = 0.0; var xc = 0.0; var xs = 0.0
-        var weight = 0.0
-        var sumX = 0.0
         val pad = (size - frames) / 2
         for (i in 0 until frames) {
             val w = analysisWindow[pad + i]
             val value = samples[i] - mean
-            weight += w; sumX += w * value
             cc += w * c * c; ss += w * s * s; cs += w * c * s
             sumC += w * c; sumS += w * s; xc += w * value * c; xs += w * value * s
             val nextC = c * stepCos - s * stepSin
@@ -458,7 +459,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         }
         cc -= sumC * sumC / weight; ss -= sumS * sumS / weight
         cs -= sumC * sumS / weight
-        xc -= sumX * sumC / weight; xs -= sumX * sumS / weight
+        xc -= centeredWeightedSum * sumC / weight; xs -= centeredWeightedSum * sumS / weight
         val determinant = cc * ss - cs * cs
         val trace = cc + ss
         val condition = determinant / (trace * trace)

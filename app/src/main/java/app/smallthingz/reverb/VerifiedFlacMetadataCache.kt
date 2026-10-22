@@ -10,9 +10,7 @@ internal object VerifiedFlacMetadataCache {
 
     private fun key(digest: CopyDigest): String? {
         if (digest.byteCount <= 0L || digest.sha256.size != 32) return null
-        return digest.byteCount.toString() + ":" + digest.sha256.joinToString("") {
-            (it.toInt() and 255).toString(16).padStart(2, '0')
-        }
+        return digest.byteCount.toString() + ":" + digest.sha256.toHexString()
     }
 
     fun remember(digest: CopyDigest, info: FlacInfo) {

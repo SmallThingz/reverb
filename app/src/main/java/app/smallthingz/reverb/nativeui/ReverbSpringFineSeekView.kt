@@ -103,6 +103,7 @@ internal class ReverbSpringFineSeekView(
     }
 
     fun setPalette(value: ReverbPalette) {
+        if (palette == value) return
         palette = value
         binding?.let(puck::bind)
         invalidate()

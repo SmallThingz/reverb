@@ -72,6 +72,7 @@ internal class NativeSettingsOwner(
         onChildEditorReadiness = { active, ready ->
             if (!active) quickTileEditorState.closeEditor()
             else quickTileEditorState.restorePendingDraft(ready)
+            // The controller calls this after draftChanged; publish once with child state settled.
             notifyChanged()
         },
     )
@@ -539,7 +540,8 @@ internal class NativeSettingsOwner(
         } finally {
             draftReconciliationDepth--
         }
-        notifyChanged()
+        // The controller's following child-readiness callback publishes the reconciled state.
+        // start() is the only direct caller and publishes after this method returns as well.
     }
 
     private fun restartHydrationEffect(key: Pair<Boolean, Boolean>) {

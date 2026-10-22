@@ -85,6 +85,11 @@ internal class NativeMainScreenView private constructor(
     private val clipLeases = IdentityHashMap<View, Any>()
     private val shellLayouts = IdentityHashMap<View, ShellLayout>()
     private var drawOrder = emptyList<View>()
+    private var orderedSettings: View? = null
+    private var orderedLibrary: View? = null
+    private var orderedLibraryToolbar: View? = null
+    private var orderedLibraryAboveHome = false
+    private var orderedFeedbackZBits = 0
     private var lastSaveFeedbackVisible: Boolean? = null
     private var measuredFeedbackBottom = Int.MIN_VALUE
     private var captureRestorationAvailable = true
@@ -441,22 +446,33 @@ internal class NativeMainScreenView private constructor(
             removeView(old)
             retireShellLayouts(old)
         }
-        updateDrawOrder()
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
+        updateDrawOrder(placement.z)
         val bottom = dp(placement.bottomPaddingDp) + if (placement.addNavigationBarBottom) navigationBottom else 0
         if (bottom != measuredFeedbackBottom) { measuredFeedbackBottom = bottom; requestLayout() }
         invalidate()
     }
 
-    private fun updateDrawOrder() {
+    private fun updateDrawOrder(feedbackZ: Float) {
+        val libraryAboveHome = navigation.showLibrary || libraryMotion.panelProgress > 0f
+        val feedbackZBits = feedbackZ.toRawBits()
+        // Home, feedback and incidents are fixed identities; only these child/order keys can change.
+        if (drawOrder.isNotEmpty() && orderedSettings === settings && orderedLibrary === libraryLayer &&
+            orderedLibraryToolbar === libraryToolbar && orderedLibraryAboveHome == libraryAboveHome &&
+            orderedFeedbackZBits == feedbackZBits) return
         val entries = ArrayList<Pair<Float, View>>(6)
         settings?.let { entries += 0f to it }
         entries += 1f to home
-        entries += navigation.feedbackPlacement(libraryMotion.panelProgress).z to feedback
-        libraryLayer?.let { entries += (if (navigation.showLibrary || libraryMotion.panelProgress > 0f) 3f else -2f) to it }
+        entries += feedbackZ to feedback
+        libraryLayer?.let { entries += (if (libraryAboveHome) 3f else -2f) to it }
         libraryToolbar?.let { entries += 4f to it }
         entries += 6f to incidents
         drawOrder = entries.sortedBy { it.first }.map { it.second }
+        orderedSettings = settings
+        orderedLibrary = libraryLayer
+        orderedLibraryToolbar = libraryToolbar
+        orderedLibraryAboveHome = libraryAboveHome
+        orderedFeedbackZBits = feedbackZBits
     }
 
     override fun getChildDrawingOrder(childCount: Int, drawingPosition: Int): Int =

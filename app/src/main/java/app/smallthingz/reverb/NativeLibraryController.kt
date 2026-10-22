@@ -309,7 +309,7 @@ internal class NativeLibraryController(
             selectionHasBusyMutation = selectedIds.keys.any { it in activeMutationRecordingIds },
             acceptsDeletions = deletionState.acceptsDeletions,
             undo = undoNotice,
-            menuRecording = visible.firstOrNull { it.id == contextMenuRecordingId },
+            menuRecording = contextMenuRecordingId?.let { id -> visible.firstOrNull { it.id == id } },
             renameRecording = renameRecording.takeIf { showRenameDialog },
             infoRecording = infoRecording.takeIf { showInfoDialog },
         ))
