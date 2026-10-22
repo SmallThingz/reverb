@@ -42,7 +42,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
                 "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
-                "native_library_parity", "native_library_playback", "native_library_transactions", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
+                "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
                 "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
                 "native_library_fixture_observation",
