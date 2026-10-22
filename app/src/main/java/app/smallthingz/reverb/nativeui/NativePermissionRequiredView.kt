@@ -151,8 +151,12 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         super.addChildrenForAccessibility(outChildren)
         for(index in outChildren.lastIndex downTo start) {
             val child=outChildren[index]
-            val present=if(child is NativeMergedRowAccessibilityHost)child.mergedRowAccessibility.isNodePresent()
-                else host.sourceNode(child).present
+            val present=when {
+                child===allow->allow.isAccessibilityNodePresent()
+                child===libraryAction->libraryAction.isAccessibilityNodePresent()
+                child is NativeMergedRowAccessibilityHost->child.mergedRowAccessibility.isNodePresent()
+                else->host.sourceNode(child).present
+            }
             if(!present)outChildren.removeAt(index)
         }
     }
@@ -221,6 +225,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     }
     override fun onMeasure(w:Int,h:Int){surface.measure(w,h);setMeasuredDimension(surface.measuredWidth,surface.measuredHeight)}
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int){surface.layout(0,0,width,height)}
+    fun isAccessibilityNodePresent():Boolean=visual.mergedRowAccessibility.isNodePresent()
     override fun close(){action=null;click.cancel();controller.detached();glyphLease.close();parentLease.close();clipLease.close()}
 
     private inner class LibraryVisual(context:Context):ViewGroup(context),NativeClickPhaseHost,
@@ -271,5 +276,6 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         override fun getAccessibilityClassName():CharSequence="android.view.View"
     }
 }
+
 private fun permissionExact(value:Int)=View.MeasureSpec.makeMeasureSpec(value,View.MeasureSpec.EXACTLY)
 private fun permissionAtMost(value:Int)=View.MeasureSpec.makeMeasureSpec(value,View.MeasureSpec.AT_MOST)

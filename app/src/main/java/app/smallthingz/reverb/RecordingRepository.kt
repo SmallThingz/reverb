@@ -1698,6 +1698,15 @@ internal fun visibleCatalogRecordings(
     recording.id !in pendingDeletionIds && recording.missingSinceMillis == null
 }
 
+// Preserve existing opaque identity equality, but admit legacy birth normalization only
+// when both unequal identities have the complete numeric stat shape.
+internal fun recordingFileCatalogIdentityMatches(previous: String, current: String): Boolean =
+    previous.isNotBlank() && current.isNotBlank() &&
+        (previous == current ||
+            (deletionClaimIdentityHasPinnedDescriptorAuthority(previous) &&
+                deletionClaimIdentityHasPinnedDescriptorAuthority(current) &&
+                fileIdentityMatches(previous, current)))
+
 internal fun sameRecordingActionTarget(
     previous: RecordingEntity,
     current: RecordingEntity,
@@ -1708,7 +1717,7 @@ internal fun sameRecordingActionTarget(
     if (previousIdentity.isNotBlank() || currentIdentity.isNotBlank()) {
         if (previousIdentity.isBlank() || currentIdentity.isBlank()) return false
         return when (previous.storageType) {
-            RecordingStorageType.FILE -> previousIdentity == currentIdentity
+            RecordingStorageType.FILE -> recordingFileCatalogIdentityMatches(previousIdentity, currentIdentity)
             RecordingStorageType.DOCUMENT,
             RecordingStorageType.MEDIASTORE,
             -> providerRecordingIdentityMatches(previousIdentity, currentIdentity)
@@ -1732,7 +1741,8 @@ internal fun observedRecordingIsSameAsset(
         RecordingStorageType.FILE -> {
             // FILE reads/destructive actions independently pin and verify the inode. A blank
             // observation can therefore preserve a known identity across a transient stat failure.
-            existingIdentity.isBlank() || observedIdentity.isBlank() || existingIdentity == observedIdentity
+            existingIdentity.isBlank() || observedIdentity.isBlank() ||
+                recordingFileCatalogIdentityMatches(existingIdentity, observedIdentity)
         }
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,

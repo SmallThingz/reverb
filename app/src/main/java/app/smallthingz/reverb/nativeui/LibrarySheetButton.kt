@@ -82,6 +82,7 @@ internal class LibrarySheetButton(
         addView(surface)
     }
     fun bind(text:String,enabled:Boolean,onClick:()->Unit)=surface.bind(text,enabled,onClick)
+    internal fun isAccessibilityNodePresent():Boolean=surface.mergedRowAccessibility.isNodePresent()
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(closed || environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
