@@ -238,7 +238,7 @@ internal class NativeMainScreenView private constructor(
                 bindCaptureBranch()
                 feedback.bind(navigation.feedbackPlacement(libraryMotion.panelProgress).deliveryAllowed, environment)
                 bindAbout()
-                applyMotion()
+                applyMotion(bindToolbar = true)
             } while (renderAgain && !closed)
         } finally { rendering = false }
     }
@@ -248,7 +248,7 @@ internal class NativeMainScreenView private constructor(
         if (!started || closed) return
         if (rendering) return
         ensurePanels()
-        applyMotion()
+        applyMotion(bindToolbar = false)
         val visible = saveFeedbackVisible()
         if (lastSaveFeedbackVisible != visible) {
             lastSaveFeedbackVisible = visible
@@ -427,16 +427,18 @@ internal class NativeMainScreenView private constructor(
         } else { about?.dismiss(); about = null }
     }
 
-    private fun applyMotion() {
+    private fun applyMotion(bindToolbar: Boolean) {
         home.translationY = settingsMotion.panelProgress * height
         settings?.alpha = if (settingsMotion.panelProgress > 0f || navigation.showSettings) 1f else .01f
         libraryLayer?.bind(environment, statusInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
         val toolbarVisible = !navigation.showSettings && libraryMotion.panelProgress > 0f && !navigation.librarySelectionActive
         if (toolbarVisible) {
+            val created = libraryToolbar == null
             val toolbar = libraryToolbar ?: ReverbAppTopBarView(context, environment, this).also {
                 libraryToolbar = it; addView(it)
             }
-            toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
+            // All toolbar inputs change through requestRender; motion only changes its membership.
+            if (created || bindToolbar) toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
             if (libraryToolbarText == null) libraryToolbarText = toolbar.bindAccessibility(
                 windowText.textWindow, source.geometry, source::node)
         } else if (libraryToolbar != null) {
