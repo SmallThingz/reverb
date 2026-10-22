@@ -35,7 +35,10 @@ internal fun awaitNativeParityKeyboardCommand(
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == android.app.Application::class.java)
     check(directory.parentFile?.canonicalFile == context.filesDir.canonicalFile)
-    check(directory.name.matches(Regex("native-(about-parity|retention-keyboard)-[0-9]+")))
+    check(directory.name.matches(Regex("native-(about-parity|retention-keyboard|input-parity)-[0-9]+")))
+    if (directory.name.startsWith("native-input-parity-")) {
+        check(stage == "input-keyboard-mode" && keyCodeName == "KEYCODE_TAB")
+    }
     check(directory.isDirectory)
     val requestId = UUID.randomUUID().toString().replace("-", "")
     val requestFile = File(directory, "keyboard-${requestId}.request.json")

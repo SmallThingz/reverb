@@ -153,7 +153,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 verifyNativeOnboardingPageParity(this, report)
             } else if (requestedTest == "native_input_parity") {
                 executed++
-                verifyNativeInputParity(this, report)
+                verifyNativeInputParity(this, report, keyboardSessionNonce)
             } else if (requestedTest == "native_switch_parity") {
                 executed++
                 verifyNativeSwitchStaticParity(this, report)

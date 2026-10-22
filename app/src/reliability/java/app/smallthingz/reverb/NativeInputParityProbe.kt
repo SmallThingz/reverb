@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -31,6 +32,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import app.smallthingz.reverb.nativeui.NativeClickBinding
 import app.smallthingz.reverb.nativeui.NativeClickEnvironment
 import app.smallthingz.reverb.nativeui.NativeClickIndication
@@ -41,25 +47,35 @@ import java.io.File
 import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collect
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Input reaches only the focused isolated fixture's own View.dispatch* methods.
- * No device-wide input injection, recorder, preferences, grants, system settings or app data.
+ * Keyboard-mode entry uses only the host-coordinated, guarded physical-display-0 TAB handshake.
+ * No recorder, preferences, grants, system settings or production app data.
  * This compares actual pinned foundation modifiers, not a copied pointer recognizer.
  */
-internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: StringBuilder) {
+internal fun verifyNativeInputParity(
+    instrumentation: Instrumentation,
+    report: StringBuilder,
+    keyboardSessionNonce: String?,
+) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
     val directory = File(context.filesDir, "native-input-parity-" + System.currentTimeMillis())
     check(directory.mkdir())
     val cases = JSONArray()
+    val keyboardRequests = JSONArray()
+    val focusPreconditions = JSONArray()
     val result = JSONObject().put("cases", cases)
+        .put("keyboard_requests", keyboardRequests).put("focus_preconditions", focusPreconditions)
         .put("reference", "Actual pinned foundation 1.11.2 clickable/combinedClickable; explicit InteractionSource")
         .put("physical_input_injected", false)
+        .put("physical_input_scope", "Only nonce-bound host keyboard TAB on explicitly physical display0; no app-side injection")
         .put("limits", "Direct synthetic own-View dispatch; no ripple raster, indirect input, or complete parent gesture arbitration")
     var activity: NativeParityActivity? = null
     var failure: Throwable? = null
@@ -75,10 +91,11 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
             for (compose in listOf(true, false)) {
                 requireNativeParityHost(instrumentation, host)
                 lateinit var target: InputFixture
+                lateinit var parent: InputDelayFrame
                 nativeParityOnMain(instrumentation) {
                     val trace = InputTrace(frames)
                     target = if (compose) ComposeInputFixture(host, trace, case) else NativeInputFixture(host, trace)
-                    val parent = InputDelayFrame(host, case == InputScenario.QUICK_DELAYED_TAP)
+                    parent = InputDelayFrame(host, case == InputScenario.QUICK_DELAYED_TAP)
                     val density = host.resources.displayMetrics.density
                     val width = (160f * density + .5f).toInt().let {
                         if (case == InputScenario.KEYBOARD_AFTER_POINTER_ODD) it or 1 else it
@@ -94,8 +111,36 @@ internal fun verifyNativeInputParity(instrumentation: Instrumentation, report: S
                         case == InputScenario.KEYBOARD_AFTER_POINTER_ODD)
                 }
                 awaitNativeParityDraw(instrumentation, target.view)
+                if (case.requiresKeyboardFocus) {
+                    val renderer = if (compose) "compose" else "native"
+                    focusPreconditions.put(target.trace.focusEvidence.put("name", case.name).put("renderer", renderer))
+                    prepareInputKeyboardMode(instrumentation, host, target, case, directory,
+                        keyboardSessionNonce, renderer) { request ->
+                        keyboardRequests.put(request)
+                        if (!result.optBoolean("physical_input_injected", false)) {
+                            // A pending host command can have an unknown outcome if the lane stops.
+                            result.put("physical_input_injected", JSONObject.NULL)
+                        }
+                        File(directory, "result.json").writeText(result.toString(2))
+                    }
+                    result.put("physical_input_injected", true)
+                    // TAB may focus the fixture. Park focus on the original parent, then let
+                    // any setup Focus/Unfocus notifications drain before resetting the trace.
+                    guardedInput(instrumentation, host, target) { check(parent.requestFocus()) }
+                }
                 awaitInputFrames(instrumentation, 2)
-                guardedInput(instrumentation, host, target) { target.trace.reset() }
+                guardedInput(instrumentation, host, target) {
+                    if (case.requiresKeyboardFocus) {
+                        val mode = target.view.isInTouchMode
+                        val parked = parent.isFocused
+                        val focused = target.isInputFocused()
+                        target.trace.focusEvidence.put("in_touch_mode_before_reset", mode)
+                            .put("parent_focused_before_reset", parked)
+                            .put("target_focused_before_reset", focused)
+                        check(!mode && parked && !focused) { "Keyboard setup must park parent focus before comparison" }
+                    }
+                    target.trace.reset()
+                }
                 runInputScenario(instrumentation, host, target, case)
                 awaitInputFrames(instrumentation, 3)
                 guardedInput(instrumentation, host, target) {
@@ -332,14 +377,19 @@ private fun verifyPublicPointerSubset(
 
 private enum class InputScenario {
     SAME_OWNER_CALLBACK, FOCUSED_LONG_CAPABILITY, QUICK_DELAYED_TAP, MULTI_POINTER_CANCEL, KEYBOARD_LONG_PRESS,
-    KEYBOARD_AFTER_POINTER_ODD,
+    KEYBOARD_AFTER_POINTER_ODD;
+
+    val requiresKeyboardFocus: Boolean get() = this == FOCUSED_LONG_CAPABILITY ||
+        this == KEYBOARD_LONG_PRESS || this == KEYBOARD_AFTER_POINTER_ODD
 }
 
 private interface InputFixture {
     val view: View
     val trace: InputTrace
     fun update(action: String, longClick: Boolean)
-    fun requestInputFocus()
+    fun requestInputFocus(): Boolean
+    fun isInputFocused(): Boolean
+    fun focusTargetSnapshot(): JSONObject
     fun dispose()
 }
 
@@ -379,7 +429,21 @@ private class ComposeInputFixture(context: Context, override val trace: InputTra
         }
     }
     override fun update(action: String, longClick: Boolean) { binding = Binding(action, longClick) }
-    override fun requestInputFocus() { focusRequester.requestFocus() }
+    override fun requestInputFocus(): Boolean = focusRequester.requestFocus()
+    private fun focusNode() = inputFixtureDescendants(view).filterIsInstance<ViewRootForTest>().single()
+        .semanticsOwner.getAllSemanticsNodes(true).single {
+            it.config.getOrNull(SemanticsActions.OnClick) != null
+        }
+    override fun isInputFocused(): Boolean = focusNode().config.getOrNull(SemanticsProperties.Focused) == true
+    override fun focusTargetSnapshot(): JSONObject {
+        val node = focusNode()
+        val bounds = node.boundsInWindow
+        return JSONObject().put("target_identity", "semantics:${node.id}")
+            .put("target_bounds", JSONArray(listOf(bounds.left.roundToInt(), bounds.top.roundToInt(),
+                bounds.right.roundToInt(), bounds.bottom.roundToInt())))
+            .put("enabled", view.isEnabled && node.config.getOrNull(SemanticsProperties.Disabled) == null)
+            .put("target_focused", node.config.getOrNull(SemanticsProperties.Focused) == true)
+    }
     override fun dispose() { view.disposeComposition() }
 }
 
@@ -390,7 +454,14 @@ private class NativeInputFixture(context: Context, override val trace: InputTrac
             onClick = { trace.action("click:" + action) },
             onLongClick = if (longClick) ({ trace.action("long:" + action) }) else null))
     }
-    override fun requestInputFocus() { check(view.requestFocus()) }
+    override fun requestInputFocus(): Boolean = view.requestFocus()
+    override fun isInputFocused(): Boolean = view.isFocused
+    override fun focusTargetSnapshot(): JSONObject {
+        val xy = IntArray(2).also(view::getLocationInWindow)
+        return JSONObject().put("target_identity", "view:${System.identityHashCode(view)}")
+            .put("target_bounds", JSONArray(listOf(xy[0], xy[1], xy[0] + view.width, xy[1] + view.height)))
+            .put("enabled", view.isEnabled).put("target_focused", view.isFocused)
+    }
     override fun dispose() { view.controller.bind(null) }
 }
 
@@ -425,6 +496,70 @@ private class NativeInputView(context: Context, trace: InputTrace) : View(contex
 
 private class InputDelayFrame(context: Context, private val delayPress: Boolean) : FrameLayout(context) {
     override fun shouldDelayChildPressedState() = delayPress
+}
+
+private fun inputFixtureDescendants(view: View): Sequence<View> = sequence {
+    yield(view)
+    if (view is ViewGroup) for (index in 0 until view.childCount) yieldAll(inputFixtureDescendants(view.getChildAt(index)))
+}
+
+private fun prepareInputKeyboardMode(
+    instrumentation: Instrumentation,
+    host: NativeParityActivity,
+    target: InputFixture,
+    case: InputScenario,
+    directory: File,
+    sessionNonce: String?,
+    renderer: String,
+    onRequest: (JSONObject) -> Unit,
+) {
+    check(case.requiresKeyboardFocus)
+    awaitNativeParityKeyboardCommand(instrumentation, directory, sessionNonce, renderer,
+        stage = "input-keyboard-mode", keyCodeName = "KEYCODE_TAB", guardedSnapshot = {
+            var snapshot: JSONObject? = null
+            guardedInput(instrumentation, host, target) {
+                val decor = host.window.decorView
+                val observed = target.focusTargetSnapshot()
+                check(observed.getBoolean("enabled")) { "Input focus target is not enabled" }
+                val bounds = observed.getJSONArray("target_bounds")
+                check(bounds.getInt(0) < bounds.getInt(2) && bounds.getInt(1) < bounds.getInt(3))
+                snapshot = JSONObject().put("display_id", checkNotNull(decor.display).displayId)
+                    .put("window_title", host.window.attributes.title?.toString().orEmpty())
+                    .put("decor_identity", System.identityHashCode(decor))
+                    .put("target_bounds", bounds).put("target_identity", observed.getString("target_identity"))
+                    .put("scene_label", "InputFocus:${case.name}")
+                    .put("observed_target", JSONObject().put("enabled", true).put("focus_scenario", case.name)
+                        .put("target_focused", observed.getBoolean("target_focused")))
+                    .put("in_touch_mode", decor.isInTouchMode)
+            }
+            checkNotNull(snapshot)
+        }, onRequest = { request ->
+            target.trace.focusEvidence.put("keyboard_request_id", request.getString("request_id"))
+            onRequest(request)
+        }, validateObservedAfter = { observed ->
+            val mode = observed.get("in_touch_mode")
+            target.trace.focusEvidence.put("in_touch_mode_after_tab", mode)
+            check(mode is Boolean && !mode) {
+                "Host TAB completed but own input window remains in Touch mode; focus assertion is not bypassed"
+            }
+        })
+}
+
+private fun requestInputFocusForComparison(target: InputFixture) {
+    val mode = target.view.isInTouchMode
+    target.trace.focusEvidence.put("in_touch_mode_at_request", mode)
+    check(!mode) { "Input comparison requires actual keyboard mode; no mode/focusability override" }
+    val accepted = target.requestInputFocus()
+    val focused = target.isInputFocused()
+    target.trace.focusEvidence.put("request_focus_return", accepted).put("target_focused_after_request", focused)
+    check(accepted && focused) { "Input target focus request must succeed and actually focus the target" }
+}
+
+private fun requireInputKeyboardTarget(target: InputFixture, phase: String) {
+    val mode = target.view.isInTouchMode
+    val focused = target.isInputFocused()
+    target.trace.focusEvidence.put(phase, JSONObject().put("in_touch_mode", mode).put("target_focused", focused))
+    check(!mode && focused) { "Keyboard dispatch requires the admitted input target to remain focused" }
 }
 
 private fun runInputScenario(instrumentation: Instrumentation, host: NativeParityActivity,
@@ -469,7 +604,7 @@ private fun runInputScenario(instrumentation: Instrumentation, host: NativeParit
         InputScenario.FOCUSED_LONG_CAPABILITY -> {
             guardedInput(instrumentation, host, target) {
                 target.trace.mark("request-focus")
-                target.requestInputFocus()
+                requestInputFocusForComparison(target)
             }
             awaitInputFrames(instrumentation, 2)
             update("with-long", true)
@@ -528,11 +663,12 @@ private fun runInputScenario(instrumentation: Instrumentation, host: NativeParit
             }
             guardedInput(instrumentation, host, target) {
                 target.trace.mark("request-focus")
-                target.requestInputFocus()
+                requestInputFocusForComparison(target)
             }
             awaitInputFrames(instrumentation, 2)
             val keyDownTime = SystemClock.uptimeMillis()
             guardedInput(instrumentation, host, target) {
+                requireInputKeyboardTarget(target, "before_key_down")
                 target.trace.mark("key-down:begin")
                 target.view.dispatchKeyEvent(KeyEvent(keyDownTime, keyDownTime, KeyEvent.ACTION_DOWN,
                     KeyEvent.KEYCODE_ENTER, 0))
@@ -540,6 +676,7 @@ private fun runInputScenario(instrumentation: Instrumentation, host: NativeParit
             }
             awaitInputDelay(instrumentation, ViewConfiguration.getLongPressTimeout().toLong() + 60)
             guardedInput(instrumentation, host, target) {
+                requireInputKeyboardTarget(target, "before_key_up")
                 target.trace.mark("key-up:begin")
                 target.view.dispatchKeyEvent(KeyEvent(keyDownTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP,
                     KeyEvent.KEYCODE_ENTER, 0))
@@ -560,6 +697,7 @@ private fun guardedInput(instrumentation: Instrumentation, host: NativeParityAct
 }
 
 private class InputTrace(private val frames: InputFrameTrace) {
+    val focusEvidence = JSONObject()
     private data class Entry(val kind: String, val token: Int, val x: Float?, val y: Float?,
         val nanos: Long, val frame: Long, val frameNanos: Long)
     private val ids = IdentityHashMap<Any, Int>()
