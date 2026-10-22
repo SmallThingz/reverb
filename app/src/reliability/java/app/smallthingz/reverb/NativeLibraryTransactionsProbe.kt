@@ -523,7 +523,19 @@ private class TransactionBoard(
             .put("action", action).put("action_submitted", false)
         windowTransitions.put(evidence)
         pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence,
-            observeInfoAuxiliaryOverlap = compose && action == context.getString(R.string.recording_info))
+            observeInfoAuxiliaryOverlap = action == context.getString(R.string.recording_info),
+            infoTooltip = if (action in listOf(R.string.recording_info, R.string.close).map(context::getString)) {
+                NativeLibraryInfoTooltip(
+                    compose,
+                    context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_drag_handle_description),
+                    listOf(R.string.recording_info, R.string.recording_details_started,
+                        R.string.recording_details_duration, R.string.recording_details_size,
+                        R.string.recording_details_codec, R.string.recording_details_mime,
+                        R.string.recording_details_storage, R.string.recording_details_location)
+                        .map { context.getString(it).removeSuffix(":") },
+                    records.map { it.displayName }, context.getString(R.string.close),
+                )
+            } else null)
         return evidence
     }
     fun clickLabels(i: Instrumentation): List<String> = nativeParityOnMain(i) {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Marker resolved only by the API28 per-editor cursor resource binding. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <size android:width="2dp" android:height="1dp" />
+    <solid android:color="@android:color/transparent" />
+</shape>

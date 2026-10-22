@@ -74,6 +74,7 @@ internal class SettingsMenuWindow(
     private var added = false
     private var closed = false
     private var positioned = false
+    private var menuMeasured = false
     private var previousAnchor: SettingsMenuBounds? = null
     private var previousMenuWidth = -1
     private var previousMenuHeight = -1
@@ -169,6 +170,11 @@ internal class SettingsMenuWindow(
         anchor.getWindowVisibleDisplayFrame(visibleFrame)
         menu.measure(atMost(visibleFrame.width()),atMost(visibleFrame.height()))
         setMeasuredDimension(menu.measuredWidth,menu.measuredHeight)
+        menuMeasured = true
+        // Compose's onSizeChanged publishes placement during measure, before ViewRoot's initial
+        // relayout and renderer light-center setup. Waiting for onLayout leaves the first setup
+        // at the default window origin even though the popup is drawn at its final placement.
+        updatePosition()
     }
 
     override fun onLayout(changed: Boolean,l: Int,t: Int,r: Int,b: Int) {
@@ -182,32 +188,34 @@ internal class SettingsMenuWindow(
     }
 
     private fun updatePosition(force: Boolean = false) {
-        if (!added || closed || !anchor.isAttachedToWindow || !isLaidOut) return
+        if (!added || closed || !anchor.isAttachedToWindow || !menuMeasured) return
+        val menuWidth = menu.measuredWidth
+        val menuHeight = menu.measuredHeight
         anchor.getLocationInWindow(location)
         val previous = previousAnchor
         val sameAnchor = previous != null && previous.left == location[0] && previous.top == location[1] &&
             previous.width == anchor.width && previous.height == anchor.height
-        if (!force && sameAnchor && menu.width == previousMenuWidth && menu.height == previousMenuHeight) return
+        if (!force && sameAnchor && menuWidth == previousMenuWidth && menuHeight == previousMenuHeight) return
         val bounds = if (sameAnchor) requireNotNull(previous) else
             SettingsMenuBounds(location[0],location[1],location[0]+anchor.width,location[1]+anchor.height)
         anchor.getWindowVisibleDisplayFrame(visibleFrame)
         val windowWidth = visibleFrame.width()
         val windowHeight = visibleFrame.height()
-        if (!force && bounds == previousAnchor && menu.width == previousMenuWidth &&
-            menu.height == previousMenuHeight && windowWidth == previousWindowWidth &&
+        if (!force && bounds == previousAnchor && menuWidth == previousMenuWidth &&
+            menuHeight == previousMenuHeight && windowWidth == previousWindowWidth &&
             windowHeight == previousWindowHeight) return
         if (windowWidth != previousWindowWidth || windowHeight != previousWindowHeight) requestLayout()
         previousAnchor = bounds
-        previousMenuWidth = menu.width
-        previousMenuHeight = menu.height
+        previousMenuWidth = menuWidth
+        previousMenuHeight = menuHeight
         previousWindowWidth = windowWidth
         previousWindowHeight = windowHeight
-        val placement = settingsMenuPlacement(bounds,windowWidth,windowHeight,menu.width,menu.height,
+        val placement = settingsMenuPlacement(bounds,windowWidth,windowHeight,menuWidth,menuHeight,
             anchor.layoutDirection == LAYOUT_DIRECTION_RTL,(48f*density.density).roundToInt())
         params.x = placement.x
         params.y = placement.y
-        menu.pivotX = placement.pivotX * menu.width
-        menu.pivotY = placement.pivotY * menu.height
+        menu.pivotX = placement.pivotX * menuWidth
+        menu.pivotY = placement.pivotY * menuHeight
         if (Build.VERSION.SDK_INT >= 29)
             systemGestureExclusionRects = listOf(Rect(0,0,windowWidth,windowHeight))
         manager.updateViewLayout(this,params)

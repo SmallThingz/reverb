@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.core.view.inputmethod.EditorInfoCompat
 import app.smallthingz.reverb.RetentionMode
+import app.smallthingz.reverb.R
 import kotlin.math.ceil
 
 /**
@@ -82,16 +83,21 @@ import kotlin.math.ceil
  * hints and keyed focus request. It does not own Settings validation, persistence or mode drafts.
  *
  * Exact text/cursor/selection raster and native Editor handle/toolbar/undo/key behavior still need
- * the accompanying A/B probe. In particular API28 has no public cursor/handle drawable setter;
- * no reflection or private API substitutes are used. No known mismatch may be accepted as parity.
+ * the accompanying A/B probe. API28 cursor styling uses its public constructor resource path;
+ * handle drawable setters remain API29+. No reflection or private API substitutes are used.
  * [sourceLayout] exposes the pinned paragraph geometry so a mismatch is measurable rather than
  * hidden by baseline nudges. If native Editor cannot reproduce that geometry, replace its drawing
  * and selection ownership explicitly before any production integration.
  */
-internal class SettingsRetentionInputView(
+internal class SettingsRetentionInputView private constructor(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
-) : EditText(context, null, 0) {
+    private val legacyCursor: LegacyNativeCursorBinding?,
+) : EditText(legacyCursor?.context ?: context, null, 0,
+    if (legacyCursor != null) R.style.ReverbNativeEditorCursor else 0) {
+    constructor(context: Context, initialEnvironment: ReverbViewEnvironment) : this(
+        context, initialEnvironment, legacyNativeCursorBinding(context,
+            2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary))
     private var environment = initialEnvironment
     private var initialized = false
     private var applyingOwner = false
@@ -495,6 +501,12 @@ internal class SettingsRetentionInputView(
         setTextColor(environment.palette.ink)
         highlightColor = (environment.palette.primary and 0x00ffffff) or (0x66 shl 24)
         lineHeightSpan = RetentionLineHeightSpan(metrics.lineHeightPx)
+        if (Build.VERSION.SDK_INT >= 29) {
+            textCursorDrawable = NativeEditableCursorDrawable(
+                2f * environment.textDensity.density, environment.palette.primary)
+        } else {
+            legacyCursor?.bind(2f * environment.textDensity.density, environment.palette.primary)
+        }
         minimumParagraph = Paragraph(
             text = "HHHHHHHHHH", style = resolved, spanStyles = emptyList(),
             maxLines = 1, overflow = TextOverflow.Clip,

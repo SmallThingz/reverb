@@ -314,9 +314,10 @@ internal class SheetRoot(
         clipChildren=false;clipToPadding=false
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
         isScreenReaderFocusable=false
-        // AndroidComposeView1.11.2:1064-1072 owns initial platform focus; descendants remain traversable.
+        // AndroidComposeView searches eligible children first; touch mode may retain owner focus.
         isFocusable=true
         isFocusableInTouchMode=true
+        descendantFocusability=FOCUS_AFTER_DESCENDANTS
         defaultFocusHighlightEnabled=false
         addView(scrim);addView(surface)
     }
@@ -370,6 +371,8 @@ internal class SheetScrim(context:Context,color:Int,private val action:()->Unit)
         isClickable=true
         isScreenReaderFocusable=true
         setOnClickListener {action()}
+        // Source Scrim has pointer/semantic actions, but no keyboard FocusTarget.
+        isFocusable=false
     }
     fun bindColor(color:Int) {
         val next=reverbColorWithAlpha(color,.32f)

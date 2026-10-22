@@ -11,6 +11,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.R
+
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -75,10 +77,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.text.style.LineHeightStyle
-import android.graphics.drawable.Drawable
-import android.graphics.Canvas
-import android.graphics.ColorFilter
-import android.graphics.PixelFormat
 import androidx.core.view.inputmethod.EditorInfoCompat
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -88,13 +86,19 @@ import kotlin.math.roundToInt
  * or hidden rendering tree. The caller owns source style, IME hints and Done action; raw edits stay
  * unrestricted. This candidate keeps native Editor drawing/handles and therefore is NOT a qualified
  * replacement until cursor/selection/key/IME and actual paragraph raster match the released field.
- * API28 cursor/handle styling has no public setter; that remains an explicit qualification gap.
+ * API28 cursor styling uses its public constructor resource path; handle setters remain API29+.
  */
-internal class ReverbSingleLineInputView(
+internal class ReverbSingleLineInputView private constructor(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     initialConfiguration: NativeSingleLineInputConfiguration,
-) : EditText(context, null, 0) {
+    private val legacyCursor: LegacyNativeCursorBinding?,
+) : EditText(legacyCursor?.context ?: context, null, 0,
+    if (legacyCursor != null) R.style.ReverbNativeEditorCursor else 0) {
+    constructor(context: Context, initialEnvironment: ReverbViewEnvironment,
+        initialConfiguration: NativeSingleLineInputConfiguration) : this(
+        context, initialEnvironment, initialConfiguration, legacyNativeCursorBinding(context,
+            2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor))
     private var environment = initialEnvironment
     private var initialized = false
     private var applyingOwner = false
@@ -522,12 +526,14 @@ internal class ReverbSingleLineInputView(
         val lineStyle = resolved.lineHeightStyle ?: LineHeightStyle.Default
         lineHeightSpan = NativeEditableLineHeightSpan(heightPx, lineStyle)
         if (Build.VERSION.SDK_INT >= 29) {
-            // Pinned foundation cursor is a2dp stroke. Native Editor placement/blink/handles still
+            // Pinned foundation cursor floors its 2dp stroke. Native Editor placement/blink/handles still
             // need actual A/B proof; this public drawable only supplies its color and nominal width.
             textCursorDrawable = NativeEditableCursorDrawable(2f * density.density, configuration.cursorColor)
             textSelectHandle?.mutate()?.setTint(configuration.selectionHandleColor)
             textSelectHandleLeft?.mutate()?.setTint(configuration.selectionHandleColor)
             textSelectHandleRight?.mutate()?.setTint(configuration.selectionHandleColor)
+        } else {
+            legacyCursor?.bind(2f * density.density, configuration.cursorColor)
         }
         minimumParagraph = Paragraph(
             text = "HHHHHHHHHH", style = resolved, spanStyles = emptyList(),
@@ -626,18 +632,3 @@ private class NativeEditableLineHeightSpan(private val heightPx: Float, private 
     }
 }
 
-/** Source2dp Float stroke; integer intrinsic allocation must not round its actual painted width. */
-private class NativeEditableCursorDrawable(private val stroke:Float,color:Int):Drawable() {
-    private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        this.color=color;strokeWidth=stroke
-    }
-    override fun getIntrinsicWidth()=ceil(stroke).toInt()
-    override fun getIntrinsicHeight()=1
-    override fun draw(canvas:Canvas) {
-        val x=bounds.left+stroke*.5f
-        canvas.drawLine(x,bounds.top.toFloat(),x,bounds.bottom.toFloat(),paint)
-    }
-    override fun setAlpha(alpha:Int){paint.alpha=alpha;invalidateSelf()}
-    override fun setColorFilter(filter:ColorFilter?){paint.colorFilter=filter;invalidateSelf()}
-    @Suppress("DEPRECATION") override fun getOpacity()=PixelFormat.TRANSLUCENT
-}

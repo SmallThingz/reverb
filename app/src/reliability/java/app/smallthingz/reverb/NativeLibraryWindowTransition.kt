@@ -8,11 +8,21 @@ import android.view.WindowManager
 import android.view.inspector.WindowInspector
 import android.widget.TextView
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
+
+internal data class NativeLibraryInfoTooltip(
+    val compose: Boolean,
+    val label: String,
+    val infoLabels: List<String>,
+    val recordingTitles: List<String>,
+    val closeLabel: String,
+)
 
 /** Read-only readiness for one explicit own UI transition; never a substitute for an input guard. */
 internal class NativeLibraryWindowTransition(
@@ -20,16 +30,24 @@ internal class NativeLibraryWindowTransition(
     private val origin: View,
     private val evidence: JSONObject,
     private val observeInfoAuxiliaryOverlap: Boolean = false,
+    private val infoTooltip: NativeLibraryInfoTooltip? = null,
 ) {
     private val main = host.window.decorView
     private val initial = visibleRoots()
     private var popup: View? = null
     private var auxiliary: View? = null
     private var reads = 0
+    private val initialAuxiliary: View?
 
     init {
-        check(initial.all { it === main || it === origin }) { "Unrelated own window before UI transition" }
         check(initial.filter(View::hasWindowFocus).single() === origin) { "UI transition origin lost focus" }
+        val extra = initial.filter { it !== main && it !== origin }
+        check(extra.size <= 1) { "Unrelated own windows before UI transition" }
+        initialAuxiliary = extra.singleOrNull()?.also {
+            val detail = auxiliaryObservation(it)
+            requireInfoTooltip(it, origin, detail)
+            evidence.put("initial_info_tooltip", detail)
+        }
         evidence.put("origin_identity", System.identityHashCode(origin))
             .put("main_identity", System.identityHashCode(main)).put("accepted", false)
     }
@@ -48,15 +66,22 @@ internal class NativeLibraryWindowTransition(
         val added = roots.filter { it !in initial }
         val focused = roots.filter(View::hasWindowFocus)
         check(focused.size <= 1) { "Ambiguous focus during owned UI transition" }
+        if (initialAuxiliary != null) {
+            check(added.isEmpty()) { "Unexpected new window while closing the classified Info scene" }
+        }
         if (added.size > 1) {
-            val pinned = popup
+            // Info and its keyboard tooltip can appear before the very first readiness read.
+            // Pin only the unique focused incoming Decor after validating the complete pair below.
+            val pinned = popup ?: added.singleOrNull {
+                it.hasWindowFocus() && it.javaClass.name == "com.android.internal.policy.DecorView"
+            }
             val extra = added.singleOrNull { it !== pinned }
-            // The retained Info transition briefly contains a new, nonfocused own PopupLayout.
-            // Its purpose is unknown: observe it, but never accept input/capture until it retires.
+            // Material3 retains its drag-handle tooltip while the handle has keyboard focus.
+            // Recognize only that anchored, noninteractive tooltip on the complete focused Info sheet.
             check(observeInfoAuxiliaryOverlap && pinned != null && added.size == 2 &&
                 pinned in added && focused.singleOrNull() === pinned && origin !in roots &&
                 pinned.javaClass.name == "com.android.internal.policy.DecorView" &&
-                extra != null && extra.javaClass.name == "androidx.compose.ui.window.PopupLayout" &&
+                extra != null && extra.javaClass.name == expectedTooltipClass() &&
                 !extra.hasWindowFocus()) { "Ambiguous new windows during owned UI transition" }
             val knownExtra = checkNotNull(extra)
             check(auxiliary == null || auxiliary === knownExtra) {
@@ -69,6 +94,17 @@ internal class NativeLibraryWindowTransition(
             }
             evidence.put("last_auxiliary_observation", detail)
                 .put("auxiliary_overlap_reads", evidence.optInt("auxiliary_overlap_reads") + 1)
+            requireInfoTooltip(knownExtra, checkNotNull(pinned), detail)
+            if (popup == null) {
+                popup = pinned
+                evidence.put("popup_identity", System.identityHashCode(pinned))
+                    .put("popup_pinned_with_classified_tooltip", true)
+            }
+            return pinned
+        }
+        if (initialAuxiliary != null && initialAuxiliary in roots) {
+            // Close must retire the known tooltip too; never accept the main scene beneath it.
+            evidence.put("outgoing_info_tooltip_reads", evidence.optInt("outgoing_info_tooltip_reads") + 1)
             return null
         }
         popup?.let { pinned ->
@@ -88,6 +124,89 @@ internal class NativeLibraryWindowTransition(
         return focused.single()
     }
 
+    private fun requireInfoTooltip(root: View, info: View, detail: JSONObject) {
+        val expected = checkNotNull(infoTooltip) { "Unclassified auxiliary window" }
+        check(info.javaClass.name == "com.android.internal.policy.DecorView" && info.hasWindowFocus() &&
+            root.javaClass.name == expectedTooltipClass() && !root.hasWindowFocus()) {
+            "Auxiliary is not attached to the focused Info scene"
+        }
+        val parameters = checkNotNull(root.layoutParams as? WindowManager.LayoutParams)
+        check(parameters.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL &&
+            parameters.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0) {
+            "Info auxiliary has unexpected window type or focusability"
+        }
+        val anchor = tooltipAnchor(root)
+        check(anchor.isAttachedToWindow && anchor.rootView === info) { "Info tooltip has a different anchor" }
+        if (!expected.compose) {
+            check(anchor.javaClass.name == "app.smallthingz.reverb.nativeui.NativeSheetDragHandle") {
+                "Native Info tooltip anchor is not the sheet drag handle"
+            }
+        }
+        check(!detail.has("content_unavailable") && !detail.getBoolean("descendant_walk_capped") &&
+            detail.getJSONArray("native_text").length() == 0) { "Unreadable Info tooltip content" }
+        fun nodes(view: View, merged: Boolean = false) = ownedViews(view).filterIsInstance<ViewRootForTest>().flatMap {
+            it.semanticsOwner.getAllSemanticsNodes(merged)
+        }
+        val labels: List<String>
+        val closeCount: Int
+        if (expected.compose) {
+            check(detail.getJSONArray("semantics_labels").let {
+                it.length() == 1 && it.getString(0) == expected.label
+            } && detail.getJSONArray("paragraph_labels").length() == 0) {
+                "Info auxiliary is not the localized Compose drag-handle tooltip"
+            }
+            check(nodes(root).none {
+                it.config.getOrNull(SemanticsActions.OnClick) != null ||
+                    it.config.getOrNull(SemanticsActions.OnLongClick) != null ||
+                    it.config.getOrNull(SemanticsActions.SetText) != null
+            }) { "Info tooltip unexpectedly contains an action" }
+            labels = nodes(info).flatMap { it.config.getOrNull(SemanticsProperties.Text)?.map { text -> text.text }.orEmpty() }
+            closeCount = nodes(info, merged = true).count {
+                expected.closeLabel in it.config.getOrNull(SemanticsProperties.Text)?.map { text -> text.text }.orEmpty() &&
+                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
+                    it.config.getOrNull(SemanticsActions.OnClick)?.action != null
+            }
+        } else {
+            check(detail.getJSONArray("paragraph_labels").let {
+                it.length() == 1 && it.getString(0) == expected.label
+            } && detail.getJSONArray("semantics_labels").length() == 0 &&
+                ownedViews(root).none { it.isClickable || it.isLongClickable }) {
+                "Info auxiliary is not the noninteractive native drag-handle tooltip"
+            }
+            val paragraphs = ownedViews(info).filterIsInstance<ReverbParagraphView>().filter(View::isShown)
+            labels = paragraphs.map { it.getText().toString() }
+            closeCount = paragraphs.filter { it.getText().toString() == expected.closeLabel }.mapNotNull { leaf ->
+                var action: View? = leaf
+                while (action != null && !action.isClickable) action = action.parent as? View
+                action
+            }.distinct().count { it.isEnabled && it.isShown }
+        }
+        check(expected.infoLabels.all(labels::contains) && expected.recordingTitles.count(labels::contains) == 1 &&
+            closeCount == 1) { "Tooltip anchor is not the complete expected Info scene" }
+        detail.put("classification", if (expected.compose) "material3-info-drag-handle-tooltip" else "native-info-drag-handle-tooltip")
+            .put("classification_anchor_identity", System.identityHashCode(info))
+    }
+
+    private fun expectedTooltipClass(): String = if (checkNotNull(infoTooltip).compose)
+        "androidx.compose.ui.window.PopupLayout" else "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow"
+
+    private fun tooltipAnchor(root: View): View {
+        val field = when (root.javaClass.name) {
+            "androidx.compose.ui.window.PopupLayout" -> "composeView"
+            "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow" -> "anchor"
+            else -> error("Unrecognized Info tooltip class")
+        }
+        return root.javaClass.getDeclaredField(field).apply { isAccessible = true }.get(root) as View
+    }
+
+    private fun ownedViews(root: View): List<View> = ArrayList<View>().also { views ->
+        fun visit(view: View) {
+            views += view
+            if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+        }
+        visit(root)
+    }
+
     private fun auxiliaryObservation(root: View): JSONObject = JSONObject()
         .put("uptime_ms", SystemClock.uptimeMillis())
         .put("identity", System.identityHashCode(root))
@@ -103,10 +222,8 @@ internal class NativeLibraryWindowTransition(
                     .put("window_title", it.title?.toString())
             }
             runCatching {
-                // Pinned Compose PopupLayout keeps the LocalView anchor in this existing field.
-                val anchor = root.javaClass.getDeclaredField("composeView").apply {
-                    isAccessible = true
-                }.get(root) as View
+                // Read the existing anchor of the exact source or native tooltip class.
+                val anchor = tooltipAnchor(root)
                 put("anchor_identity", System.identityHashCode(anchor))
                     .put("anchor_root_identity", System.identityHashCode(anchor.rootView))
             }.onFailure { put("anchor_unavailable", it.toString()) }
@@ -120,6 +237,7 @@ internal class NativeLibraryWindowTransition(
                 visit(root)
                 put("descendant_classes", JSONArray(views.map { it.javaClass.name }.distinct()))
                 put("native_text", JSONArray(views.filterIsInstance<TextView>().map { it.text.toString() }))
+                put("paragraph_labels", JSONArray(views.filterIsInstance<ReverbParagraphView>().map { it.getText().toString() }))
                 val labels = views.filterIsInstance<ViewRootForTest>().flatMap {
                     it.semanticsOwner.getAllSemanticsNodes(false)
                 }.flatMap { node ->
