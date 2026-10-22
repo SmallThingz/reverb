@@ -264,9 +264,10 @@ internal class AudioBlobView(context: Context) : View(context) {
         val activityRate = if (targetActivity > currentActivity) 0.72f else 0.16f
         val activityMix = 1f - (1f - activityRate).pow(normalized)
         currentActivity += (targetActivity - currentActivity) * activityMix
+        val attackMix = 1f - (1f - 0.68f).pow(normalized)
+        val releaseMix = 1f - (1f - 0.13f).pow(normalized)
         for (index in currentBands.indices) {
-            val rate = if (targetBands[index] > currentBands[index]) 0.68f else 0.13f
-            val mix = 1f - (1f - rate).pow(normalized)
+            val mix = if (targetBands[index] > currentBands[index]) attackMix else releaseMix
             currentBands[index] += (targetBands[index] - currentBands[index]) * mix
         }
         val lifeRate = if (targetLife > currentLife) 0.18f else 0.15f

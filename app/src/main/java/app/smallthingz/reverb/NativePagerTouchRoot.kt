@@ -56,12 +56,13 @@ internal open class NativePagerTouchRoot(
     private val paths = NativePointerPhaseTree()
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_CANCEL) {
             val owned = paths.hasPaths
             cancelPointerInput()
             return if (owned) true else super.dispatchTouchEvent(event)
         }
-        if (!nativePressedPointerAction(event.actionMasked)) return super.dispatchTouchEvent(event)
+        if (!nativePressedPointerAction(action)) return super.dispatchTouchEvent(event)
         prepareCoordinates(event)
         val frame = source.read(event) ?: return super.dispatchTouchEvent(event)
         paths.pruneDetached()
@@ -83,7 +84,9 @@ internal open class NativePagerTouchRoot(
                 bound += node
                 frame.project(transform::local, transform.originOnScreen, ids)
             }
-            paths.release(frame.changes.filterNot { it.pressed }.mapTo(mutableSetOf()) { it.id })
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                paths.release(frame.changes.filterNot { it.pressed }.mapTo(mutableSetOf()) { it.id })
+            }
             // Pinned PointerInputEventProcessor computes movement separately from dispatch/handled.
             // AndroidView interop can suppress this request on the SAME per-event state.
             if (frame.anyMovementConsumed()) parent?.requestDisallowInterceptTouchEvent(true)

@@ -31,7 +31,9 @@ internal class ReverbHomeBufferMotion(initialSelection: BufferSlot) {
     private var saving = false
     private val progress = LibraryTweenValue(0f, Float.VectorConverter, tween<Float>(260),
         { AnimationVector1D(0f) })
-    val running get() = progress.running
+    // A zero-duration retarget may finish inside target(), before the owner samples a frame.
+    // Keep its terminal delivery scheduled until the non-dragging target has been retired.
+    val running get() = progress.running || (!dragging && target != null)
     val renderedBuffer get() = target?.let {
         bufferTransitionDisplayedSlot(displayedBuffer, it, progress.value)
     } ?: displayedBuffer
@@ -115,9 +117,8 @@ internal class ReverbHomeBufferMotion(initialSelection: BufferSlot) {
 
     /** Returns the source onSelectBuffer commit to deliver once, after rendering this final frame. */
     fun frame(timeNanos: Long, durationScale: Float): BufferSlot? {
-        val wasRunning = progress.running
         progress.frame(timeNanos, durationScale)
-        if (!wasRunning || progress.running || dragging) return null
+        if (progress.running || dragging) return null
         val destination = target ?: return null
         if (progress.value >= .999f) {
             val commit = pendingCommit == destination

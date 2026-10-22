@@ -113,7 +113,7 @@ allprojects {
                     }
                     // Native backends change namespaces; QA keeps pinned old implementations.
                     // Invert only declared mechanical seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != 'f0af935076001feb19e4e65505bde54b0d2f0637d8c04e0d79b233003e8127e8') {
+                    if (splitSha256(backendSourceMapFile.bytes) != '984958f82c0ebdae0d685312c1a40cf7041eda41c35b9b121124286c1c783ff8') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]

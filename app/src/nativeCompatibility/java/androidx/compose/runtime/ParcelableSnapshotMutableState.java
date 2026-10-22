@@ -14,7 +14,8 @@ public final class ParcelableSnapshotMutableState implements Parcelable {
 
     public ParcelableSnapshotMutableState(Object value, int policy) {
         if (policy < 0 || policy > 2) {
-            throw new IllegalStateException("Unsupported MutableState policy " + policy + " was restored");
+            throw new IllegalStateException("Unsupported MutableState policy "
+                    .concat(Integer.toString(policy)).concat(" was restored"));
         }
         savedValue = value;
         savedPolicy = policy;

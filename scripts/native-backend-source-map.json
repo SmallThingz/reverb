@@ -458,6 +458,18 @@
         "peer": "clean-window48/review-20-peer.json",
         "scope": "Detach rename visibility callback; preserve frozen49/released oracle source reconstruction and terminal EOF byte. No renderer modification."
       }
+    },
+    "src/main/java/app/smallthingz/reverb/AudioBlobView.kt": {
+      "compiled_sha256": "911074b387f5d00e54f2f1e9466d5ef415b7193e95abbcbfc8720a26ffda9e4f",
+      "normalized_sha256": "85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8",
+      "inverse": [
+        {
+          "from": "        val attackMix = 1f - (1f - 0.68f).pow(normalized)\n        val releaseMix = 1f - (1f - 0.13f).pow(normalized)\n        for (index in currentBands.indices) {\n            val mix = if (targetBands[index] > currentBands[index]) attackMix else releaseMix\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
+          "to": "        for (index in currentBands.indices) {\n            val rate = if (targetBands[index] > currentBands[index]) 0.68f else 0.13f\n            val mix = 1f - (1f - rate).pow(normalized)\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
+          "count": 1,
+          "word": false
+        }
+      ]
     }
   },
   "references": {
