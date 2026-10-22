@@ -77,16 +77,16 @@ internal class OnboardingPermissionGroup(
                 context.getString(R.string.onboarding_microphone_title), null,
                 status.microphoneAllowed, status.interactionEnabled))
             if (status.storageRequired) add(PermissionRowState(OnboardingPermission.STORAGE, "S",
-                context.getString(R.string.storage_settings_title), context.getString(R.string.onboarding_storage_body),
+                context.getString(R.string.storage_settings_title), context.getString(R.string.onboarding_native_storage_body),
                 status.storageAllowed, status.interactionEnabled))
             if (status.recoveryRequired) add(PermissionRowState(OnboardingPermission.RECOVERY, "R",
-                context.getString(R.string.recording_recovery_title), context.getString(R.string.recording_recovery_body),
+                context.getString(R.string.recording_recovery_title), context.getString(R.string.onboarding_native_recovery_body),
                 status.recoveryAllowed, status.interactionEnabled))
             add(PermissionRowState(OnboardingPermission.NOTIFICATIONS, "N",
-                context.getString(R.string.onboarding_notifications_title), context.getString(R.string.onboarding_notifications_body),
+                context.getString(R.string.onboarding_notifications_title), context.getString(R.string.onboarding_native_notifications_body),
                 status.notificationsAllowed, status.interactionEnabled && status.notificationPermissionRequired))
             add(PermissionRowState(OnboardingPermission.BATTERY, "B",
-                context.getString(R.string.onboarding_background_title), context.getString(R.string.onboarding_background_body),
+                context.getString(R.string.onboarding_background_title), context.getString(R.string.onboarding_native_background_body),
                 status.batteryOptimizationAllowed, status.interactionEnabled))
         }
         val present = states.mapTo(mutableSetOf()) { it.kind }
@@ -155,6 +155,7 @@ private class PermissionRow(
         (trailing as OnboardingIconView).bind(
             if (value.allowed) ReverbIcon.Checked else ReverbIcon.Unchecked,
             if (value.allowed) palette.primary else palette.onSurfaceVariant,
+            missingPermission = !value.allowed,
         )
         bindCard(value.title, value.body, canRequestNow, palette)
         trailing.contentDescription = context.getString(

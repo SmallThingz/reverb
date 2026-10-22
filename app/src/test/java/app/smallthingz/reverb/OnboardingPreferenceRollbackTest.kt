@@ -17,6 +17,8 @@ class OnboardingPreferenceRollbackTest {
             PrefKey.RETENTION_CONFIG_DIGEST.name to 42,
             PrefKey.OUTPUT_FORMAT.name to "legacy-or-damaged-format",
             PrefKey.SILENCE_GATE.name to 19L,
+            PrefKey.FLAC_COMPRESSION_LEVEL.name to "bad-level",
+            PrefKey.SILENCE_CALIBRATION_HISTOGRAM.name to 73L,
         )
 
         val snapshot = onboardingPreferenceRollbackSnapshot(raw)
@@ -27,6 +29,8 @@ class OnboardingPreferenceRollbackTest {
         assertEquals(42, snapshot.getValue(PrefKey.RETENTION_CONFIG_DIGEST).value)
         assertEquals("legacy-or-damaged-format", snapshot.getValue(PrefKey.OUTPUT_FORMAT).value)
         assertEquals(19L, snapshot.getValue(PrefKey.SILENCE_GATE).value)
+        assertEquals("bad-level", snapshot.getValue(PrefKey.FLAC_COMPRESSION_LEVEL).value)
+        assertEquals(73L, snapshot.getValue(PrefKey.SILENCE_CALIBRATION_HISTOGRAM).value)
     }
 
     @Test
@@ -65,7 +69,9 @@ class OnboardingPreferenceRollbackTest {
                 PrefKey.AUDIO_MEMORY_SIZE,
                 PrefKey.RETENTION_CONFIG_DIGEST,
                 PrefKey.OUTPUT_FORMAT,
+                PrefKey.FLAC_COMPRESSION_LEVEL,
                 PrefKey.SILENCE_GATE,
+                PrefKey.SILENCE_CALIBRATION_HISTOGRAM,
             ),
             snapshots.keys,
         )

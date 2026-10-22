@@ -8,6 +8,7 @@
     <string msgid="5834637030682409883" name="state_off">"ක්‍රියාවිරහිතයි"</string>
     <string msgid="1490883874751719580" name="state_on">"ක්‍රියාත්මකයි"</string>
     <string msgid="2561197295334830845" name="switch_role">"මාරු කරන්න"</string>
+    <string msgid="1672349317127674378" name="tab">"ටැබය"</string>
     <string msgid="5946805113151406391" name="template_percent">"සියයට <ns0:g id="PERCENTAGE">%1$d</ns0:g>."</string>
     <string msgid="3124740595719787496" name="tooltip_label">"මෙවලම් ඉඟිය පෙන්වන්න"</string>
     <string msgid="3765533235322692011" name="tooltip_description">"මෙවලම් ඉඟිය"</string>

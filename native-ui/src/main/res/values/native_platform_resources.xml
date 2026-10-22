@@ -10,6 +10,7 @@
     <string name="state_off">Off</string>
     <string name="state_on">On</string>
     <string name="switch_role">Switch</string>
+    <string name="tab">Tab</string>
     <string name="template_percent">
         <ns1:g id="percentage">%1$d</ns1:g> percent.</string>
     <style name="FloatingDialogWindowTheme">

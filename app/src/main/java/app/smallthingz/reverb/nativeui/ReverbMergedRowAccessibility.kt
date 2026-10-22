@@ -20,7 +20,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
-internal enum class NativeMergedRowRole { BUTTON, SWITCH }
+internal enum class NativeMergedRowRole { BUTTON, SWITCH, TAB }
 
 internal interface NativeMergedRowAccessibilityHost {
     val mergedRowAccessibility: ReverbMergedRowAccessibility
@@ -190,7 +190,9 @@ internal class ReverbMergedRowAccessibility(
         info.isChecked = role == NativeMergedRowRole.SWITCH && current.checked == true
         info.isSelected = current.selected == true
         info.isEnabled = current.enabled
-        info.isClickable = current.clickable // Disabled-but-present OnClick remains clickable.
+        // Pinned delegate825-839 suppresses only selected Tab advertisement. The source OnClick
+        // still exists, owns focus, and remains invocable directly while enabled.
+        info.isClickable = current.clickable && !(role == NativeMergedRowRole.TAB && current.selected == true)
         info.isLongClickable = current.longClickable
         info.isFocusable = current.enabled && current.clickable
         info.isFocused = current.enabled && host.isFocused
@@ -205,7 +207,7 @@ internal class ReverbMergedRowAccessibility(
         if (info.isFocusable) info.addAction(if (info.isFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
-        if (current.enabled && current.clickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+        if (current.enabled && info.isClickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
             AccessibilityNodeInfo.ACTION_CLICK, current.clickLabel))
         if (current.enabled && current.longClickable) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
             AccessibilityNodeInfo.ACTION_LONG_CLICK, current.longClickLabel))
@@ -242,6 +244,8 @@ internal class ReverbMergedRowAccessibility(
             NativeMergedRowRole.BUTTON -> info.className = "android.widget.Button"
             NativeMergedRowRole.SWITCH -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
                 host.context.getString(app.smallthingz.nativeui.R.string.switch_role)
+            NativeMergedRowRole.TAB -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
+                host.context.getString(app.smallthingz.nativeui.R.string.tab)
         }
     }
 

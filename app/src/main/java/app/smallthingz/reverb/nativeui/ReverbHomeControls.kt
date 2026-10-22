@@ -299,9 +299,11 @@ internal abstract class HomeClickable(
 }
 
 internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbViewEnvironment,
-    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root, 16f) {
+    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root, 16f),
+    NativeMergedRowAccessibilityHost {
     private val glyph = HomeGlyph(context, currentEnvironment, ReverbIcon.OneShot)
     private val label = currentEnvironment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
+    private val accessibilityChildren = listOf(label)
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundMotion = colorMotion(Color.Transparent)
     private val foregroundMotion = colorMotion(Color(currentEnvironment.palette.muted))
@@ -310,6 +312,9 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     private var recording = false
     private var bufferEnabled = true
     private var filled = false
+    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.TAB,
+        { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren, selected = selection) },
+        { action(); true })
     private val frames = HomeFrameLoop(this, animationScope,
         { backgroundMotion.running || foregroundMotion.running }) { time, scale ->
         backgroundMotion.frame(time, scale); foregroundMotion.frame(time, scale)
@@ -318,6 +323,12 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     init {
         setWillNotDraw(false)
         addView(glyph); addView(label)
+        // The shared page owner binds this existing row to Main's minimum-aware source bounds.
+        // The role-only child has no drawing/input and keeps the original visual bounds.
+        addView(mergedRowAccessibility.roleView)
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        accessibilityDelegate = mergedRowAccessibility
+        label.isScreenReaderFocusable = false
         label.setTextLayout(maxLines = 1)
     }
     fun bind(text: String, icon: ReverbIcon, selected: Boolean, recording: Boolean,
@@ -390,6 +401,8 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         label.measure(MeasureSpec.makeMeasureSpec((innerWidth - glyph.measuredWidth - gap).coerceAtLeast(0),
             MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(innerHeight, MeasureSpec.AT_MOST))
         setMeasuredDimension(width, resolveSize(max(glyph.measuredHeight, label.measuredHeight) + dp(11) * 2, h))
+        mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val inner = (width - dp(12) * 2).coerceAtLeast(0)
@@ -406,11 +419,12 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         } else {
             place(glyph, 0); place(label, glyph.measuredWidth + gap)
         }
+        mergedRowAccessibility.roleView.layout(0, 0, width, height)
     }
-    override fun getAccessibilityClassName(): CharSequence = "android.widget.TabWidget"
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info); info.isSelected = selection
-    }
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
+    override fun addChildrenForAccessibility(children: ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(children)
     private fun colorMotion(color: Color) = LibraryTweenValue(color, (Color.VectorConverter)(color.colorSpace),
         tween<Color>(160), { AnimationVector4D(0f, 0f, 0f, 0f) })
 }

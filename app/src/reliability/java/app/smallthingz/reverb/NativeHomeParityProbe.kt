@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -60,6 +66,14 @@ import app.smallthingz.reverb.nativeui.ReverbHomeInsets
 import app.smallthingz.reverb.nativeui.ReverbHomeScreenView
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
+import app.smallthingz.reverb.nativeui.HomeBufferSegment
+import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
+import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
+import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
+import app.smallthingz.reverb.nativeui.ReverbGroupLayout
+import app.smallthingz.reverb.nativeui.ReverbHomeControlSurface
+import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -79,6 +93,7 @@ private data class HomeCase(
     val oneShotEnabled: Boolean = true, val loopingEnabled: Boolean = true,
     val full: Boolean = false, val retention: RetentionMode = RetentionMode.TIME,
     val hasIncidents: Boolean = false,
+    val serviceConnected: Boolean = true,
 )
 private fun homeCases() = listOf(
     HomeCase("blank"),
@@ -248,7 +263,7 @@ private class HomeParityBoard(
     )
     private fun nativeState() = ReverbHomeBodyState(
         case.active, case.oneShot, case.looping, case.oneShotEnabled, case.full, case.loopingEnabled,
-        case.retention, case.listening, false, true, true, false, nativeOne, nativeLoop, false,
+        case.retention, case.listening, false, case.serviceConnected, true, false, nativeOne, nativeLoop, false,
     )
 
     init {
@@ -289,7 +304,7 @@ private class HomeParityBoard(
                                 oneShotEnabled = case.oneShotEnabled, oneShotFull = case.full,
                                 loopingEnabled = case.loopingEnabled, retentionMode = case.retention,
                                 isListening = case.listening, isSaving = false, service = null,
-                                fixtureServiceConnected = true, serviceStateHydrated = true,
+                                fixtureServiceConnected = case.serviceConnected, serviceStateHydrated = true,
                                 isPreparingRange = false, oneShotBlobController = referenceOne,
                                 loopingBlobController = referenceLoop, oneShotBlobActivity = 0f,
                                 loopingBlobActivity = 0f, rangeSnapshot = null, rangeSnapshotBuffer = null,
@@ -772,4 +787,256 @@ private fun verifyNativeHomeLeafBindings(
             .put("passed", primary == null && cleanup == null && completed == 16)
         if (primary == null) cleanup?.let { throw it }
     }
+}
+
+/** Focused platform-node regression; existing raw/pixel/input selectors are independent. */
+internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val directory = File(context.filesDir, "native-home-accessibility-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val cases = JSONArray()
+    val result = JSONObject().put("selector", "native_home_accessibility")
+        .put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
+        .put("oracle_sha256", "f364a4f9b2a48f45bbe004e02958431d2df3898d9aa42f95ec92f100a3cc84af")
+        .put("scope", "Actual standalone Home platform nodes; native production source mapper and text binding; selected/unselected tabs, service-ready/disabled, LTR/RTL")
+        .put("limits", "No TalkBack delivery, full Activity/recorder, overlay occlusion, pixel or motion-phase claim; no system setting changes. isFocused is retained raw and checked direct-versus-platform, but not compared across standalone renderers: this fixture lacks Main's unsolicited-focus suppression. Focusability and complete advertised actions remain exact comparisons.")
+        .put("cases", cases).put("passed", false)
+    var host: NativeParityActivity? = null
+    var board: HomeParityBoard? = null
+    var textLease: AutoCloseable? = null
+    var primary: Throwable? = null
+    var completed = 0
+    var mismatches = 0
+    try {
+        val activity = launchNativeParityActivity(instrumentation).also { host = it }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        requireNativeParityHost(instrumentation, activity)
+        // Keep the user's enabled accessibility services, including ToastCaptureService, running.
+        val automation = nativeParityUiAutomation(instrumentation)
+        result.put("ui_automation_flags", android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+        val scale = android.animation.ValueAnimator.getDurationScale()
+        check(scale.isFinite() && scale in 0f..10f) { "Home node follow-up unqualified at current animator scale" }
+        result.put("observed_animator_scale", scale.toDouble())
+        val labels = listOf(context.getString(R.string.buffer_one_shot), context.getString(R.string.buffer_loop))
+        for (rtl in listOf(false, true)) for (ready in listOf(true, false)) {
+            val name = (if (rtl) "rtl" else "ltr") + if (ready) "-ready" else "-disabled"
+            val entry = JSONObject().put("name", name).put("service_ready", ready)
+                .put("rtl", rtl).put("routes", JSONArray()).put("passed", false)
+            cases.put(entry)
+            val signatures = ArrayList<String>()
+            for (compose in listOf(true, false)) {
+                requireNativeParityHost(instrumentation, activity)
+                val current = nativeParityOnMain(instrumentation) {
+                    HomeParityBoard(activity, homeCases()[1].copy(serviceConnected = ready), rtl).also { board = it }
+                }
+                captureNativeParityContent(instrumentation, activity) { current.show(true) }.recycle()
+                captureNativeParityContent(instrumentation, activity) { current.show(compose) }.recycle()
+                if (!compose) textLease = nativeParityOnMain(instrumentation) {
+                    bindHomeParityAccessibility(activity, current.content(false) as ReverbHomeScreenView, current.dp(48f))
+                }
+                val route = JSONObject().put("renderer", if (compose) "compose" else "native")
+                entry.getJSONArray("routes").put(route)
+                fun snapshot(step: String): JSONArray {
+                    val nodes = onboardingNativeNodeEvidence(instrumentation, activity, current.content(compose), automation) {
+                        route.put("$step-partial", it)
+                        writeHomeEvidence(directory, result, null)
+                    }
+                    route.put("$step-platform", nodes)
+                    val tabs = extractHomeTabNodes(nodes.getJSONArray("raw"), labels)
+                    route.put(step, tabs)
+                    if (!compose) nativeParityOnMain(instrumentation) {
+                        labels.forEachIndexed { index, label ->
+                            val target = homeNativeTab(current.content(false), label)
+                            val info = checkNotNull(target.createAccessibilityNodeInfo())
+                            try {
+                                val expected = tabs.getJSONObject(index).getJSONObject("parent")
+                                check(homeNodeKey(directHomeNode(info, current.content(false))) == homeNodeKey(expected)) {
+                                    "Direct native node disagrees with actual platform tree for $label"
+                                }
+                                val children = ArrayList<View>().also(target::addChildrenForAccessibility)
+                                check(children.size == 2 && children[0] is ReverbParagraphView)
+                                val bounds = expected.getJSONArray("bounds")
+                                check(bounds.getInt(3) - bounds.getInt(1) >= kotlin.math.floor(current.dp(48f)).toInt()) {
+                                    "Tab semantic target lost its released48dp minimum"
+                                }
+                                val role = tabs.getJSONObject(index).getJSONArray("children").getJSONObject(1)
+                                val visual = IntArray(2).also(target::getLocationOnScreen)
+                                val origin = IntArray(2).also(current.content(false)::getLocationOnScreen)
+                                val visualBounds = JSONArray(listOf(visual[0] - origin[0], visual[1] - origin[1],
+                                    visual[0] - origin[0] + target.width, visual[1] - origin[1] + target.height))
+                                check(role.getJSONArray("bounds").toString() == visualBounds.toString()) {
+                                    "Role-only child must retain visual bounds, separate from expanded parent"
+                                }
+                            } finally { @Suppress("DEPRECATION") info.recycle() }
+                        }
+                    }
+                    return tabs
+                }
+                val initial = snapshot("initial")
+                check(initial.getJSONObject(0).getJSONObject("parent").getBoolean("selected"))
+                check(!initial.getJSONObject(1).getJSONObject("parent").getBoolean("selected"))
+                requireNativeParityHost(instrumentation, activity)
+                val selectedResult = nativeParityOnMain(instrumentation) {
+                    clickHomeTabNode(current.content(compose), compose, labels[0])
+                }
+                check(selectedResult == ready) { "Selected tab direct action admission differs from released contract" }
+                check(nativeParityOnMain(instrumentation) { current.events(compose).length() } == 0) {
+                    "Selecting the current buffer must not commit another selection"
+                }
+                val completion = CountDownLatch(1)
+                nativeParityOnMain(instrumentation) { current.setCompletion(completion) }
+                requireNativeParityHost(instrumentation, activity)
+                val unselectedResult = nativeParityOnMain(instrumentation) {
+                    clickHomeTabNode(current.content(compose), compose, labels[1])
+                }
+                check(unselectedResult == ready)
+                if (ready) check(completion.await((420f * scale).toLong() + 2_000L, TimeUnit.MILLISECONDS)) {
+                    "Home semantic selection callback did not complete"
+                }
+                captureNativeParityContent(instrumentation, activity) { current.show(compose) }.recycle()
+                val after = snapshot("after-actions") // Fresh provider IDs and native nodes after any rebind.
+                val callbacks = nativeParityOnMain(instrumentation) {
+                    val events = current.events(compose)
+                    JSONArray((0 until events.length()).map { events.getJSONObject(it).getString("action") })
+                }
+                val expectedCallbacks = JSONArray(if (ready) listOf("select:LOOPING") else emptyList<String>())
+                check(callbacks.toString() == expectedCallbacks.toString())
+                val selection = nativeParityOnMain(instrumentation) { current.selected(compose).name }
+                check(selection == if (ready) "LOOPING" else "ONE_SHOT")
+                route.put("selected_action_result", selectedResult).put("unselected_action_result", unselectedResult)
+                    .put("callbacks", callbacks).put("selection", selection)
+                signatures += homeTabKey(initial) + "\n" + homeTabKey(after) + "\n" +
+                    selectedResult + ":" + unselectedResult + ":" + callbacks + ":" + selection
+                nativeParityOnMain(instrumentation) {
+                    textLease?.close(); textLease = null
+                    current.close(); board = null
+                }
+            }
+            val passed = signatures[0] == signatures[1]
+            entry.put("exact_node_and_action_match", passed).put("passed", passed)
+            completed++
+            if (!passed) mismatches++
+            report.append(if (passed) "PASS " else "FAIL ").append("native_home_accessibility ").append(name).append('\n')
+            writeHomeEvidence(directory, result, null)
+        }
+        check(completed == 4 && mismatches == 0) { "Home accessibility differs in $mismatches/$completed cases" }
+    } catch (failure: Throwable) {
+        primary = failure
+        result.put("terminal_error", android.util.Log.getStackTraceString(failure))
+        throw failure
+    } finally {
+        var cleanup: Throwable? = null
+        try { nativeParityOnMain(instrumentation) {
+            try { textLease?.close() } finally { try { board?.close() } finally { host?.finish() } }
+        } } catch (failure: Throwable) { cleanup = failure; primary?.addSuppressed(failure) }
+        result.put("completed_cases", completed).put("mismatched_cases", mismatches)
+            .put("passed", primary == null && cleanup == null && completed == 4 && mismatches == 0)
+        cleanup?.let { result.put("cleanup_error", android.util.Log.getStackTraceString(it)) }
+        report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
+        writeHomeEvidence(directory, result, primary ?: cleanup)
+        if (primary == null) cleanup?.let { throw it }
+    }
+}
+
+private fun homeViewDescendants(root: View): List<View> = buildList {
+    fun visit(view: View) { add(view); if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) } }
+    visit(root)
+}
+
+private fun homeNativeTab(root: View, label: String): HomeBufferSegment =
+    homeViewDescendants(root).filterIsInstance<HomeBufferSegment>().single { tab ->
+        homeViewDescendants(tab).filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+    }
+
+private fun clickHomeTabNode(root: View, reference: Boolean, label: String): Boolean {
+    if (!reference) return homeNativeTab(root, label).performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+    val owner = homeViewDescendants(root).filterIsInstance<ViewRootForTest>().single()
+    val semantic = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true).single { node ->
+        node.config.getOrNull(SemanticsProperties.Role) == Role.Tab &&
+            node.config.getOrNull(SemanticsProperties.Selected) != null &&
+            node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == label }
+    }
+    return checkNotNull(owner.view.accessibilityNodeProvider)
+        .performAction(semantic.id, AccessibilityNodeInfo.ACTION_CLICK, null)
+}
+
+private fun bindHomeParityAccessibility(host: NativeParityActivity, home: ReverbHomeScreenView,
+                                       minimum: Float): AutoCloseable {
+    fun clip(view: View): NativeTextSemanticsClip = home.topBar.sourceClip(view) ?: when {
+        (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view) ||
+            view is ReverbHomeControlSurface -> NativeTextSemanticsClip.Rectangle(
+                app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+        else -> NativeTextSemanticsClip.Unclipped
+    }
+    val source = NativeMainAccessibility(host.fixtureRoot, host.fixtureRoot, { listOf(home) },
+        ownNodeHidden = { false }, clip = ::clip, minimumTouch = { view ->
+            if (view is NativeClickPhaseHost &&
+                (view !is NativeMergedRowAccessibilityHost || view.mergesAccessibilityDescendants)) minimum else 0f
+        })
+    return NativeWindowTextAccessibilityOwner(host.fixtureRoot, NativeTextSemanticsClipPolicy(::clip))
+        .bindContent(home, NativeTextSemanticsClipPolicy(::clip), source::node) { source.node(it).present }
+}
+
+/** Keep the complete platform tree separately; select only the two original tab subtrees here. */
+private fun extractHomeTabNodes(raw: JSONArray, labels: List<String>): JSONArray = JSONArray(labels.map { label ->
+    val matches = ArrayList<JSONObject>()
+    for (index in 0 until raw.length()) {
+        val parent = raw.getJSONObject(index)
+        val depth = parent.getInt("depth")
+        val children = JSONArray()
+        var child = index + 1
+        while (child < raw.length() && raw.getJSONObject(child).getInt("depth") > depth) {
+            val node = raw.getJSONObject(child++)
+            if (node.getInt("depth") == depth + 1) children.put(node)
+        }
+        if (children.length() != 2 || children.getJSONObject(0).optString("text") != label ||
+            children.getJSONObject(1).isNull("role_description")) continue
+        check(parent.getString("class") == "android.view.View")
+        check(parent.isNull("role_description") && parent.isNull("text"))
+        check(!children.getJSONObject(1).getBoolean("selected"))
+        check(!children.getJSONObject(1).getBoolean("clickable"))
+        val selected = parent.getBoolean("selected")
+        check(parent.getBoolean("clickable") == !selected)
+        val click = parent.getJSONArray("actions").let { actions ->
+            (0 until actions.length()).any { actions.getJSONObject(it).getInt("id") == AccessibilityNodeInfo.ACTION_CLICK }
+        }
+        check(click == (parent.getBoolean("enabled") && !selected))
+        matches += JSONObject().put("label", label).put("parent", parent).put("children", children)
+    }
+    check(matches.size == 1) { "Expected one platform tab subtree for $label; found ${matches.size}" }
+    matches.single()
+})
+
+private val homeNodeFields = listOf("class", "text", "description", "state_description", "role_description",
+    "screen_reader_focusable", "enabled", "clickable", "long_clickable", "checkable", "checked", "selected",
+    "focusable", "focused", "visible", "movement_granularities", "actions", "bounds")
+private fun homeNodeKey(node: JSONObject, compareFocused: Boolean = true): String =
+    JSONArray(homeNodeFields.filter { compareFocused || it != "focused" }.map { node.get(it) }).toString()
+private fun homeTabKey(tabs: JSONArray): String = (0 until tabs.length()).joinToString("\n") { index ->
+    val tab = tabs.getJSONObject(index)
+    val children = tab.getJSONArray("children")
+    homeNodeKey(tab.getJSONObject("parent"), compareFocused = false) + "\n" +
+        (0 until children.length()).joinToString("\n") { homeNodeKey(children.getJSONObject(it), compareFocused = false) }
+}
+
+private fun directHomeNode(node: AccessibilityNodeInfo, root: View): JSONObject {
+    val bounds = Rect().also(node::getBoundsInScreen)
+    val origin = IntArray(2).also(root::getLocationOnScreen)
+    val compat = androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(node)
+    return JSONObject().put("class", node.className?.toString() ?: JSONObject.NULL)
+        .put("text", node.text?.toString() ?: JSONObject.NULL)
+        .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
+        .put("state_description", if (Build.VERSION.SDK_INT >= 30) node.stateDescription?.toString() ?: JSONObject.NULL else JSONObject.NULL)
+        .put("role_description", compat.roleDescription?.toString() ?: JSONObject.NULL)
+        .put("screen_reader_focusable", node.isScreenReaderFocusable).put("enabled", node.isEnabled)
+        .put("clickable", node.isClickable).put("long_clickable", node.isLongClickable)
+        .put("checkable", node.isCheckable).put("checked", node.isChecked).put("selected", node.isSelected)
+        .put("focusable", node.isFocusable).put("focused", node.isFocused).put("visible", node.isVisibleToUser)
+        .put("movement_granularities", node.movementGranularities)
+        .put("actions", JSONArray(node.actionList.sortedBy { it.id }.map {
+            JSONObject().put("id", it.id).put("label", it.label?.toString() ?: JSONObject.NULL)
+        })).put("bounds", JSONArray(listOf(bounds.left - origin[0], bounds.top - origin[1],
+            bounds.right - origin[0], bounds.bottom - origin[1])))
 }

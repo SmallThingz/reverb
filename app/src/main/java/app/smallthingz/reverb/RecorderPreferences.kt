@@ -383,7 +383,9 @@ fun isOnboardingPending(context: Context): Boolean =
 private val ONBOARDING_TRANSACTION_PREFERENCE_KEYS = listOf(
     PrefKey.ONBOARDING_SHOWN,
     PrefKey.OUTPUT_FORMAT,
+    PrefKey.FLAC_COMPRESSION_LEVEL,
     PrefKey.SILENCE_GATE,
+    PrefKey.SILENCE_CALIBRATION_HISTOGRAM,
     PrefKey.RETENTION_MODE,
     PrefKey.ONE_SHOT_RETENTION_SECONDS,
     PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE,
@@ -453,6 +455,9 @@ internal fun finishOnboarding(
                 currentFormat = getConfiguredOutputFormat(context),
                 currentSilence = currentSilence.config,
                 sampleFormat = configuredSampleFormat,
+                currentCompression = getConfiguredFlacCompression(context),
+                currentHistogram = getRecorderPreferences(context).safeString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM),
+                currentInput = readSilenceCalibrationInput(context),
             ) ?: return@withOnboardingTransaction false
             if (!isCodecSupported(
                     audio.outputFormat,
@@ -470,7 +475,9 @@ internal fun finishOnboarding(
                     prefs.edit()
                         .putBoolean(PrefKey.ONBOARDING_SHOWN, true)
                         .putInt(PrefKey.OUTPUT_FORMAT, audio.outputFormat.storageCode.toInt())
+                        .putInt(PrefKey.FLAC_COMPRESSION_LEVEL, audio.flacCompression)
                         .putString(PrefKey.SILENCE_GATE, encodedSilence)
+                        .putString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM, audio.silenceHistogram)
                         .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
                         .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
                         .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)

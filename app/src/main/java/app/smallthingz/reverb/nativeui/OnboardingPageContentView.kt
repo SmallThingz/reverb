@@ -14,6 +14,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.R
+import app.smallthingz.reverb.DEFAULT_FLAC_COMPRESSION
+import app.smallthingz.reverb.NativeDragPointerChange
+import app.smallthingz.reverb.NativeViewPhasePointerNode
+import app.smallthingz.reverb.SilenceGateConfig
 import kotlin.math.roundToInt
 
 internal data class OnboardingPageContentState(
@@ -28,6 +32,9 @@ internal data class OnboardingPageContentState(
     val controlsEnabled: Boolean,
     /** False only for Finish/predictive preview, never merely because the pager is moving. */
     val interactionEnabled: Boolean,
+    val compressionLevel: Int = DEFAULT_FLAC_COMPRESSION,
+    val silenceState: SettingsSilenceState = SettingsSilenceState(SilenceGateConfig(enabled = skipSilence)),
+    val calibrationRequired: Boolean = false,
 )
 
 internal data class OnboardingPageActions(
@@ -36,6 +43,10 @@ internal data class OnboardingPageActions(
     val loopingChanged: (Boolean) -> Unit,
     val compressionChanged: (Boolean) -> Unit,
     val skipSilenceChanged: (Boolean) -> Unit,
+    val compressionLevelChanged: (Int) -> Unit = {},
+    val silenceActions: SettingsSilenceActions? = null,
+    /** -1 means no settled visible page, including swipe, predictive Back and detach. */
+    val pageChanged: (Int) -> Unit = {},
 )
 
 /**
@@ -59,10 +70,29 @@ internal class OnboardingPageContentView(
     scrollScope: CoroutineScope,
     scrollNested: NativeVerticalNestedHost,
     interactions: OnboardingNativeInteractionsFactory = OnboardingNativeInteractionsFactory(),
-) : FrameLayout(context) {
+    inputRoot: () -> View? = { null },
+    parentInterested: (NativeDragPointerChange) -> Boolean = { false },
+    private val audioStructureChanged: () -> Unit = {},
+) : FrameLayout(context), AutoCloseable {
     private var state = initialState
+    private var environment = ReverbViewEnvironment(density, resolver, initialPalette)
+    private var closed = false
+    private var bindingInitialized = false
+    private var audioStructureObserved = false
+    private var audioSliderView: View? = null
+    private var audioCurveView: View? = null
+    private var audioCalibrationView: View? = null
     private var owner: ActionOwner? = null
     private var textAccessibility: NativePageTextAccessibilityOwner? = null
+    private var accessibilityWindow: NativeWindowTextAccessibilityOwner? = null
+    private var accessibilitySourceNode: ((View) -> NativeSourceAccessibilityNode)? = null
+    private var accessibilityExposure: ((View) -> Boolean)? = null
+    private val progressAccessibility = java.util.IdentityHashMap<SettingsCalibrationProgressView, AutoCloseable>()
+    private val accessibilityClips = NativeTextSemanticsClipPolicy { view ->
+        if (view === viewport || view is SettingsExpansionView || view.parent is ReverbGroupLayout)
+            NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+        else NativeTextSemanticsClip.Unclipped
+    }
     private val viewport = NativeVerticalViewport(context, scrollState, density, scrollFrames, scrollScope, scrollNested)
     val sourceVerticalViewport: NativeVerticalViewport get() = viewport
     private val column = OnboardingPageColumn(context)
@@ -72,8 +102,6 @@ internal class OnboardingPageContentView(
         else -> ReverbIcon.Capture
     }, initialPalette.primary)
     private val header = ReverbParagraphView(context, typography.headlineMedium, density, resolver, initialPalette.onSurface)
-    private val permissionBody = if (page == 0) label(context, typography.bodyMedium, density, resolver,
-        R.string.onboarding_permissions_body, initialPalette.onSurfaceVariant) else null
     private val permissions = if (page == 0)
         OnboardingPermissionGroup(context, typography, density, resolver, interactions) else null
     private val bufferGroup = if (page == 1) ReverbGroupLayout(context, cornerRadiusDp = 20f) else null
@@ -82,12 +110,27 @@ internal class OnboardingPageContentView(
     private val looping = if (page == 1)
         OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, interactions) else null
     private val bufferOrder = if (page == 1) label(context, typography.bodyMedium, density, resolver,
-        R.string.onboarding_order, initialPalette.onSurfaceVariant) else null
+        R.string.onboarding_native_order, initialPalette.onSurfaceVariant) else null
     private val audioGroup = if (page == 2) ReverbGroupLayout(context, cornerRadiusDp = 20f) else null
+    private val silenceActions = object : SettingsSilenceActions {
+        override fun configChanged(config: SilenceGateConfig) = activate {
+            val callbacks = it.silenceActions
+            if (callbacks != null) callbacks.configChanged(config) else it.skipSilenceChanged(config.enabled)
+        }
+        override fun calibrate() = activate { it.silenceActions?.calibrate() }
+        override fun beginHeld(): Boolean = currentActions()?.silenceActions?.beginHeld() == true
+        override fun completeTap() = activate { it.silenceActions?.completeTap() }
+        override fun finishHeld() = activate { it.silenceActions?.finishHeld() }
+        // Cancellation must release an accepted sample even after interaction is disabled/detached.
+        override fun cancel() { owner?.actions?.silenceActions?.cancel() }
+    }
     private val compression = if (page == 2)
-        OnboardingAudioRow(context, typography, density, resolver, initialPalette, interactions) else null
+        SettingsOutputCompressionView(context, compressionState(initialState), environment, inputRoot,
+            scrollScope, parentInterested,
+            { checked -> activate { it.compressionChanged(checked) } },
+            { level -> activate { it.compressionLevelChanged(level) } }) else null
     private val silence = if (page == 2)
-        OnboardingAudioRow(context, typography, density, resolver, initialPalette, interactions) else null
+        SettingsSilenceView(context, silenceState(initialState), environment, inputRoot, scrollScope, silenceActions) else null
     private val compressionWarning = if (page == 2) OnboardingPaddedLabel(context,
         label(context, typography.bodySmall, density, resolver,
             R.string.flac_pcm_required, initialPalette.onSurfaceVariant), density) else null
@@ -110,8 +153,7 @@ internal class OnboardingPageContentView(
         column.add(header, beforeDp = 16)
         when (page) {
             0 -> {
-                column.add(checkNotNull(permissionBody), beforeDp = 24)
-                column.add(checkNotNull(permissions).view, beforeDp = 16, fillWidth = true)
+                column.add(checkNotNull(permissions).view, beforeDp = 24, fillWidth = true)
             }
             1 -> {
                 val group = checkNotNull(bufferGroup)
@@ -129,8 +171,6 @@ internal class OnboardingPageContentView(
                 group.addRow(checkNotNull(silence), ReverbGroupLayout.LayoutParams(-1, -2).apply { dividerTop = true })
                 group.addRow(checkNotNull(silenceWarning), ReverbGroupLayout.LayoutParams(-2, -2))
                 column.add(group, beforeDp = 24, fillWidth = true)
-                compression.onActivate = { activate { it.compressionChanged(!state.outputCompression) } }
-                silence.onActivate = { activate { it.skipSilenceChanged(!state.skipSilence) } }
             }
         }
         viewport.setContent(column)
@@ -152,31 +192,50 @@ internal class OnboardingPageContentView(
     }
 
     fun bind(next: OnboardingPageContentState, palette: ReverbPalette) {
+        val previous = state
+        val paletteChanged = environment.palette !== palette
+        if (paletteChanged) environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
         val permissionMembershipChanged = state.permissions.storageRequired != next.permissions.storageRequired ||
             state.permissions.recoveryRequired != next.permissions.recoveryRequired
         state = next
         viewport.interactionEnabled = next.interactionEnabled
+        if (bindingInitialized && !paletteChanged && previous.controlsEnabled == next.controlsEnabled &&
+            previous.interactionEnabled == next.interactionEnabled) {
+            when (page) {
+                0 -> if (previous.permissions == next.permissions) return
+                1 -> if (previous.oneShotEnabled == next.oneShotEnabled && previous.loopingEnabled == next.loopingEnabled) return
+                2 -> if (previous.outputCompression == next.outputCompression && previous.skipSilence == next.skipSilence &&
+                    previous.compressionLevel == next.compressionLevel && previous.compressionAvailable == next.compressionAvailable &&
+                    previous.silenceValid == next.silenceValid) {
+                    // Calibration progress keeps every other page/control stable. The reused silence
+                    // component already updates only its progress leaf when its presentation is equal.
+                    if (previous.silenceState !== next.silenceState) silence?.bind(silenceState(next), environment, silenceActions)
+                    return
+                }
+            }
+        }
+        bindingInitialized = true
         headerIcon.bind(when (page) {
             0 -> ReverbIcon.BackgroundWarning
             1 -> ReverbIcon.OneShot
             else -> ReverbIcon.Capture
         }, palette.primary)
         header.setTextColor(palette.onSurface)
-        permissionBody?.setTextColor(palette.onSurfaceVariant)
         permissions?.bind(next.permissions.copy(interactionEnabled = next.interactionEnabled), palette)
         bufferGroup?.setPalette(palette.field, palette.border)
         oneShot?.bind(context.getString(R.string.onboarding_one_shot_title),
-            context.getString(R.string.onboarding_one_shot_body), next.oneShotEnabled,
+            context.getString(R.string.onboarding_native_one_shot_body), next.oneShotEnabled,
             next.controlsEnabled && (!next.oneShotEnabled || next.loopingEnabled), next.interactionEnabled, palette)
         looping?.bind(context.getString(R.string.onboarding_looping_title),
-            context.getString(R.string.onboarding_looping_body), next.loopingEnabled,
+            context.getString(R.string.onboarding_native_looping_body), next.loopingEnabled,
             next.controlsEnabled && (!next.loopingEnabled || next.oneShotEnabled), next.interactionEnabled, palette)
         bufferOrder?.setTextColor(palette.onSurfaceVariant)
         audioGroup?.setPalette(palette.field, palette.border)
-        compression?.bind(context.getString(R.string.output_compression), next.outputCompression,
-            next.controlsEnabled && (next.compressionAvailable || next.outputCompression), next.interactionEnabled, palette)
-        silence?.bind(context.getString(R.string.silence_title), next.skipSilence,
-            next.controlsEnabled, next.interactionEnabled, palette)
+        if (paletteChanged || previous.outputCompression != next.outputCompression ||
+            previous.compressionLevel != next.compressionLevel || previous.controlsEnabled != next.controlsEnabled ||
+            previous.interactionEnabled != next.interactionEnabled || previous.compressionAvailable != next.compressionAvailable)
+            compression?.bind(compressionState(next), environment)
+        silence?.bind(silenceState(next), environment, silenceActions)
         compressionWarning?.apply {
             visibility = if (next.compressionAvailable) GONE else VISIBLE
             setTextColor(palette.onSurfaceVariant)
@@ -186,7 +245,11 @@ internal class OnboardingPageContentView(
             setTextColor(palette.error)
         }
         if (!next.interactionEnabled) cancelInputs()
-        if (permissionMembershipChanged) textAccessibility?.refresh()
+        if (permissionMembershipChanged || previous.outputCompression != next.outputCompression ||
+            previous.skipSilence != next.skipSilence) {
+            textAccessibility?.refresh()
+            refreshProgressAccessibility()
+        }
     }
 
     /** Window-owned cursor/float geometry; retained across page detach and refreshed only as needed. */
@@ -196,27 +259,87 @@ internal class OnboardingPageContentView(
         sourceExposure: (View) -> Boolean,
     ): AutoCloseable {
         textAccessibility?.close()
-        val connected = window.bindPage(this, viewport, sourceNode, sourceExposure)
+        closeProgressAccessibility()
+        val connected = if (page == 2) window.bindContent(this, accessibilityClips, sourceNode, sourceExposure)
+            else window.bindPage(this, viewport, sourceNode, sourceExposure)
         textAccessibility = connected
+        accessibilityWindow = window
+        accessibilitySourceNode = sourceNode
+        accessibilityExposure = sourceExposure
+        refreshProgressAccessibility()
         return AutoCloseable {
             if (textAccessibility === connected) {
                 textAccessibility = null
                 connected.close()
+                closeProgressAccessibility()
+                accessibilityWindow = null
+                accessibilitySourceNode = null
+                accessibilityExposure = null
             }
         }
+    }
+
+    private fun refreshProgressAccessibility() {
+        val window = accessibilityWindow ?: return
+        val present = java.util.IdentityHashMap<SettingsCalibrationProgressView, Boolean>()
+        fun visit(view: View) {
+            if (view is SettingsCalibrationProgressView) present[view] = true
+            if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+        }
+        silence?.let(::visit)
+        progressAccessibility.keys.filterNot(present::containsKey).forEach { progressAccessibility.remove(it)?.close() }
+        for (view in present.keys) if (!progressAccessibility.containsKey(view))
+            progressAccessibility[view] = window.bindSettingsProgress(view, this, accessibilityClips) {
+                !closed && state.interactionEnabled && accessibilityExposure?.invoke(view) == true &&
+                    accessibilitySourceNode?.invoke(view)?.hidden != true
+            }
+    }
+
+    private fun closeProgressAccessibility() {
+        var failure: Throwable? = null
+        progressAccessibility.values.forEach { lease ->
+            try { lease.close() } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        progressAccessibility.clear()
+        failure?.let { throw it }
     }
 
     fun verticalScrollPosition(): Int = viewport.saveScrollPosition()
     fun maximumVerticalScrollPosition(): Int = viewport.state.maxValue
 
+    /** The screen's existing pointer phase tree owns these exact reused child nodes. */
+    fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
+        compression?.currentSlider?.let { if (it.pointerView === view) return it.pointerNodes }
+        silence?.calibrationPointerNode?.let { if (it.view === view) return listOf(it) }
+        return emptyList()
+    }
+
+    private fun compressionState(value: OnboardingPageContentState) = SettingsOutputCompressionState(
+        value.outputCompression, value.compressionLevel,
+        value.controlsEnabled && value.interactionEnabled && (value.compressionAvailable || value.outputCompression),
+    )
+    private fun silenceState(value: OnboardingPageContentState): SettingsSilenceState {
+        val source = value.silenceState
+        val enabled = source.enabled && value.controlsEnabled && value.interactionEnabled
+        if (source.config.enabled == value.skipSilence && source.enabled == enabled) return source
+        return source.copy(config = if (source.config.enabled == value.skipSilence) source.config
+            else source.config.copy(enabled = value.skipSilence), enabled = enabled)
+    }
+
+    private fun currentActions(): OnboardingPageActions? = owner?.actions?.takeIf {
+        !closed && isAttachedToWindow && state.controlsEnabled && state.interactionEnabled
+    }
+
     private fun activate(action: (OnboardingPageActions) -> Unit) {
-        val current = owner ?: return
-        if (!isAttachedToWindow || !state.controlsEnabled || !state.interactionEnabled) return
-        action(current.actions)
+        currentActions()?.let(action)
     }
     private fun cancelInputs() {
         permissions?.cancelPendingRowInput()
-        listOfNotNull(oneShot, looping, compression, silence).forEach(View::cancelPendingInputEvents)
+        listOfNotNull(oneShot, looping).forEach(View::cancelPendingInputEvents)
+        compression?.currentSlider?.pointerNodes?.forEach { it.cancel() }
+        silence?.calibrationPointerNode?.cancel()
     }
     private fun releaseOwner(expected: ActionOwner) {
         if (owner !== expected) return
@@ -228,6 +351,36 @@ internal class OnboardingPageContentView(
     override fun onDetachedFromWindow() {
         cancelInputs()
         super.onDetachedFromWindow()
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (page != 2 || closed) return
+        // Animated expansion owns disposal after the final frame. Observe only actual leaf identity
+        // changes so retired gesture/semantic leases close even when no new draft bind follows.
+        val slider = compression?.currentSlider?.pointerView
+        val curve = silence?.curveView
+        val calibration = silence?.calibrationPointerNode?.view
+        if (audioStructureObserved && slider === audioSliderView && curve === audioCurveView &&
+            calibration === audioCalibrationView) return
+        audioStructureObserved = true
+        audioSliderView = slider
+        audioCurveView = curve
+        audioCalibrationView = calibration
+        textAccessibility?.refresh()
+        refreshProgressAccessibility()
+        audioStructureChanged()
+    }
+    override fun close() {
+        if (closed) return
+        closed = true
+        audioSliderView = null
+        audioCurveView = null
+        audioCalibrationView = null
+        try { cancelInputs() } finally {
+            try { compression?.close() } finally {
+                try { silence?.close() } finally { closeProgressAccessibility() }
+            }
+        }
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
     private class ActionOwner(val lifecycleOwner: LifecycleOwner, val actions: OnboardingPageActions) {

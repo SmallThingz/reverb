@@ -152,8 +152,11 @@ private fun verifyNativeMainSettingsParity(
                 click(R.string.onboarding_back)
                 capture("main-restored", R.string.open_settings)
                 // Acquiring keyboard focus changes touch mode; do it only after every parity capture.
-                if (pass == 3) run.put("settings_page_key_dispatch",
-                    verifyMainSettingsPageKeyDispatch(instrumentation, host, current))
+                if (pass == 3) {
+                    val pageKeys = JSONObject()
+                    run.put("settings_page_key_dispatch", pageKeys)
+                    verifyMainSettingsPageKeyDispatch(instrumentation, host, current, pageKeys)
+                }
                 check(nativeParityOnMain(instrumentation) { current.forbiddenCalls == 0 })
             } catch (error: Throwable) {
                 passFailure = error
@@ -221,7 +224,12 @@ private fun verifyMainSettingsPageKeyDispatch(
     instrumentation: Instrumentation,
     host: NativeParityActivity,
     render: MainSettingsParityRender,
+    result: JSONObject,
 ): JSONObject {
+    val focusRequests = JSONArray()
+    result.put("dispatch", "NativeMainScreenView.dispatchKeyEvent")
+        .put("focus_requests", focusRequests).put("passed", false)
+        .put("focus_contract", "Existing native keyboard leaf; public requestFocusFromTouch; no focusability or mode override")
     check(!render.reference)
     fun <T> main(action: () -> T): T {
         requireNativeParityHost(instrumentation, host)
@@ -236,7 +244,7 @@ private fun verifyMainSettingsPageKeyDispatch(
         check(settings.inputAllowed && !settings.owner.state.hasUnsavedChanges)
         settings.owner.snapshot
     }
-    var slider: CompressionSliderView? = null
+    var slider: View? = null
     var toggle: SettingsToggleRowView? = null
     var fallbackPixels = 0
     var fallbackAnimated = false
@@ -246,7 +254,37 @@ private fun verifyMainSettingsPageKeyDispatch(
             if (state == RecyclerView.SCROLL_STATE_SETTLING) fallbackAnimated = true
         }
     }
-    val result = JSONObject().put("dispatch", "NativeMainScreenView.dispatchKeyEvent")
+    fun focusSnapshot(target: View): JSONObject {
+        val bounds = Rect()
+        val visible = target.getGlobalVisibleRect(bounds)
+        val focused = root.findFocus()
+        return JSONObject().put("enabled", target.isEnabled).put("focusable", target.isFocusable)
+            .put("attached_to_window", target.isAttachedToWindow).put("shown", target.isShown)
+            .put("globally_visible", visible)
+            .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+            .put("in_touch_mode", target.isInTouchMode).put("target_focused", focused === target)
+            .put("current_focus_class", focused?.javaClass?.name ?: JSONObject.NULL)
+            .put("current_focus_identity", focused?.let(System::identityHashCode) ?: JSONObject.NULL)
+    }
+    fun requestTargetFocus(target: View, name: String) {
+        val before = focusSnapshot(target)
+        val evidence = JSONObject().put("target", name).put("target_class", target.javaClass.name)
+            .put("target_identity", System.identityHashCode(target)).put("before", before)
+            .put("request_attempted", false).put("request_focus_return", JSONObject.NULL)
+        focusRequests.put(evidence)
+        try {
+            check(before.getBoolean("enabled")) { "$name focus target is disabled" }
+            check(before.getBoolean("focusable")) { "$name focus target is not focusable" }
+            check(before.getBoolean("attached_to_window")) { "$name focus target is detached" }
+            evidence.put("request_attempted", true)
+            val accepted = target.requestFocusFromTouch()
+            evidence.put("request_focus_return", accepted)
+            check(accepted) { "$name focus request was rejected" }
+            check(root.findFocus() === target) { "$name focus request did not focus the actual target" }
+        } finally {
+            evidence.put("after", focusSnapshot(target))
+        }
+    }
     fun settledPosition(): SettingsListSavedPosition {
         var previous: SettingsListSavedPosition? = null
         var stable = 0
@@ -283,9 +321,10 @@ private fun verifyMainSettingsPageKeyDispatch(
         }
         settledPosition()
         val focusedSlider = main {
-            mainParityViews(settings).filterIsInstance<CompressionSliderView>().single().also {
+            // The wrapper owns layout; its existing pointerView owns focus, accessibility and keys.
+            mainParityViews(settings).filterIsInstance<CompressionSliderView>().single().pointerView.also {
                 slider = it
-                check(it.isEnabled && it.requestFocusFromTouch() && root.findFocus() === it)
+                requestTargetFocus(it, "compression_slider")
             }
         }
         settledPosition()
@@ -316,7 +355,7 @@ private fun verifyMainSettingsPageKeyDispatch(
             focusedSlider.setOnKeyListener(null)
             val compression = mainParityViews(settings).filterIsInstance<SettingsOutputCompressionView>().single()
             toggle = mainParityViews(compression).filterIsInstance<SettingsToggleRowView>().single().also {
-                check(it.isEnabled && it.requestFocusFromTouch() && root.findFocus() === it)
+                requestTargetFocus(it, "compression_toggle")
                 it.setOnKeyListener { _, code, event ->
                     if (code == KeyEvent.KEYCODE_PAGE_DOWN) toggleEvents += event.action
                     false // The actual toggle declines PageDown, so Settings owns the fallback.
@@ -345,6 +384,9 @@ private fun verifyMainSettingsPageKeyDispatch(
             .put("fallback_pixels", fallbackPixels).put("fallback_viewport_height", main { viewport.height })
             .put("fallback_used_stock_animation", fallbackAnimated)
             .put("fallback_key_up_delivered_to_retained_target", KeyEvent.ACTION_UP in toggleEvents)
+    } catch (error: Throwable) {
+        result.put("failure", error.stackTraceToString())
+        throw error
     } finally {
         main {
             viewport.removeOnScrollListener(scrollEvents)
@@ -355,6 +397,7 @@ private fun verifyMainSettingsPageKeyDispatch(
             check(settings.owner.snapshot == baseline && !settings.owner.state.hasUnsavedChanges) {
                 "Keyboard regression did not discard its unsaved Settings draft"
             }
+            result.put("draft_discarded", true)
         }
     }
     return result.put("draft_discarded", true).put("passed", true)

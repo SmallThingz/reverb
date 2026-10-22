@@ -77,6 +77,8 @@ internal class NativeOnboardingScreenView private constructor(
     private val navigation = NativeOnboardingNavigationState()
     private var state = initialState
     private var closed = false
+    private var reportedPage = -1
+    private var contentLaidOut = false
     private var safeDrawing = Rect()
     private var pageHeight = 0
     private var innerLeft = 0
@@ -216,7 +218,8 @@ internal class NativeOnboardingScreenView private constructor(
             buildList {
                 fun visit(view: View) {
                     if (view.visibility != View.VISIBLE) return
-                    if (view is NativeClickPhaseHost && view.isFocusable) add(view)
+                    if (view.isFocusable && (view is NativeClickPhaseHost || view is SilenceCurveView ||
+                        (view.parent is CompressionSliderView && (view.parent as CompressionSliderView).pointerView === view))) add(view)
                     if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
                 }
                 visit(pages[page])
@@ -300,6 +303,12 @@ internal class NativeOnboardingScreenView private constructor(
     private fun createPage(page: Int, value: OnboardingPageContentState) = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost, interactions,
+        inputRoot = { this },
+        parentInterested = { change ->
+            (this::horizontal.isInitialized && horizontal.interested(change)) ||
+                vertical[pages[page].sourceVerticalViewport]?.interested(change) == true
+        },
+        audioStructureChanged = pointer::retireRemovedClicks,
     )
 
     private fun addVertical(page: OnboardingPageContentView) {
@@ -326,10 +335,19 @@ internal class NativeOnboardingScreenView private constructor(
         val page = target?.sourcePage ?: pager.settledPage
         val footerPage = target?.sourcePage ?: minOf(page, pager.targetPage)
         footer.bind(OnboardingFooterState(page, footerPage,
-            footerPage != 0 || state.permissions.isReadyForHighlightedContinue(), stateIsFinishing),
+            footerPage != 0 || state.permissions.isReadyForHighlightedContinue(), stateIsFinishing,
+            calibrationRequired = state.skipSilence && state.calibrationRequired,
+            calibrating = state.silenceState.calibrating),
             environment.palette)
         if (this::horizontal.isInitialized) horizontal.updateEnabled()
         backCallback.isEnabled = (page > 0 || target != null) && !stateIsFinishing && !closed
+        val visiblePage = if (!closed && inputScope != null && isAttachedToWindow && contentLaidOut && isShown &&
+            windowVisibility == VISIBLE && !stateIsFinishing && !backMotion.active &&
+            !pager.isScrollInProgress && pager.targetPage == pager.settledPage) pager.settledPage else -1
+        if (reportedPage != visiblePage) {
+            reportedPage = visiblePage // Set before callback: owner publication may synchronously bind this screen.
+            actions.pageChanged(visiblePage)
+        }
     }
 
     private fun navigate(target: Int) {
@@ -343,7 +361,8 @@ internal class NativeOnboardingScreenView private constructor(
     private fun continueOrFinish() {
         val current = minOf(pager.settledPage, pager.targetPage)
         if (current < 2) navigate(current + 1)
-        else if (navigation.mayFinish(pager.settledPage == 2, pager.isScrollInProgress, backMotion.active)) onFinish()
+        else if (!state.silenceState.calibrating &&
+            navigation.mayFinish(pager.settledPage == 2, pager.isScrollInProgress, backMotion.active)) onFinish()
     }
 
     private fun beginBack() {
@@ -375,6 +394,7 @@ internal class NativeOnboardingScreenView private constructor(
 
     private fun clearPreview() {
         preview?.let { shown ->
+            shown.close()
             pageArea.removeView(shown)
             vertical.remove(shown.sourceVerticalViewport)?.close()
             verticalAccessibility.remove(shown.sourceVerticalViewport)?.close()
@@ -451,10 +471,14 @@ internal class NativeOnboardingScreenView private constructor(
         pageArea.layout(innerLeft, innerTop, innerLeft + pageArea.measuredWidth, innerTop + pageHeight)
         footer.layout(innerLeft, innerTop + pageHeight, innerLeft + footer.measuredWidth,
             innerTop + pageHeight + footer.measuredHeight)
+        // View sets its first isLaidOut flag after this callback returns; our children are already
+        // laid out here. Publish readiness now, without waiting for an unrelated second layout.
+        contentLaidOut = true
         applyMotion()
     }
 
     override fun onAttachedToWindow() {
+        contentLaidOut = false
         // Parent is attached before children: the horizontal binding asks for this attached scope.
         inputJob = SupervisorJob(ownerJob)
         inputScope = CoroutineScope(scope.coroutineContext + requireNotNull(inputJob))
@@ -462,11 +486,17 @@ internal class NativeOnboardingScreenView private constructor(
     }
 
     override fun onDetachedFromWindow() {
+        contentLaidOut = false
         inputJob?.cancel()
         inputJob = null
         inputScope = null
         cancelBack()
         super.onDetachedFromWindow()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (this::viewport.isInitialized) publishState()
     }
 
     override fun close() {
@@ -475,6 +505,7 @@ internal class NativeOnboardingScreenView private constructor(
         backCallback.remove()
         insets?.close()
         cancelPointerInput()
+        pointer.close()
         cancelBack()
         horizontal.close()
         vertical.values.toList().forEach(AutoCloseable::close)
@@ -483,6 +514,7 @@ internal class NativeOnboardingScreenView private constructor(
         verticalAccessibility.clear()
         pagerAccessibility.close()
         scrollEvents.close()
+        pages.forEach(AutoCloseable::close)
         pageActions.forEach(AutoCloseable::close)
         pageText.forEach(AutoCloseable::close)
         footerActions?.close()
@@ -490,7 +522,11 @@ internal class NativeOnboardingScreenView private constructor(
         scope.cancel()
     }
 
-    internal fun pointerNodes(view: View): List<NativeViewPhasePointerNode> = when {
+    internal fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
+        if (view is SilenceCurveView) return listOf(pointer.interop(view))
+        val audio = pages[2].pointerNodes(view)
+        if (audio.isNotEmpty()) return audio
+        return when {
         view === viewport -> horizontal.nodes
         view is NativeVerticalViewport -> vertical[view]?.let { listOf(it.observerNode, it.dragNode) } ?: emptyList()
         view is NativeClickPhaseHost -> listOf(pointer.click(view, view.nativeClickEndpoint) { change ->
@@ -502,6 +538,7 @@ internal class NativeOnboardingScreenView private constructor(
             false
         })
         else -> emptyList()
+        }
     }
 
     internal fun isPager(view: View) = view === viewport
@@ -527,9 +564,13 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
     lateinit var root: NativeOnboardingScreenView
     val coordinates = NativeWindowPointerCoordinates { root }
     private val clicks = java.util.IdentityHashMap<View, NativeClickPhaseNode>()
+    private val interop = java.util.IdentityHashMap<View, NativeAndroidInteropNode>()
     val rootLayout: NativeViewPointerHitLayout = Layout { root }
     fun click(view: View, endpoint: NativeClickPhaseEndpoint, interested: (NativeDragPointerChange) -> Boolean) =
         clicks.getOrPut(view) { NativeClickPhaseNode(view, endpoint, interested) }
+    fun interop(view: SilenceCurveView) = interop.getOrPut(view) {
+        NativeAndroidInteropNode(view, (view.parent as NativeAndroidInteropHost).nativeInteropRequests)
+    }
 
     fun retireRemovedClicks() {
         fun belongs(view: View): Boolean {
@@ -541,6 +582,14 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
             return false
         }
         clicks.keys.filterNot(::belongs).forEach { clicks.remove(it)?.cancel() }
+        interop.keys.filterNot(::belongs).forEach { interop.remove(it)?.close() }
+    }
+
+    fun close() {
+        clicks.values.forEach { it.cancel() }
+        clicks.clear()
+        interop.values.forEach(AutoCloseable::close)
+        interop.clear()
     }
 
     private inner class Layout(private val getView: () -> View) : NativeViewPointerHitLayout {
@@ -561,6 +610,10 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
             return when {
                 root.isPager(view) -> local.x >= 0f && local.x < width && local.y >= -margin && local.y < height + margin
                 view is NativeVerticalViewport -> local.y >= 0f && local.y < height && local.x >= -margin && local.x < width + margin
+                view is SettingsExpansionView -> local.x >= 0f && local.x < width && local.y >= 0f && local.y < height
+                view is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
+                view is ReverbGroupLayout -> view.containsVisualPoint(local.x, local.y)
+                view is SettingsOutputCompressionView || view is SettingsSilenceView -> true // One outer group clips both consecutive controls.
                 view.parent is ReverbGroupLayout -> reverbGroupGeometry(width, height, environment.textDensity.density, 20f)
                     .contains(local.x, local.y)
                 root.isFooterButton(view) -> reverbGroupGeometry(width, height, environment.textDensity.density,

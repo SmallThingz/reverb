@@ -772,7 +772,7 @@ private class TransactionBoard(
                 frame.put("before_capture", currentState())
                 // Retain the full physical display and full fixture. The separately compared app
                 // viewport comes only from current platform insets, never observed pixel differences.
-                val screen = checkNotNull(i.uiAutomation.takeScreenshot())
+                val screen = checkNotNull(nativeParityUiAutomation(i).takeScreenshot())
                 val cropped = try {
                     frame.put("after_capture", currentState())
                     saveNativeParityBitmap(evidence, "$name-$pass-full.png", screen)

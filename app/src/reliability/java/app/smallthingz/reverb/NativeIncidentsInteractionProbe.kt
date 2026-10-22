@@ -218,7 +218,7 @@ private fun awaitIncidentCondition(instrumentation: Instrumentation, host: Nativ
             check(returningWindows.isNotEmpty()) { "Unexpected own-window focus loss during $name" }
             // Focus callbacks can lag the removal of our popup by one main-loop turn. Read-only
             // waiting accepts only the two exact already-observed own windows, never a foreign dialog.
-            val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+            val root = checkNotNull(nativeParityUiAutomation(instrumentation).rootInActiveWindow)
             try {
                 check(root.refresh() && root.packageName?.toString() == host.packageName && root.windowId in returningWindows)
                 val window = checkNotNull(root.window)
@@ -296,7 +296,7 @@ private fun captureIncidentStep(instrumentation: Instrumentation, host: NativePa
 
 private fun currentIncidentApplicationWindow(instrumentation: Instrumentation, host: NativeParityActivity): Int {
     requireNativeParityHost(instrumentation, host)
-    val node = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+    val node = checkNotNull(nativeParityUiAutomation(instrumentation).rootInActiveWindow)
     try {
         check(node.packageName?.toString() == host.packageName)
         return node.windowId
@@ -311,7 +311,7 @@ private class IncidentMenuWindowNotPublished(val observation: JSONObject) :
 private fun currentIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity,
                                 expectedWindow: Int? = null): Pair<AccessibilityNodeInfo, JSONObject> {
     check(host.packageName == "app.smallthingz.reverb.nativeparity.reliability")
-    val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+    val root = checkNotNull(nativeParityUiAutomation(instrumentation).rootInActiveWindow)
     try {
         check(root.refresh() && root.packageName?.toString() == host.packageName && root.isVisibleToUser)
         if (expectedWindow != null) check(root.windowId == expectedWindow)
@@ -349,7 +349,7 @@ private fun awaitIncidentMenu(instrumentation: Instrumentation, host: NativePari
     var attempts = 0
     // Root may still be the known own main window while its new popup is attaching.
     while (SystemClock.uptimeMillis() < deadline) {
-        val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+        val root = checkNotNull(nativeParityUiAutomation(instrumentation).rootInActiveWindow)
         val id = try {
             check(root.packageName?.toString() == host.packageName) { "Foreign window interrupted Incidents popup" }
             root.windowId
@@ -500,7 +500,7 @@ private fun captureIncidentMenu(instrumentation: Instrumentation, host: NativePa
                 }
                 incidentCaptureFrameState(popup)
             })
-            val full = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+            val full = checkNotNull(nativeParityUiAutomation(instrumentation).takeScreenshot())
             try {
                 currentIncidentMenu(instrumentation, host, window).first.recycle()
                 frame.put("after_capture", nativeParityOnMain(instrumentation) {

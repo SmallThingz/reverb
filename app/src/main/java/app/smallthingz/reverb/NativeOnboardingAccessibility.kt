@@ -37,7 +37,7 @@ internal class NativeOnboardingAccessibility(
 
     private fun clip(view: View): NativeTextSemanticsClip = when {
         view === pager() || view is NativeVerticalViewport ||
-            view.parent is ReverbGroupLayout || footer.clipsAccessibilityTextAt(view) ->
+            view.parent is ReverbGroupLayout || view is SettingsExpansionView || footer.clipsAccessibilityTextAt(view) ->
             NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }
@@ -59,7 +59,8 @@ internal class NativeOnboardingAccessibility(
 
     private fun isSemantic(view: View): Boolean = view === pager() ||
         view is NativeVerticalViewport || view is NativeMergedRowAccessibilityHost ||
-        view is ReverbParagraphView ||
+        view is ReverbParagraphView || view is SilenceCurveView || view is SettingsCalibrationProgressView ||
+        (view.parent is CompressionSliderView && (view.parent as CompressionSliderView).pointerView === view) ||
         (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())
 
     /** Existing row returns its exact marker/title/body/status order, excluding its fake role. */
@@ -76,9 +77,11 @@ internal class NativeOnboardingAccessibility(
         return result
     }
 
-    private fun localBounds(view: View) = if (view is ReverbParagraphView)
-        view.originalAccessibilityBoundsInView()
-    else ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
+    private fun localBounds(view: View) = when (view) {
+        is ReverbParagraphView -> view.originalAccessibilityBoundsInView()
+        is SettingsCalibrationProgressView -> view.semanticsBoundsInView()
+        else -> ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
+    }
 
     private fun hidden(view: View): Boolean {
         if (view === preview()?.sourceVerticalViewport) return true

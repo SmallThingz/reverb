@@ -90,7 +90,7 @@ internal fun verifyNativeRetentionKeyboardParity(
                 awaitNativeParityDraw(instrumentation, field.content)
                 awaitNativeParityDraw(instrumentation, field.content)
                 val guard = RetentionKeyboardGuard(instrumentation, activity, label, rawOwner, entry,
-                    referenceContent = field.content.takeIf { reference })
+                    referenceContent = field.content.takeIf { reference }, windowScope = windowScope)
                 val initial = guard.initialSnapshot()
                 check(initial.target().getString("raw_text") == original)
                 check(!initial.target().getBoolean("editable_focused")) { "Fixture must begin unfocused" }
@@ -213,6 +213,7 @@ private class RetentionKeyboardGuard(
     private val rawOwner: KeyboardRawOwner,
     private val evidence: JSONObject,
     private val referenceContent: View?,
+    private val windowScope: NativeParityInteractiveWindows,
 ) {
     private var expectedWindowId: Int? = null
     private var expectedTargetIdentity: String? = null
@@ -399,7 +400,7 @@ private class RetentionKeyboardGuard(
     ): T {
         requireNativeParityHost(instrumentation, host)
         check(host.applicationInfo.uid == android.os.Process.myUid()) { "QA host UID changed" }
-        val windows = instrumentation.uiAutomation.windows
+        val windows = windowScope.windows()
         val roots = mutableListOf<AccessibilityNodeInfo>()
         val labelPaths = mutableListOf<List<AccessibilityNodeInfo>>()
         val windowInventory = JSONArray()

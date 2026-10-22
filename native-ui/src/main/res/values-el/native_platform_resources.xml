@@ -8,6 +8,7 @@
     <string msgid="5834637030682409883" name="state_off">"Ανενεργός"</string>
     <string msgid="1490883874751719580" name="state_on">"Ενεργός"</string>
     <string msgid="2561197295334830845" name="switch_role">"Εναλλαγή"</string>
+    <string msgid="1672349317127674378" name="tab">"Καρτέλα"</string>
     <string msgid="5946805113151406391" name="template_percent">"<ns0:g id="PERCENTAGE">%1$d</ns0:g> τοις εκατό."</string>
     <string msgid="3124740595719787496" name="tooltip_label">"εμφάνιση επεξήγησης εργαλείου"</string>
     <string msgid="3765533235322692011" name="tooltip_description">"επεξήγηση εργαλείου"</string>

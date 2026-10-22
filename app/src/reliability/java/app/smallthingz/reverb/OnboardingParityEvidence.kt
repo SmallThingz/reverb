@@ -144,15 +144,16 @@ private fun pointInFixture(view: View, fixture: View, point: Offset,
  */
 internal fun onboardingNativeNodeEvidence(
     instrumentation: Instrumentation, activity: NativeParityActivity, content: View,
+    automation: android.app.UiAutomation = nativeParityUiAutomation(instrumentation),
     preserveFailure: (JSONObject) -> Unit,
 ): JSONObject {
     requireNativeParityHost(instrumentation, activity)
-    instrumentation.uiAutomation.waitForIdle(80, 2_000)
+    automation.waitForIdle(80, 2_000)
     requireNativeParityHost(instrumentation, activity)
     val origin = IntArray(2)
     nativeParityOnMain(instrumentation) { content.getLocationOnScreen(origin) }
     val viewport = AndroidRect(origin[0], origin[1], origin[0] + content.width, origin[1] + content.height)
-    val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow) { "No current QA node root" }
+    val root = checkNotNull(automation.rootInActiveWindow) { "No current QA node root" }
     val raw = JSONArray()
     val canonical = mutableListOf<JSONObject>()
     var visited = 0

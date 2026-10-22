@@ -2,6 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
+import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +18,7 @@ import app.smallthingz.nativeui.text.font.FontFamily
 import app.smallthingz.nativeui.unit.Density
 import androidx.core.view.ViewCompat
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Exact released roles supplied by the screen owner; no platform font/style substitution. */
@@ -39,8 +42,20 @@ internal class OnboardingIconView(
     private var sourceDescriptionNode: (() -> NativeSourceAccessibilityNode)? = null
     private var currentIcon = icon
     private var glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
+    private var missingPermission = false
+    private var missingPermissionPaint: Paint? = null
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
-    fun bind(icon: ReverbIcon, color: Int) {
+    fun bind(icon: ReverbIcon, color: Int, missingPermission: Boolean = false) {
+        this.missingPermission = missingPermission
+        if (missingPermission) {
+            val paint = missingPermissionPaint ?: Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                val density = resources.displayMetrics.density
+                style = Paint.Style.STROKE
+                strokeWidth = 2f * density
+                pathEffect = DashPathEffect(floatArrayOf(4f * density, 3f * density), 0f)
+            }.also { missingPermissionPaint = it }
+            paint.color = color
+        }
         if (currentIcon != icon) {
             currentIcon = icon
             glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
@@ -55,7 +70,13 @@ internal class OnboardingIconView(
         glyph.layoutDirection = layoutDirection
         invalidate()
     }
-    override fun onDraw(canvas: Canvas) { glyph.draw(canvas) }
+    override fun onDraw(canvas: Canvas) {
+        if (missingPermission) {
+            val paint = checkNotNull(missingPermissionPaint)
+            val radius = (min(width, height) / 2f - 2f * resources.displayMetrics.density).coerceAtLeast(0f)
+            canvas.drawCircle(width / 2f, height / 2f, radius, paint)
+        } else glyph.draw(canvas)
+    }
 
     fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope, exposed: () -> Boolean): AutoCloseable =
         bindDescriptionAccessibility(window, null, exposed)

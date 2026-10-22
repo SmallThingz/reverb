@@ -5,11 +5,16 @@ import android.content.Context
 internal data class OnboardingAudioSelection(
     val outputCompressionEnabled: Boolean,
     val skipSilenceEnabled: Boolean,
+    val flacCompression: Int? = null,
+    val silenceConfig: SilenceGateConfig? = null,
+    val silenceHistogram: String? = null,
 )
 
 internal data class OnboardingAudioCommit(
     val outputFormat: ExportFormat,
     val silenceConfig: SilenceGateConfig,
+    val flacCompression: Int = DEFAULT_FLAC_COMPRESSION,
+    val silenceHistogram: String? = null,
 )
 
 internal data class OnboardingSilenceConfiguration(
@@ -31,13 +36,28 @@ internal fun decodeOnboardingSilence(rawPreferences: Map<String, *>): Onboarding
     return OnboardingSilenceConfiguration(config ?: SilenceGateConfig(), valid = config != null)
 }
 
-/** Untouched choices follow fresh durable state; editing a switch owns only that choice. */
+/** New choices default on; a stored false is still an explicit existing choice. */
+internal fun initialOnboardingAudioSelection(
+    original: OnboardingAudioSelection,
+    outputPreferencePresent: Boolean,
+    silencePreferencePresent: Boolean,
+    compressionAvailable: Boolean,
+): OnboardingAudioSelection = original.copy(
+    outputCompressionEnabled = original.outputCompressionEnabled ||
+        (!outputPreferencePresent && compressionAvailable),
+    skipSilenceEnabled = original.skipSilenceEnabled || !silencePreferencePresent,
+)
+
+/** Untouched fields follow fresh durable state; Finish owns only the edited fields. */
 internal fun resolveOnboardingAudioSelection(
     original: OnboardingAudioSelection,
     selected: OnboardingAudioSelection,
     currentFormat: ExportFormat,
     currentSilence: SilenceGateConfig,
     sampleFormat: PcmSampleFormat,
+    currentCompression: Int = DEFAULT_FLAC_COMPRESSION,
+    currentHistogram: String? = null,
+    currentInput: SilenceCalibrationInput? = null,
 ): OnboardingAudioCommit? {
     val format = if (selected.outputCompressionEnabled == original.outputCompressionEnabled) {
         currentFormat
@@ -52,7 +72,30 @@ internal fun resolveOnboardingAudioSelection(
     } else {
         selected.skipSilenceEnabled
     }
-    return OnboardingAudioCommit(format, currentSilence.copy(enabled = silenceEnabled))
+    val compression = selected.flacCompression?.takeIf { it != original.flacCompression }
+        ?: currentCompression
+    if (!validFlacCompression(compression)) return null
+
+    val selectedCurve = selected.silenceConfig
+    val curveChanged = selectedCurve != null && selectedCurve.points != original.silenceConfig?.points
+    if (curveChanged && original.silenceConfig != null &&
+        currentSilence.points != original.silenceConfig.points && currentSilence.points != selectedCurve?.points
+    ) return null
+    val curve = if (curveChanged) checkNotNull(selectedCurve) else currentSilence
+    val histogramChanged = selected.silenceHistogram != original.silenceHistogram
+    val histogram = if (histogramChanged) selected.silenceHistogram else currentHistogram
+    val measured = decodeSilenceCalibrationHistogram(histogram)
+    if (histogramChanged && histogram != null && measured == null) return null
+    if (histogramChanged && measured != null && currentInput != null && measured.input != currentInput) return null
+    // Validate the effective merged selection, not a stale untouched draft measurement.
+    // Legacy callers without a curve retain their original two-switch merge contract.
+    if (silenceEnabled && selectedCurve != null) {
+        if (measured == null || (currentInput != null && measured.input != currentInput)) return null
+    }
+    if (curveChanged && currentInput != null &&
+        decodeSilenceCalibrationHistogram(selected.silenceHistogram)?.input != currentInput
+    ) return null
+    return OnboardingAudioCommit(format, curve.copy(enabled = silenceEnabled), compression, histogram)
 }
 
 internal data class OnboardingConfiguration(
@@ -60,18 +103,40 @@ internal data class OnboardingConfiguration(
     val audio: OnboardingAudioSelection,
     val compressionAvailable: Boolean,
     val silenceValid: Boolean,
+    val initialAudio: OnboardingAudioSelection = audio,
+    val input: SilenceCalibrationInput? = null,
 )
 
 internal fun getOnboardingConfiguration(context: Context): OnboardingConfiguration =
     withRetentionPersistenceLock {
         val silence = SilenceGatePreferences.readForOnboarding(context)
+        val preferences = getRecorderPreferences(context)
+        val input = readSilenceCalibrationInput(context)
+        val audio = OnboardingAudioSelection(
+            outputCompressionEnabled = getConfiguredOutputFormat(context) == ExportFormat.FLAC,
+            skipSilenceEnabled = silence.config.enabled,
+            flacCompression = getConfiguredFlacCompression(context),
+            silenceConfig = silence.config,
+            silenceHistogram = preferences.safeString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM),
+        )
+        val compressionAvailable = input.sampleFormat == PcmSampleFormat.PCM_16
         OnboardingConfiguration(
             buffers = getConfiguredBufferAvailability(context),
-            audio = OnboardingAudioSelection(
-                outputCompressionEnabled = getConfiguredOutputFormat(context) == ExportFormat.FLAC,
-                skipSilenceEnabled = silence.config.enabled,
-            ),
-            compressionAvailable = getConfiguredPcmSampleFormat(context) == PcmSampleFormat.PCM_16,
+            audio = audio,
+            compressionAvailable = compressionAvailable,
             silenceValid = silence.valid,
+            initialAudio = initialOnboardingAudioSelection(audio,
+                preferences.contains(PrefKey.OUTPUT_FORMAT), preferences.contains(PrefKey.SILENCE_GATE),
+                compressionAvailable),
+            input = input,
         )
+    }
+
+/** The footer never converts an unfinished or failed sample into a successful Finish. */
+internal enum class OnboardingAudioPrimaryAction { CALIBRATE, WAIT, FINISH }
+internal fun onboardingAudioPrimaryAction(calibrationRequired: Boolean, calibrating: Boolean): OnboardingAudioPrimaryAction =
+    when {
+        calibrating -> OnboardingAudioPrimaryAction.WAIT
+        calibrationRequired -> OnboardingAudioPrimaryAction.CALIBRATE
+        else -> OnboardingAudioPrimaryAction.FINISH
     }

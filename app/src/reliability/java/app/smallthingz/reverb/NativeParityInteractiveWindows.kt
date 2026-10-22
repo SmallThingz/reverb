@@ -5,7 +5,15 @@ import android.app.Instrumentation
 import android.app.UiAutomation
 import android.os.Build
 import android.os.Parcel
+import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONObject
+
+/** Public QA connection: never suppress the user's enabled accessibility services. */
+internal fun nativeParityUiAutomation(instrumentation: Instrumentation): UiAutomation {
+    check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(instrumentation.targetContext.applicationContext.javaClass == android.app.Application::class.java)
+    return checkNotNull(instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES))
+}
 
 /** Scoped setup for the two QA probes that use interactive accessibility windows. */
 internal class NativeParityInteractiveWindows private constructor(
@@ -15,6 +23,12 @@ internal class NativeParityInteractiveWindows private constructor(
 ) : AutoCloseable {
     private var changed = false
     private var closed = false
+
+    /** Retention reads the exact scoped connection; no default getter can reconnect mid-flow. */
+    fun windows(): List<AccessibilityWindowInfo> {
+        check(!closed) { "Interactive-window scope is closed" }
+        return automation.windows
+    }
 
     fun recordHost(instrumentation: Instrumentation, host: NativeParityActivity) {
         requireNativeParityHost(instrumentation, host)
@@ -54,8 +68,9 @@ internal class NativeParityInteractiveWindows private constructor(
             check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
             check(instrumentation.targetContext.applicationContext.javaClass == android.app.Application::class.java)
             val evidence = JSONObject().put("expected_display_id", 0).put("restored", false)
+                .put("connection_flags", UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
             result.put("ui_automation_windows", evidence)
-            val automation = instrumentation.uiAutomation
+            val automation = nativeParityUiAutomation(instrumentation)
             val original = checkNotNull(automation.serviceInfo) { "UiAutomation service info unavailable before setup" }
             val requested = copyServiceInfo(original)
             requested.flags = original.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS

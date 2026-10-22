@@ -54,6 +54,13 @@
     <string name="onboarding_continue">Continue</string>
     <string name="onboarding_back">Back</string>
     <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_native_storage_body">Save to Music/Reverb so recordings survive uninstall.</string>
+    <string name="onboarding_native_recovery_body">Optional. Find recordings from a previous install.</string>
+    <string name="onboarding_native_notifications_body">Show recording status.</string>
+    <string name="onboarding_native_background_body">Battery limits can interrupt recording.</string>
+    <string name="onboarding_native_one_shot_body">Fills once; keeps audio until cleared.</string>
+    <string name="onboarding_native_looping_body">Replaces oldest audio when full.</string>
+    <string name="onboarding_native_order">One-shot fills, then Looping takes over if enabled.</string>
     <string name="files_tab">Files</string>
     <string name="open_options">Open options</string>
     <string name="record_all_memory">Export full</string>

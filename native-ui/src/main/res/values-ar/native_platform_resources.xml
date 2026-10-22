@@ -8,6 +8,7 @@
     <string msgid="5834637030682409883" name="state_off">"غير مفعَّل"</string>
     <string msgid="1490883874751719580" name="state_on">"مفعَّل"</string>
     <string msgid="2561197295334830845" name="switch_role">"تبديل"</string>
+    <string msgid="1672349317127674378" name="tab">"علامة تبويب"</string>
     <string msgid="5946805113151406391" name="template_percent">"<ns0:g id="PERCENTAGE">%1$d</ns0:g> في المئة."</string>
     <string msgid="3124740595719787496" name="tooltip_label">"إظهار التلميح"</string>
     <string msgid="3765533235322692011" name="tooltip_description">"تلميح"</string>
