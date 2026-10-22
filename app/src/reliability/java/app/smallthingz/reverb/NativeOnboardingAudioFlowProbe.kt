@@ -52,6 +52,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
         for (dark in listOf(false, true)) {
             val paletteName = if (dark) "dark" else "light"
             val seen = linkedSetOf<String>()
+            // The intended destination is owned by this scenario, not sampled mid-transition.
+            var intendedPage = 0
             fun current() = checkNotNull(fixture)
             fun main(action: () -> Unit) {
                 requireNativeParityHost(instrumentation, activity)
@@ -59,7 +61,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             }
             fun settle() {
                 awaitOnboardingScreenSettled(instrumentation, activity, current().render,
-                    nativeParityOnMain(instrumentation) { current().view.saveViewportState().page })
+                    intendedPage)
                 // Observe actual lifetime/geometry/scroll completion, not a refresh-rate-dependent
                 // number of frames. No private animation clock or duration scale is changed.
                 var consecutive = 0
@@ -68,10 +70,13 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                     awaitNativeParityDraw(instrumentation, current().view)
                     val ready = nativeParityOnMain(instrumentation) {
                         val f = current()
+                        val viewport = f.view.saveViewportState()
+                        val pageReady = viewport.page == intendedPage && viewport.offsetFraction == 0f &&
+                            f.settledPages.lastOrNull() == intendedPage
                         val descendants = onboardingViewDescendants(f.view)
                         val scrollIdle = descendants.filterIsInstance<NativeVerticalViewport>()
                             .all { !it.state.isScrollInProgress }
-                        val audioReady = f.view.saveViewportState().page != 2 || (
+                        val audioReady = intendedPage != 2 || (
                             (f.compression().currentSlider != null) == f.state.outputCompression &&
                             (f.silence().curveView != null) == f.state.skipSilence &&
                             descendants.filterIsInstance<SettingsExpansionView>().all { expansion ->
@@ -79,7 +84,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                                 content == null || (content.alpha == 1f && expansion.width == content.width &&
                                     expansion.height == content.height && !expansion.isLayoutRequested)
                             })
-                        !f.view.isLayoutRequested && scrollIdle && audioReady
+                        pageReady && !f.view.isLayoutRequested && scrollIdle && audioReady
                     }
                     consecutive = if (ready) consecutive + 1 else 0
                     if (consecutive >= 3) return
@@ -98,7 +103,10 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                         File(directory, "$stem-failed-nodes.json").writeText(partial.toString(2))
                     }
                     val entry = nativeParityOnMain(instrumentation) {
+                        val viewport = f.view.saveViewportState()
+                        check(viewport.page == intendedPage && viewport.offsetFraction == 0f)
                         JSONObject().put("palette", paletteName).put("case", name).put("passed", true)
+                            .put("intended_page", intendedPage).put("observed_page", viewport.page)
                             .put("state", f.evidence()).put("geometry", onboardingGeometryEvidence(f.view, false))
                             .put("nodes", nodes)
                             .also {
@@ -144,9 +152,19 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                     check(target.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
                 }
             }
+            fun continueTo(page: Int) {
+                check(page == intendedPage + 1 && page in 1..2)
+                main {
+                    val viewport = current().view.saveViewportState()
+                    check(viewport.page == intendedPage && viewport.offsetFraction == 0f)
+                }
+                click { footer(R.string.onboarding_continue) }
+                intendedPage = page
+                settle()
+            }
 
             main {
-                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = false)
+                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = false, page = intendedPage)
                 activity.fixtureRoot.addView(current().view, FrameLayout.LayoutParams(-1, -1))
             }
             capture("permission-missing")
@@ -165,12 +183,10 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             settle()
             check(nativeParityOnMain(instrumentation) { current().permissionRequests == 1 && current().state.permissions.microphoneAllowed })
             capture("permission-granted")
-            click { footer(R.string.onboarding_continue) }
-            settle()
+            continueTo(1)
             main { check(current().state.oneShotEnabled && current().state.loopingEnabled) }
             capture("buffers-default")
-            click { footer(R.string.onboarding_continue) }
-            settle()
+            continueTo(2)
             main {
                 check(current().state.outputCompression && current().state.skipSilence)
                 check(current().compression().currentSlider != null && current().silence().curveView != null)
@@ -280,7 +296,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                 retired.close()
                 check(retired.settledPages.last() == -1) { "Closed screen did not retire settled-page publication" }
                 activity.fixtureRoot.removeAllViews()
-                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = true, page = 2)
+                intendedPage = 2
+                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = true, page = intendedPage)
                 activity.fixtureRoot.addView(current().view, FrameLayout.LayoutParams(-1, -1))
             }
             settle()
