@@ -38,6 +38,35 @@ internal class NativeMainAccessibility(
     fun node(view: View): NativeSourceAccessibilityNode =
         capture()[view] ?: NativeSourceAccessibilityNode.absent()
 
+    /** Keep Android's ordering/importance traversal, but never advertise an absent source layer.
+     * With INCLUDE_NOT_IMPORTANT_VIEWS the candidates are layout layers; ordinary traversal can
+     * flatten them into descendants. Unmapped wrappers are not themselves proof of absence. */
+    fun retainPresentLayerChildren(children: ArrayList<View>, firstIndex: Int) {
+        val layers = layersInDrawOrder()
+        val nodes = capture(layers)
+        var write = firstIndex
+        for (read in firstIndex until children.size) {
+            val child = children[read]
+            var layer: View? = child
+            while (layer != null && layer.parent !== root) layer = layer.parent as? View
+            if (layer !in layers || nodes[layer]?.present == true) children[write++] = child
+        }
+        if (write != children.size) children.subList(write, children.size).clear()
+    }
+
+    /** The caller owns semantic action children, rather than arbitrary layout wrappers. */
+    fun retainPresentSemanticChildren(children: ArrayList<View>, firstIndex: Int,
+                                      semanticChild: (View) -> View?) {
+        val nodes = capture()
+        var write = firstIndex
+        for (read in firstIndex until children.size) {
+            val child = children[read]
+            val semantic = semanticChild(child)
+            if (semantic == null || nodes[semantic]?.present == true) children[write++] = child
+        }
+        if (write != children.size) children.subList(write, children.size).clear()
+    }
+
     private fun semantic(view: View, layers: List<View>): Boolean {
         if (view is NativeMergedRowAccessibilityHost) return view.hasAccessibilitySemanticNode
         return view in layers || view is ReverbParagraphView || view is NativeClickPhaseHost ||
@@ -127,10 +156,9 @@ internal class NativeMainAccessibility(
             view.isScreenReaderFocusable || !view.contentDescription.isNullOrEmpty()
     }
 
-    private fun capture(): IdentityHashMap<View, NativeSourceAccessibilityNode> {
+    private fun capture(layers: List<View> = layersInDrawOrder()): IdentityHashMap<View, NativeSourceAccessibilityNode> {
         val result = IdentityHashMap<View, NativeSourceAccessibilityNode>()
         if (!root.isAttachedToWindow || !root.isLaidOut) return result
-        val layers = layersInDrawOrder()
         val rootGeometry = geometry.capture(root, Offset.Zero,
             ComposeRect(0f, 0f, root.width.toFloat(), root.height.toFloat())) ?: return result
         val rootBounds = rootGeometry.visibleBoundsInRoot.roundToIntRect()

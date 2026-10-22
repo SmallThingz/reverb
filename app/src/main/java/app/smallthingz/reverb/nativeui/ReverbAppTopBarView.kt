@@ -48,6 +48,7 @@ internal class ReverbAppTopBarView(
     private var barHeight = 66f
     private var accessibilityLease: AutoCloseable? = null
     private var refreshAccessibilityBack: (() -> Unit)? = null
+    private var admitAccessibilityChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -80,7 +81,8 @@ internal class ReverbAppTopBarView(
     }
     /** Same window cursor and source geometry as the enclosing Home/Library screen. */
     fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
-        geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable {
+        geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode,
+        admitChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null): AutoCloseable {
         val previous = accessibilityLease
         accessibilityLease = null
         previous?.close()
@@ -112,11 +114,15 @@ internal class ReverbAppTopBarView(
             closeTopBarAccessibilityLeases(listOfNotNull(backLease) + fixed.asReversed(), error)
             throw error
         }
+        admitAccessibilityChildren = admitChildren
         var closed = false
         val lease = AutoCloseable {
             if (!closed) {
                 closed = true
-                if (refreshAccessibilityBack === refresh) refreshAccessibilityBack = null
+                if (refreshAccessibilityBack === refresh) {
+                    refreshAccessibilityBack = null
+                    admitAccessibilityChildren = null
+                }
                 val retired = backLease
                 backLease = null
                 boundBack = null
@@ -125,6 +131,32 @@ internal class ReverbAppTopBarView(
         }
         accessibilityLease = lease
         return lease
+    }
+
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first == children.size) return
+        val admit = admitAccessibilityChildren
+        if (admit != null) {
+            admit(children, first, ::accessibilityAction)
+        } else {
+            // Standalone owners already bind each action's source node. A clipped action must
+            // not be advertised by this structural wrapper when its node provider returns null.
+            var write = first
+            for (read in first until children.size) {
+                val child = children[read]
+                if ((accessibilityAction(child) as? NativeMergedRowAccessibilityHost)?.mergedRowAccessibility
+                        ?.isNodePresent() != false) children[write++] = child
+            }
+            if (write != children.size) children.subList(write, children.size).clear()
+        }
+    }
+
+    private fun accessibilityAction(child: View): View? = when (child) {
+        is ReverbTopBarIconAction -> child.accessibilityAction
+        is ReverbTopBarActionLeaf, is ReverbTopBarBrandAction -> child
+        else -> null
     }
     fun sourceClip(view: View): NativeTextSemanticsClip? = when {
         view === this -> NativeTextSemanticsClip.Unclipped
@@ -204,6 +236,7 @@ internal class ReverbTopBarIconAction(
     private var density = environment.textDensity.density
     private val surface = ReverbGroupLayout(context, 15f)
     private val leaf = ReverbTopBarActionLeaf(context, environment, inputRoot, glyph, context.getString(description))
+    internal val accessibilityAction: View get() = leaf
     init {
         // The source size modifier does not clip an overflowing minimum-layout residual.
         clipChildren = false

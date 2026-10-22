@@ -146,7 +146,8 @@ internal class NativeMainScreenView private constructor(
     }
     private val incidentsPointer = NativeIncidentsPointerBinding(incidents, pointer.coordinates,
         frames, scope) { false }
-    private val homeText = home.topBar.bindAccessibility(windowText.textWindow, source.geometry, source::node)
+    private val homeText = home.topBar.bindAccessibility(windowText.textWindow, source.geometry, source::node,
+        source::retainPresentSemanticChildren)
 
     private val noNestedScroll = object : NativeVerticalNestedHost {
         override fun preScroll(availableY: Float, source: NativeVerticalScrollSource) = 0f
@@ -440,7 +441,7 @@ internal class NativeMainScreenView private constructor(
             // All toolbar inputs change through requestRender; motion only changes its membership.
             if (created || bindToolbar) toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
             if (libraryToolbarText == null) libraryToolbarText = toolbar.bindAccessibility(
-                windowText.textWindow, source.geometry, source::node)
+                windowText.textWindow, source.geometry, source::node, source::retainPresentSemanticChildren)
         } else if (libraryToolbar != null) {
             val old = libraryToolbar!!
             libraryToolbar = null
@@ -515,6 +516,12 @@ internal class NativeMainScreenView private constructor(
         // Source Compose click nodes never announce Android focus availability on an enabled change.
         // Explicit requestFocus/traversal remains intact; existing AndroidView widgets keep theirs.
         if (view !is NativeClickPhaseHost) super.focusableViewAvailable(view)
+    }
+
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first < children.size) source.retainPresentLayerChildren(children, first)
     }
 
     override fun onMeasure(w: Int, h: Int) {

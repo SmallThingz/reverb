@@ -800,7 +800,7 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
     val result = JSONObject().put("selector", "native_home_accessibility")
         .put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "f364a4f9b2a48f45bbe004e02958431d2df3898d9aa42f95ec92f100a3cc84af")
-        .put("scope", "Actual standalone Home platform nodes; native production source mapper and text binding; selected/unselected tabs, service-ready/disabled, LTR/RTL")
+        .put("scope", "Actual standalone Home platform nodes; native production source mapper and text binding; selected/unselected tabs, service-ready/unready, LTR/RTL")
         .put("limits", "No TalkBack delivery, full Activity/recorder, overlay occlusion, pixel or motion-phase claim; no system setting changes. isFocused is retained raw and checked direct-versus-platform, but not compared across standalone renderers: this fixture lacks Main's unsolicited-focus suppression. Focusability and complete advertised actions remain exact comparisons.")
         .put("cases", cases).put("passed", false)
     var host: NativeParityActivity? = null
@@ -821,7 +821,7 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
         result.put("observed_animator_scale", scale.toDouble())
         val labels = listOf(context.getString(R.string.buffer_one_shot), context.getString(R.string.buffer_loop))
         for (rtl in listOf(false, true)) for (ready in listOf(true, false)) {
-            val name = (if (rtl) "rtl" else "ltr") + if (ready) "-ready" else "-disabled"
+            val name = (if (rtl) "rtl" else "ltr") + if (ready) "-ready" else "-service-unready"
             val entry = JSONObject().put("name", name).put("service_ready", ready)
                 .put("rtl", rtl).put("routes", JSONArray()).put("passed", false)
             cases.put(entry)
@@ -875,13 +875,19 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
                     return tabs
                 }
                 val initial = snapshot("initial")
+                // ReleasedHomeCaptureControlCluster leaves selector interactionEnabled=true.
+                // Service readiness gates capture/export, not navigation between retained buffers.
+                check((0 until initial.length()).all {
+                    initial.getJSONObject(it).getJSONObject("parent").getBoolean("enabled")
+                }) { "Settled Home buffer navigation must remain enabled without the service" }
                 check(initial.getJSONObject(0).getJSONObject("parent").getBoolean("selected"))
                 check(!initial.getJSONObject(1).getJSONObject("parent").getBoolean("selected"))
                 requireNativeParityHost(instrumentation, activity)
                 val selectedResult = nativeParityOnMain(instrumentation) {
                     clickHomeTabNode(current.content(compose), compose, labels[0])
                 }
-                check(selectedResult == ready) { "Selected tab direct action admission differs from released contract" }
+                route.put("selected_action_result", selectedResult)
+                check(selectedResult) { "Selected tab direct action admission differs from released contract" }
                 check(nativeParityOnMain(instrumentation) { current.events(compose).length() } == 0) {
                     "Selecting the current buffer must not commit another selection"
                 }
@@ -891,8 +897,9 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
                 val unselectedResult = nativeParityOnMain(instrumentation) {
                     clickHomeTabNode(current.content(compose), compose, labels[1])
                 }
-                check(unselectedResult == ready)
-                if (ready) check(completion.await((420f * scale).toLong() + 2_000L, TimeUnit.MILLISECONDS)) {
+                route.put("unselected_action_result", unselectedResult)
+                check(unselectedResult) { "Unselected tab direct action admission differs from released contract" }
+                check(completion.await((420f * scale).toLong() + 2_000L, TimeUnit.MILLISECONDS)) {
                     "Home semantic selection callback did not complete"
                 }
                 captureNativeParityContent(instrumentation, activity) { current.show(compose) }.recycle()
@@ -901,12 +908,12 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
                     val events = current.events(compose)
                     JSONArray((0 until events.length()).map { events.getJSONObject(it).getString("action") })
                 }
-                val expectedCallbacks = JSONArray(if (ready) listOf("select:LOOPING") else emptyList<String>())
+                val expectedCallbacks = JSONArray(listOf("select:LOOPING"))
+                route.put("callbacks", callbacks)
                 check(callbacks.toString() == expectedCallbacks.toString())
                 val selection = nativeParityOnMain(instrumentation) { current.selected(compose).name }
-                check(selection == if (ready) "LOOPING" else "ONE_SHOT")
-                route.put("selected_action_result", selectedResult).put("unselected_action_result", unselectedResult)
-                    .put("callbacks", callbacks).put("selection", selection)
+                route.put("selection", selection)
+                check(selection == "LOOPING")
                 signatures += homeTabKey(initial) + "\n" + homeTabKey(after) + "\n" +
                     selectedResult + ":" + unselectedResult + ":" + callbacks + ":" + selection
                 nativeParityOnMain(instrumentation) {

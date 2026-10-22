@@ -142,6 +142,31 @@ private fun verifyNativeMainSettingsParity(
                         run.getJSONArray("steps").put(evidence)
                         captures += file to evidence
                     } finally { bitmap.recycle() }
+                    if (automation != null && pass == 1 && step == "main") {
+                        val importance = JSONObject()
+                        run.put("home_importance_traversal", importance)
+                        var canonical: String? = null
+                        verifyNativeMainImportanceTraversal(automation, importance) { traversal ->
+                            val nodes = onboardingNativeNodeEvidence(instrumentation, host, current.board,
+                                automation) { partial ->
+                                traversal.put("platform_partial", partial)
+                                File(directory, "result.json").writeText(result.toString(2))
+                            }
+                            val visible = nodes.getJSONArray("canonical")
+                            val descriptions = (0 until visible.length()).map {
+                                visible.getJSONObject(it).optString("description")
+                            }
+                            for (label in listOf(R.string.app_name, R.string.open_incidents, R.string.open_settings)) {
+                                check(host.getString(label) in descriptions) { "Visible Home action missing from platform tree" }
+                            }
+                            val signature = visible.toString()
+                            check(canonical == null || canonical == signature) {
+                                "Importance traversal changed visible Home semantics"
+                            }
+                            canonical = signature
+                            nodes
+                        }
+                    }
                     if (automation != null && step in listOf("settings", "preview", "undo")) {
                         val entry = JSONObject().put("step", step).put("passed", false)
                         run.getJSONArray("settings_radio_nodes").put(entry)
@@ -155,6 +180,28 @@ private fun verifyNativeMainSettingsParity(
                         val groups = mainSettingsRadioGroups(nodes.getJSONArray("raw"), host,
                             host.getString(expectedTheme.labelRes))
                         entry.put("expected_theme", expectedTheme.name).put("groups", groups).put("passed", true)
+                        if (pass == 1 && step == "settings") {
+                            val importance = JSONObject()
+                            entry.put("importance_traversal", importance)
+                            verifyNativeMainImportanceTraversal(automation, importance) { traversal ->
+                                val traversed = onboardingNativeNodeEvidence(instrumentation, host,
+                                    current.board, automation, includeCollections = true) { partial ->
+                                    traversal.put("platform_partial", partial)
+                                    File(directory, "result.json").writeText(result.toString(2))
+                                }
+                                val traversedGroups = mainSettingsRadioGroups(traversed.getJSONArray("raw"),
+                                    host, host.getString(expectedTheme.labelRes))
+                                check(mainSettingsRadioGroupsKey(traversedGroups) == mainSettingsRadioGroupsKey(groups)) {
+                                    "Importance traversal changed visible Settings radio/group semantics"
+                                }
+                                traversed.put("groups", traversedGroups)
+                            }
+                            entry.put("layer_admission", verifyNativeMainLayerAdmission(instrumentation,
+                                host, current.board) { partial ->
+                                entry.put("layer_admission", partial)
+                                File(directory, "result.json").writeText(result.toString(2))
+                            })
+                        }
                     }
                 }
                 fun click(resource: Int) {
