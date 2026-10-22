@@ -68,6 +68,7 @@ private fun verifyNativeMainSettingsParity(
     check(directory.mkdir())
     val runs = JSONArray()
     val comparisons = JSONArray()
+    val radioComparisons = JSONArray()
     val result = JSONObject()
         .put("oracle_sha256", "614856c6ad8a0a54027c932d44f1361003e73f1bf7faafaf7b902e9e8c6d117f")
         .put("dispatch", "Own focused QA window semantic actions; no physical input or permission request")
@@ -78,6 +79,8 @@ private fun verifyNativeMainSettingsParity(
     if (commonGrainInput) result.put("selector", "native_main_settings_parity_common_grain")
         .put("reference_input_override", "settings_noise_tile only: exact native procedural grain")
         .put("raw_grain_parity", "Unqualified by this supplemental selector; raw selector remains separate")
+        .put("settings_radio_scope", "Actual platform Theme and Time/Size groups at the existing Settings, preview and Undo captures; current retention selection only, no additional actions or TalkBack delivery claim")
+        .put("settings_radio_comparisons", radioComparisons)
     var activity: NativeParityActivity? = null
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
@@ -89,6 +92,9 @@ private fun verifyNativeMainSettingsParity(
         val host = launchNativeParityActivity(instrumentation)
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        val automation = if (commonGrainInput) nativeParityUiAutomation(instrumentation) else null
+        if (automation != null) result.put("ui_automation_flags",
+            android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         nativeParityOnMain(instrumentation) {
             // The release Activity's ReverbTheme uses these own-window policies. Both renderers
             // receive the same dispatched insets; neither is given fabricated zero bar sizes.
@@ -109,6 +115,7 @@ private fun verifyNativeMainSettingsParity(
             val reference = pass % 2 == 0
             val label = listOf("compose", "native", "compose-repeat", "native-repeat")[pass]
             val run = JSONObject().put("renderer", label).put("steps", JSONArray())
+            if (commonGrainInput) run.put("settings_radio_nodes", JSONArray())
             runs.put(run)
             val captures = ArrayList<Pair<File, JSONObject>>()
             all += captures
@@ -135,6 +142,20 @@ private fun verifyNativeMainSettingsParity(
                         run.getJSONArray("steps").put(evidence)
                         captures += file to evidence
                     } finally { bitmap.recycle() }
+                    if (automation != null && step in listOf("settings", "preview", "undo")) {
+                        val entry = JSONObject().put("step", step).put("passed", false)
+                        run.getJSONArray("settings_radio_nodes").put(entry)
+                        val nodes = onboardingNativeNodeEvidence(instrumentation, host, current.board,
+                            automation, includeCollections = true) { partial ->
+                            entry.put("platform_partial", partial)
+                            File(directory, "result.json").writeText(result.toString(2))
+                        }
+                        entry.put("platform", nodes)
+                        val expectedTheme = if (step == "preview") target else initialMode
+                        val groups = mainSettingsRadioGroups(nodes.getJSONArray("raw"), host,
+                            host.getString(expectedTheme.labelRes))
+                        entry.put("expected_theme", expectedTheme.name).put("groups", groups).put("passed", true)
+                    }
                 }
                 fun click(resource: Int) {
                     requireNativeParityHost(instrumentation, host)
@@ -189,6 +210,32 @@ private fun verifyNativeMainSettingsParity(
             if (!passed) mismatches++
         }
         check(mismatches == 0) { "Assembled Main/Settings differs in $mismatches steps; retain raw evidence" }
+        if (commonGrainInput) {
+            val states = listOf("settings", "preview", "undo")
+            for (pass in 0..3) {
+                val nodes = runs.getJSONObject(pass).getJSONArray("settings_radio_nodes")
+                check(nodes.length() == states.size)
+                val retention = mainSettingsRadioGroupKey(nodes.getJSONObject(0).getJSONObject("groups")
+                    .getJSONObject("retention"))
+                for (step in states.indices) {
+                    check(nodes.getJSONObject(step).getString("step") == states[step])
+                    check(mainSettingsRadioGroupKey(nodes.getJSONObject(step).getJSONObject("groups")
+                        .getJSONObject("retention")) == retention) { "Theme preview changed Time/Size semantics" }
+                }
+            }
+            for (step in states.indices) {
+                fun signature(pass: Int) = mainSettingsRadioGroupsKey(runs.getJSONObject(pass)
+                    .getJSONArray("settings_radio_nodes").getJSONObject(step).getJSONObject("groups"))
+                val entry = JSONObject().put("step", states[step])
+                    .put("released_native_equal", signature(0) == signature(1))
+                    .put("released_repeat_equal", signature(0) == signature(2))
+                    .put("native_repeat_equal", signature(1) == signature(3))
+                val passed = entry.getBoolean("released_native_equal") && entry.getBoolean("released_repeat_equal") &&
+                    entry.getBoolean("native_repeat_equal")
+                radioComparisons.put(entry.put("passed", passed))
+                check(passed) { "Settings platform radio/group semantics differ at ${states[step]}" }
+            }
+        }
         commonGrain?.verifyReferenceLoads()
         commonGrain?.verifyNativeReady()
         comparisonSucceeded = true
@@ -635,6 +682,92 @@ private class MainSettingsParityRender(
         failure?.let { throw it }
     }
 }
+
+/** Actual platform subtrees, not source/View state or a screenshot-derived selection. */
+private fun mainSettingsRadioGroups(raw: JSONArray, host: NativeParityActivity, expectedTheme: String): JSONObject {
+    fun children(parent: Int): List<Int> = buildList {
+        val depth = raw.getJSONObject(parent).getInt("depth")
+        var index = parent + 1
+        while (index < raw.length() && raw.getJSONObject(index).getInt("depth") > depth) {
+            if (raw.getJSONObject(index).getInt("depth") == depth + 1) add(index)
+            index++
+        }
+    }
+    fun group(labels: List<String>, expected: String?): JSONObject {
+        val candidates = (0 until raw.length()).filter { index ->
+            val parent = raw.getJSONObject(index)
+            val collection = parent.optJSONObject("collection") ?: return@filter false
+            val cells = children(index)
+            collection.getInt("rows") == 1 && collection.getInt("columns") == labels.size &&
+                cells.size == labels.size && cells.map { cell ->
+                    children(cell).map { raw.getJSONObject(it).optString("text", "") }
+                        .singleOrNull { it in labels }
+                } == labels
+        }
+        check(candidates.size == 1) { "Expected one platform radio group for $labels; found ${candidates.size}" }
+        val index = candidates.single()
+        val parent = raw.getJSONObject(index)
+        val collection = parent.getJSONObject("collection")
+        check(parent.getString("class") == "android.view.View" && parent.getBoolean("visible"))
+        check(!parent.getBoolean("clickable") && !parent.getBoolean("checkable"))
+        check(!collection.getBoolean("hierarchical") && collection.getInt("selection_mode") ==
+            AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_NONE)
+        val items = JSONArray()
+        val selected = ArrayList<String>()
+        children(index).forEachIndexed { column, cellIndex ->
+            val cell = raw.getJSONObject(cellIndex)
+            val descendants = children(cellIndex).map(raw::getJSONObject)
+            check(descendants.size == 2 && descendants.count { it.optString("text") == labels[column] } == 1 &&
+                descendants.count { it.optString("class") == "android.widget.RadioButton" } == 1) {
+                "Missing label or role-only RadioButton node for ${labels[column]}"
+            }
+            val checked = cell.getBoolean("checked")
+            check(cell.getString("class") == "android.view.View" && cell.getBoolean("visible") &&
+                cell.getBoolean("enabled") && cell.getBoolean("checkable") && !cell.getBoolean("selected"))
+            check(!cell.isNull("state_description") && cell.getString("state_description").isNotEmpty())
+            check(cell.getBoolean("clickable") == !checked)
+            val actions = cell.getJSONArray("actions")
+            check((0 until actions.length()).any { actions.getJSONObject(it).getInt("id") ==
+                AccessibilityNodeInfo.ACTION_CLICK } == !checked) { "Selected radio click advertisement differs" }
+            val item = cell.getJSONObject("collection_item")
+            check(item.getInt("row") == 0 && item.getInt("row_span") == 1 &&
+                item.getInt("column") == column && item.getInt("column_span") == 1 &&
+                !item.getBoolean("heading") && item.getBoolean("selected") == checked)
+            if (checked) selected += labels[column]
+            items.put(JSONObject().put("label", labels[column]).put("parent", cell)
+                .put("children", JSONArray(descendants)))
+        }
+        check(selected.size == 1) { "Radio group $labels must expose exactly one checked item: $selected" }
+        if (expected != null) check(selected.single() == expected) {
+            "Expected platform selection $expected, observed ${selected.single()}"
+        }
+        return JSONObject().put("parent", parent).put("items", items).put("selected_label", selected.single())
+    }
+    return JSONObject().put("theme", group(AppThemeMode.entries.map { host.getString(it.labelRes) }, expectedTheme))
+        .put("retention", group(listOf(host.getString(R.string.retention_time_label),
+            host.getString(R.string.retention_size_mode_label)), null))
+}
+
+// Tree paths/provider IDs and input focus are retained raw; compare the requested radio/group
+// payload and bounds exactly across the released/native renderers and their existing repeats.
+private val mainSettingsRadioNodeFields = listOf("class", "text", "description", "state_description",
+    "role_description", "screen_reader_focusable", "enabled", "clickable", "long_clickable", "checkable",
+    "checked", "selected", "focusable", "visible", "actions", "bounds", "collection", "collection_item")
+private fun mainSettingsRadioNodeKey(node: JSONObject): String =
+    JSONArray(mainSettingsRadioNodeFields.map(node::get)).toString()
+private fun mainSettingsRadioGroupKey(group: JSONObject): String {
+    val items = group.getJSONArray("items")
+    return mainSettingsRadioNodeKey(group.getJSONObject("parent")) + "\n" +
+        (0 until items.length()).joinToString("\n") { index ->
+            val item = items.getJSONObject(index)
+            val children = item.getJSONArray("children")
+            item.getString("label") + "\n" + mainSettingsRadioNodeKey(item.getJSONObject("parent")) + "\n" +
+                (0 until children.length()).joinToString("\n") { mainSettingsRadioNodeKey(children.getJSONObject(it)) }
+        }
+}
+private fun mainSettingsRadioGroupsKey(groups: JSONObject): String =
+    mainSettingsRadioGroupKey(groups.getJSONObject("theme")) + "\n" +
+        mainSettingsRadioGroupKey(groups.getJSONObject("retention"))
 
 private fun mainParityDark(mode: AppThemeMode, systemDark: Boolean) = when (mode) {
     AppThemeMode.SYSTEM -> systemDark

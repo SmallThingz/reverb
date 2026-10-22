@@ -12,4 +12,6 @@
     <string msgid="5946805113151406391" name="template_percent">"<ns0:g id="PERCENTAGE">%1$d</ns0:g> በመቶ።"</string>
     <string msgid="3124740595719787496" name="tooltip_label">"መሣሪያ ጥቆማን አሳይ"</string>
     <string msgid="3765533235322692011" name="tooltip_description">"መሣሪያ ጥቆማ"</string>
+    <string msgid="6610465462668679431" name="not_selected">"ያልተመረጡ"</string>
+    <string msgid="6043586758067023" name="selected">"ተመርጧል"</string>
 </resources>

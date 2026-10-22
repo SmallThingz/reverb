@@ -20,12 +20,14 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
-internal enum class NativeMergedRowRole { BUTTON, SWITCH, TAB }
+internal enum class NativeMergedRowRole { BUTTON, SWITCH, TAB, RADIO_BUTTON }
 
 internal interface NativeMergedRowAccessibilityHost {
     val mergedRowAccessibility: ReverbMergedRowAccessibility
     val mergesAccessibilityDescendants: Boolean get() = true
     val hasAccessibilitySemanticNode: Boolean get() = true
+    /** Semantic modifier bounds when a native layout also owns outer source padding. */
+    val accessibilityBoundsInView: ComposeRect? get() = null
 }
 
 internal data class NativeMergedRowAccessibilityState(
@@ -142,8 +144,10 @@ internal class ReverbMergedRowAccessibility(
 
     private fun snapshot(): NativeMergedRowAccessibilitySnapshot {
         val state = sourceState()
+        val localBounds = (host as? NativeMergedRowAccessibilityHost)?.accessibilityBoundsInView
+            ?: ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat())
         val mapped = geometry?.capture(host, Offset.Zero,
-            ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))
+            localBounds)
         val node = sourceNode?.invoke()
         val hidden = sourceExposure?.invoke() != true || !host.isShown || hasTransparentAncestor(host)
         val present = mapped != null && host.isAttachedToWindow && !mapped.visibleBoundsInRoot.isEmpty
@@ -159,6 +163,15 @@ internal class ReverbMergedRowAccessibility(
     }
 
     fun isNodePresent(): Boolean = host.isAttachedToWindow && snapshot().present
+
+    /** Selected radios publish state-description changes, not the Tab's selected event. */
+    fun notifyRadioSelectionChanged() {
+        if (role != NativeMergedRowRole.RADIO_BUTTON || !isNodePresent()) return
+        sendSourceEvent(host, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION)
+        sendSourceEvent(host, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
+    }
 
     /**
      * The actual ViewGroup must forward its public addChildrenForAccessibility here. Replacing
@@ -189,10 +202,18 @@ internal class ReverbMergedRowAccessibility(
         info.isCheckable = role == NativeMergedRowRole.SWITCH
         info.isChecked = role == NativeMergedRowRole.SWITCH && current.checked == true
         info.isSelected = current.selected == true
+        if (role == NativeMergedRowRole.RADIO_BUTTON) {
+            compat.stateDescription = host.context.getString(if (current.selected == true)
+                app.smallthingz.nativeui.R.string.selected else app.smallthingz.nativeui.R.string.not_selected)
+            info.isCheckable = true
+            info.isChecked = current.selected == true
+            info.isSelected = false
+        }
         info.isEnabled = current.enabled
         // Pinned delegate825-839 suppresses only selected Tab advertisement. The source OnClick
         // still exists, owns focus, and remains invocable directly while enabled.
         info.isClickable = current.clickable && !(role == NativeMergedRowRole.TAB && current.selected == true)
+        if (role == NativeMergedRowRole.RADIO_BUTTON && current.selected == true) info.isClickable = false
         info.isLongClickable = current.longClickable
         info.isFocusable = current.enabled && current.clickable
         info.isFocused = current.enabled && host.isFocused
@@ -242,6 +263,7 @@ internal class ReverbMergedRowAccessibility(
     private fun applyRole(info: AccessibilityNodeInfo) {
         when (role) {
             NativeMergedRowRole.BUTTON -> info.className = "android.widget.Button"
+            NativeMergedRowRole.RADIO_BUTTON -> info.className = "android.widget.RadioButton"
             NativeMergedRowRole.SWITCH -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
                 host.context.getString(app.smallthingz.nativeui.R.string.switch_role)
             NativeMergedRowRole.TAB -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
@@ -336,10 +358,11 @@ internal class ReverbMergedRowAccessibility(
         }
 
         @Suppress("DEPRECATION")
-        fun sendSourceEvent(view: View, type: Int) {
+        fun sendSourceEvent(view: View, type: Int, contentChangeTypes: Int = 0) {
             val manager = view.context.getSystemService(AccessibilityManager::class.java)
             if (manager?.isEnabled != true || !view.isAttachedToWindow) return
             val event = AccessibilityEvent.obtain(type).apply {
+                this.contentChangeTypes = contentChangeTypes
                 isEnabled = true
                 className = "android.view.View"
                 packageName = view.context.packageName

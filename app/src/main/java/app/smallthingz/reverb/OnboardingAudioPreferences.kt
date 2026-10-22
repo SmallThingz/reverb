@@ -92,7 +92,8 @@ internal fun resolveOnboardingAudioSelection(
     if (silenceEnabled && selectedCurve != null) {
         if (measured == null || (currentInput != null && measured.input != currentInput)) return null
     }
-    if (curveChanged && currentInput != null &&
+    // A dormant manually edited curve does not claim a calibration measurement.
+    if (silenceEnabled && curveChanged && currentInput != null &&
         decodeSilenceCalibrationHistogram(selected.silenceHistogram)?.input != currentInput
     ) return null
     return OnboardingAudioCommit(format, curve.copy(enabled = silenceEnabled), compression, histogram)

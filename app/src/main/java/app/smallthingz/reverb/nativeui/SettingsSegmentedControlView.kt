@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.accessibility.AccessibilityNodeInfo
 import app.smallthingz.nativeui.graphics.Color
 import app.smallthingz.nativeui.graphics.toArgb
 import androidx.core.view.ViewCompat
@@ -35,8 +36,8 @@ internal class SettingsSegmentedControlView<T>(
 ) : ViewGroup(context), AutoCloseable {
     private val surface = ReverbGroupLayout(context,30f)
     private val row = SegmentRow(context)
-    private val cells = items.map { item ->
-        SegmentCell(context,item,item.value==selected,environment,inputRoot) { onSelected(item.value) }
+    private val cells = items.mapIndexed { index,item ->
+        SegmentCell(context,item,index,item.value==selected,environment,inputRoot) { onSelected(item.value) }
     }
     init {
         require(items.isNotEmpty())
@@ -61,9 +62,33 @@ internal class SettingsSegmentedControlView<T>(
     }
     override fun close() { cells.forEach { it.close() } }
 
-    private inner class SegmentRow(context: Context): ViewGroup(context) {
+    private inner class SegmentRow(context: Context): ViewGroup(context), NativeMergedRowAccessibilityHost {
         private val widths=IntArray(items.size)
-        init { importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren=false }
+        override val mergesAccessibilityDescendants=false
+        override val accessibilityBoundsInView:app.smallthingz.nativeui.geometry.Rect
+            get() {
+                // padding(4.dp) precedes selectableGroup: only the inner Row is semantic.
+                val inset=dp(4).toFloat()
+                return app.smallthingz.nativeui.geometry.Rect(inset,inset,
+                    (width-inset).coerceAtLeast(inset),(height-inset).coerceAtLeast(inset))
+            }
+        override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+            {NativeMergedRowAccessibilityState(true,null,null,cells,clickable=false,rolePresent=false)},{false})
+        init {
+            importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
+            accessibilityDelegate=mergedRowAccessibility
+            clipChildren=false
+        }
+        override fun createAccessibilityNodeInfo():AccessibilityNodeInfo? =
+            if(mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
+        override fun addChildrenForAccessibility(children:ArrayList<View>) =
+            mergedRowAccessibility.addChildrenForAccessibility(children)
+        override fun onInitializeAccessibilityNodeInfo(info:AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(info)
+            // Released selectableGroup uses placement order and SELECTION_MODE_NONE.
+            info.collectionInfo=AccessibilityNodeInfo.CollectionInfo.obtain(1,items.size,false,
+                AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_NONE)
+        }
         override fun onMeasure(w: Int,h: Int) {
             val padding=dp(4)
             val width=MeasureSpec.getSize(w)
@@ -93,11 +118,12 @@ internal class SettingsSegmentedControlView<T>(
 private class SegmentCell<T>(
     context: Context,
     private val item: SettingsSegment<T>,
+    private val columnIndex: Int,
     selected: Boolean,
     private var environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
     private var activate: (() -> Unit)?,
-): ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, AutoCloseable {
+): ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost, AutoCloseable {
     override fun containsPointerLayer(x:Float,y:Float):Boolean=
         reverbGroupGeometry(width.toFloat(),height.toFloat(),environment.textDensity.density,22f).contains(x,y)
     private var chosen=selected
@@ -129,6 +155,9 @@ private class SegmentCell<T>(
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },sink)
     override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
+    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.RADIO_BUTTON,
+        {NativeMergedRowAccessibilityState(isEnabled,null,null,listOf(text),selected=chosen)},
+        {val action=activate;if(action==null)false else {action();true}})
 
     init {
         // Released Text only clips actual overflow; glyph ink may exceed its measured advance.
@@ -144,6 +173,9 @@ private class SegmentCell<T>(
         text.setTextLayout(maxLines=1)
         addView(text)
         icon?.let(::addView)
+        // The source merges the label but retains its leaf and a non-drawing role-only child.
+        addView(mergedRowAccessibility.roleView)
+        accessibilityDelegate=mergedRowAccessibility
         outlineProvider=object:ViewOutlineProvider() {
             override fun getOutline(view:View,outline:Outline) {
                 outline.setRoundRect(0,0,view.width,view.height,min(22f*environment.textDensity.density,min(view.width,view.height)/2f))
@@ -154,12 +186,14 @@ private class SegmentCell<T>(
         input.bind(NativeClickBinding(this,true,{performClick()}))
     }
     fun bind(selected:Boolean,next:ReverbViewEnvironment) {
+        val selectionChanged=chosen!=selected
         chosen=selected; environment=next
         indication.updateColor(next.palette.ink)
         text.setTypography(ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],next.textDensity,next.sharedFontResolver)
         backgroundDriver.retarget(Color(if(selected) next.palette.raised else android.graphics.Color.TRANSPARENT))
         colorDriver.retarget(Color(if(selected) next.palette.ink else next.palette.muted))
         updateClip();requestLayout()
+        if(selectionChanged)mergedRowAccessibility.notifyRadioSelectionChanged()
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w);val height=MeasureSpec.getSize(h)
@@ -168,6 +202,7 @@ private class SegmentCell<T>(
         gap=if(icon==null)0 else min(dp(6),(width-iconWidth).coerceAtLeast(0))
         text.measure(atMost((width-iconWidth-gap).coerceAtLeast(0)),atMost(height))
         contentWidth=iconWidth+gap+text.measuredWidth
+        mergedRowAccessibility.roleView.measure(exact(width),exact(height))
         setMeasuredDimension(width,height)
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
@@ -178,7 +213,16 @@ private class SegmentCell<T>(
             child.layout(x,y,x+child.measuredWidth,y+child.measuredHeight)
         }
         icon?.let { place(it);start+=it.measuredWidth+gap };place(text)
+        mergedRowAccessibility.roleView.layout(0,0,width,height)
         indication.onMeasured(width,height,environment.textDensity.density)
+    }
+    override fun createAccessibilityNodeInfo():AccessibilityNodeInfo? =
+        if(mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
+    override fun addChildrenForAccessibility(children:ArrayList<View>) =
+        mergedRowAccessibility.addChildrenForAccessibility(children)
+    override fun onInitializeAccessibilityNodeInfo(info:AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info.collectionItemInfo=AccessibilityNodeInfo.CollectionItemInfo.obtain(0,1,columnIndex,1,false,chosen)
     }
     override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int) { super.onSizeChanged(w,h,oldw,oldh);updateClip() }
     private fun updateClip() {

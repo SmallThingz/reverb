@@ -62,7 +62,8 @@ internal class NativeMainAccessibility(
 
     private fun bounds(view: View, minimumTouch: Float): ComposeRect {
         val base = if (view is ReverbParagraphView) view.originalAccessibilityBoundsInView()
-            else ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
+            else (view as? NativeMergedRowAccessibilityHost)?.accessibilityBoundsInView
+                ?: ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
         if (minimumTouch <= 0f) return base
         val dx = ((minimumTouch - base.width) / 2f).coerceAtLeast(0f)
         val dy = ((minimumTouch - base.height) / 2f).coerceAtLeast(0f)

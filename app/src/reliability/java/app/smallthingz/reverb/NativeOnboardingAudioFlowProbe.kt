@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
@@ -28,6 +29,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
     val directory = File(instrumentation.targetContext.filesDir, "native-onboarding-audio-flow-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val cases = JSONArray()
+    val pointerAttempts = JSONArray()
+    val scrollAttempts = JSONArray()
     val expected = listOf("permission-missing", "permission-granted", "buffers-default", "audio-default-on-top",
         "audio-default-on-graph", "slider-input", "toggles-off", "toggles-on",
         "calibration-running", "calibration-error", "calibration-cancelled",
@@ -39,6 +42,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
         .put("accessibility_connection", "public FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES")
         .put("expected_cases_per_palette", JSONArray(expected)).put("expected_case_count", expected.size * 2)
         .put("cases", cases).put("passed", false)
+        .put("pointer_attempts", pointerAttempts).put("scroll_attempts", scrollAttempts)
         .put("unqualified", JSONArray(listOf("actual microphone calibration", "production owner timed-calibration invocation",
             "system permission prompts/automatic sequence", "TalkBack delivery", "physical keyboard delivery",
             "released pixel parity of intentionally changed onboarding", "production preference persistence")))
@@ -124,25 +128,27 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                 repeat(8) {
                     val visible = nativeParityOnMain(instrumentation) {
                         val v = target()
-                        val rect = Rect()
-                        v.getGlobalVisibleRect(rect) && rect.height() >= v.height && rect.width() >= v.width
+                        val geometry = onboardingAudioQaVisibleGeometry(current().view, v)
+                        scrollAttempts.put(geometry.evidence().put("palette", paletteName)
+                            .put("intended_page", intendedPage).put("target_class", v.javaClass.name))
+                        geometry.usable
                     }
                     if (visible) return
                     main {
                         val v = target()
-                        var parent = v.parent as? View
-                        while (parent != null && parent !is NativeVerticalViewport) parent = parent.parent as? View
-                        val viewport = parent as? NativeVerticalViewport ?: error("Target has no actual page viewport")
-                        val rect = Rect(); val bounds = Rect()
-                        v.getGlobalVisibleRect(rect); viewport.getGlobalVisibleRect(bounds)
-                        val position = IntArray(2); v.getLocationOnScreen(position)
-                        val direction = if (position[1] < bounds.top) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                            else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                        check(viewport.performAccessibilityAction(direction, null)) { "Target cannot be scrolled into view" }
+                        // The native viewport's existing responder maps this precise descendant
+                        // rectangle. Page-sized scroll actions can oscillate around a tall graph.
+                        check(v.requestRectangleOnScreen(Rect(0, 0, v.width, v.height), false)) {
+                            "Target's existing bring-into-view path rejected the rectangle"
+                        }
                     }
                     settle()
                 }
-                error("Target did not become fully visible in eight actual viewport actions")
+                // Credit the eighth admitted request if it completed; do not issue a ninth.
+                if (nativeParityOnMain(instrumentation) {
+                    onboardingAudioQaVisibleGeometry(current().view, target()).usable
+                }) return
+                error("Target did not reach its usable page clip in eight actual bring-into-view requests")
             }
             fun click(view: () -> View) {
                 scrollTo(view)
@@ -178,7 +184,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                 val x = target.left + 8f * permission.resources.displayMetrics.density
                 val y = target.exactCenterY()
                 check(!text.contains(x.toInt(), y.toInt())) { "Whole-card witness fell inside label" }
-                onboardingAudioQaTap(current().view, x, y)
+                onboardingAudioQaTap(current().view, permission, x, y, pointerAttempts)
             }
             settle()
             check(nativeParityOnMain(instrumentation) { current().permissionRequests == 1 && current().state.permissions.microphoneAllowed })
@@ -215,7 +221,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             main {
                 val slider = checkNotNull(current().compression().currentSlider).pointerView
                 val bounds = Rect(); check(slider.getGlobalVisibleRect(bounds))
-                onboardingAudioQaTap(current().view, bounds.left + bounds.width() * .8f, bounds.exactCenterY())
+                onboardingAudioQaTap(current().view, slider, bounds.left + bounds.width() * .8f,
+                    bounds.exactCenterY(), pointerAttempts)
             }
             settle()
             check(nativeParityOnMain(instrumentation) { current().compressionEdits > beforePointer }) {
@@ -492,16 +499,81 @@ private fun onboardingAudioQaProgress(root: View, tree: JSONObject): JSONObject 
     } finally { node.recycle() }
 }
 
-/** Coordinates are freshly read own-view screen bounds, transformed to its current input root. */
-private fun onboardingAudioQaTap(root: View, screenX: Float, screenY: Float) {
+private data class OnboardingAudioQaVisibleGeometry(
+    val target: Rect,
+    val clip: Rect,
+    val visible: Rect,
+    val viewportCount: Int,
+    val usable: Boolean,
+) {
+    fun evidence(): JSONObject = JSONObject()
+        .put("target_bounds", JSONArray(listOf(target.left, target.top, target.right, target.bottom)))
+        .put("page_clip", JSONArray(listOf(clip.left, clip.top, clip.right, clip.bottom)))
+        .put("visible_bounds", JSONArray(listOf(visible.left, visible.top, visible.right, visible.bottom)))
+        .put("viewport_count", viewportCount).put("usable", usable)
+        .put("oversized", target.width() > clip.width() || target.height() > clip.height())
+}
+
+/** getGlobalVisibleRect does not account for clipToOutline on a clipChildren=false viewport. */
+private fun onboardingAudioQaVisibleGeometry(root: View, target: View): OnboardingAudioQaVisibleGeometry {
+    check(root.isAttachedToWindow && target.isAttachedToWindow && root.isShown && target.isShown)
+    val location = IntArray(2)
+    target.getLocationOnScreen(location)
+    val bounds = Rect(location[0], location[1], location[0] + target.width, location[1] + target.height)
+    val clip = Rect()
+    check(root.getGlobalVisibleRect(clip))
+    var ancestor: View? = target
+    var viewportCount = 0
+    while (ancestor !== root) {
+        val current = checkNotNull(ancestor) { "Target does not belong to the current fixture" }
+        if (current is NativeVerticalViewport) {
+            current.getLocationOnScreen(location)
+            val viewport = Rect(location[0], location[1], location[0] + current.width, location[1] + current.height)
+            if (!clip.intersect(viewport)) clip.setEmpty()
+            viewportCount++
+        }
+        ancestor = current.parent as? View
+    }
+    val visible = Rect()
+    if (!target.getGlobalVisibleRect(visible) || !visible.intersect(clip)) visible.setEmpty()
+    // Fitting controls must be wholly visible. A graph larger than the current viewport must
+    // span the available clipped axis; partial visibility is recorded, never called full visibility.
+    val usable = bounds.width() > 0 && bounds.height() > 0 && !clip.isEmpty && !visible.isEmpty &&
+        visible.width() >= minOf(bounds.width(), clip.width()) &&
+        visible.height() >= minOf(bounds.height(), clip.height())
+    return OnboardingAudioQaVisibleGeometry(bounds, clip, visible, viewportCount, usable)
+}
+
+/** Fresh own-target/page clip admission; same screen/raw-to-local contract as Settings fixtures. */
+private fun onboardingAudioQaTap(root: View, target: View, screenX: Float, screenY: Float, attempts: JSONArray) {
     check(root.isAttachedToWindow && root.hasWindowFocus() && root.display?.displayId == 0)
+    check(target.isEnabled)
+    val geometry = onboardingAudioQaVisibleGeometry(root, target)
     val origin = IntArray(2); root.getLocationOnScreen(origin)
     val x = screenX - origin[0]; val y = screenY - origin[1]
+    val entry = geometry.evidence().put("target_class", target.javaClass.name)
+        .put("screen_point", JSONArray(listOf(screenX.toDouble(), screenY.toDouble())))
+        .put("root_origin", JSONArray(listOf(origin[0], origin[1])))
+        .put("local_point", JSONArray(listOf(x.toDouble(), y.toDouble())))
+        .put("events", JSONArray())
+    attempts.put(entry)
+    check(geometry.usable && geometry.visible.contains(screenX.toInt(), screenY.toInt()) &&
+        geometry.clip.contains(screenX.toInt(), screenY.toInt())) {
+        "Touch target/point is outside its actual current page clip: $entry"
+    }
     check(x >= 0 && x < root.width && y >= 0 && y < root.height)
     val down = SystemClock.uptimeMillis()
     for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
-        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
-        try { check(root.dispatchTouchEvent(event)) { "Own-root pointer action $action was rejected" } }
+        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, screenX, screenY, 0)
+        event.source = InputDevice.SOURCE_TOUCHSCREEN
+        event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
+        try {
+            val accepted = root.dispatchTouchEvent(event)
+            entry.getJSONArray("events").put(JSONObject().put("action", action).put("accepted", accepted)
+                .put("raw", JSONArray(listOf(event.rawX.toDouble(), event.rawY.toDouble())))
+                .put("local", JSONArray(listOf(event.x.toDouble(), event.y.toDouble()))))
+            check(accepted) { "Own-root pointer action $action was rejected: $entry" }
+        }
         finally { event.recycle() }
     }
 }

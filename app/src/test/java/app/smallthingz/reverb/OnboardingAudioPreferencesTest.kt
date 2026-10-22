@@ -212,13 +212,54 @@ class OnboardingAudioPreferencesTest {
 
     @Test
     fun editedCalibrationCannotBorrowAConcurrentInputsMeasurement() {
-        val old = OnboardingAudioSelection(true, true, 5, customCurve, histogram())
-        val changedCurve = customCurve.copy(points = customCurve.points.map { it.copy(db = -60) })
+        val enabledCurve = customCurve.copy(enabled = true)
+        val old = OnboardingAudioSelection(true, true, 5, enabledCurve, histogram())
+        val changedCurve = enabledCurve.copy(points = enabledCurve.points.map { it.copy(db = -60) })
         val nextInput = input.copy(sampleRate = 48_000)
         assertNull(resolveOnboardingAudioSelection(old, old.copy(silenceConfig = changedCurve),
-            ExportFormat.FLAC, customCurve, PcmSampleFormat.PCM_16, 5, histogram(nextInput), nextInput))
+            ExportFormat.FLAC, enabledCurve, PcmSampleFormat.PCM_16, 5, histogram(nextInput), nextInput))
         assertNull(resolveOnboardingAudioSelection(old, old.copy(silenceHistogram = histogram(db = -62f)),
-            ExportFormat.FLAC, customCurve, PcmSampleFormat.PCM_16, 5, histogram(nextInput), nextInput))
+            ExportFormat.FLAC, enabledCurve, PcmSampleFormat.PCM_16, 5, histogram(nextInput), nextInput))
+    }
+
+    @Test
+    fun manuallyEditedCurveCanFinishWithSilenceOffWithoutCalibration() {
+        val edited = customCurve.copy(points = customCurve.points.map { it.copy(db = -60) })
+        for (optionalHistogram in listOf(null, histogram())) {
+            val original = OnboardingAudioSelection(false, false, 5, customCurve, optionalHistogram)
+            val selected = original.copy(outputCompressionEnabled = true, flacCompression = 2,
+                silenceConfig = edited)
+            val result = requireNotNull(resolveOnboardingAudioSelection(original, selected,
+                ExportFormat.WAV, customCurve, PcmSampleFormat.PCM_16, 5, optionalHistogram, input))
+            assertEquals(ExportFormat.FLAC, result.outputFormat)
+            assertEquals(2, result.flacCompression)
+            assertEquals(edited, result.silenceConfig)
+            assertFalse(result.silenceConfig.enabled)
+            assertEquals(optionalHistogram, result.silenceHistogram)
+        }
+    }
+
+    @Test
+    fun manuallyEditedCurveStillRequiresMeasurementWhenSilenceIsEnabled() {
+        val original = OnboardingAudioSelection(false, false, 5, customCurve, null)
+        val edited = customCurve.copy(enabled = true, points = customCurve.points.map { it.copy(db = -60) })
+        val selected = original.copy(skipSilenceEnabled = true, silenceConfig = edited)
+        assertNull(resolveOnboardingAudioSelection(original, selected, ExportFormat.WAV,
+            customCurve, PcmSampleFormat.PCM_16, 5, null, input))
+        // An untouched switch follows a concurrent enable, so the effective state also gates Finish.
+        assertNull(resolveOnboardingAudioSelection(original, selected.copy(skipSilenceEnabled = false),
+            ExportFormat.WAV, customCurve.copy(enabled = true), PcmSampleFormat.PCM_16, 5, null, input))
+    }
+
+    @Test
+    fun disabledCurveDoesNotAcceptCorruptOrWrongInputMeasurements() {
+        val original = OnboardingAudioSelection(false, false, 5, customCurve, null)
+        val edited = customCurve.copy(points = customCurve.points.map { it.copy(db = -60) })
+        for (invalidHistogram in listOf("invalid", histogram(input.copy(sampleRate = 48_000)))) {
+            val selected = original.copy(silenceConfig = edited, silenceHistogram = invalidHistogram)
+            assertNull(resolveOnboardingAudioSelection(original, selected, ExportFormat.WAV,
+                customCurve, PcmSampleFormat.PCM_16, 5, null, input))
+        }
     }
 
     @Test

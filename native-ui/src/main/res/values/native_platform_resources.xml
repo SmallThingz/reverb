@@ -19,4 +19,6 @@
     </style>
     <string name="tooltip_label">show tooltip</string>
     <string name="tooltip_description">tooltip</string>
+    <string name="not_selected">Not selected</string>
+    <string name="selected">Selected</string>
 </resources>

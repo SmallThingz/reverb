@@ -145,6 +145,7 @@ private fun pointInFixture(view: View, fixture: View, point: Offset,
 internal fun onboardingNativeNodeEvidence(
     instrumentation: Instrumentation, activity: NativeParityActivity, content: View,
     automation: android.app.UiAutomation = nativeParityUiAutomation(instrumentation),
+    includeCollections: Boolean = false,
     preserveFailure: (JSONObject) -> Unit,
 ): JSONObject {
     requireNativeParityHost(instrumentation, activity)
@@ -235,9 +236,22 @@ internal fun onboardingNativeNodeEvidence(
             .put("actions", JSONArray(actions))
             .put("bounds", JSONArray(listOf(rect.left - origin[0], rect.top - origin[1],
                 rect.right - origin[0], rect.bottom - origin[1])))
-        raw.put(JSONObject(item.toString()).put("depth", depth)
+        val rawItem = JSONObject(item.toString()).put("depth", depth)
             .put("package", node.packageName?.toString() ?: JSONObject.NULL)
-            .put("children", node.childCount))
+            .put("children", node.childCount)
+        // Opt-in raw evidence only: existing callers and canonical comparisons stay unchanged.
+        if (includeCollections) {
+            rawItem.put("collection", node.collectionInfo?.let {
+                JSONObject().put("rows", it.rowCount).put("columns", it.columnCount)
+                    .put("hierarchical", it.isHierarchical).put("selection_mode", it.selectionMode)
+            } ?: JSONObject.NULL)
+            rawItem.put("collection_item", node.collectionItemInfo?.let {
+                JSONObject().put("row", it.rowIndex).put("row_span", it.rowSpan)
+                    .put("column", it.columnIndex).put("column_span", it.columnSpan)
+                    .put("heading", it.isHeading).put("selected", it.isSelected)
+            } ?: JSONObject.NULL)
+        }
+        raw.put(rawItem)
         // Compose creates role-only virtual children for merging Button/Switch rows. They are
         // semantic payload, not empty wrappers: keep their role/class even without text or clicks.
         val hasPayload = !node.text.isNullOrEmpty() || !node.contentDescription.isNullOrEmpty() ||
