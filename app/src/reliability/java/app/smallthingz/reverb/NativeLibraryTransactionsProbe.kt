@@ -75,11 +75,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** QA-owned files only. Every storage mutation is the same visible action in the released screen. */
-internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, report: StringBuilder) {
+internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, report: StringBuilder,
+                                             menuOnly: Boolean = false) {
     check(Build.VERSION.SDK_INT >= 31) // Exact current physical-phone fixture; no software fallback.
     val context = instrumentation.targetContext
     requireTransactionIdentity(context)
-    val directory = File(context.filesDir, "native-library-transactions-" + System.currentTimeMillis())
+    val selector = if (menuOnly) "native_library_menu" else "native_library_transactions"
+    val directory = File(context.filesDir,
+        (if (menuOnly) "native-library-menu-" else "native-library-transactions-") + System.currentTimeMillis())
     check(directory.mkdir())
     val preferences = getRecorderPreferences(context).all.toMap()
     val feedback = AppFeedbackCenter.events.value.toList()
@@ -89,6 +92,8 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("scope", "One Light/LTR menu/Info, Rename raw-newline draft and valid rename, consecutive Delete/Undo, real Undo expiry per renderer; QA-owned MediaStore catalog")
         .put("limits", "Semantic/View actions, not physical keyboard/IME or full MediaPlayer playback; no Share, Trim, import, permissions or production store")
         .put("passed", false)
+    result.put("selector", selector)
+    if (menuOnly) result.put("scope", "One Light/LTR recording menu per renderer; same QA-owned MediaStore fixtures, no menu action")
     val cases = JSONArray()
     result.put("cases", cases)
     val windowTransitions = JSONArray().also { result.put("window_transitions", it) }
@@ -97,6 +102,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
     var fixtures: TransactionFixtures? = null
     var primary: Throwable? = null
     val captures = linkedMapOf<String, MutableMap<String, File>>()
+    val captureRegions = JSONObject().also { result.put("capture_regions", it) }
     fun closeBoard() {
         val retired = board ?: return
         board = null
@@ -136,8 +142,31 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             }
             current.awaitReady(instrumentation, records.map { it.id }.toSet())
             fun capture(name: String, settle: Boolean = true) {
-                val file = current.capture(instrumentation, directory, "$renderer-$name", settle)
+                val scene = captureRegions.optJSONObject(name) ?: JSONObject().also { captureRegions.put(name, it) }
+                val observation = JSONObject().also { scene.put(renderer, it) }
+                val file = current.capture(instrumentation, directory, "$renderer-$name", settle,
+                    observation, observeMenu = name == "menu")
                 captures.getOrPut(name) { linkedMapOf() }[renderer] = file
+            }
+            if (menuOnly) {
+                recordCase(renderer, "menu") { entry ->
+                    current.openMenu(instrumentation, records[0].displayName)
+                    val expected = listOf(R.string.rename_recording, R.string.recording_info,
+                        R.string.share_recording, R.string.trim_recording, R.string.delete_recording, R.string.multi_select)
+                        .map(context::getString)
+                    val actual = current.clickLabels(instrumentation)
+                    entry.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actual))
+                    check(actual == expected) { "Menu label/order/enabled mismatch" }
+                    capture("menu")
+                    ledger.requireUnchanged()
+                }
+                closeBoard()
+                ledger.close()
+                fixtures = null
+                check(getRecorderPreferences(context).all == preferences)
+                check(AppFeedbackCenter.events.value == feedback) { "Unexpected passive feedback; preserved" }
+                check(recordingMutations.activeIds.value.isEmpty())
+                continue
             }
             recordCase(renderer, "menu-info") { entry ->
                 current.openMenu(instrumentation, records[0].displayName)
@@ -275,17 +304,31 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         result.put("comparisons", comparisons)
         for ((name, files) in captures) {
             check(files.keys == setOf("compose", "native"))
+            val regions = captureRegions.getJSONObject(name)
+            check(regions.getJSONObject("compose").getJSONObject("region").toString() ==
+                regions.getJSONObject("native").getJSONObject("region").toString()) {
+                "Released/native app viewport geometry changed: $name"
+            }
+            val fullSource = checkNotNull(BitmapFactory.decodeFile(File(directory, "compose-$name-0.png").absolutePath))
+            val fullDiff = try {
+                val fullNative = checkNotNull(BitmapFactory.decodeFile(File(directory, "native-$name-0.png").absolutePath))
+                try { compareNativeParityPixels(fullSource, fullNative) } finally { fullNative.recycle() }
+            } finally { fullSource.recycle() }
             val source = checkNotNull(BitmapFactory.decodeFile(files.getValue("compose").absolutePath))
             try {
                 val native = checkNotNull(BitmapFactory.decodeFile(files.getValue("native").absolutePath))
                 try {
                     val diff = compareNativeParityPixels(source, native)
-                    comparisons.put(JSONObject().put("name", name).put("difference", diff))
+                    comparisons.put(JSONObject().put("name", name).put("difference", diff)
+                        .put("full_fixture_difference", fullDiff)
+                        .put("scope", "Exact app viewport from current system-bar/cutout insets; full raw differences retained separately")
+                        .put("outside_viewport_difference_requires_review",
+                            fullDiff.getLong("different_pixels") > diff.getLong("different_pixels")))
                     check(diff.getLong("different_pixels") == 0L) { "Library transaction raster mismatch: $name" }
                 } finally { native.recycle() }
             } finally { source.recycle() }
         }
-        check(cases.length() == 8 && captures.size == 8)
+        check(cases.length() == (if (menuOnly) 2 else 8) && captures.size == (if (menuOnly) 1 else 8))
     } catch (error: Throwable) {
         primary = error
         result.put("terminal_error", android.util.Log.getStackTraceString(error))
@@ -315,7 +358,8 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             .append(directory.name).append("/result.json\n")
     }
     primary?.let { throw it }
-    report.append("PASS native_library_transactions flows=8 exact_raster_scenes=8\n")
+    report.append(if (menuOnly) "PASS native_library_menu flows=2 exact_app_viewport_scenes=1\n"
+        else "PASS native_library_transactions flows=8 exact_app_viewport_scenes=8\n")
 }
 
 private class TransactionLifecycle : LifecycleOwner {
@@ -641,7 +685,8 @@ private class TransactionBoard(
         } else check(nativeEditor().performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT,
             Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, raw) }))
     }
-    fun capture(i: Instrumentation, evidence: File, name: String, settle: Boolean): File {
+    fun capture(i: Instrumentation, evidence: File, name: String, settle: Boolean,
+                observation: JSONObject, observeMenu: Boolean): File {
         if (settle) {
             val duration = (900f * ValueAnimator.getDurationScale().coerceAtLeast(1f)).toLong()
             check(duration <= 15_000L)
@@ -656,32 +701,60 @@ private class TransactionBoard(
             val p = IntArray(2); host.fixtureRoot.getLocationOnScreen(p)
             Rect(p[0], p[1], p[0] + host.fixtureRoot.width, p[1] + host.fixtureRoot.height)
         }
+        val (viewport, region) = nativeParityOnMain(i) { transactionCaptureRegion(host, bounds) }
+        observation.put("region", region)
+        val frames = JSONArray().also { observation.put("frames", it) }
+        fun currentState(): JSONObject = nativeParityOnMain(i) {
+            guard()
+            check(focusRoot() === root)
+            check(transactionCaptureRegion(host, bounds).second.toString() == region.toString()) {
+                "Owned transaction capture viewport changed: $name"
+            }
+            transactionCaptureWindowState(root).also {
+                if (observeMenu) it.put("source_owned_layers", observeLibraryMenuLayers(root))
+            }
+        }
         var first: Bitmap? = null
+        var firstFull: Bitmap? = null
         try {
             repeat(2) { pass ->
+                val frame = JSONObject().put("pass", pass).also(frames::put)
                 awaitNativeParityDraw(i, root)
-                nativeParityOnMain(i) { guard(); check(focusRoot() === root) }
-                // Public UiAutomation screenshot is the default physical display. It captures owned
-                // popup/sheet windows too; PixelCopy(Activity.window) would omit those windows.
+                frame.put("before_capture", currentState())
+                // Retain the full physical display and full fixture. The separately compared app
+                // viewport comes only from current platform insets, never observed pixel differences.
                 val screen = checkNotNull(i.uiAutomation.takeScreenshot())
                 val cropped = try {
+                    frame.put("after_capture", currentState())
                     saveNativeParityBitmap(evidence, "$name-$pass-full.png", screen)
                     check(bounds.left >= 0 && bounds.top >= 0 && bounds.right <= screen.width && bounds.bottom <= screen.height)
-                    val region = Bitmap.createBitmap(screen, bounds.left, bounds.top, bounds.width(), bounds.height())
-                    if (region === screen) checkNotNull(region.copy(Bitmap.Config.ARGB_8888, false)) else region
+                    val raw = Bitmap.createBitmap(screen, bounds.left, bounds.top, bounds.width(), bounds.height())
+                    val fixture = if (raw === screen) checkNotNull(raw.copy(Bitmap.Config.ARGB_8888, false)) else raw
+                    var retained = false
+                    try {
+                        saveNativeParityBitmap(evidence, "$name-$pass.png", fixture)
+                        if (pass == 0) { firstFull = fixture; retained = true }
+                        else frame.put("full_fixture_stability_observation",
+                            compareNativeParityPixels(checkNotNull(firstFull), fixture))
+                    } finally { if (!retained) fixture.recycle() }
+                    val selected = Bitmap.createBitmap(screen, viewport.left, viewport.top, viewport.width(), viewport.height())
+                    if (selected === screen) checkNotNull(selected.copy(Bitmap.Config.ARGB_8888, false)) else selected
                 } finally { screen.recycle() }
                 var retained = false
                 try {
-                    nativeParityOnMain(i) { guard(); check(focusRoot() === root) }
-                    saveNativeParityBitmap(evidence, "$name-$pass.png", cropped)
+                    saveNativeParityBitmap(evidence, "$name-$pass-app-content.png", cropped)
                     if (pass == 0) { first = cropped; retained = true }
-                    else check(compareNativeParityPixels(checkNotNull(first), cropped).getLong("different_pixels") == 0L) {
-                        "Owned transaction scene is not stable: $name"
+                    else {
+                        val difference = compareNativeParityPixels(checkNotNull(first), cropped)
+                        frame.put("app_viewport_stability", difference)
+                        check(difference.getLong("different_pixels") == 0L) {
+                            "Owned transaction app viewport is not stable: $name"
+                        }
                     }
                 } finally { if (!retained) cropped.recycle() }
             }
-            return File(evidence, "$name-0.png")
-        } finally { first?.recycle() }
+            return File(evidence, "$name-0-app-content.png")
+        } finally { first?.recycle(); firstFull?.recycle() }
     }
     fun checkAsync() { asyncFailure.get()?.let { throw it } }
     fun awaitClosed() {
@@ -708,6 +781,64 @@ private class TransactionBoard(
         release(::checkAsync)
         primary?.let { throw it }
     }
+}
+
+/** Platform-owned overlay regions; do not intersect source/native crops to hide a mismatch. */
+private fun transactionCaptureRegion(host: NativeParityActivity, fixture: Rect): Pair<Rect, JSONObject> {
+    val decor = host.window.decorView
+    val location = IntArray(2).also(decor::getLocationOnScreen)
+    val insets = checkNotNull(decor.rootWindowInsets).getInsets(
+        android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+    val viewport = Rect(location[0] + insets.left, location[1] + insets.top,
+        location[0] + decor.width - insets.right, location[1] + decor.height - insets.bottom)
+    check(!viewport.isEmpty && fixture.contains(viewport)) {
+        "Platform app viewport is outside the owned fixture"
+    }
+    return viewport to JSONObject().put("fixture_bounds", fixture.flattenToString())
+        .put("decor_bounds", Rect(location[0], location[1], location[0] + decor.width,
+            location[1] + decor.height).flattenToString())
+        .put("system_bar_cutout_insets", JSONArray(listOf(insets.left, insets.top, insets.right, insets.bottom)))
+        .put("compared_app_bounds", viewport.flattenToString())
+}
+
+private fun transactionCaptureWindowState(root: View): JSONObject {
+    fun state(view: View): JSONObject {
+        val screen = IntArray(2).also(view::getLocationOnScreen)
+        val window = IntArray(2).also(view::getLocationInWindow)
+        return JSONObject().put("identity", System.identityHashCode(view)).put("class", view.javaClass.name)
+            .put("width", view.width).put("height", view.height)
+            .put("screen_location", JSONArray(screen.toList())).put("window_location", JSONArray(window.toList()))
+            .put("focused", view.isFocused).put("window_focused", view.hasWindowFocus())
+            .put("touch_mode", view.isInTouchMode).put("shown", view.isShown)
+            .put("elevation", view.elevation.toDouble()).put("translation_z", view.translationZ.toDouble())
+            .put("alpha", view.alpha.toDouble()).put("scale_x", view.scaleX.toDouble()).put("scale_y", view.scaleY.toDouble())
+            .put("clip_to_outline", view.clipToOutline).put("force_dark_allowed", view.isForceDarkAllowed)
+            .put("outline_provider", view.outlineProvider?.javaClass?.name ?: JSONObject.NULL).also {
+                if (view is ViewGroup) it.put("clip_children", view.clipChildren).put("clip_to_padding", view.clipToPadding)
+            }
+    }
+    val descendants = transactionViews(root)
+    val lighting = JSONObject()
+    for ((name, attribute) in listOf("ambient_shadow_alpha" to android.R.attr.ambientShadowAlpha,
+        "spot_shadow_alpha" to android.R.attr.spotShadowAlpha, "window_elevation" to android.R.attr.windowElevation)) {
+        val value = android.util.TypedValue()
+        lighting.put(name, if (root.context.theme.resolveAttribute(attribute, value, true))
+            JSONObject().put("type", value.type).put("data", value.data)
+                .put("value", value.coerceToString()?.toString() ?: JSONObject.NULL) else JSONObject.NULL)
+    }
+    lighting.put("light_position_and_radius", "Unavailable through public Android SDK theme attributes")
+    return JSONObject().put("uptime_ms", SystemClock.uptimeMillis()).put("root", state(root))
+        .put("public_theme_lighting", lighting)
+        .put("focused_view_identity", root.findFocus()?.let(System::identityHashCode) ?: JSONObject.NULL)
+        .put("descendants", JSONArray(descendants.take(128).map(::state)))
+        .put("descendant_count", descendants.size).put("descendant_observation_capped", descendants.size > 128)
+        .put("window_layout", (root.layoutParams as? android.view.WindowManager.LayoutParams)?.let {
+            JSONObject().put("type", it.type).put("flags", it.flags).put("x", it.x).put("y", it.y)
+                .put("width", it.width).put("height", it.height)
+                .put("surface_insets", "Unavailable through public Android SDK; no hidden API access")
+                .put("manual_surface_insets", "Unavailable through public Android SDK")
+                .put("preserve_previous_surface_insets", "Unavailable through public Android SDK")
+        } ?: JSONObject.NULL)
 }
 
 private val transactionNoNested = object : NativeVerticalNestedHost {

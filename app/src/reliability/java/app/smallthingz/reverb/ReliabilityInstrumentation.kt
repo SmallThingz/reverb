@@ -103,6 +103,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_transactions") {
                 executed++
                 verifyNativeLibraryTransactions(this, report)
+            } else if (requestedTest == "native_library_menu") {
+                executed++
+                verifyNativeLibraryTransactions(this, report, menuOnly = true)
             } else if (requestedTest == "native_library_playback") {
                 executed++
                 verifyNativeLibraryPlayback(this, report)
