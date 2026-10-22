@@ -421,7 +421,7 @@ internal class IncidentsParityBoard(
             owner = panelOwner
             val content = NativeIncidentsScreenView(context, environment, panelOwner, nativeScope,
                 host, host.onBackPressedDispatcher, host.fixtureRoot, text, source::node,
-                scrollEvents = events)
+                scrollEvents = events, admitChildren = source::retainPresentSemanticChildren)
             native = content
             content.layoutDirection = direction
             contentRoot.addView(content, FrameLayout.LayoutParams(-1, -1))

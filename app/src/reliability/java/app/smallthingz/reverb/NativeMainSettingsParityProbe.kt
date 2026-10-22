@@ -205,6 +205,8 @@ private fun verifyNativeMainSettingsParity(
                                 traversal.put("platform_partial", partial)
                                 File(directory, "result.json").writeText(result.toString(2))
                             }
+                            // Retain both complete traversals even if their semantic comparison fails.
+                            traversal.put("platform", nodes)
                             val visible = nodes.getJSONArray("canonical")
                             val descriptions = (0 until visible.length()).map {
                                 visible.getJSONObject(it).optString("description")
@@ -242,6 +244,7 @@ private fun verifyNativeMainSettingsParity(
                                     traversal.put("platform_partial", partial)
                                     File(directory, "result.json").writeText(result.toString(2))
                                 }
+                                traversal.put("platform", traversed)
                                 val traversedGroups = mainSettingsRadioGroups(traversed.getJSONArray("raw"),
                                     host, host.getString(expectedTheme.labelRes))
                                 check(mainSettingsRadioGroupsKey(traversedGroups) == mainSettingsRadioGroupsKey(groups)) {

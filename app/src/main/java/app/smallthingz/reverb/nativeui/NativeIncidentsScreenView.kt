@@ -38,6 +38,7 @@ internal class NativeIncidentsScreenView(
     private val overlayVisibilityChanged: (Boolean) -> Unit = {},
     private val scrollEvents: NativeWindowScrollAccessibilityEvents,
     restoredPosition: NativeListSavedPosition? = null,
+    private val admitChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null,
 ) : ViewGroup(context), NativeIncidentsRenderer, AutoCloseable {
     private val savedPosition = NativeIncidentsSavedPosition(restoredPosition)
     private var closed = false
@@ -147,7 +148,7 @@ internal class NativeIncidentsScreenView(
         scrollList = null
         previous?.close()
         scrollList = next
-        scrollLease = next?.let { NativeLibraryRecyclerAccessibility(it, sourceNode, scrollEvents) }
+        scrollLease = next?.let { NativeLibraryRecyclerAccessibility(it, sourceNode, scrollEvents, admitChildren) }
     }
 
     /** Delivered by the one main-window NativeWindowInsetsBinding, before child consumption. */

@@ -115,7 +115,8 @@ internal class NativeMainScreenView private constructor(
         overlayVisibilityChanged = { visible ->
             navigation.bindIncidentsOverlayVisibility(visible)
             requestRender()
-        }, scrollEvents = scrollEvents, restoredPosition = restored?.incidentsPosition)
+        }, scrollEvents = scrollEvents, restoredPosition = restored?.incidentsPosition,
+        admitChildren = source::retainPresentSemanticChildren)
     private val libraryMotion = NativeMainPanelMotion(navigation.showLibrary, scope, dispatcher,
         lifecycleOwner, ::motionChanged)
     private val home = ReverbHomeScaffoldView(context, environment, homeNavigation(), hasIncidentAlert,
@@ -277,7 +278,8 @@ internal class NativeMainScreenView private constructor(
         settings = content
         addView(content)
         settingsPointer = NativeSettingsPointerBinding(content, pointer.coordinates, frames, scope, parentInterested = { false })
-        settingsText = NativeSettingsAccessibilityBinding(content, windowText, source::node, scrollEvents)
+        settingsText = NativeSettingsAccessibilityBinding(content, windowText, source::node, scrollEvents,
+            source::retainPresentSemanticChildren)
         content.start()
         settingsNodesChanged()
     }
@@ -301,7 +303,8 @@ internal class NativeMainScreenView private constructor(
         library = content
         libraryLayer = NativeMainLibraryLayer(context, environment, content).also(::addView)
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
-        libraryText = NativeLibraryAccessibilityBinding(content, windowText, source::node, scrollEvents)
+        libraryText = NativeLibraryAccessibilityBinding(content, windowText, source::node, scrollEvents,
+            source::retainPresentSemanticChildren)
         libraryNodesChanged()
     }
 

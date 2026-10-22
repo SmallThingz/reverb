@@ -25,6 +25,7 @@ internal class NativeLibraryAccessibilityBinding(
     window:NativeWindowTextAccessibilityOwner,
     private val sourceNode:(View)->NativeSourceAccessibilityNode,
     private val scrollEvents:NativeWindowScrollAccessibilityEvents,
+    private val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
 ):AutoCloseable {
     private val clips=NativeTextSemanticsClipPolicy(content::sourceClip)
     private val text=window.bindContent(content,clips,sourceNode){view->sourceNode(view).present}
@@ -44,7 +45,7 @@ internal class NativeLibraryAccessibilityBinding(
         val nextList=content.listViewport
         if(list!==nextList) {
             listLease?.close();listLease=null;list=nextList
-            listLease=nextList?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents)}
+            listLease=nextList?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents,admitChildren)}
         }
         val nextEmpty=content.emptyViewport
         if(empty!==nextEmpty) {
@@ -53,7 +54,7 @@ internal class NativeLibraryAccessibilityBinding(
             empty=nextEmpty
             if(nextEmpty!=null) {
                 nextEmpty.sourceAccessibilityNode={sourceNode(nextEmpty)}
-                nextEmpty.sourceAccessibilityChildren={sourceChildren(nextEmpty,sourceNode)}
+                nextEmpty.sourceAccessibilityChildren={sourceChildren(nextEmpty,sourceNode,admitChildren)}
                 emptyLease=NativeVerticalScrollAccessibilityBinding(nextEmpty,scrollEvents){sourceNode(nextEmpty).present}
             }
         }
@@ -104,20 +105,40 @@ internal fun nativeLibraryAccessibilityRange(firstIndex:Int,offset:Int,canScroll
 }
 
 /** Native layout-only wrappers never become extra advertised children under the source LazyColumn. */
-private fun sourceChildren(root:ViewGroup,sourceNode:(View)->NativeSourceAccessibilityNode):List<View> = buildList {
+private fun sourceChildren(
+    root:ViewGroup,
+    sourceNode:(View)->NativeSourceAccessibilityNode,
+    admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?,
+):List<View> {
+    val children=ArrayList<View>()
     fun visit(view:View) {
         if(view.visibility!=View.VISIBLE || view.importantForAccessibility==View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS)return
-        if(view.isImportantForAccessibility) {
-            if(sourceNode(view).present)add(view)
-        }else if(view is ViewGroup)for(index in 0 until view.childCount)visit(view.getChildAt(index))
+        if(view.isImportantForAccessibility)children.add(view)
+        else if(view is ViewGroup)for(index in 0 until view.childCount)visit(view.getChildAt(index))
     }
     for(index in 0 until root.childCount)visit(root.getChildAt(index))
+    if(children.isEmpty())return children
+    if(admitChildren!=null) {
+        // All candidates are semantic children. A missing node stays absent; unlike structural
+        // wrappers, none may opt out of admission through a null semantic-child mapping.
+        admitChildren(children,0) {it}
+    }else {
+        // Standalone callers retain their existing per-node presence contract.
+        var write=0
+        for(read in children.indices) {
+            val child=children[read]
+            if(sourceNode(child).present)children[write++]=child
+        }
+        if(write!=children.size)children.subList(write,children.size).clear()
+    }
+    return children
 }
 
 internal class NativeLibraryRecyclerAccessibility(
     private val view:ReverbLibraryRecyclerView,
     private val sourceNode:(View)->NativeSourceAccessibilityNode,
     private val window:NativeWindowScrollAccessibilityEvents,
+    private val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
 ):View.OnAttachStateChangeListener,AutoCloseable {
     private var registration:NativeScrollAccessibilityRegistration?=null
     private val originalDelegate=ViewCompat.getAccessibilityDelegate(view)
@@ -178,7 +199,7 @@ internal class NativeLibraryRecyclerAccessibility(
     private val layout=View.OnLayoutChangeListener{_,_,_,_,_,_,_,_,_->registration?.layoutChanged()}
     init {
         view.sourceAccessibilityNode={sourceNode(view)}
-        view.sourceAccessibilityChildren={sourceChildren(view,sourceNode)}
+        view.sourceAccessibilityChildren={sourceChildren(view,sourceNode,admitChildren)}
         ViewCompat.setAccessibilityDelegate(view,delegate)
         view.sourceAccessibilityEventsBound=true
         view.addOnScrollListener(scroll);view.addOnLayoutChangeListener(layout)

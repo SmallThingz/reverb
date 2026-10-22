@@ -11,6 +11,7 @@ internal class NativeSettingsAccessibilityBinding(
     private val window:NativeWindowTextAccessibilityOwner,
     private val sourceNode:(View)->NativeSourceAccessibilityNode,
     private val scrollEvents:NativeWindowScrollAccessibilityEvents,
+    private val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
 ):AutoCloseable {
     private val clips=NativeTextSemanticsClipPolicy(content::sourceClip)
     private val topBar=window.bindSettingsTopBar(content.topBar,content,clips,sourceNode)
@@ -35,7 +36,7 @@ internal class NativeSettingsAccessibilityBinding(
         if(listViewport!==nextViewport) {
             listScroll?.close();listScroll=null
             listViewport=nextViewport
-            listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents)}
+            listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents,admitChildren)}
         }
         val present=IdentityHashMap<SettingsCalibrationProgressView,Boolean>()
         fun visit(view:View) {
