@@ -522,7 +522,8 @@ private class TransactionBoard(
         val evidence = JSONObject().put("renderer", if (compose) "compose" else "native")
             .put("action", action).put("action_submitted", false)
         windowTransitions.put(evidence)
-        pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence)
+        pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence,
+            observeInfoAuxiliaryOverlap = compose && action == context.getString(R.string.recording_info))
         return evidence
     }
     fun clickLabels(i: Instrumentation): List<String> = nativeParityOnMain(i) {

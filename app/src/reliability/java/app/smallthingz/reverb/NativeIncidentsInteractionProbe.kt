@@ -11,6 +11,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.View
+import android.view.WindowInsets
 import android.view.inspector.WindowInspector
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -145,8 +146,21 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
                 b = checkNotNull(android.graphics.BitmapFactory.decodeFile(pictures.getValue("native-$step").path))
                 compareNativeParityPixels(a, b)
             } finally { a?.recycle(); b?.recycle() }
-            comparisons.put(comparison.put("step", step))
+            comparisons.put(comparison.put("step", step).put("scope",
+                if (step == "menu") "app viewport excluding platform system overlays" else "app surface"))
         }
+        check(runs.getJSONObject(0).getJSONObject("menu_capture_region").toString() ==
+            runs.getJSONObject(1).getJSONObject("menu_capture_region").toString()) {
+            "Released/native app viewport geometry changed"
+        }
+        var fullReleased: Bitmap? = null
+        var fullNative: Bitmap? = null
+        try {
+            fullReleased = checkNotNull(android.graphics.BitmapFactory.decodeFile(File(directory, "released-menu.png").path))
+            fullNative = checkNotNull(android.graphics.BitmapFactory.decodeFile(File(directory, "native-menu.png").path))
+            result.put("menu_full_fixture_observation", compareNativeParityPixels(fullReleased, fullNative))
+                .put("menu_comparison_scope", "Exact app viewport from current system-bar/cutout insets. All pixels in those platform inset regions are excluded from this menu comparison; full fixture diff retained separately.")
+        } finally { fullReleased?.recycle(); fullNative?.recycle() }
         check((0 until comparisons.length()).all {
             comparisons.getJSONObject(it).getLong("different_pixels") == 0L
         }) { "Incidents interaction endpoint/menu pixels differ; retain captures without tolerance" }
@@ -459,37 +473,122 @@ private fun captureIncidentMenu(instrumentation: Instrumentation, host: NativePa
         val location = IntArray(2); host.fixtureRoot.getLocationOnScreen(location)
         Rect(location[0], location[1], location[0] + host.fixtureRoot.width, location[1] + host.fixtureRoot.height)
     }
+    val (viewport, region) = nativeParityOnMain(instrumentation) { incidentCaptureRegion(host, bounds) }
+    run.put("menu_capture_region", region)
     var previous: Bitmap? = null
     var stable = 0
     val deadline = SystemClock.uptimeMillis() + 8_000L
+    val frames = JSONArray().also { run.put("menu_capture_frames", it) }
+    currentIncidentMenu(instrumentation, host, window).first.recycle()
+    val popup = nativeParityOnMain(instrumentation) { incidentCapturePopup(host, window) }
     try {
         while (SystemClock.uptimeMillis() < deadline) {
             currentIncidentMenu(instrumentation, host, window).first.recycle()
+            nativeParityOnMain(instrumentation) { check(incidentCapturePopup(host, window) === popup) }
+            val frame = JSONObject().put("draw_requested_uptime_ms", SystemClock.uptimeMillis()).also(frames::put)
+            // Identical compositor snapshots alone do not prove a completed popup render. In
+            // particular, three snapshots can repeat while its entry animation is still pending.
+            awaitNativeParityDraw(instrumentation, popup)
+            frame.put("draw_completed_uptime_ms", SystemClock.uptimeMillis())
+            currentIncidentMenu(instrumentation, host, window).first.recycle()
+            frame.put("before_capture", nativeParityOnMain(instrumentation) {
+                check(incidentCapturePopup(host, window) === popup)
+                check(incidentCaptureRegion(host, bounds).second.toString() == region.toString())
+                val location = IntArray(2).also(popup::getLocationOnScreen)
+                check(viewport.contains(location[0], location[1], location[0] + popup.width, location[1] + popup.height)) {
+                    "The complete popup must remain within the compared app viewport"
+                }
+                incidentCaptureFrameState(popup)
+            })
             val full = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
-            val crop = try {
+            try {
                 currentIncidentMenu(instrumentation, host, window).first.recycle()
-                check(bounds.left >= 0 && bounds.top >= 0 && bounds.right <= full.width && bounds.bottom <= full.height)
-                val selected = Bitmap.createBitmap(full, bounds.left, bounds.top, bounds.width(), bounds.height())
-                // createBitmap may return its source for a full-display rectangle.
-                if (selected === full) checkNotNull(full.copy(Bitmap.Config.ARGB_8888, false)) else selected
-            } finally { full.recycle() }
-            val same = previous?.let { compareNativeParityPixels(it, crop).getLong("different_pixels") == 0L } ?: false
-            previous?.recycle(); previous = crop
-            stable = if (same) stable + 1 else 0
-            if (stable >= 2) {
-                val file = File(directory, "$name.png")
-                saveNativeParityBitmap(directory, file.name, crop); pictures[name] = file
-                currentIncidentMenu(instrumentation, host, window).first.recycle()
-                run.put("menu_text_geometry", nativeParityOnMain(instrumentation) {
-                    incidentMenuTextGeometry(host, window)
+                frame.put("after_capture", nativeParityOnMain(instrumentation) {
+                    check(incidentCapturePopup(host, window) === popup)
+                    check(incidentCaptureRegion(host, bounds).second.toString() == region.toString())
+                    val location = IntArray(2).also(popup::getLocationOnScreen)
+                    check(viewport.contains(location[0], location[1], location[0] + popup.width, location[1] + popup.height)) {
+                        "The complete popup must remain within the compared app viewport"
+                    }
+                    incidentCaptureFrameState(popup)
                 })
-                currentIncidentMenu(instrumentation, host, window).first.recycle()
-                return
-            }
-            Thread.sleep(32)
+                check(bounds.left >= 0 && bounds.top >= 0 && bounds.right <= full.width && bounds.bottom <= full.height)
+                val selected = Bitmap.createBitmap(full, viewport.left, viewport.top, viewport.width(), viewport.height())
+                // createBitmap may return its source for a full-display rectangle.
+                val crop = if (selected === full) checkNotNull(full.copy(Bitmap.Config.ARGB_8888, false)) else selected
+                val previousFrame = previous
+                previous = crop // Retain ownership even if exact comparison fails.
+                val same = try {
+                    previousFrame?.let { compareNativeParityPixels(it, crop).getLong("different_pixels") == 0L } ?: false
+                } finally { previousFrame?.recycle() }
+                stable = if (same) stable + 1 else 0
+                frame.put("same_pixels_as_previous", same).put("consecutive_equal_pairs", stable)
+                if (stable >= 2) {
+                    saveNativeParityBitmap(directory, "$name-full-display.png", full)
+                    val fixture = Bitmap.createBitmap(full, bounds.left, bounds.top, bounds.width(), bounds.height())
+                    try { saveNativeParityBitmap(directory, "$name.png", fixture) }
+                    finally { if (fixture !== full) fixture.recycle() }
+                    val file = File(directory, "$name-app-content.png")
+                    saveNativeParityBitmap(directory, file.name, crop); pictures[name] = file
+                    currentIncidentMenu(instrumentation, host, window).first.recycle()
+                    run.put("menu_text_geometry", nativeParityOnMain(instrumentation) {
+                        incidentMenuTextGeometry(host, window)
+                    })
+                    currentIncidentMenu(instrumentation, host, window).first.recycle()
+                    return
+                }
+            } finally { full.recycle() }
         }
         error("Incidents popup raster did not settle")
     } finally { previous?.recycle() }
+}
+
+/** Platform-reported overlay ownership, never image-derived masking or a pixel tolerance. */
+private fun incidentCaptureRegion(host: NativeParityActivity, fixture: Rect): Pair<Rect, JSONObject> {
+    val decor = host.window.decorView
+    val location = IntArray(2).also(decor::getLocationOnScreen)
+    val insets = checkNotNull(decor.rootWindowInsets).getInsets(
+        WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+    val viewport = Rect(location[0] + insets.left, location[1] + insets.top,
+        location[0] + decor.width - insets.right, location[1] + decor.height - insets.bottom)
+    check(viewport.intersect(fixture) && !viewport.isEmpty)
+    return viewport to JSONObject().put("fixture_bounds", fixture.flattenToString())
+        .put("decor_bounds", Rect(location[0], location[1], location[0] + decor.width,
+            location[1] + decor.height).flattenToString())
+        .put("system_bar_cutout_insets", JSONArray(listOf(insets.left, insets.top, insets.right, insets.bottom)))
+        .put("compared_app_bounds", viewport.flattenToString())
+}
+
+/** Main-thread read of the exact current own popup; this never requests or repairs focus. */
+private fun incidentCapturePopup(host: NativeParityActivity, window: Int): View {
+    val popup = WindowInspector.getGlobalWindowViews().filter {
+        it.isAttachedToWindow && it.isShown && it.hasWindowFocus()
+    }.single()
+    check(popup.context.applicationInfo.uid == Process.myUid() &&
+        popup.context.packageName == host.packageName && popup.display?.displayId == 0)
+    val node = checkNotNull(popup.createAccessibilityNodeInfo())
+    try { check(node.windowId == window) }
+    finally { @Suppress("DEPRECATION") node.recycle() }
+    return popup
+}
+
+/** Image-bound View observations, not a claim about Compose's internal graphics-layer alpha. */
+private fun incidentCaptureFrameState(popup: View): JSONObject {
+    val focused = popup.findFocus()
+    return JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+        .put("root_identity", System.identityHashCode(popup)).put("in_touch_mode", popup.isInTouchMode)
+        .put("focused_view_identity", focused?.let(System::identityHashCode) ?: JSONObject.NULL)
+        .put("focused_view_class", focused?.javaClass?.name ?: JSONObject.NULL)
+        .put("views", JSONArray().apply {
+            onboardingViewDescendants(popup).forEach { view ->
+                val location = IntArray(2).also(view::getLocationOnScreen)
+                put(JSONObject().put("identity", System.identityHashCode(view)).put("class", view.javaClass.name)
+                    .put("alpha", view.alpha.toDouble()).put("scale_x", view.scaleX.toDouble())
+                    .put("scale_y", view.scaleY.toDouble()).put("focused", view.isFocused)
+                    .put("screen_x", location[0]).put("screen_y", location[1])
+                    .put("width", view.width).put("height", view.height))
+            }
+        })
 }
 
 private fun clickIncidentMenuDelete(instrumentation: Instrumentation, host: NativeParityActivity, window: Int) {

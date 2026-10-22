@@ -123,6 +123,8 @@ internal class SettingsRetentionInputView(
     init {
         background = null
         foreground = null
+        // AndroidComposeView opts out of the platform overlay; cursor/selection own field focus.
+        defaultFocusHighlightEnabled = false
         setPadding(0, 0, 0, 0)
         setCompoundDrawablePadding(0)
         minimumWidth = 0

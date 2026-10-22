@@ -97,7 +97,8 @@ internal class SettingsMenuWindow(
         clipToPadding = false
         isFocusable = true
         isFocusableInTouchMode = true
-        descendantFocusability = FOCUS_BEFORE_DESCENDANTS
+        // Compose enters an eligible menu item in keyboard mode; touch mode keeps root focus.
+        descendantFocusability = FOCUS_AFTER_DESCENDANTS
         super.setLayoutDirection(anchor.layoutDirection)
         elevation = 8f * density.density
         outlineProvider = object : ViewOutlineProvider() {

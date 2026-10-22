@@ -263,6 +263,9 @@ internal class IncidentsParityBoard(
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
             if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        // A new Compose popup initializes direction from its Context before View RTL callbacks.
+        // Match this fixture's declared direction at construction; keep its language/locale list.
+        setLayoutDirection(if (dark) Locale.forLanguageTag("ar") else Locale.ROOT)
     }
     private val context = host.createConfigurationContext(configuration)
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
