@@ -25,6 +25,22 @@ internal fun nativeOnboardingPlacedPages(width: Int, offset: Long): IntRange {
     return first..last
 }
 
+/** Fixed three-page membership; callers already validate focus-search indices. */
+internal fun nativeOnboardingPageMembershipMask(
+    placed: IntRange,
+    focusSearchPages: Set<Int>,
+    focusedPage: Int?,
+): Int {
+    var mask = 0
+    for (page in placed) mask = mask or (1 shl page)
+    // Ordinary motion has no focus-search pin; avoid even an empty-set iterator on that path.
+    if (focusSearchPages.isNotEmpty()) {
+        for (page in focusSearchPages) mask = mask or (1 shl page)
+    }
+    if (focusedPage != null) mask = mask or (1 shl focusedPage)
+    return mask
+}
+
 /**
  * Direct native placement owner. Retains the three page bodies/state but only attaches actually
  * placed pages. Unplaced nodes therefore cannot receive input, own a fling or request permission.
@@ -48,6 +64,7 @@ internal class NativeOnboardingPlacedPagerViewport(
         NativePagerBringIntoViewSpec(pager, nativeBringIntoViewSpec(context)))
     private val focusSearchPages = mutableSetOf<Int>()
     private var attachedPages: Set<Int> = emptySet()
+    private var attachedPageMask = 0
     private var measuring = false
     var sourceAccessibility: NativeOnboardingPagerAccessibility? = null
     var placedPages: IntRange = IntRange.EMPTY
@@ -73,8 +90,9 @@ internal class NativeOnboardingPlacedPagerViewport(
     private fun reconcilePlaced(width: Int, height: Int) {
         val next = nativeOnboardingPlacedPages(width, pager.layoutAbsoluteOffsetPx)
         val focusedPage = pages.indexOfFirst { it.hasFocus() }.takeIf { it >= 0 }
+        val wantedMask = nativeOnboardingPageMembershipMask(next, focusSearchPages, focusedPage)
+        if (wantedMask == attachedPageMask && next == placedPages) return
         val wanted = (next.toSet() + focusSearchPages + listOfNotNull(focusedPage)).toSortedSet()
-        if (wanted == attachedPages && next == placedPages) return
         for (index in attachedPages) if (index !in wanted) removeView(pages[index])
         for (index in wanted) if (pages[index].parent !== this) {
             val insertion = (0 until childCount).count { pages.indexOf(getChildAt(it)) < index }
@@ -83,6 +101,7 @@ internal class NativeOnboardingPlacedPagerViewport(
         }
         placedPages = next
         attachedPages = wanted
+        attachedPageMask = wantedMask
         placementChanged()
     }
 

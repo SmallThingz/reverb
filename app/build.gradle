@@ -78,6 +78,9 @@ android {
         // Never combine these two legacy wire-name readers with the QA Compose runtime.
         debug.java.srcDir 'src/nativeCompatibility/java'
         release.java.srcDir 'src/nativeCompatibility/java'
+        // AGP's built-in Kotlin compiler has its own source roots for this .kt adapter.
+        debug.kotlin.srcDir 'src/nativeCompatibility/java'
+        release.kotlin.srcDir 'src/nativeCompatibility/java'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

@@ -221,7 +221,7 @@ avoids downloads and tests callback lifecycle only, not emoji glyph rasterizatio
 previous EmojiCompat singleton is restored afterward. The retired Compose downloaded-font
 and Snapshot bridge cases are no longer claimed as native coverage.
 
-`native_text_backend` compares 108 bounded software Paragraph cases against real Compose
+`native_text_backend` compares 180 bounded software Paragraph cases against real Compose
 Paragraph using equivalent inputs. It reports exact metrics/pixel differences; it does not
 prove hardware/whole-screen parity or independently validate the role table. The separate
 Typography metadata test and `native_text_parity` provide those role/reference checks.

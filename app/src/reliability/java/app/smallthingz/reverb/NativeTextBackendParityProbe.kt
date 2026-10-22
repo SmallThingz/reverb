@@ -78,70 +78,128 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                     density = referenceDensity, fontFamilyResolver = referenceFonts),
                     androidx.compose.ui.unit.Constraints(maxWidth = width, maxHeight = maxHeight),
                     case.maxLines, if (case.ellipsis) ReferenceOverflow.Ellipsis else ReferenceOverflow.Clip)
-                val differences = JSONArray()
-                fun same(name: String, expected: Float, actual: Float) {
-                    if (expected.toRawBits() != actual.toRawBits()) differences.put(
-                        JSONObject().put("field", name).put("expected", expected).put("actual", actual))
-                }
-                same("height", reference.height, native.height)
-                same("minIntrinsicWidth", reference.minIntrinsicWidth, native.minIntrinsicWidth)
-                same("maxIntrinsicWidth", reference.maxIntrinsicWidth, native.maxIntrinsicWidth)
-                same("firstBaseline", reference.firstBaseline, native.firstBaseline)
-                same("lastBaseline", reference.lastBaseline, native.lastBaseline)
-                if (native.lineCount != reference.lineCount) differences.put("lineCount")
-                if (native.didExceedMaxLines != reference.didExceedMaxLines) differences.put("didExceedMaxLines")
-                for (line in 0 until minOf(native.lineCount, reference.lineCount)) {
-                    same("top[$line]", reference.getLineTop(line), native.getLineTop(line))
-                    same("bottom[$line]", reference.getLineBottom(line), native.getLineBottom(line))
-                    same("baseline[$line]", reference.getLineBaseline(line), native.getLineBaseline(line))
-                    same("left[$line]", reference.getLineLeft(line), native.getLineLeft(line))
-                    same("right[$line]", reference.getLineRight(line), native.getLineRight(line))
-                    if (reference.getLineStart(line) != native.getLineStart(line)) differences.put("start[$line]")
-                    if (reference.getLineEnd(line, true) != native.getLineEnd(line, true)) differences.put("end[$line]")
-                }
-                for (offset in case.text.indices) {
-                    val expected = reference.getBoundingBox(offset)
-                    val actual = native.getBoundingBox(offset)
-                    same("box[$offset].left", expected.left, actual.left)
-                    same("box[$offset].top", expected.top, actual.top)
-                    same("box[$offset].right", expected.right, actual.right)
-                    same("box[$offset].bottom", expected.bottom, actual.bottom)
-                }
-                val height = maxOf(1, ceil(maxOf(native.height, reference.height)).toInt() + 16)
-                val expectedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val actualBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                try {
-                    if (case.label == "draw-only-decoration") {
-                        reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black, null,
-                            androidx.compose.ui.text.style.TextDecoration.Underline)
-                        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black,
-                            app.smallthingz.nativeui.text.style.TextDecoration.Underline)
-                    } else {
-                        reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
-                        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
-                    }
-                    val expectedPixels = IntArray(width * height)
-                    val actualPixels = IntArray(width * height)
-                    expectedBitmap.getPixels(expectedPixels, 0, width, 0, 0, width, height)
-                    actualBitmap.getPixels(actualPixels, 0, width, 0, 0, width, height)
-                    var mismatched = 0
-                    for (index in expectedPixels.indices) if (expectedPixels[index] != actualPixels[index]) mismatched++
-                    entry.put("pixelMismatches", mismatched).put("pixelCount", expectedPixels.size)
-                    entry.put("metrics", differences).put("pass", differences.length() == 0 && mismatched == 0)
-                } finally {
-                    expectedBitmap.recycle()
-                    actualBitmap.recycle()
-                }
+                compareParagraphs(reference, native, case.text, width,
+                    case.label == "draw-only-decoration", entry)
             } catch (error: Exception) {
                 entry.put("pass", false).put("error", error.javaClass.name + ": " + error.message)
             }
             results.put(entry)
+        }
+        // One pair of real intrinsics is retained across width and height changes, as in the View.
+        // Redraw the original Paragraph after later layouts to cover shared mutable line-height spans.
+        for (role in roles) {
+            val text = "Retained 😀 אבג text wraps across width changes.\n"
+            val dimensions = listOf(240 to 10000, 112 to 10000, 112 to
+                (nativeDensity.density * 40).toInt(), 240 to 10000)
+            var stage = "construction"
+            try {
+                val nativeStyle = ReverbParagraphStyles[role]
+                val nativeIntrinsics = NativeIntrinsics(text,
+                    app.smallthingz.nativeui.text.resolveDefaults(nativeStyle, NativeDirection.Ltr),
+                    density = nativeDensity, fontFamilyResolver = nativeFonts)
+                val referenceIntrinsics = ReferenceIntrinsics(text,
+                    androidx.compose.ui.text.resolveDefaults(nativeStyle.referenceStyle(),
+                        androidx.compose.ui.unit.LayoutDirection.Ltr),
+                    annotations = emptyList(), placeholders = emptyList(),
+                    density = referenceDensity, fontFamilyResolver = referenceFonts)
+                var firstNative: NativeParagraph? = null
+                var firstReference: ReferenceParagraph? = null
+                for ((index, dimension) in dimensions.withIndex()) {
+                    stage = "layout-$index"
+                    val width = (dimension.first * nativeDensity.density).toInt()
+                    val native = NativeParagraph(nativeIntrinsics,
+                        app.smallthingz.nativeui.unit.Constraints(maxWidth = width,
+                            maxHeight = dimension.second), 3, NativeOverflow.Ellipsis)
+                    val reference = ReferenceParagraph(referenceIntrinsics,
+                        androidx.compose.ui.unit.Constraints(maxWidth = width,
+                            maxHeight = dimension.second), 3, ReferenceOverflow.Ellipsis)
+                    if (index == 0) { firstNative = native; firstReference = reference }
+                    val entry = JSONObject().put("case", "retained-intrinsics-$stage")
+                        .put("role", role.name).put("fontScale", scale)
+                    compareParagraphs(reference, native, text, width, false, entry)
+                    results.put(entry)
+                }
+                stage = "first-after-relayout"
+                val entry = JSONObject().put("case", "retained-intrinsics-$stage")
+                    .put("role", role.name).put("fontScale", scale)
+                compareParagraphs(checkNotNull(firstReference), checkNotNull(firstNative), text,
+                    (dimensions.first().first * nativeDensity.density).toInt(), false, entry)
+                results.put(entry)
+            } catch (error: Exception) {
+                results.put(JSONObject().put("case", "retained-intrinsics-$stage")
+                    .put("role", role.name).put("fontScale", scale).put("pass", false)
+                    .put("error", error.javaClass.name + ": " + error.message))
+            }
         }
     }
     var failures = 0
     for (index in 0 until results.length()) if (!results.getJSONObject(index).getBoolean("pass")) failures++
     return JSONObject().put("scope", "native paragraph versus real released paragraph; software bitmap")
         .put("cases", results).put("failures", failures).put("pass", failures == 0)
+}
+
+private fun compareParagraphs(
+    reference: ReferenceParagraph,
+    native: NativeParagraph,
+    text: String,
+    width: Int,
+    underline: Boolean,
+    entry: JSONObject,
+) {
+    val differences = JSONArray()
+    fun same(name: String, expected: Float, actual: Float) {
+        if (expected.toRawBits() != actual.toRawBits()) differences.put(
+            JSONObject().put("field", name).put("expected", expected).put("actual", actual))
+    }
+    same("height", reference.height, native.height)
+    same("minIntrinsicWidth", reference.minIntrinsicWidth, native.minIntrinsicWidth)
+    same("maxIntrinsicWidth", reference.maxIntrinsicWidth, native.maxIntrinsicWidth)
+    same("firstBaseline", reference.firstBaseline, native.firstBaseline)
+    same("lastBaseline", reference.lastBaseline, native.lastBaseline)
+    if (native.lineCount != reference.lineCount) differences.put("lineCount")
+    if (native.didExceedMaxLines != reference.didExceedMaxLines) differences.put("didExceedMaxLines")
+    for (line in 0 until minOf(native.lineCount, reference.lineCount)) {
+        same("top[$line]", reference.getLineTop(line), native.getLineTop(line))
+        same("bottom[$line]", reference.getLineBottom(line), native.getLineBottom(line))
+        same("baseline[$line]", reference.getLineBaseline(line), native.getLineBaseline(line))
+        same("left[$line]", reference.getLineLeft(line), native.getLineLeft(line))
+        same("right[$line]", reference.getLineRight(line), native.getLineRight(line))
+        if (reference.getLineStart(line) != native.getLineStart(line)) differences.put("start[$line]")
+        if (reference.getLineEnd(line, true) != native.getLineEnd(line, true)) differences.put("end[$line]")
+    }
+    for (offset in text.indices) {
+        val expected = reference.getBoundingBox(offset)
+        val actual = native.getBoundingBox(offset)
+        same("box[$offset].left", expected.left, actual.left)
+        same("box[$offset].top", expected.top, actual.top)
+        same("box[$offset].right", expected.right, actual.right)
+        same("box[$offset].bottom", expected.bottom, actual.bottom)
+    }
+    val height = maxOf(1, ceil(maxOf(native.height, reference.height)).toInt() + 16)
+    val expectedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val actualBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    try {
+        if (underline) {
+            reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black, null,
+                androidx.compose.ui.text.style.TextDecoration.Underline)
+            native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black,
+                app.smallthingz.nativeui.text.style.TextDecoration.Underline)
+        } else {
+            reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
+            native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+        }
+        val expectedPixels = IntArray(width * height)
+        val actualPixels = IntArray(width * height)
+        expectedBitmap.getPixels(expectedPixels, 0, width, 0, 0, width, height)
+        actualBitmap.getPixels(actualPixels, 0, width, 0, 0, width, height)
+        var mismatched = 0
+        for (index in expectedPixels.indices) if (expectedPixels[index] != actualPixels[index]) mismatched++
+        entry.put("pixelMismatches", mismatched).put("pixelCount", expectedPixels.size)
+        entry.put("metrics", differences).put("pass", differences.length() == 0 && mismatched == 0)
+    } finally {
+        expectedBitmap.recycle()
+        actualBitmap.recycle()
+    }
 }
 
 private fun NativeStyle.referenceStyle(): ReferenceStyle {

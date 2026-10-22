@@ -70,12 +70,11 @@ class MutatorMutex {
 
         tryMutateOrCancel(mutator)
 
-        mutex.withLock {
-            try {
-                block()
-            } finally {
-                currentMutator.compareAndSet(mutator, null)
-            }
+        // Cancellation can happen while acquiring the lock, before its block is entered.
+        try {
+            mutex.withLock { block() }
+        } finally {
+            currentMutator.compareAndSet(mutator, null)
         }
     }
 
@@ -89,12 +88,10 @@ class MutatorMutex {
 
         tryMutateOrCancel(mutator)
 
-        mutex.withLock {
-            try {
-                receiver.block()
-            } finally {
-                currentMutator.compareAndSet(mutator, null)
-            }
+        try {
+            mutex.withLock { receiver.block() }
+        } finally {
+            currentMutator.compareAndSet(mutator, null)
         }
     }
 

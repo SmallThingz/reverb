@@ -10,7 +10,6 @@ import app.smallthingz.reverb.CaptureBufferUiState
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import app.smallthingz.reverb.ReverbService.BufferSlot
-import app.smallthingz.reverb.captureBufferReadout
 import app.smallthingz.reverb.captureBufferUiState
 import app.smallthingz.reverb.captureServiceInteractionReady
 import app.smallthingz.reverb.isCaptureBlockedByOtherBuffer
@@ -56,6 +55,8 @@ internal class ReverbHomeBodyView(
     private var renderedBuffer = BufferSlot.ONE_SHOT
     private var flip = ReverbHomeFlipFrame()
     private var actions: ReverbHomeActions? = null
+    private val readoutCache = HomeReadoutCache()
+    private var disabledBufferLabel = context.getString(R.string.buffer_disabled)
     private val blob = ReverbHomeBlobControl(context, initialEnvironment, blobInputEnvironment, animationScope) {}
     private var progress: ReverbIncidentLoadingView? = null
     private val controls = ReverbHomeControls(context, initialEnvironment, nativeInputRoot, animationScope)
@@ -92,8 +93,8 @@ internal class ReverbHomeBodyView(
         val captureEnabled = serviceReady && value.serviceConnected &&
             (ui == CaptureBufferUiState.READY || recording)
         val clickable = serviceReady && !value.saving && (disabled || captureEnabled)
-        val readout = captureBufferReadout(value.retentionMode, disabled, metrics.seconds, metrics.bytes,
-            context.getString(R.string.buffer_disabled))
+        val readout = readoutCache.read(value.retentionMode, disabled, metrics.seconds, metrics.bytes,
+            disabledBufferLabel)
         blob.bind(ReverbHomeBlobState(
             if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotController else value.loopingController,
             recording, value.saving, captureEnabled, clickable, full,
@@ -126,6 +127,8 @@ internal class ReverbHomeBodyView(
 
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
+        disabledBufferLabel = context.getString(R.string.buffer_disabled)
+        readoutCache.invalidate()
         blob.setEnvironment(value)
         controls.setEnvironment(value)
         progress?.setColor(value.palette.primary)

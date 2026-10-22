@@ -47,6 +47,7 @@ internal class NativeSettingsScreenContent(
     private var republish=false
     private var lastSections:SectionValues?=null
     private var lastTopBar:TopBarValues?=null
+    private val tileEditorPublication=SettingsTileEditorPublication()
     private var list:SettingsSectionListView?=null
     private var savedPosition=restoredPosition
     private var pendingRetentionFocus=false
@@ -121,6 +122,7 @@ internal class NativeSettingsScreenContent(
             list=null
             if(topBar.parent===this)removeView(topBar)
             lastSections=null;lastTopBar=null
+            tileEditorPublication.reset()
             structureChanged()
             return
         }
@@ -131,10 +133,15 @@ internal class NativeSettingsScreenContent(
         }
         val sectionValues=SectionValues(state,owner.errors,owner.exportPathText,owner.canMove,
             owner.batteryOptimizationRestricted,environment,input.focusRetention)
+        val tileEditorChanged=tileEditorPublication.changed(owner.quickTileEditorState)
         if(lastSections!=sectionValues) {
             lastSections=sectionValues
             currentList.bind(owner.batteryOptimizationRestricted,environment)
-        } else sections.refreshCalibration()
+        } else {
+            // Back can close the child without changing the parent draft or firing the tile owner.
+            if(tileEditorChanged)currentList.bindSection(SettingsSectionKey.QUICK_TILES)
+            sections.refreshCalibration()
+        }
         val bar=TopBarValues(state.activation,state.hasUnsavedChanges,state.persisting,
             owner.calibration.running,owner.quickTileEditorState.editorOpen,
             owner.notificationDurationInteraction.pending,environment)

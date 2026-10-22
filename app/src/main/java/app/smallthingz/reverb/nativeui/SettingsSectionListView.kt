@@ -64,6 +64,10 @@ internal class SettingsSectionListView(
         rows.membership(restricted)
         rows.bindAttached()
     }
+    fun bindSection(key:SettingsSectionKey) {
+        check(!closed)
+        rows.bindAttached(key)
+    }
     fun focusRetention() {
         // Released effect calls scrollToItem2/1 immediately when the focus-buffer owner changes.
         val index=SettingsSectionKey.retentionIndex(rows.restricted)
@@ -111,9 +115,10 @@ internal class SettingsSectionListView(
                 }
             }
         }
-        fun bindAttached() {
+        fun bindAttached(key:SettingsSectionKey?=null) {
             for(index in 0 until list.childCount) {
-                (list.getChildViewHolder(list.getChildAt(index)) as? Holder)?.section?.bind()
+                val holder=list.getChildViewHolder(list.getChildAt(index)) as? Holder?:continue
+                if(key==null||holder.itemViewType==key.ordinal)holder.section.bind()
             }
         }
         override fun getItemCount()=keys.size

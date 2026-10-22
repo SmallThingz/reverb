@@ -159,7 +159,8 @@ open class Paragraph(
 
     private val paint = paragraphIntrinsics.paint
     private val includePadding = paragraphIntrinsics.style.platformStyle?.includeFontPadding ?: false
-    private val text = paragraphIntrinsics.styledText()
+    // Like the released paragraph, retain the intrinsics-owned styled sequence across layouts.
+    private val text = paragraphIntrinsics.measuredText
     private val ellipsize = when (overflow) {
         TextOverflow.Ellipsis -> TextUtils.TruncateAt.END
         TextOverflow.StartEllipsis -> TextUtils.TruncateAt.START
