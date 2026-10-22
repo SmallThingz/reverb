@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
@@ -115,6 +116,7 @@ internal class OnboardingFooterView(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var state = OnboardingFooterState(0, 0, ready = false, finishing = false)
     private var palette: ReverbPalette? = null
+    private var boundConfiguration: Configuration? = null
     private var actions: FooterActions? = null
     private var buttonHeight = 0
     private var backWidth = 0
@@ -154,6 +156,12 @@ internal class OnboardingFooterView(
     }
 
     fun bind(value: OnboardingFooterState, colors: ReverbPalette) {
+        // Pager frames keep these values unchanged. Callbacks read the current actions directly;
+        // typography and attachment own their updates independently. Copy configuration so a
+        // resource/locale change still refreshes labels when state and palette remain identical.
+        val configuration = resources.configuration
+        if (state == value && palette === colors && boundConfiguration == configuration) return
+        if (boundConfiguration != configuration) boundConfiguration = Configuration(configuration)
         val old = state
         state = value
         palette = colors

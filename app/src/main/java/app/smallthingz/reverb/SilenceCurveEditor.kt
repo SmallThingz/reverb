@@ -111,20 +111,67 @@ internal class SilenceCurveView(context: Context) : View(context) {
         setMeasuredDimension(measuredWidth, resolveSize(maxOf(245 * density, preferred).roundToInt(), heightMeasureSpec))
     }
 
-    /** The renderer and regression fixtures share measured text bounds, not screenshot estimates. */
-    internal fun labelGeometry(): SilenceCurveLabelGeometry {
-        fun label(text: String, left: Float, top: Float, size: Float): SilenceCurveTextLabel {
-            labelPaint.textSize = size
-            val metrics = labelPaint.fontMetrics
-            return SilenceCurveTextLabel(text, RectF(left, top, left + labelPaint.measureText(text),
-                top + metrics.bottom - metrics.top), top - metrics.top, size)
-        }
-        val labels = mutableListOf<SilenceCurveTextLabel>()
+    private class LabelGeometryCache(
+        val width: Int,
+        val height: Int,
+        val density: Float,
+        val tickSize: Float,
+        val valueSize: Float,
+        val typeface: android.graphics.Typeface?,
+        var point: SilencePoint,
+        var geometry: SilenceCurveLabelGeometry,
+    )
+    private var labelCache: LabelGeometryCache? = null
+
+    /** A defensive snapshot keeps mutable RectF/list consumers out of the renderer's one-entry cache. */
+    internal fun labelGeometry(): SilenceCurveLabelGeometry = drawingLabelGeometry().let { geometry ->
+        geometry.copy(viewport = RectF(geometry.viewport), plot = RectF(geometry.plot),
+            labels = geometry.labels.map { it.copy(bounds = RectF(it.bounds)) })
+    }
+
+    private fun drawingLabelGeometry(): SilenceCurveLabelGeometry {
         val point = points[selected]
-        labels += label("${point.hz} Hz", 0f, 0f, valueTextSize)
+        val cached = labelCache
+        if (cached != null && cached.width == width && cached.height == height &&
+            cached.density == density && cached.tickSize == tickTextSize && cached.valueSize == valueTextSize &&
+            cached.typeface === labelPaint.typeface && cached.geometry.plot == plot) {
+            if (cached.point != point) {
+                // Only the selected values change while dragging; static ticks keep their exact measured bounds.
+                val labels = cached.geometry.labels.toMutableList()
+                labels[0] = frequencyLabel(point)
+                labels[1] = cutoffLabel(point)
+                cached.geometry = cached.geometry.copy(labels = labels)
+                cached.point = point
+            }
+            return cached.geometry
+        }
+        return createLabelGeometry().also {
+            labelCache = LabelGeometryCache(width, height, density, tickTextSize, valueTextSize,
+                labelPaint.typeface, point, it)
+        }
+    }
+
+    private fun label(text: String, left: Float, top: Float, size: Float): SilenceCurveTextLabel {
+        labelPaint.textSize = size
+        val metrics = labelPaint.fontMetrics
+        return SilenceCurveTextLabel(text, RectF(left, top, left + labelPaint.measureText(text),
+            top + metrics.bottom - metrics.top), top - metrics.top, size)
+    }
+
+    private fun frequencyLabel(point: SilencePoint) = label("${point.hz} Hz", 0f, 0f, valueTextSize)
+
+    private fun cutoffLabel(point: SilencePoint): SilenceCurveTextLabel {
         val cutoff = "${point.db} dBFS"
         val cutoffTop = if (headerLines(width.toFloat()) == 1) 0f else textHeight(valueTextSize) + 4 * density
-        labels += label(cutoff, (width - textWidth(cutoff, valueTextSize)).coerceAtLeast(0f), cutoffTop, valueTextSize)
+        return label(cutoff, (width - textWidth(cutoff, valueTextSize)).coerceAtLeast(0f), cutoffTop, valueTextSize)
+    }
+
+    /** The renderer and regression fixtures share measured text bounds, not screenshot estimates. */
+    private fun createLabelGeometry(): SilenceCurveLabelGeometry {
+        val labels = mutableListOf<SilenceCurveTextLabel>()
+        val point = points[selected]
+        labels += frequencyLabel(point)
+        labels += cutoffLabel(point)
         for (db in listOf(0, -24, -48, -72, -96)) {
             val text = db.toString()
             labels += label(text, plot.left - 8 * density - textWidth(text, tickTextSize),
@@ -152,7 +199,7 @@ internal class SilenceCurveView(context: Context) : View(context) {
         if (plot.width() <= 0 || plot.height() <= 0) return
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.LEFT
-        for ((index, label) in labelGeometry().labels.withIndex()) {
+        for ((index, label) in drawingLabelGeometry().labels.withIndex()) {
             paint.textSize = label.textSize
             paint.color = if (index < 2) ink else muted
             canvas.drawText(label.text, label.bounds.left, label.baseline, paint)
