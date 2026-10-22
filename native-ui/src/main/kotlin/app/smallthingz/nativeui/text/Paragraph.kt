@@ -60,6 +60,13 @@ open class ParagraphIntrinsics(
             "Native plain paragraphs do not accept inline content or style annotations"
         }
     }
+    // Unresolved semantics use content direction; resolved drawing styles force their direction.
+    internal val direction: TextDirectionHeuristic = when (style.layoutDirection) {
+        LayoutDirection.Rtl -> TextDirectionHeuristics.RTL
+        LayoutDirection.Ltr -> TextDirectionHeuristics.LTR
+        null -> if (TextUtils.getLayoutDirectionFromLocale(Locale.getDefault()) == android.view.View.LAYOUT_DIRECTION_RTL)
+            TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
+    }
     val style = resolveDefaults(style, style.layoutDirection ?:
         if (TextUtils.getLayoutDirectionFromLocale(Locale.getDefault()) == android.view.View.LAYOUT_DIRECTION_RTL)
             LayoutDirection.Rtl else LayoutDirection.Ltr)
@@ -67,9 +74,6 @@ open class ParagraphIntrinsics(
     val hasStaleResolvedFonts: Boolean get() = !emojiProcessed && NativeEmojiFonts.ready
     fun observeFontChanges(onChanged: () -> Unit): AutoCloseable = NativeEmojiFonts.observe(onChanged)
 
-    internal val direction: TextDirectionHeuristic =
-        if (this.style.layoutDirection == LayoutDirection.Rtl) TextDirectionHeuristics.RTL
-        else TextDirectionHeuristics.LTR
     internal val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         this.density = this@ParagraphIntrinsics.density.density
         hinting = Paint.HINTING_ON

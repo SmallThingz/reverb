@@ -380,7 +380,6 @@ internal class SheetRoot(
         if(measuring)return
         if(!state.offset.isNaN()&&surface.isLaidOut)surface.offsetTopAndBottom(state.offset.roundToInt()-surface.top)
         updateContentInsets()
-        motion()
     }
     override fun getAccessibilityClassName():CharSequence="android.view.View"
 }

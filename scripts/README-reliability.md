@@ -221,10 +221,16 @@ avoids downloads and tests callback lifecycle only, not emoji glyph rasterizatio
 previous EmojiCompat singleton is restored afterward. The retired Compose downloaded-font
 and Snapshot bridge cases are no longer claimed as native coverage.
 
-`native_text_backend` compares 180 bounded software Paragraph cases against real Compose
-Paragraph using equivalent inputs. It reports exact metrics/pixel differences; it does not
-prove hardware/whole-screen parity or independently validate the role table. The separate
-Typography metadata test and `native_text_parity` provide those role/reference checks.
+`native_text_backend` keeps 180 resolved software Paragraph cases against real Compose
+Paragraph and adds 32 unresolved original-semantics cases after measuring a native View.
+The latter compare against real MultiParagraph in English/Arabic process locales, two
+roles and two font scales, including opposing leading text, wrapping, ellipsis and neutral
+fallback. Process locale defaults are restored in `finally`; system locale settings are
+untouched. A complete run has 212 cases. Exact metrics, UTF-16 geometry and pixels are
+compared; failed images are retained for at most eight pixel cases and two metric-only
+cases in the isolated QA files directory. This does not prove hardware/whole-screen or
+TalkBack parity, or independently validate the role table. The separate Typography metadata
+test and `native_text_parity` provide those role/reference checks.
 `native_motion_spline` compares the real released/native decay engines numerically using
 Android's friction value; it does not measure frame scheduling or smoothness. Both selectors
 require the same exact UI-only package and plain Application as the other native probes.

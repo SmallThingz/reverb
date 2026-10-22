@@ -5,6 +5,10 @@ import android.app.Application
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.LocaleList
+import android.view.View
+import app.smallthingz.reverb.nativeui.ReverbParagraphView
+import java.util.Locale
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextRole
 import app.smallthingz.nativeui.text.Paragraph as NativeParagraph
@@ -137,12 +141,152 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
             }
         }
     }
+    appendUnresolvedSemanticsCases(context, results, artifacts)
     var failures = 0
     for (index in 0 until results.length()) if (!results.getJSONObject(index).getBoolean("pass")) failures++
     return JSONObject().put("scope", "native paragraph versus real released paragraph; software bitmap")
         .put("cases", results).put("failures", failures).put("pass", failures == 0)
         .put("diagnostic_directory", artifacts.directoryPath ?: JSONObject.NULL)
         .put("captured_failure_pairs", artifacts.capturedPairs)
+}
+
+/** Separate original-semantics cases; the 180 resolved comparisons above remain unchanged. */
+private fun appendUnresolvedSemanticsCases(
+    context: Context,
+    results: JSONArray,
+    artifacts: ParagraphFailureArtifacts,
+) {
+    data class Case(val label: String, val text: String, val widthDp: Int, val maxLines: Int,
+                    val ellipsis: Boolean = false)
+    val previousLocales = LocaleList.getDefault()
+    val previousLocale = Locale.getDefault()
+    val previousIndex = (0 until previousLocales.size()).firstOrNull {
+        previousLocales[it] == previousLocale
+    } ?: 0
+    try {
+        for (locale in listOf(Locale.ENGLISH, Locale.forLanguageTag("ar"))) {
+            // Only this isolated QA process's defaults change; no Android locale setting is written.
+            LocaleList.setDefault(LocaleList(locale))
+            val rtl = android.text.TextUtils.getLayoutDirectionFromLocale(locale) == View.LAYOUT_DIRECTION_RTL
+            val leading = if (rtl) "Recording אבג 123" else "אבג Recording 123"
+            val cases = listOf(
+                Case("opposite-leading", leading, 180, 3),
+                Case("mixed-wrap", "$leading mixed text repeats across several narrow lines.", 96, 3),
+                Case("end-ellipsis", "$leading a long recording name that must be truncated", 110, 1, true),
+                Case("neutral-fallback", "123 — (456) ...", 180, 3),
+            )
+            for (scale in listOf(1f, 2f)) {
+                val configured = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+                    fontScale = scale
+                    setLocales(LocaleList(locale))
+                })
+                val nativeDensity = app.smallthingz.nativeui.unit.Density(configured)
+                val referenceDensity = androidx.compose.ui.unit.Density(configured)
+                val nativeFonts = app.smallthingz.nativeui.text.font.createFontFamilyResolver(configured)
+                val referenceFonts = androidx.compose.ui.text.font.createFontFamilyResolver(configured)
+                for (role in listOf(ReverbTextRole.TITLE_MEDIUM, ReverbTextRole.BODY_LARGE)) for (case in cases) {
+                    val entry = JSONObject().put("case", "unresolved-${locale.language}-${case.label}")
+                        .put("role", role.name).put("fontScale", scale)
+                        .put("route", "measured View original semantics versus released MultiParagraph")
+                    try {
+                        val width = (case.widthDp * nativeDensity.density).toInt()
+                        val style = ReverbParagraphStyles[role]
+                        check(style.layoutDirection == null)
+                        val view = ReverbParagraphView(configured, style, nativeDensity, nativeFonts,
+                            android.graphics.Color.BLACK).apply {
+                            layoutDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+                            setText(case.text)
+                            setTextLayout(maxLines = case.maxLines,
+                                overflow = if (case.ellipsis) NativeOverflow.Ellipsis else NativeOverflow.Clip)
+                            measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.AT_MOST),
+                                View.MeasureSpec.makeMeasureSpec(10000, View.MeasureSpec.AT_MOST))
+                        }
+                        val native = checkNotNull(view.createOriginalSemanticsParagraph())
+                        // Deliberately no resolveDefaults: the released original-semantics route forwards style.
+                        val reference = androidx.compose.ui.text.MultiParagraph(
+                            androidx.compose.ui.text.MultiParagraphIntrinsics(
+                                androidx.compose.ui.text.AnnotatedString(case.text), style.referenceStyle(),
+                                emptyList(), referenceDensity, referenceFonts),
+                            androidx.compose.ui.unit.Constraints(maxWidth = width, maxHeight = 10000),
+                            case.maxLines, if (case.ellipsis) ReferenceOverflow.Ellipsis else ReferenceOverflow.Clip)
+                        compareSemanticsParagraphs(reference, native, case.text, width, entry, artifacts)
+                    } catch (error: Exception) {
+                        entry.put("pass", false).put("error", error.javaClass.name + ": " + error.message)
+                    }
+                    results.put(entry)
+                }
+            }
+        }
+    } finally {
+        LocaleList.setDefault(previousLocales, previousIndex)
+        check(Locale.getDefault() == previousLocale && LocaleList.getDefault() == previousLocales) {
+            "QA process locale restoration failed"
+        }
+    }
+}
+
+private fun compareSemanticsParagraphs(
+    reference: androidx.compose.ui.text.MultiParagraph,
+    native: app.smallthingz.nativeui.text.MultiParagraph,
+    text: String,
+    width: Int,
+    entry: JSONObject,
+    artifacts: ParagraphFailureArtifacts,
+) {
+    val differences = JSONArray()
+    fun same(name: String, expected: Float, actual: Float) {
+        if (expected.toRawBits() != actual.toRawBits()) differences.put(
+            JSONObject().put("field", name).put("expected", expected).put("actual", actual))
+    }
+    same("height", reference.height, native.height)
+    same("minIntrinsicWidth", reference.minIntrinsicWidth, native.minIntrinsicWidth)
+    same("maxIntrinsicWidth", reference.maxIntrinsicWidth, native.maxIntrinsicWidth)
+    same("firstBaseline", reference.firstBaseline, native.firstBaseline)
+    same("lastBaseline", reference.lastBaseline, native.lastBaseline)
+    if (native.lineCount != reference.lineCount) differences.put("lineCount")
+    if (native.didExceedMaxLines != reference.didExceedMaxLines) differences.put("didExceedMaxLines")
+    for (line in 0 until minOf(native.lineCount, reference.lineCount)) {
+        same("top[$line]", reference.getLineTop(line), native.getLineTop(line))
+        same("bottom[$line]", reference.getLineBottom(line), native.getLineBottom(line))
+        same("baseline[$line]", reference.getLineBaseline(line), native.getLineBaseline(line))
+        same("left[$line]", reference.getLineLeft(line), native.getLineLeft(line))
+        same("right[$line]", reference.getLineRight(line), native.getLineRight(line))
+        if (reference.getLineStart(line) != native.getLineStart(line)) differences.put("start[$line]")
+        if (reference.getLineEnd(line, true) != native.getLineEnd(line, true)) differences.put("end[$line]")
+    }
+    for (offset in text.indices) {
+        val expected = reference.getBoundingBox(offset)
+        val actual = native.getBoundingBox(offset)
+        same("box[$offset].left", expected.left, actual.left)
+        same("box[$offset].top", expected.top, actual.top)
+        same("box[$offset].right", expected.right, actual.right)
+        same("box[$offset].bottom", expected.bottom, actual.bottom)
+        if ((reference.getParagraphDirection(offset) == androidx.compose.ui.text.style.ResolvedTextDirection.Ltr) !=
+            (native.getParagraphDirection(offset) == app.smallthingz.nativeui.text.style.ResolvedTextDirection.Ltr)) {
+            differences.put("direction[$offset]")
+        }
+    }
+    val height = maxOf(1, ceil(maxOf(native.height, reference.height)).toInt() + 16)
+    val expectedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val actualBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    try {
+        reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
+        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+        val expectedPixels = IntArray(width * height)
+        val actualPixels = IntArray(width * height)
+        expectedBitmap.getPixels(expectedPixels, 0, width, 0, 0, width, height)
+        actualBitmap.getPixels(actualPixels, 0, width, 0, 0, width, height)
+        var mismatched = 0
+        for (index in expectedPixels.indices) if (expectedPixels[index] != actualPixels[index]) mismatched++
+        entry.put("pixelMismatches", mismatched).put("pixelCount", expectedPixels.size)
+        entry.put("metrics", differences).put("pass", differences.length() == 0 && mismatched == 0)
+        if (differences.length() != 0 || mismatched != 0) {
+            artifacts.capture(entry, expectedBitmap, actualBitmap, mismatched != 0)
+        }
+    } finally {
+        expectedBitmap.recycle()
+        actualBitmap.recycle()
+    }
 }
 
 private fun compareParagraphs(
