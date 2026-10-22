@@ -560,19 +560,24 @@ private fun SQLiteDatabase.createSchema() {
 }
 
 private fun SQLiteDatabase.createIndexes() {
-    execSQL(
-        "CREATE INDEX IF NOT EXISTS recordings_started_created_idx ON " +
-            "${RecordingDatabase.TABLE_RECORDINGS} (" +
-            "${RecordingDatabase.COLUMN_STARTED_AT_MILLIS} DESC, " +
-            "${RecordingDatabase.COLUMN_CREATED_AT_MILLIS} DESC)",
-    )
-    execSQL(
-        "CREATE INDEX IF NOT EXISTS recordings_directory_started_created_idx ON " +
-            "${RecordingDatabase.TABLE_RECORDINGS} (" +
-            "${RecordingDatabase.COLUMN_DIRECTORY_ID}, " +
-            "${RecordingDatabase.COLUMN_STARTED_AT_MILLIS} DESC, " +
-            "${RecordingDatabase.COLUMN_CREATED_AT_MILLIS} DESC)",
-    )
+    // Raw timestamp indexes cannot satisfy the type-guarded catalog order. Keep the
+    // same expressions in both queries and indexes, including corrupt-row isolation.
+    val orderBy = recordingCatalogOrderBy()
+    transaction {
+        execSQL(
+            "CREATE INDEX IF NOT EXISTS recordings_catalog_order_idx ON " +
+                "${RecordingDatabase.TABLE_RECORDINGS} ($orderBy)",
+        )
+        execSQL(
+            "CREATE INDEX IF NOT EXISTS recordings_directory_catalog_order_idx ON " +
+                "${RecordingDatabase.TABLE_RECORDINGS} (" +
+                "${RecordingDatabase.COLUMN_DIRECTORY_ID}, $orderBy)",
+        )
+        // onOpen upgrades existing catalogs without changing their rows or version.
+        // Publish both replacements before retiring the unused raw-order indexes.
+        execSQL("DROP INDEX IF EXISTS recordings_started_created_idx")
+        execSQL("DROP INDEX IF EXISTS recordings_directory_started_created_idx")
+    }
 }
 
 internal enum class RecordingDatabaseMigrationStep {

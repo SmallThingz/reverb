@@ -32,15 +32,17 @@ internal fun nativePointerSubsetAction(action: Int, flags: Int, selectedIndices:
  */
 internal fun MotionEvent.nativePointerSubset(pointerMask: Int): MotionEvent {
     var availableMask = 0
+    for (index in 0 until pointerCount) {
+        availableMask = availableMask or (1 shl getPointerId(index))
+    }
+    require(pointerMask != 0 && pointerMask and availableMask == pointerMask)
+    // Full-pointer delivery needs no selected-index scratch array.
+    if (pointerMask == availableMask) return MotionEvent.obtain(this)
     val selected = IntArray(pointerCount)
     var count = 0
     for (index in 0 until pointerCount) {
-        val bit = 1 shl getPointerId(index)
-        availableMask = availableMask or bit
-        if (pointerMask and bit != 0) selected[count++] = index
+        if (pointerMask and (1 shl getPointerId(index)) != 0) selected[count++] = index
     }
-    require(count > 0 && pointerMask and availableMask == pointerMask)
-    if (count == pointerCount) return MotionEvent.obtain(this)
     val indices = selected.copyOf(count)
     val properties = Array(count) { MotionEvent.PointerProperties().also { p -> getPointerProperties(indices[it], p) } }
     val coords = Array(count) { MotionEvent.PointerCoords() }

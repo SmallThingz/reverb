@@ -181,6 +181,39 @@ private fun verifyPublicPointerSubset(
                 setAxisValue(MotionEvent.AXIS_TILT, .375f)
                 setAxisValue(MotionEvent.AXIS_GENERIC_1, 7.25f + sample)
             } }
+            fun verifyAdditionalSubset(event: MotionEvent, mask: Int, indices: IntArray, action: Int) {
+                val copy = event.nativePointerSubset(mask)
+                try {
+                    check(copy !== event && copy.pointerCount == indices.size && copy.action == action)
+                    check(copy.downTime == event.downTime && copy.eventTime == event.eventTime)
+                    check(copy.historySize == event.historySize && copy.metaState == event.metaState)
+                    check(copy.buttonState == event.buttonState && copy.flags == event.flags)
+                    check(copy.deviceId == event.deviceId && copy.source == event.source)
+                    check(copy.edgeFlags == event.edgeFlags)
+                    check(copy.xPrecision == event.xPrecision && copy.yPrecision == event.yPrecision)
+                    for ((output, input) in indices.withIndex()) {
+                        check(copy.getPointerId(output) == event.getPointerId(input))
+                        check(copy.getToolType(output) == event.getToolType(input))
+                        for (axis in 0..63) {
+                            check(copy.getAxisValue(axis, output) == event.getAxisValue(axis, input))
+                            for (history in 0 until event.historySize) {
+                                check(copy.getHistoricalEventTime(history) == event.getHistoricalEventTime(history))
+                                check(copy.getHistoricalAxisValue(axis, output, history) ==
+                                    event.getHistoricalAxisValue(axis, input, history))
+                            }
+                        }
+                    }
+                } finally { copy.recycle() }
+            }
+            fun verifyRejectedMask(event: MotionEvent, mask: Int) {
+                var unexpected: MotionEvent? = null
+                try {
+                    unexpected = event.nativePointerSubset(mask)
+                } catch (_: IllegalArgumentException) {
+                    return
+                } finally { unexpected?.recycle() }
+                error("Pointer mask $mask was unexpectedly accepted")
+            }
             val original = MotionEvent.obtain(100, 110, MotionEvent.ACTION_MOVE, 3,
                 properties, coords(0), KeyEvent.META_SHIFT_ON, MotionEvent.BUTTON_STYLUS_PRIMARY,
                 .25f, .5f, 7, MotionEvent.EDGE_TOP, InputDevice.SOURCE_STYLUS, MotionEvent.FLAG_WINDOW_IS_OBSCURED)
@@ -211,7 +244,42 @@ private fun verifyPublicPointerSubset(
                     }
                     receipt.put("ids_action_properties_axes_history_metadata", "passed")
                 } finally { subset.recycle() }
+                val fullMask = (1 shl 3) or (1 shl 11) or (1 shl 23)
+                verifyAdditionalSubset(original, fullMask, intArrayOf(0, 1, 2), original.action)
+                verifyAdditionalSubset(original, (1 shl 3) or (1 shl 11), intArrayOf(0, 1), MotionEvent.ACTION_MOVE)
+                verifyAdditionalSubset(original, 1 shl 23, intArrayOf(2), MotionEvent.ACTION_UP)
+                verifyRejectedMask(original, 0)
+                verifyRejectedMask(original, 1 shl 31)
+                verifyRejectedMask(original, fullMask or (1 shl 31))
+                receipt.put("full_mask_copy_removed_action_pointer_empty_unknown_masks", "passed")
             } finally { original.recycle() }
+
+            val signProperties = arrayOf(MotionEvent.PointerProperties().apply {
+                id = 31
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }, properties[0])
+            fun signCoords(sample: Int) = coords(sample).let { arrayOf(it[2], it[0]) }
+            val signEvent = MotionEvent.obtain(200, 210, MotionEvent.ACTION_MOVE, 2,
+                signProperties, signCoords(0), KeyEvent.META_SHIFT_ON, MotionEvent.BUTTON_STYLUS_PRIMARY,
+                .25f, .5f, 7, MotionEvent.EDGE_TOP, InputDevice.SOURCE_STYLUS, MotionEvent.FLAG_WINDOW_IS_OBSCURED)
+            try {
+                signEvent.addBatch(220, signCoords(1), signEvent.metaState)
+                signEvent.addBatch(230, signCoords(2), signEvent.metaState)
+                signEvent.action = MotionEvent.ACTION_POINTER_UP
+                verifyAdditionalSubset(signEvent, (1 shl 31) or (1 shl 3), intArrayOf(0, 1), signEvent.action)
+                verifyAdditionalSubset(signEvent, 1 shl 31, intArrayOf(0), MotionEvent.ACTION_UP)
+                verifyAdditionalSubset(signEvent, 1 shl 3, intArrayOf(1), MotionEvent.ACTION_MOVE)
+                verifyRejectedMask(signEvent, 0)
+                verifyRejectedMask(signEvent, (1 shl 31) or (1 shl 2))
+                receipt.put("id31_full_mask_subset_history_order", "passed")
+            } finally { signEvent.recycle() }
+            val singleEvent = MotionEvent.obtain(300, 310, MotionEvent.ACTION_DOWN, 1,
+                arrayOf(signProperties[0]), arrayOf(signCoords(0)[0]), 0, 0, 1f, 1f, 7, 0,
+                InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try {
+                verifyAdditionalSubset(singleEvent, 1 shl 31, intArrayOf(0), MotionEvent.ACTION_DOWN)
+                receipt.put("single_id31_full_mask_copy", "passed")
+            } finally { singleEvent.recycle() }
 
             if (android.os.Build.VERSION.SDK_INT >= 34) {
                 // Public API34 creation can give ORIGINAL deep-press classification. The subset
