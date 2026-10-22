@@ -149,7 +149,7 @@ internal class ReverbMergedRowAccessibility(
         val mapped = geometry?.capture(host, Offset.Zero,
             localBounds)
         val node = sourceNode?.invoke()
-        val hidden = sourceExposure?.invoke() != true || !host.isShown || hasTransparentAncestor(host)
+        val hidden = node?.hidden ?: (sourceExposure?.invoke() != true || !host.isShown || hasTransparentAncestor(host))
         val present = mapped != null && host.isAttachedToWindow && !mapped.visibleBoundsInRoot.isEmpty
         val bounds = mapped?.let { nativeMergedRoleBoundsInScreen(it, host.isLaidOut) } ?: Rect()
         // Released onboarding rows are at least64dp high and fill the available width: their
