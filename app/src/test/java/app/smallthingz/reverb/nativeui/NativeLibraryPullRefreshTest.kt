@@ -1,7 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.runtime.BroadcastFrameClock
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import kotlinx.coroutines.suspendCancellableCoroutine
+import app.smallthingz.nativeui.unit.Density
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -134,5 +135,21 @@ class NativeLibraryPullRefreshTest {
         override fun postScroll(consumedY: Float, availableY: Float, source: NativeVerticalScrollSource) = 0f
         override suspend fun preFling(availableY: Float) = 0f
         override suspend fun postFling(consumedY: Float, availableY: Float) = 0f
+    }
+}
+
+/** Test clock: broadcasts one timestamp to the current waiters only. */
+private class BroadcastFrameClock : MonotonicFrameClock {
+    private val callbacks = ArrayDeque<(Long) -> Unit>()
+    override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R = suspendCancellableCoroutine { continuation ->
+        callbacks.addLast { time ->
+            if (continuation.isActive) {
+                continuation.resumeWith(runCatching { onFrame(time) })
+            }
+        }
+    }
+    fun sendFrame(timeNanos: Long) {
+        val waiting = callbacks.size
+        repeat(waiting) { callbacks.removeFirst()(timeNanos) }
     }
 }

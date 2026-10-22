@@ -17,16 +17,16 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
-import androidx.compose.animation.Animatable
-import androidx.compose.animation.core.Animatable as ValueAnimatable
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.spring
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.LineHeightStyle
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.animation.Animatable
+import app.smallthingz.nativeui.animation.core.Animatable as ValueAnimatable
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.spring
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.toArgb
+import app.smallthingz.nativeui.text.PlatformTextStyle
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.style.LineHeightStyle
+import app.smallthingz.nativeui.unit.dp
 import app.smallthingz.reverb.NativeAndroidInteropHost
 import app.smallthingz.reverb.NativeAndroidInteropNode
 import app.smallthingz.reverb.NativeAndroidInteropRequests
@@ -75,9 +75,9 @@ internal class ReverbRenameFieldView(
     private val borderPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val borderBounds=RectF()
     private val color=Animatable(Color(if(initialError!=null)environment.palette.error else environment.palette.outline))
-    private val thickness=ValueAnimatable(1.dp,androidx.compose.ui.unit.Dp.VectorConverter)
+    private val thickness=ValueAnimatable(1.dp,app.smallthingz.nativeui.unit.Dp.VectorConverter)
     private val colorTargets=Channel<Color>(Channel.CONFLATED)
-    private val thicknessTargets=Channel<androidx.compose.ui.unit.Dp>(Channel.CONFLATED)
+    private val thicknessTargets=Channel<app.smallthingz.nativeui.unit.Dp>(Channel.CONFLATED)
     private val ownerJob=Job(host.runtime.scope.coroutineContext[Job])
     private val scope=CoroutineScope(host.runtime.scope.coroutineContext+ownerJob)
     override val nativeInteropRequests=NativeAndroidInteropRequests()
@@ -244,9 +244,9 @@ internal class ReverbRenameFieldView(
         info.isEnabled=true;info.isFocusable=true;info.isFocused=editor.isFocused
         info.isClickable=true;info.isLongClickable=true;info.isScreenReaderFocusable=true
         info.isContentInvalid=error!=null
-        info.error=if(error!=null)context.getString(androidx.compose.ui.R.string.default_error_message)else null
+        info.error=if(error!=null)context.getString(app.smallthingz.nativeui.R.string.default_error_message)else null
         AccessibilityNodeInfoCompat.wrap(info).stateDescription=
-            if(editor.length()==0 && error.isNullOrEmpty())context.getString(androidx.compose.ui.R.string.state_empty)else null
+            if(editor.length()==0 && error.isNullOrEmpty())context.getString(app.smallthingz.nativeui.R.string.state_empty)else null
         info.addAction(if(editor.isFocused)AccessibilityNodeInfo.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.ACTION_FOCUS)
         info.addAction(AccessibilityNodeInfo.ACTION_CLICK)
         info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)

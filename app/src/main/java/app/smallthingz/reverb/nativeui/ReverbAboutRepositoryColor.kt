@@ -5,9 +5,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.toArgb
+import app.smallthingz.nativeui.text.TextStyle
 
 /**
  * The released repository Surface omits contentColor. Material3 1.4.0 resolves it by

@@ -4,8 +4,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.unit.Density
+import app.smallthingz.nativeui.unit.dp
 
 /**
  * Geometry/clip seam only. Not a production-ready pager: the source-matched touch, nested-scroll,

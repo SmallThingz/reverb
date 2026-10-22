@@ -5,8 +5,8 @@ import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect as ComposeRect
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect as ComposeRect
 import kotlin.math.max
 
 /** One cursor per actual sheet Window; bodies explicitly share it instead of creating another. */

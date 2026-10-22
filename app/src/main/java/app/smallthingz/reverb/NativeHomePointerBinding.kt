@@ -2,8 +2,8 @@ package app.smallthingz.reverb
 
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import app.smallthingz.reverb.nativeui.NativePointerLayerShape
 import app.smallthingz.reverb.nativeui.ReverbHomeScaffoldView
 import java.util.IdentityHashMap

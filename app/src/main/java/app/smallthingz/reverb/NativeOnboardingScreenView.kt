@@ -11,11 +11,11 @@ import android.widget.FrameLayout
 import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Matrix
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
+import app.smallthingz.nativeui.graphics.Matrix
+import app.smallthingz.nativeui.unit.dp
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope
@@ -119,7 +119,7 @@ internal class NativeOnboardingScreenView private constructor(
     val sourceTextTransforms = NativeTextSemanticsTransformPolicy(::populateSourceTextTransform)
     private val windowText = externalWindowText ?: NativeWindowTextAccessibilityOwner(
         this, NativeTextSemanticsClipPolicy(::sourceWindowTextClip),
-        rootContentClip = { androidx.compose.ui.geometry.Rect(0f, 0f, width.toFloat(), height.toFloat()) },
+        rootContentClip = { app.smallthingz.nativeui.geometry.Rect(0f, 0f, width.toFloat(), height.toFloat()) },
         transformPolicy = sourceTextTransforms)
     var externalAccessibilityOcclusion: () -> List<android.graphics.Rect> = { emptyList() }
     private val accessibility = NativeOnboardingAccessibility(this, { viewport }, { preview }, footer,
@@ -224,9 +224,9 @@ internal class NativeOnboardingScreenView private constructor(
         },
         rtl = { layoutDirection == View.LAYOUT_DIRECTION_RTL },
         pageBounds = { page -> nativeBringIntoViewLocalRect(this, pages[page].sourceVerticalViewport,
-            androidx.compose.ui.geometry.Rect(0f, 0f, pages[page].width.toFloat(), pages[page].height.toFloat())) },
+            app.smallthingz.nativeui.geometry.Rect(0f, 0f, pages[page].width.toFloat(), pages[page].height.toFloat())) },
         focusBounds = { view -> nativeBringIntoViewLocalRect(this, view,
-            androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat())) },
+            app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat())) },
         withExtraPage = { page, block -> viewport.withFocusSearchPage(page, block) },
     )
 
@@ -239,10 +239,10 @@ internal class NativeOnboardingScreenView private constructor(
             KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> false
             else -> {
                 val direction = when (event.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> androidx.compose.ui.focus.FocusDirection.Left
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> androidx.compose.ui.focus.FocusDirection.Right
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_PAGE_UP -> androidx.compose.ui.focus.FocusDirection.Up
-                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> androidx.compose.ui.focus.FocusDirection.Down
+                    KeyEvent.KEYCODE_DPAD_LEFT -> app.smallthingz.nativeui.focus.FocusDirection.Left
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> app.smallthingz.nativeui.focus.FocusDirection.Right
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_PAGE_UP -> app.smallthingz.nativeui.focus.FocusDirection.Up
+                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> app.smallthingz.nativeui.focus.FocusDirection.Down
                     else -> return false
                 }
                 return beyondBoundsFocus.moveDirectional(direction)
@@ -274,7 +274,7 @@ internal class NativeOnboardingScreenView private constructor(
     /** Actual source Surface and pager clips outside each page subtree, including shared Activity ownership. */
     fun sourceWindowTextClip(view: View): NativeTextSemanticsClip =
         if (view === this || (this::viewport.isInitialized && view === viewport))
-            NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
+            NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(
                 0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else NativeTextSemanticsClip.Unclipped
 
@@ -400,7 +400,7 @@ internal class NativeOnboardingScreenView private constructor(
         backFrameJob?.cancel()
         backFrameJob = scope.launch {
             while (isActive && backMotion.hasContinuation) {
-                val completed = frames.withFrameNanos { time -> backMotion.frame(time, scope.coroutineContext[androidx.compose.ui.MotionDurationScale]?.scaleFactor ?: 1f) }
+                val completed = frames.withFrameNanos { time -> backMotion.frame(time, scope.coroutineContext[app.smallthingz.nativeui.MotionDurationScale]?.scaleFactor ?: 1f) }
                 applyMotion()
                 if (completed) finishBackCommit()
             }

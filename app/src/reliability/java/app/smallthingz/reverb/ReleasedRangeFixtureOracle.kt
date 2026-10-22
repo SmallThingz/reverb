@@ -127,7 +127,7 @@ private const val FIXTURE_RANGE_TIMELINE_TIME_LABEL_HEIGHT_DP = 28f
 @Composable
 internal fun ReleasedRangeFixtureRangeExportHomeContent(
     snapshot: ReverbService.TimelineSnapshot?,
-    fixtureStateObserver: (RangeExportEditorState) -> Unit,
+    fixtureStateObserver: (LegacyRangeExportEditorState) -> Unit,
     initialDurationSeconds: Float,
     selectedBuffer: ReverbService.BufferSlot,
     activeBuffer: ReverbService.BufferSlot?,
@@ -154,7 +154,7 @@ internal fun ReleasedRangeFixtureRangeExportHomeContent(
         getRememberedRangeExport(context, selectedBuffer)
     }
     val state = remember(selectedBuffer, rememberedRangeExport, appContext) {
-        RangeExportEditorState(
+        LegacyRangeExportEditorState(
             initialDurationSeconds = initialDurationSeconds,
             rememberedRangeExport = rememberedRangeExport,
             onPreviewReleaseFailure = { error ->
@@ -385,7 +385,7 @@ internal fun ReleasedRangeFixtureRangeExportHomeContent(
 
 @Composable
 private fun ReleasedRangeFixtureRangeSelectionDurationWheel(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     maxExportDurationSeconds: Double,
     enabled: Boolean,
     inputVisible: Boolean,
@@ -488,7 +488,7 @@ private fun ReleasedRangeFixtureRangeSelectionDurationWheel(
 
 @Composable
 private fun ReleasedRangeFixtureRangeExportTimeline(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     morphProgress: () -> Float,
     modifier: Modifier = Modifier,
     morphStartColor: androidx.compose.ui.graphics.Color? = null,
@@ -697,7 +697,7 @@ private fun ReleasedRangeFixturebubbleOffset(xPx: Float, fullWidthPx: Float, bub
 @Composable
 private fun ReleasedRangeFixtureRangeTimelineBar(
     target: RangeEditTarget,
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     interactionEnabled: Boolean,
     xPx: () -> Float,
     topPx: Float,
@@ -881,7 +881,7 @@ private fun ReleasedRangeFixtureRangeTimelineBar(
 private fun ReleasedRangeFixtureTimelineTimeLabel(
     target: RangeEditTarget,
     active: Boolean,
-    editorState: RangeExportEditorState,
+    editorState: LegacyRangeExportEditorState,
     visualAlpha: Float,
     modifier: Modifier = Modifier,
 ) {
@@ -920,7 +920,7 @@ private fun ReleasedRangeFixtureTimelineTimeLabel(
 
 @Composable
 private fun ReleasedRangeFixtureSpringFineAdjust(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -953,7 +953,7 @@ private fun ReleasedRangeFixtureSpringFineAdjust(
 @Composable
 private fun ReleasedRangeFixtureRangeExportControls(
     modifier: Modifier = Modifier,
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     loading: Boolean,
     canExport: Boolean,
     selectedBuffer: ReverbService.BufferSlot,

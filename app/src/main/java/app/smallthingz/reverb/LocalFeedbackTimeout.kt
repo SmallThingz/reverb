@@ -1,6 +1,6 @@
 package app.smallthingz.reverb
 
-import androidx.compose.ui.platform.AccessibilityManager
+import app.smallthingz.nativeui.platform.AccessibilityManager
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive

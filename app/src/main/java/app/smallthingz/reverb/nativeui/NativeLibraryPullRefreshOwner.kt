@@ -4,10 +4,10 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.animation.core.Animatable
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.unit.Density
+import app.smallthingz.nativeui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel

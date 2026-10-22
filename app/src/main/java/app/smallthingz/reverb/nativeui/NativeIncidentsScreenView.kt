@@ -4,8 +4,8 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.OnBackPressedDispatcher
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.MotionDurationScale
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.MotionDurationScale
 import androidx.lifecycle.LifecycleOwner
 import androidx.core.graphics.Insets
 import app.smallthingz.reverb.IncidentHistoryUiState

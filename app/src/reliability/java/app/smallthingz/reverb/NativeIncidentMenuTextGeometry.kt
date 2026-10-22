@@ -11,8 +11,8 @@ import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.Paragraph
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.unit.Density
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -178,7 +178,7 @@ private fun incidentSourceDrawCache(semantics: Any): JSONObject {
 }
 
 /** Observe the objects actually held by the draw Paragraph, independently of mutable cache fields. */
-private fun incidentDrawParagraphState(paragraph: Paragraph): JSONObject {
+private fun incidentDrawParagraphState(paragraph: Any): JSONObject {
     val result = JSONObject().put("paragraph_identity", System.identityHashCode(paragraph))
         .put("paragraph_class", paragraph.javaClass.name).put("complete", false)
     fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name)

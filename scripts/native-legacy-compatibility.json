@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "purpose": "Data-only readers for the exact two released0.1.2 Parcelable wire names; no Compose dependency/runtime/UI. No additional type/prefix exceptions.",
+  "sources": {
+    "app/src/nativeCompatibility/java/androidx/compose/runtime/ParcelableSnapshotMutableState.java": "d83c340e8b8f014e9886a8af44ebbc47f13d2f257036af013a066125ef3b1d8f",
+    "app/src/nativeCompatibility/java/androidx/compose/runtime/ParcelableSnapshotMutableIntState.java": "2b0cfa3b515466c07f76ce9e46cfa22d417c9212e3e921fd4b70c9d18e066785"
+  }
+}

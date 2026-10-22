@@ -5,13 +5,13 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.LineHeightStyle
-import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.sp
+import app.smallthingz.nativeui.text.PlatformTextStyle
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.text.font.FontWeight
+import app.smallthingz.nativeui.text.style.LineHeightStyle
+import app.smallthingz.nativeui.unit.TextUnit
+import app.smallthingz.nativeui.unit.sp
 
 /**
  * One immutable TextStyle per released role. No MaterialTheme, Composition, or runtime lookup.

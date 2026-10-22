@@ -25,40 +25,31 @@ import android.view.translation.ViewTranslationResponse
 import androidx.annotation.RequiresApi
 import java.util.function.Consumer
 import android.widget.TextView
-import androidx.compose.runtime.snapshots.SnapshotStateObserver
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.CanvasHolder
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.drawscope.Fill
-import androidx.compose.ui.text.Paragraph
-import androidx.compose.ui.text.ParagraphIntrinsics
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.MultiParagraph
-import androidx.compose.ui.text.MultiParagraphIntrinsics
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.resolveDefaults
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.constrain
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.text.Paragraph
+import app.smallthingz.nativeui.text.ParagraphIntrinsics
+import app.smallthingz.nativeui.text.AnnotatedString
+import app.smallthingz.nativeui.text.MultiParagraph
+import app.smallthingz.nativeui.text.MultiParagraphIntrinsics
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.text.resolveDefaults
+import app.smallthingz.nativeui.text.style.TextOverflow
+import app.smallthingz.nativeui.unit.Constraints
+import app.smallthingz.nativeui.unit.Density
+import app.smallthingz.nativeui.unit.IntSize
+import app.smallthingz.nativeui.unit.LayoutDirection
+import app.smallthingz.nativeui.unit.constrain
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Native text candidate; not yet wired into production screens or qualified for full text parity.
- *
- * An ordinary View using the existing pinned paragraph engine. There is no Composition,
- * LayoutNode/Modifier tree, recomposition scheduler, or font-readiness polling. SnapshotStateObserver
- * observes only the paragraph's asynchronously resolved-font/EmojiCompat readiness. A shared,
- * attached-consumer-only notification bridge makes that work without any Compose host; neither
- * mechanism is a second application state model.
+ * Native text View using Android TextPaint and StaticLayout/BoringLayout.
+ * Layout, accessibility geometry and drawing share one retained paragraph. EmojiCompat readiness
+ * invalidates only attached consumers; there is no composition or snapshot state engine.
  *
  * Scope: plain String labels, minLines=1, no selection, inline content, annotated links, editing,
  * or autosizing. The host owns role/color resolution, shared FontFamily.Resolver, and configuration
@@ -134,7 +125,6 @@ internal class ReverbParagraphView(
     private var clipParagraph = false
     private var firstBaseline = -1
     private var lastBaseline = -1
-    private val canvasHolder = CanvasHolder()
     private var observedIntrinsics: ParagraphIntrinsics? = null
     private var textAccessibility: PlainTextAccessibility? = null
     private var accessibilityWindow: PlainTextAccessibilityWindowScope? = null
@@ -142,18 +132,7 @@ internal class ReverbParagraphView(
     private var accessibilityExposed: (() -> Boolean)? = null
     private var accessibilityBindingToken: Any? = null
 
-    private val onFontsChanged: (ReverbParagraphView) -> Unit = { owner ->
-        if (owner.isAttachedToWindow && owner.observedIntrinsics != null) {
-            // Re-measure the active cache; do not erase an inactive original layout's history.
-            owner.requestLayout()
-            owner.invalidate()
-        }
-    }
-    private val fontObserver = SnapshotStateObserver { command ->
-        // Apply delivery can occur while a paragraph is being measured. Defer its invalidation
-        // until that traversal finishes instead of clearing the paragraph during onMeasure.
-        post { command() }
-    }
+    private var fontObservation: AutoCloseable? = null
     private var reportedSubstitution: String? = null
     private var reportedShowingSubstitution = false
     private var translationSemanticsPosted = false
@@ -305,7 +284,6 @@ internal class ReverbParagraphView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        fontObserver.start()
         // The source retains original/substitution caches across detach. Measurement checks font
         // staleness; destroying both caches here would lose original semantics while translated.
         reportedSubstitution = substitution.substitution
@@ -317,8 +295,6 @@ internal class ReverbParagraphView(
         removeCallbacks(translationSemanticsInvalidation)
         translationSemanticsPosted = false
         clearFontObservation()
-        fontObserver.stop()
-        fontObserver.clear()
         super.onDetachedFromWindow()
     }
 
@@ -416,29 +392,27 @@ internal class ReverbParagraphView(
 
     private fun observeResolvedFonts(current: ParagraphIntrinsics) {
         if (!isAttachedToWindow || observedIntrinsics === current) return
+        clearFontObservation()
         observedIntrinsics = current
-        var alreadyStale = false
-        ReverbFontSnapshotNotifications.observeReads(this) {
-            fontObserver.observeReads(this, onFontsChanged) {
-                alreadyStale = current.hasStaleResolvedFonts
-            }
-        }
-        // Completion may precede registration of a newly observed state. The bridge initializes
-        // those states, then this second read closes that hand-off without readiness polling.
-        if (alreadyStale || current.hasStaleResolvedFonts) {
+        val invalidateFonts = {
+            // Emoji readiness can arrive during measure; defer until that traversal finishes.
             post {
                 if (isAttachedToWindow && observedIntrinsics === current) {
                     requestLayout()
                     invalidate()
                 }
             }
+            Unit
         }
+        fontObservation = current.observeFontChanges(invalidateFonts)
+        // Close the completion-before-registration race without readiness polling.
+        if (current.hasStaleResolvedFonts) invalidateFonts()
     }
 
     private fun clearFontObservation() {
         observedIntrinsics = null
-        fontObserver.clear(this)
-        ReverbFontSnapshotNotifications.clear(this)
+        fontObservation?.close()
+        fontObservation = null
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -570,17 +544,7 @@ internal class ReverbParagraphView(
         try {
             canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
             if (clipParagraph) canvas.clipRect(0, 0, measuredContentSize.width, measuredContentSize.height)
-            val shadow = textStyle.shadow ?: Shadow.None
-            val decoration = textStyle.textDecoration ?: TextDecoration.None
-            val drawStyle = textStyle.drawStyle ?: Fill
-            val brush = textStyle.brush
-            canvasHolder.drawInto(canvas) {
-                if (brush != null) {
-                    current.paint(this, brush, textStyle.alpha, shadow, decoration, drawStyle)
-                } else {
-                    current.paint(this, textColor, shadow, decoration, drawStyle)
-                }
-            }
+            current.paint(canvas, textColor)
         } finally {
             canvas.restoreToCount(saved)
         }

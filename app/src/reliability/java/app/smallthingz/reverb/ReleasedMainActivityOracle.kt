@@ -540,7 +540,7 @@ private fun OnboardingScreen(
     val pageScrollStates = mutableListOf<ScrollState>()
     repeat(ONBOARDING_PAGE_COUNT) { pageScrollStates += rememberScrollState() }
     val scope = rememberCoroutineScope()
-    val navigation = remember { OnboardingNavigationState() }
+    val navigation = remember { LegacyOnboardingNavigationState() }
     fun navigateTo(target: Int, animate: Boolean = true) {
         if (!navigation.mayNavigate()) return
         val owner = navigation.begin()

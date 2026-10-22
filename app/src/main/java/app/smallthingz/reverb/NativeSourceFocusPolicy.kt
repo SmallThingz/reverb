@@ -7,8 +7,8 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
-import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.geometry.Rect as FocusRect
+import app.smallthingz.nativeui.focus.FocusDirection
+import app.smallthingz.nativeui.geometry.Rect as FocusRect
 
 /**
  * Window-owner focus policy for Views which replace the released Compose focus targets.

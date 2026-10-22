@@ -5,8 +5,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.platform.AccessibilityManager
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.platform.AccessibilityManager
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.NativeLibraryCallbacks
 import app.smallthingz.reverb.NativeLibraryController
@@ -326,13 +326,13 @@ internal class ReverbLibraryScreenContent(
             }
             ancestor=ancestor.parent as? View
         }
-        val rectangle={NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
+        val rectangle={NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(
             0f,0f,view.width.toFloat(),view.height.toFloat()))}
         return when {
             view===this || view is ReverbLibraryRecordingRow || view is LibraryExpansionViewport -> rectangle()
             view===listViewport || view===emptyViewport -> {
                 val extra=(30f*environment.textDensity.density).roundToInt().toFloat()
-                NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(-extra,0f,
+                NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(-extra,0f,
                     view.width+extra,view.height.toFloat()))
             }
             view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent===view -> rectangle()

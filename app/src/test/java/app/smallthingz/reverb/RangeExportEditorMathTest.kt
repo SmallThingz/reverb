@@ -1,6 +1,6 @@
 package app.smallthingz.reverb
 
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.geometry.Rect
 import java.io.IOException
 import kotlin.math.PI
 import kotlin.math.roundToInt

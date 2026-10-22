@@ -1,11 +1,11 @@
 package app.smallthingz.reverb
 
 import androidx.activity.BackEventCompat
-import androidx.compose.animation.core.Animatable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import app.smallthingz.nativeui.animation.core.Animatable
+import app.smallthingz.nativeui.runtime.getValue
+import app.smallthingz.nativeui.runtime.mutableIntStateOf
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.runtime.setValue
 import kotlin.math.roundToInt
 
 private const val PREDICTIVE_BACK_COMMIT_MAX_DURATION_MS = 220

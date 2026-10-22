@@ -5,8 +5,8 @@
  */
 package app.smallthingz.reverb
 
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.unit.Velocity
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.unit.Velocity
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope

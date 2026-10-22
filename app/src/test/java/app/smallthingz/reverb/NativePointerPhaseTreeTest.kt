@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.PointerType
-import androidx.compose.ui.unit.Velocity
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.input.pointer.PointerType
+import app.smallthingz.nativeui.unit.Velocity
 import org.junit.Assert.*
 import org.junit.Test
 

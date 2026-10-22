@@ -2,8 +2,8 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.view.View
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 
 /**
  * Replaces the normal Home's existing weighted Box. The parent still owns its source dimensions and

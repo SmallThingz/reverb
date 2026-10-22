@@ -4,10 +4,10 @@
  */
 package app.smallthingz.reverb
 
-import androidx.compose.foundation.gestures.BringIntoViewSpec
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.foundation.gestures.BringIntoViewSpec
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
 import app.smallthingz.reverb.nativeui.NativeBringIntoViewRequestQueue
 import app.smallthingz.reverb.nativeui.NativeContentInViewOwner
 import app.smallthingz.reverb.nativeui.NativeUpdatableScrollAnimation

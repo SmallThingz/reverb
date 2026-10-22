@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exact native sheet resources from AndroidX Material3 1.4.0 (Apache-2.0).
+     See nativeui/sheet-resources/SOURCE.md; no Material runtime is required. -->
+<resources>
+    <string msgid="1555567894577437024" name="native_sheet_dismiss_description">"ബോട്ടം ഷീറ്റ് ഡിസ്മിസ് ചെയ്യുക"</string>
+    <string msgid="8403354765404029791" name="native_sheet_drag_handle_description">"വലിച്ചിടുന്നതിനുള്ള ഹാൻഡിൽ"</string>
+    <string msgid="3010635850035863127" name="native_sheet_pane_title">"ബോട്ടം ഷീറ്റ്"</string>
+</resources>

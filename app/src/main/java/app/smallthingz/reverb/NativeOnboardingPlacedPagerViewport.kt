@@ -5,11 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.unit.Density
+import app.smallthingz.nativeui.unit.dp
 import app.smallthingz.reverb.nativeui.*
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.geometry.Rect as ComposeRect
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.geometry.Rect as ComposeRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job

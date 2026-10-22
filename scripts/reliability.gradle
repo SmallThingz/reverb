@@ -1,4 +1,8 @@
 // Opt-in, isolated on-device reliability tests. Never replaces the user's Reverb install.
+// Set before project buildscript evaluation: normal builds do not load the Compose plugin.
+gradle.ext.reverbReliabilityEnabled = gradle.startParameter.taskNames.any {
+    it.tokenize(':').last().toLowerCase(java.util.Locale.ROOT).contains('reliability')
+}
 allprojects {
     plugins.withId('com.android.application') {
         def parityOnly = providers.gradleProperty('reverbNativeParity')
@@ -24,6 +28,18 @@ allprojects {
                     ]
                 }
             }
+        }
+        dependencies {
+            reliabilityImplementation 'androidx.activity:activity-compose:1.13.0'
+            reliabilityImplementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
+            reliabilityImplementation platform('androidx.compose:compose-bom:2026.05.01')
+            reliabilityImplementation 'androidx.compose.animation:animation'
+            reliabilityImplementation 'androidx.compose.foundation:foundation'
+            reliabilityImplementation 'androidx.compose.material:material-icons-core'
+            reliabilityImplementation 'androidx.compose.material:material-icons-extended'
+            reliabilityImplementation 'androidx.compose.material3:material3'
+            reliabilityImplementation 'androidx.compose.ui:ui'
+            reliabilityImplementation 'androidx.compose.ui:ui-tooling-preview'
         }
         if (parityOnly) {
             def oracleCheck = tasks.register('verifyNativeParityOracle') {
@@ -76,6 +92,11 @@ allprojects {
                 def splitSourceMap = new groovy.json.JsonSlurper().parse(splitSourceMapFile)
                 inputs.file(splitSourceMapFile)
                 inputs.files(splitSourceMap.outputs_sha256.keySet().collect { file(it) })
+                def backendSourceMapFile = rootProject.file('scripts/native-backend-source-map.json')
+                def backendSourceMap = new groovy.json.JsonSlurper().parse(backendSourceMapFile)
+                inputs.file(backendSourceMapFile)
+                inputs.files((backendSourceMap.normalizations.keySet() + backendSourceMap.references.keySet())
+                    .collect { file(it) })
                 doLast {
                     def splitSha256 = { byte[] bytes ->
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
@@ -83,9 +104,47 @@ allprojects {
                     if (splitSha256(splitSourceMapFile.bytes) != '441a3c805dadb0711e79b72d132cf4151c431eaa1f63b8a393c7c104442f90e0') {
                         throw new GradleException('Native renderer split manifest changed')
                     }
+                    // Native backends change namespaces; QA keeps pinned old implementations.
+                    // Invert only declared mechanical seams, then apply every original release hash.
+                    if (splitSha256(backendSourceMapFile.bytes) != 'f4b32ac0ac2ed301a3e92189e3e5c95f3b8ec6fe16f4fe7790327f3e5fe4b5d9') {
+                        throw new GradleException('Native backend source manifest changed')
+                    }
+                    def backendNormalizedBytes = [:]
+                    def nativeBackendBytes = { relative ->
+                        if (!backendNormalizedBytes.containsKey(relative)) {
+                            byte[] bytes = file(relative).bytes
+                            def definition = backendSourceMap.normalizations[relative] ?:
+                                backendSourceMap.references[relative]
+                            if (definition != null) {
+                                if (splitSha256(bytes) != definition.compiled_sha256) {
+                                    throw new GradleException('Native backend compiled source changed: ' + relative)
+                                }
+                                def text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                                definition.inverse.each { replacement ->
+                                    def expression = java.util.regex.Pattern.quote(replacement.from as String)
+                                    if (replacement.word) expression = '\\b' + expression + '\\b'
+                                    def matcher = java.util.regex.Pattern.compile(expression).matcher(text)
+                                    int count = 0
+                                    while (matcher.find()) count++
+                                    if (count != (replacement.count as int)) {
+                                        throw new GradleException('Native backend mechanical seam changed: ' + relative)
+                                    }
+                                    text = matcher.reset().replaceAll(
+                                        java.util.regex.Matcher.quoteReplacement(replacement.to as String))
+                                }
+                                bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                                if (splitSha256(bytes) != definition.normalized_sha256) {
+                                    throw new GradleException('Native backend no longer reconstructs pinned source: ' + relative)
+                                }
+                            }
+                            backendNormalizedBytes[relative] = bytes
+                        }
+                        backendNormalizedBytes[relative]
+                    }
+                    backendSourceMap.references.keySet().each { nativeBackendBytes(it) }
                     def splitActualBytes = [:]
                     splitSourceMap.outputs_sha256.each { relative, expected ->
-                        def bytes = file(relative).bytes
+                        def bytes = nativeBackendBytes(relative)
                         if (splitSha256(bytes) != expected) {
                             throw new GradleException('Native renderer split output changed: ' + relative)
                         }
@@ -95,7 +154,7 @@ allprojects {
                     def readSplitBytes = { relative ->
                         if (!normalizedSplitBytes.containsKey(relative)) {
                             byte[] bytes = splitActualBytes.containsKey(relative) ?
-                                splitActualBytes[relative] : file(relative).bytes
+                                splitActualBytes[relative] : nativeBackendBytes(relative)
                             def replacements = splitSourceMap.normalizations[relative] ?: []
                             if (!replacements.isEmpty()) {
                                 def text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
@@ -160,7 +219,7 @@ allprojects {
                     }
                     def releasedOracleBytes = { relative ->
                         originalSplitBytes.containsKey(relative) ?
-                            originalSplitBytes[relative] : file(relative).bytes
+                            originalSplitBytes[relative] : nativeBackendBytes(relative)
                     }
                     def source = new String(releasedOracleBytes('src/main/java/app/smallthingz/reverb/SettingsScreen.kt'), 'UTF-8')
                     def start = source.indexOf('@Composable\ninternal fun SettingsAudioGroup(')
@@ -172,11 +231,11 @@ allprojects {
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
                     }
 
-                    if (sha256(releasedMainOracle.bytes) != 'beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090' ||
+                    if (sha256(nativeBackendBytes('src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt')) != 'beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090' ||
                         sha256(extractedMainPanelPolicy.bytes) != '4091efe78b45a42b4532c361b21de89c18cf9f4b1d1af9bf04bdf396949c4582') {
                         throw new GradleException('Released Main oracle/helper split changed')
                     }
-                    def reconstructedReleasedMain = releasedMainOracle.getText('UTF-8')
+                    def reconstructedReleasedMain = new String(nativeBackendBytes('src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt'), 'UTF-8')
                         .replaceAll('\\bReleasedMainActivityOracle\\b', 'MainActivity')
                         .replaceAll('\\breleasedMainOraclePanelRevealProgress\\b', 'panelRevealProgress')
                         .replaceAll('\\breleasedMainOracleShouldCommitPanelReveal\\b', 'shouldCommitPanelReveal')
@@ -216,7 +275,7 @@ allprojects {
                             'be40d98c8b619c4920ca5b102ad8d38b6d0a7239bca6ed3a08110cce56f78423') {
                         throw new GradleException('Released inline-player oracle changed beyond the two visibility seams')
                     }
-                    if (sha256(onboardingScreenOracle.bytes) !=
+                    if (sha256(nativeBackendBytes('src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt')) !=
                             '8be65c8c589678c3a5393d4cb7a73489af942e3a04cf0958845bbad5fc4c72a9') {
                         throw new GradleException('Released onboarding screen oracle changed')
                     }

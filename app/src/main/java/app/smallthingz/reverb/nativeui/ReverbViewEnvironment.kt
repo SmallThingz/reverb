@@ -3,8 +3,8 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import androidx.annotation.ColorInt
 import androidx.annotation.MainThread
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.unit.Density
 
 /**
  * Immutable bindings for one native host window and one configuration/theme generation.

@@ -4,11 +4,11 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.TargetBasedAnimation
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
+import app.smallthingz.nativeui.animation.core.CubicBezierEasing
+import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.infiniteRepeatable
+import app.smallthingz.nativeui.animation.core.keyframes
 
 /** Four public animation-engine tracks; no Composition or separate animation clock. */
 internal class NativeIndeterminateLinearMotion {

@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import app.smallthingz.nativeui.runtime.getValue
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.runtime.setValue
 
 /** The parent acknowledges only this synchronous edit, including any canonicalized duration. */
 internal data class NotificationDurationCommit(val seconds: Int, val owner: Long)

@@ -51,7 +51,7 @@ internal class ReverbAboutDialog(
     appearance: AboutContentAppearance,
     restoredScrollPosition: Int,
     onDismiss: () -> Unit,
-) : ComponentDialog(ContextThemeWrapper(anchor.context, androidx.compose.ui.R.style.FloatingDialogWindowTheme)) {
+) : ComponentDialog(ContextThemeWrapper(anchor.context, app.smallthingz.nativeui.R.style.FloatingDialogWindowTheme)) {
     constructor(anchor: View, appearance: AboutContentAppearance, onDismiss: () -> Unit) :
         this(anchor, appearance, 0, onDismiss)
 

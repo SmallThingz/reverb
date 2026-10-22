@@ -5,13 +5,13 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.DecayAnimationSpec
-import androidx.compose.animation.core.TargetBasedAnimation
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.MutatePriority
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.MotionDurationScale
+import app.smallthingz.nativeui.animation.core.DecayAnimationSpec
+import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.spring
+import app.smallthingz.nativeui.foundation.MutatePriority
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.MotionDurationScale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch

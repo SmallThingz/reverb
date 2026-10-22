@@ -5,7 +5,7 @@ import android.graphics.Matrix
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
-import androidx.compose.ui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Offset
 
 /** Captured authoritative float matrices from the window's existing geometry owner. */
 internal class NativePointerCoordinates(

@@ -31,7 +31,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect as ComposeRect
@@ -299,7 +299,7 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
                 }
             }
         } else {
-            val coroutineContext = AndroidUiDispatcher.Main + SupervisorJob()
+            val coroutineContext = (AndroidUiDispatcher.Main + SupervisorJob()).withNativeParityClock()
             val viewportScope = CoroutineScope(coroutineContext).also { scope = it }
             val icon = OnboardingIconView(context, ReverbIcon.Unchecked, palette.onSurfaceVariant)
             nativeIcon = icon
@@ -309,7 +309,7 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
                 addRow(body, ReverbGroupLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, CLIP_GROUP_HEIGHT))
             } else body.apply { setBackgroundColor(palette.field) }
             val column = IconClipColumn(context, group)
-            viewport = NativeVerticalViewport(context, NativeVerticalScrollState(), density,
+            viewport = NativeVerticalViewport(context, NativeVerticalScrollState(), density.nativeParityDensity(),
                 checkNotNull(coroutineContext[MonotonicFrameClock]), viewportScope, IconClipNoNested).apply {
                 layoutDirection = View.LAYOUT_DIRECTION_RTL
                 setContent(column)
@@ -335,7 +335,7 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
             val group = view.parent as? ReverbGroupLayout
             if (view === viewport || (group != null && group.getChildAt(0) === view))
                 NativeTextSemanticsClip.Rectangle(ComposeRect(
-                    0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                    0f, 0f, view.width.toFloat(), view.height.toFloat()).nativeParityRect())
             else NativeTextSemanticsClip.Unclipped
         })
     return IconClipRender(root, {
@@ -345,11 +345,11 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
             val rawVisible = Rect()
             check(icon.getGlobalVisibleRect(rawVisible))
             val captured = checkNotNull(checkNotNull(nativeGeometry).capture(
-                icon, Offset.Zero, ComposeRect(0f, 0f, icon.width.toFloat(), icon.height.toFloat())))
+                icon, Offset.Zero.nativeParityOffset(), ComposeRect(0f, 0f, icon.width.toFloat(), icon.height.toFloat()).nativeParityRect()))
             // This fixture's ordinary root has no transform; preserve the source window space.
             val rootPosition = IntArray(2).also(root::getLocationInWindow)
             val clipped = captured.visibleBoundsInRoot.translate(
-                Offset(rootPosition[0].toFloat(), rootPosition[1].toFloat()))
+                Offset(rootPosition[0].toFloat(), rootPosition[1].toFloat()).nativeParityOffset())
             JSONObject().put("position", JSONArray(position.toList()))
                 .put("size", JSONArray(listOf(icon.width, icon.height)))
                 .put("clipped", JSONArray(listOf(clipped.left, clipped.top, clipped.right, clipped.bottom)))

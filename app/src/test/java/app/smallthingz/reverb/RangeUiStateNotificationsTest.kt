@@ -1,11 +1,10 @@
 package app.smallthingz.reverb
 
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.runtime.PausableMonotonicFrameClock
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.neverEqualPolicy
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.PausableMonotonicFrameClock
+import app.smallthingz.nativeui.runtime.mutableFloatStateOf
+import app.smallthingz.nativeui.runtime.mutableIntStateOf
+import app.smallthingz.nativeui.runtime.mutableStateOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
@@ -24,10 +23,14 @@ class RangeUiStateNotificationsTest {
         assertSame(integer, rangeUiState(integer, null))
     }
 
-    @Test fun notificationReadsAlreadyCommittedStorageAndPreservesItsPolicy() {
+    @Test fun notificationReadsAlreadyCommittedStorageAndPreservesIdentity() {
         val first = String(charArrayOf('a'))
         val second = String(charArrayOf('a'))
-        val storage = mutableStateOf(first, neverEqualPolicy())
+        // A custom delegate deliberately replaces equal values. The notification wrapper must
+        // preserve that delegate's behavior, without imposing the default cell's equality rule.
+        val storage = object : app.smallthingz.nativeui.runtime.MutableState<String> {
+            override var value = first
+        }
         var observed: String? = null
         val wrapper = rangeUiState(storage) { observed = storage.value }
         wrapper.value = second

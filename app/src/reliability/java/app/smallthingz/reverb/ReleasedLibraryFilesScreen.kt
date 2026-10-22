@@ -313,7 +313,7 @@ fun ReleasedLibraryFilesScreen(
 
     val selectedIds = remember { mutableStateMapOf<String, RecordingEntity>() }
     val pendingDeletions = remember { mutableStateMapOf<String, RecordingEntity>() }
-    val deletionState = remember { LibraryDeletionState() }
+    val deletionState = remember { LegacyLibraryDeletionState() }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameRecording by remember { mutableStateOf<RecordingEntity?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -683,7 +683,7 @@ fun ReleasedLibraryFilesScreen(
                 return@launch
             }
             if (backgroundDeletionReceipt[0] !== receipt) return@launch
-            if (settleCompletedBackgroundDeletion(
+            if (legacySettleCompletedBackgroundDeletion(
                     state = deletionState,
                     revision = revision,
                     attempted = pending,

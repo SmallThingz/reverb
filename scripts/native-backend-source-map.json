@@ -1,0 +1,895 @@
+{
+  "format": 1,
+  "purpose": "Finite inverse namespace/symbol and QA-only helper extraction; original release expected bytes unchanged",
+  "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+  "normalizations": {
+    "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
+      "compiled_sha256": "6f6234c434d115367902753474bf95805b2157ab120338fed2995617847420de",
+      "normalized_sha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.",
+          "to": "androidx.compose.ui.",
+          "count": 1,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": {
+      "compiled_sha256": "ec3a3c0f3236fdffc3af61fa9cc9835a5de5694374111ab49e41654ecdff2286",
+      "normalized_sha256": "08b827a9566af730fae1519005de8d48142d6551cfa0aa98aa0760215d6f242c",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.animation.",
+          "to": "androidx.compose.animation.",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 5,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": {
+      "compiled_sha256": "3cd97b30c1a4e3a46ce0cc0041f9eaa0d5d2b79f1f2e862ada6fcbd7db0343cc",
+      "normalized_sha256": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.animation.",
+          "to": "androidx.compose.animation.",
+          "count": 2,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 4,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": {
+      "compiled_sha256": "8d2bdb97f5c9ef3b93372e5f5bf548fb6fa6371e449d3b2e05148e2aa2b4e81e",
+      "normalized_sha256": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 3,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": {
+      "compiled_sha256": "ab3b9030ad4ccf7d167981f5fa3b0467940cf3557cd6f7f633bb5427ac4ab30b",
+      "normalized_sha256": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.animation.",
+          "to": "androidx.compose.animation.",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 4,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": {
+      "compiled_sha256": "4649177cad7944890e3d1ea42329914fc41059592cbfa3ac5d961abe021513ab",
+      "normalized_sha256": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 5,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
+      "compiled_sha256": "87f1c7c1e72b8e248873b71dd403fb1996de8335c0bff8a57eed99dfb2af51b3",
+      "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 5,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.",
+          "to": "androidx.compose.ui.",
+          "count": 1,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": {
+      "compiled_sha256": "0d3aada2f7032d77dda18225d69732a282fa89e17f9b122761b2bba28a8bd958",
+      "normalized_sha256": "a699f2eb0c0b654ed28078f7519905067e7a81801ba642a07dffe49e5915f2eb",
+      "inverse": [
+        {
+          "from": "import android.content.Context\n",
+          "to": "import android.content.Context\nimport androidx.compose.ui.input.pointer.PointerInputChange\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "// The expansion itself owns playback;",
+          "to": "// The waveform owns this pointer stream. Revoke cancellation before the final seek can resume.\ninternal inline fun finishInlineWaveformGesture(\n    release: PointerInputChange?,\n    playback: InlinePlayerBookkeeping,\n    finishSeek: () -> Unit,\n) {\n    rangePointerReleaseWasNormal(release, playback::revokeResume)\n    finishSeek()\n}\n\n// The expansion itself owns playback;",
+          "count": 1,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": {
+      "compiled_sha256": "063281317d40365b11ea0b5f8de9c6bdb76657f1eb17ce18febcb8dc5ad3509a",
+      "normalized_sha256": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
+      "inverse": [
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 4,
+          "word": false
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt": {
+      "compiled_sha256": "22cbadf52dbee13e586dc660e84bc15baf3c19b0cdd08f6b241ebcd475c565a0",
+      "normalized_sha256": "0bf912d0759ec78331eff2acd35e2356639b69bdaee6555f4562ead4b01b7ea2",
+      "inverse": [
+        {
+          "from": "legacyRangeMorphSourceGeometry",
+          "to": "rangeMorphSourceGeometry",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt": {
+      "compiled_sha256": "6ba63fce00ec53ce89125b1be76298e38fe025a02b22c4b288c0a5f79a84e7dd",
+      "normalized_sha256": "2e8bd369cf290d3d7653c788a615c872f8ee63e15ca3465b49aa5e2b11599656",
+      "inverse": [
+        {
+          "from": "LegacyLibraryDeletionState",
+          "to": "LibraryDeletionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacySettleCompletedBackgroundDeletion",
+          "to": "settleCompletedBackgroundDeletion",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt": {
+      "compiled_sha256": "27445d8b83873090bbcccb9b95f1661a3c35043b1d4e119a590fd2ac2a29a7aa",
+      "normalized_sha256": "ef96f9cfeda3c074f0437ed1ce6edd9438b671fc63a350ded23bb9b9b09720ad",
+      "inverse": [
+        {
+          "from": "LegacyIncidentsPredictiveBackMotionState",
+          "to": "IncidentsPredictiveBackMotionState",
+          "count": 2,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt": {
+      "compiled_sha256": "515e34cffb0298e62d18000b3a2da62efac72f458044bf24a975661342750613",
+      "normalized_sha256": "87cd2836da36b454ded58146d80ad9ad580d3a8a94e3c91d380064f4c2c7baa2",
+      "inverse": [
+        {
+          "from": "LegacyIncidentsPanelMotionState",
+          "to": "IncidentsPanelMotionState",
+          "count": 2,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/NotificationSaveSettingsRenderer.kt": {
+      "compiled_sha256": "8fbe0905df9edde14b66b45ef0ececf2495c736aee775a37f1221cd3d12e5855",
+      "normalized_sha256": "6570029a18a5ae3998a6ea37ea34eac718478cff4935aee73d2ec26bf229df2f",
+      "inverse": [
+        {
+          "from": "LegacyNotificationDurationInteractionState",
+          "to": "NotificationDurationInteractionState",
+          "count": 2,
+          "word": true
+        },
+        {
+          "from": "LegacyNotificationDurationBinding",
+          "to": "NotificationDurationBinding",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt": {
+      "compiled_sha256": "d04af31d72d9dddca5a3e0a685c6c2fe65d3af97c7166b6c167ca814f5dd5d91",
+      "normalized_sha256": "6d21af5ef8590d4b6a948aa878b70dc8f9aa4633fc515d8c54d05f8596be8b2b",
+      "inverse": [
+        {
+          "from": "LegacyPredictiveBackMotionState",
+          "to": "PredictiveBackMotionState",
+          "count": 2,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/QuickSettingsTilesControlsRenderer.kt": {
+      "compiled_sha256": "01c0bfcaa4c68444f1a1ba9e732b6abe061edcb51f9425fce5273a0d5d65fb75",
+      "normalized_sha256": "d360f38ecc3866ccd7bf05c28ede8832bf125c2bb014bf3d1c1f0f9475bdca93",
+      "inverse": [
+        {
+          "from": "LegacyNotificationDurationInteractionState",
+          "to": "NotificationDurationInteractionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyTileCapacityLoad",
+          "to": "TileCapacityLoad",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTileEditorTarget",
+          "to": "QuickSettingsTileEditorTarget",
+          "count": 2,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTilesEditorState",
+          "to": "QuickSettingsTilesEditorState",
+          "count": 2,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedHomeFixtureOracle.kt": {
+      "compiled_sha256": "f364a4f9b2a48f45bbe004e02958431d2df3898d9aa42f95ec92f100a3cc84af",
+      "normalized_sha256": "5acd675302d79e1aad10f5ec603fce7d631b164834c7cd9e0773bfdc5ab5b5c1",
+      "inverse": [
+        {
+          "from": "legacyRangeMorphSourceGeometry",
+          "to": "rangeMorphSourceGeometry",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedLibraryFilesScreen.kt": {
+      "compiled_sha256": "16f5188627b1524f5267dd1b48c1f2cf1ce0ec2940f91a295623b19997d8c838",
+      "normalized_sha256": "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489",
+      "inverse": [
+        {
+          "from": "LegacyLibraryDeletionState",
+          "to": "LibraryDeletionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacySettleCompletedBackgroundDeletion",
+          "to": "settleCompletedBackgroundDeletion",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedMainActivityOracle.kt": {
+      "compiled_sha256": "7857319317e19065888ef4f2e287137dcf9259544da201f4bf1940d16d653d7e",
+      "normalized_sha256": "beca2d20a8a6230fb93e276cc370e8f86e08b605d40f60c4bb3698fdc1814090",
+      "inverse": [
+        {
+          "from": "LegacyOnboardingNavigationState",
+          "to": "OnboardingNavigationState",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedOnboardingScreenOracle.kt": {
+      "compiled_sha256": "3e2fcffb3e492a87c50db7ecd615700f4533f9fcf470808a89fdc7a21bc02e38",
+      "normalized_sha256": "8be65c8c589678c3a5393d4cb7a73489af942e3a04cf0958845bbad5fc4c72a9",
+      "inverse": [
+        {
+          "from": "LegacyOnboardingNavigationState",
+          "to": "OnboardingNavigationState",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedRangeEditorRenderers.kt": {
+      "compiled_sha256": "d3cc7cb67368ac71cfd83a04d93cf0e4d071cc1646cc61a57e5a1d4e7e6c59d0",
+      "normalized_sha256": "19cef23bb9c6bc36871c63fb2d9651879afbfa2ee4dd96a98ab407b4f27de9a2",
+      "inverse": [
+        {
+          "from": "LegacyRangeExportEditorState",
+          "to": "RangeExportEditorState",
+          "count": 7,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedRangeFixtureOracle.kt": {
+      "compiled_sha256": "d54b228a45f27e0bfccb63d38b25273b05cfe094ff0625c8f3421ea2779e767b",
+      "normalized_sha256": "cf325e83be5dfacc7a48725a5210d36fcf5f971d1c4617ca5843c65f5011b73b",
+      "inverse": [
+        {
+          "from": "LegacyRangeExportEditorState",
+          "to": "RangeExportEditorState",
+          "count": 8,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedSettingsQuickTileInlineEditor.kt": {
+      "compiled_sha256": "5f06b07434391ea0da5fd510277028c8a4e73bd891534bfa749e62be4484fcad",
+      "normalized_sha256": "448f5f7b157ad5dd7b7332869f6c5ffbbd425ddcbe2df8fb81ca15edf7517371",
+      "inverse": [
+        {
+          "from": "LegacyNotificationDurationInteractionState",
+          "to": "NotificationDurationInteractionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyTileCapacityLoad",
+          "to": "TileCapacityLoad",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTileEditorTarget",
+          "to": "QuickSettingsTileEditorTarget",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTilesEditorState",
+          "to": "QuickSettingsTilesEditorState",
+          "count": 1,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt": {
+      "compiled_sha256": "ba93936a5ebaa3eddc4271025bb20d1373dcdf96b969974b2fa865d86cf069fb",
+      "normalized_sha256": "98b1f17c83d87ebb11f233196801cf3522c74f9cfd6e7a10cc5bd6a66344f2f8",
+      "inverse": [
+        {
+          "from": "LegacyNotificationDurationInteractionState",
+          "to": "NotificationDurationInteractionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTilesEditorState",
+          "to": "QuickSettingsTilesEditorState",
+          "count": 3,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/SettingsSilenceCalibrationRenderer.kt": {
+      "compiled_sha256": "268bb952536708d002d9205626914317a303984c9770ac48a36c7a9768512331",
+      "normalized_sha256": "da93c545f0bc42f57cb92f4a4f46398e101aea21826a81febd4d1597dd25dea4",
+      "inverse": [
+        {
+          "from": "LegacySettingsSilenceCalibration",
+          "to": "SettingsSilenceCalibration",
+          "count": 2,
+          "word": true
+        }
+      ]
+    }
+  },
+  "references": {
+    "src/reliability/java/app/smallthingz/reverb/LegacyNotificationSaveSettingsStateOracle.kt": {
+      "compiled_sha256": "7a5c87218172dd68fe478ddbad06270c4f0911823742a8635126318a4ee78034",
+      "normalized_sha256": "35bb8e27a653a69904b463438bccf53e74ab41acefc294d8ded2467c1df4fda7",
+      "inverse": [
+        {
+          "from": "LegacyNotificationDurationInteractionState",
+          "to": "NotificationDurationInteractionState",
+          "count": 3,
+          "word": true
+        },
+        {
+          "from": "LegacyNotificationDurationBinding",
+          "to": "NotificationDurationBinding",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
+        "selectedSha256": "35bb8e27a653a69904b463438bccf53e74ab41acefc294d8ded2467c1df4fda7",
+        "spans": [
+          {
+            "symbol": "NotificationDurationInteractionState",
+            "startLine": 15,
+            "endLine": 28,
+            "sha256": "46869f8b2d0589215e49480abbe8277d1c14032f6c4cdd54f2e1f0d5703ded45"
+          },
+          {
+            "symbol": "NotificationDurationBinding",
+            "startLine": 31,
+            "endLine": 145,
+            "sha256": "5b46247bd02a47d441b775a7a4ce57ddd0375f44e886ebbcf252f9510d64d0d9"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyNotificationSaveSettingsStateOracle.kt",
+        "candidateSha256": "7a5c87218172dd68fe478ddbad06270c4f0911823742a8635126318a4ee78034",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyRangeExportEditorStateOracle.kt": {
+      "compiled_sha256": "ffa7000855e0362161d1222ddc062733eb8ac95148b97194b1c8e1ca93ac534f",
+      "normalized_sha256": "3a90a4c7b15161310999364f55df7c8402a022e14c65ff1441881012158c7a2f",
+      "inverse": [
+        {
+          "from": "LegacyRangeExportEditorState",
+          "to": "RangeExportEditorState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacyRangeMorphSourceGeometry",
+          "to": "rangeMorphSourceGeometry",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacyRangeUiState",
+          "to": "rangeUiState",
+          "count": 14,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/RangeExportEditor.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
+        "selectedSha256": "3a90a4c7b15161310999364f55df7c8402a022e14c65ff1441881012158c7a2f",
+        "spans": [
+          {
+            "symbol": "RangeExportEditorState",
+            "startLine": 619,
+            "endLine": 994,
+            "sha256": "1513fd8ac2a2b64ca3cf878e43f9ab0d7919ceeef3e02d8494f5d8ae22eec75d"
+          },
+          {
+            "symbol": "rangeMorphSourceGeometry",
+            "startLine": 209,
+            "endLine": 232,
+            "sha256": "e39dacc68f44e0c0faabadb32eac210d2cc46f0268718866feff8040ba7e00c4"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyRangeExportEditorStateOracle.kt",
+        "candidateSha256": "ffa7000855e0362161d1222ddc062733eb8ac95148b97194b1c8e1ca93ac534f",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyPredictiveBackMotionStateOracle.kt": {
+      "compiled_sha256": "5cfa50d149353c9822ac0ac011a0eb9bef2cad5e40b1320ce77c2dd7744c9a0d",
+      "normalized_sha256": "372d6adb9a96851db8aa5349f3b6a2e031270c333d849d27185b98ab03e0b88d",
+      "inverse": [
+        {
+          "from": "LegacyPredictiveBackMotionState",
+          "to": "PredictiveBackMotionState",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
+        "selectedSha256": "372d6adb9a96851db8aa5349f3b6a2e031270c333d849d27185b98ab03e0b88d",
+        "spans": [
+          {
+            "symbol": "PredictiveBackMotionState",
+            "startLine": 13,
+            "endLine": 23,
+            "sha256": "f2237ea09c11ec44da08f9dacd8c8840420ee9bd10060ac82a9e828db93acc78"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyPredictiveBackMotionStateOracle.kt",
+        "candidateSha256": "5cfa50d149353c9822ac0ac011a0eb9bef2cad5e40b1320ce77c2dd7744c9a0d",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyLibraryDeletionStateStateOracle.kt": {
+      "compiled_sha256": "90426feab26567bf741291e8022edd6196e5ef9584f70e6acb8bcc3860468fd6",
+      "normalized_sha256": "159da303744423105ff383a6dbc3ede98c12858d99ca4cb9dbf21931f5048670",
+      "inverse": [
+        {
+          "from": "LegacyLibraryDeletionState",
+          "to": "LibraryDeletionState",
+          "count": 2,
+          "word": true
+        },
+        {
+          "from": "legacySettleCompletedBackgroundDeletion",
+          "to": "settleCompletedBackgroundDeletion",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/LibraryDeletionState.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "86e0f52bf7620781598191a174c9e5a70ca62618904ae8abdf4a6c6205d68c33",
+        "selectedSha256": "159da303744423105ff383a6dbc3ede98c12858d99ca4cb9dbf21931f5048670",
+        "spans": [
+          {
+            "symbol": "LibraryDeletionState",
+            "startLine": 8,
+            "endLine": 68,
+            "sha256": "84d35b8c2322d570f079a0684a2283770df0dae109a5dd6b181d877ab2a4c4b3"
+          },
+          {
+            "symbol": "settleCompletedBackgroundDeletion",
+            "startLine": 71,
+            "endLine": 95,
+            "sha256": "db4757f19bba9cef6c4aa1e7f6ac5a9269f1a7b32c1c39d987ae944c33e79b60"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyLibraryDeletionStateStateOracle.kt",
+        "candidateSha256": "90426feab26567bf741291e8022edd6196e5ef9584f70e6acb8bcc3860468fd6",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyOnboardingNavigationStateStateOracle.kt": {
+      "compiled_sha256": "8db7067e34213e9d6ba25dc1fe06cf44d0319b394ab3b10eeaf888803ed75bc1",
+      "normalized_sha256": "ee53d0d66dbfb15718e9c00da085fd958033279d07dbc922e8cb5bfc3a0039cd",
+      "inverse": [
+        {
+          "from": "LegacyOnboardingNavigationState",
+          "to": "OnboardingNavigationState",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/OnboardingNavigationState.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "f10f89c4ca6968fce8fc654253104e269713cc5b27888cadd8cb90b2cbedff89",
+        "selectedSha256": "ee53d0d66dbfb15718e9c00da085fd958033279d07dbc922e8cb5bfc3a0039cd",
+        "spans": [
+          {
+            "symbol": "OnboardingNavigationState",
+            "startLine": 11,
+            "endLine": 53,
+            "sha256": "7aea19efd332c155de10a37306e065fd2e840c426b2e1f00cc9383d1bf989572"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyOnboardingNavigationStateStateOracle.kt",
+        "candidateSha256": "8db7067e34213e9d6ba25dc1fe06cf44d0319b394ab3b10eeaf888803ed75bc1",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacySettingsSilenceCalibrationStateOracle.kt": {
+      "compiled_sha256": "943fb792afd03f5def1904a1105afd7a915066032ab247b51a682aa4db07a94c",
+      "normalized_sha256": "bac38987a552286c945ca697e43bde49842d2dac1dede0b443e04f701e721c34",
+      "inverse": [
+        {
+          "from": "LegacySettingsSilenceCalibration",
+          "to": "SettingsSilenceCalibration",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
+        "selectedSha256": "bac38987a552286c945ca697e43bde49842d2dac1dede0b443e04f701e721c34",
+        "spans": [
+          {
+            "symbol": "SettingsSilenceCalibration",
+            "startLine": 18,
+            "endLine": 149,
+            "sha256": "4f6a936037408d3bdf393d5c2b25cb93ed12f600709c1676a6159534cd28cb4b"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacySettingsSilenceCalibrationStateOracle.kt",
+        "candidateSha256": "943fb792afd03f5def1904a1105afd7a915066032ab247b51a682aa4db07a94c",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyQuickSettingsTilesControlsStateOracle.kt": {
+      "compiled_sha256": "ac19a9357ccbc6e76a4b5c4302102c96f8fc22ef54c882f5ffcc739de275bd7b",
+      "normalized_sha256": "ff6699d8209fb95badba18087b9dec6e12166363f1dba0b39366ae7a4059a47c",
+      "inverse": [
+        {
+          "from": "LegacyTileCapacityLoad",
+          "to": "TileCapacityLoad",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTileEditorTarget",
+          "to": "QuickSettingsTileEditorTarget",
+          "count": 6,
+          "word": true
+        },
+        {
+          "from": "LegacyQuickSettingsTilesEditorState",
+          "to": "QuickSettingsTilesEditorState",
+          "count": 2,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
+        "selectedSha256": "ff6699d8209fb95badba18087b9dec6e12166363f1dba0b39366ae7a4059a47c",
+        "spans": [
+          {
+            "symbol": "TileCapacityLoad",
+            "startLine": 22,
+            "endLine": 46,
+            "sha256": "48e0e88cc8e395d4d9c3b735ef241a9d26754692125a04ad97b62a9fc2436ee5"
+          },
+          {
+            "symbol": "QuickSettingsTileEditorTarget",
+            "startLine": 49,
+            "endLine": 95,
+            "sha256": "1386385a46983914b01971aab36679191420d7ce1348608b8b257df50e5666d3"
+          },
+          {
+            "symbol": "QuickSettingsTilesEditorState",
+            "startLine": 112,
+            "endLine": 152,
+            "sha256": "750966b83316a2c66149bdfab9d32dc55a4afcabf250238fba0d1e3af3e27328"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyQuickSettingsTilesControlsStateOracle.kt",
+        "candidateSha256": "ac19a9357ccbc6e76a4b5c4302102c96f8fc22ef54c882f5ffcc739de275bd7b",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyRangeUiStateNotifications.kt": {
+      "compiled_sha256": "e5ce3b4fe2bd43f4030e04432104932151df3128b6617e24168c9ff63eadab60",
+      "normalized_sha256": "8522013b9351aeb6cdaab4743fa8adb474e5d8d91b207af2c138c970ee872b89",
+      "inverse": [
+        {
+          "from": "legacyRangeUiState",
+          "to": "rangeUiState",
+          "count": 3,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/RangeUiStateNotifications.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "8522013b9351aeb6cdaab4743fa8adb474e5d8d91b207af2c138c970ee872b89",
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyRangeUiStateNotifications.kt",
+        "candidateSha256": "e5ce3b4fe2bd43f4030e04432104932151df3128b6617e24168c9ff63eadab60",
+        "inverseExact": true,
+        "replacements": {
+          "NotificationDurationInteractionState": "LegacyNotificationDurationInteractionState",
+          "NotificationDurationBinding": "LegacyNotificationDurationBinding",
+          "RangeExportEditorState": "LegacyRangeExportEditorState",
+          "rangeMorphSourceGeometry": "legacyRangeMorphSourceGeometry",
+          "PredictiveBackMotionState": "LegacyPredictiveBackMotionState",
+          "LibraryDeletionState": "LegacyLibraryDeletionState",
+          "settleCompletedBackgroundDeletion": "legacySettleCompletedBackgroundDeletion",
+          "OnboardingNavigationState": "LegacyOnboardingNavigationState",
+          "SettingsSilenceCalibration": "LegacySettingsSilenceCalibration",
+          "TileCapacityLoad": "LegacyTileCapacityLoad",
+          "QuickSettingsTileEditorTarget": "LegacyQuickSettingsTileEditorTarget",
+          "QuickSettingsTilesEditorState": "LegacyQuickSettingsTilesEditorState",
+          "rangeUiState": "legacyRangeUiState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyIncidentsBackMotionStateOracle.kt": {
+      "compiled_sha256": "5488417597b681a650c2f561cbd0fa791a73ef3019b3dae2dc5a6820754de8e6",
+      "normalized_sha256": "5645d04e06a27661f32c086f3c7d595a4891c989f264f47f260c6af7c0f761b4",
+      "inverse": [
+        {
+          "from": "LegacyIncidentsPredictiveBackMotionState",
+          "to": "IncidentsPredictiveBackMotionState",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "08b827a9566af730fae1519005de8d48142d6551cfa0aa98aa0760215d6f242c",
+        "selectedSha256": "5645d04e06a27661f32c086f3c7d595a4891c989f264f47f260c6af7c0f761b4",
+        "spans": [
+          {
+            "symbol": "IncidentsPredictiveBackMotionState",
+            "startLine": 13,
+            "endLine": 47,
+            "sha256": "b904ac267406ccc298fd73d98e9290334725f00bdc8272e0af75d5601d079241"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyIncidentsBackMotionStateOracle.kt",
+        "candidateSha256": "5488417597b681a650c2f561cbd0fa791a73ef3019b3dae2dc5a6820754de8e6",
+        "inverseExact": true,
+        "replacements": {
+          "IncidentsPredictiveBackMotionState": "LegacyIncidentsPredictiveBackMotionState"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyIncidentsPanelMotion.kt": {
+      "compiled_sha256": "c9421abaac4459a0077bca40fd9dbb6093afdc5aa21456f8073f5330f94688bf",
+      "normalized_sha256": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
+      "inverse": [
+        {
+          "from": "LegacyIncidentsPanelMotionState",
+          "to": "IncidentsPanelMotionState",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacyIncidentsPanelTranslationX",
+          "to": "incidentsPanelTranslationX",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "frozenCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "source": "app/src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+        "sourceSha256": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyIncidentsPanelMotion.kt",
+        "candidateSha256": "c9421abaac4459a0077bca40fd9dbb6093afdc5aa21456f8073f5330f94688bf",
+        "inverseRenameExact": true
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/nativeui/LegacyNativeAboutWindowRuntime.kt": {
+      "compiled_sha256": "9d5320b9f1a5bd4efde4e7fd49709c3d066a4ddcd88063d30abbefd1ff4dffea",
+      "normalized_sha256": "406de397e6f5917aa48e2d18648806d6ed2ce127980a8de1b483f8f3d770f56f",
+      "inverse": [
+        {
+          "from": "LegacyNativeAboutWindowRuntime",
+          "to": "NativeAboutWindowRuntime",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "source": "app/src/main/java/app/smallthingz/reverb/nativeui/NativeAboutWindowRuntime.kt",
+        "sourceSha256": "406de397e6f5917aa48e2d18648806d6ed2ce127980a8de1b483f8f3d770f56f",
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/nativeui/LegacyNativeAboutWindowRuntime.kt",
+        "candidateSha256": "9d5320b9f1a5bd4efde4e7fd49709c3d066a4ddcd88063d30abbefd1ff4dffea",
+        "replacements": {
+          "NativeAboutWindowRuntime": "LegacyNativeAboutWindowRuntime"
+        },
+        "inverseExact": true
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/ReleasedPointerBridges.kt": {
+      "compiled_sha256": "962f452235fd62d569f6517a039da8f1423331e1596482262aba01dc0c50b37a",
+      "normalized_sha256": "962f452235fd62d569f6517a039da8f1423331e1596482262aba01dc0c50b37a",
+      "inverse": [],
+      "origin": "Exact two pointer bridge bodies extracted from frozen44 main; production has no callers"
+    }
+  }
+}

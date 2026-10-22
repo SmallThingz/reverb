@@ -6,7 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.*
 import kotlinx.coroutines.CoroutineScope
@@ -158,9 +158,9 @@ internal class NativeSettingsScreenContent(
         topBar.sourceClip(view)?.let {return it}
         return when {
             view===listViewport||view is SettingsExpansionView->
-                NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
+                NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
             view.parent is ReverbGroupLayout&&(view.parent as ReverbGroupLayout).pointerContent===view->
-                NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
+                NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
             else->NativeTextSemanticsClip.Unclipped
         }
     }

@@ -20,8 +20,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import app.smallthingz.reverb.NativeHomePointerRoot
 import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeWindowPointerCoordinates

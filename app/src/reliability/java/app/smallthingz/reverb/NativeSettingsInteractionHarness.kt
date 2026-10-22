@@ -29,8 +29,8 @@ import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
@@ -285,9 +285,9 @@ internal class SettingsInteractionRender(
     onOwned: (SettingsInteractionRender) -> Unit,
 ) : AutoCloseable {
     val board = FrameLayout(activity)
-    val runtime = NativeAboutWindowRuntime()
+    val runtime = LegacyNativeAboutWindowRuntime()
     private val asyncFailure = AtomicReference<Throwable?>(null)
-    val scope = CoroutineScope(runtime.scope.coroutineContext + CoroutineExceptionHandler { _, error ->
+    val scope = CoroutineScope(runtime.scope.coroutineContext.withNativeParityClock() + CoroutineExceptionHandler { _, error ->
         if (!asyncFailure.compareAndSet(null, error)) {
             asyncFailure.get()?.let { first -> if (first !== error) first.addSuppressed(error) }
         }
@@ -298,7 +298,7 @@ internal class SettingsInteractionRender(
     private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
     val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
-    val environment = ReverbViewEnvironment(density, createFontFamilyResolver(activity), ReverbPalette.resolve(activity, true))
+    val environment = nativeParityEnvironment(activity, density, ReverbPalette.resolve(activity, true))
     private var composition: ComposeViewContext? = null
     private var compose: ComposeView? = null
     private var native: SettingsInteractionNativeContent? = null
@@ -393,7 +393,7 @@ internal class SettingsInteractionRender(
                 val clips = NativeTextSemanticsClipPolicy { view ->
                     if (view is SettingsExpansionView ||
                         (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view))
-                        NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                        NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped
                 }
                 text = NativeWindowTextAccessibilityOwner(board, clips).bindContent(root, clips, sourceExposure = { it.isShown })

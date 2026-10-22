@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exact native sheet resources from AndroidX Material3 1.4.0 (Apache-2.0).
+     See nativeui/sheet-resources/SOURCE.md; no Material runtime is required. -->
+<resources>
+    <integer name="reverb_native_sheet_cutout_mode">3</integer>
+</resources>

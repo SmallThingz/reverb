@@ -1,6 +1,6 @@
 package app.smallthingz.reverb
 
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.geometry.Rect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

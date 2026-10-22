@@ -20,12 +20,12 @@ import android.view.WindowManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentDialog
 import androidx.activity.OnBackPressedCallback
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color as ComposeColor
-import androidx.compose.ui.graphics.luminance
+import app.smallthingz.nativeui.animation.core.Animatable
+import app.smallthingz.nativeui.animation.core.CubicBezierEasing
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
+import app.smallthingz.nativeui.graphics.Color as ComposeColor
+import app.smallthingz.nativeui.graphics.luminance
 import androidx.core.graphics.Insets
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -65,7 +65,7 @@ internal class ReverbActionSheetDialog(
     initialEnvironment:ReverbViewEnvironment,
     title:String,
     onDismiss:()->Unit,
-):ComponentDialog(ContextThemeWrapper(anchor.context,androidx.compose.material3.R.style.EdgeToEdgeFloatingDialogWindowTheme)) {
+):ComponentDialog(ContextThemeWrapper(anchor.context,app.smallthingz.reverb.R.style.ReverbNativeSheetWindowTheme)) {
     var environment=initialEnvironment;private set
     private var onOwnerDismiss=onDismiss
     private var disposed=false
@@ -366,7 +366,7 @@ internal class SheetScrim(context:Context,color:Int,private val action:()->Unit)
     var opacity=0f
         set(value) {if(field!=value){field=value;invalidate()}}
     init {
-        contentDescription=context.getString(androidx.compose.ui.R.string.close_sheet)
+        contentDescription=context.getString(app.smallthingz.nativeui.R.string.close_sheet)
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
         isClickable=true
         isScreenReaderFocusable=true

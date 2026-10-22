@@ -14,14 +14,14 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.TargetBasedAnimation
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.tween
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.animation.core.CubicBezierEasing
+import app.smallthingz.nativeui.animation.core.LinearEasing
+import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.infiniteRepeatable
+import app.smallthingz.nativeui.animation.core.keyframes
+import app.smallthingz.nativeui.animation.core.tween
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -148,7 +148,7 @@ internal open class ReverbIncidentLoadingView(
         // AndroidComposeView exposes indeterminate progress without RangeInfo; no fake percentage.
         info.rangeInfo = null
         androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(info).stateDescription =
-            context.getString(androidx.compose.ui.R.string.in_progress)
+            context.getString(app.smallthingz.nativeui.R.string.in_progress)
     }
 }
 

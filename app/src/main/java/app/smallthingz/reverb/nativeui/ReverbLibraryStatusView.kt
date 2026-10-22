@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import app.smallthingz.reverb.R
 import kotlin.math.max

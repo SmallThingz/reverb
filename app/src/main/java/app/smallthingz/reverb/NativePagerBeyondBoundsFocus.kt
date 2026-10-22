@@ -6,8 +6,8 @@
 package app.smallthingz.reverb
 
 import android.view.View
-import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.focus.FocusDirection
+import app.smallthingz.nativeui.geometry.Rect
 
 /** Fill pages, zero beyondViewportPageCount: source lays out at most two extra items per search. */
 internal fun nativePagerBeyondBoundsIndices(

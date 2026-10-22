@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import app.smallthingz.reverb.NativePointerHitScore
 import app.smallthingz.reverb.nativeMinimumTouchDistance
 import kotlin.math.min

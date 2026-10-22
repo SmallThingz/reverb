@@ -1,12 +1,12 @@
 package app.smallthingz.reverb
 
 import androidx.activity.BackEventCompat
-import androidx.compose.animation.core.Animatable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import app.smallthingz.nativeui.animation.core.Animatable
+import app.smallthingz.nativeui.runtime.getValue
+import app.smallthingz.nativeui.runtime.mutableIntStateOf
+import app.smallthingz.nativeui.runtime.mutableFloatStateOf
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.runtime.setValue
 import kotlinx.coroutines.Job
 
 // Incidents owns interrupted entry and Back return independently of the other panels.

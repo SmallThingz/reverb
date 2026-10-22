@@ -70,8 +70,8 @@ private fun ReleasedSettingsTileStatus(text: String, modifier: Modifier = Modifi
 
 @Composable
 internal fun ReleasedSettingsQuickTileInlineEditor(
-    target: QuickSettingsTileEditorTarget,
-    owner: QuickSettingsTilesEditorState,
+    target: LegacyQuickSettingsTileEditorTarget,
+    owner: LegacyQuickSettingsTilesEditorState,
     interactionReady: Boolean,
     durationSubmissionAllowed: Boolean,
     editRevision: Long,
@@ -84,8 +84,8 @@ internal fun ReleasedSettingsQuickTileInlineEditor(
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
-    val capacityLoad = remember { TileCapacityLoad() }
-    val durationInteraction = remember { NotificationDurationInteractionState() }
+    val capacityLoad = remember { LegacyTileCapacityLoad() }
+    val durationInteraction = remember { LegacyNotificationDurationInteractionState() }
     var message by remember { mutableStateOf<String?>(null) }
     var shortened by remember { mutableStateOf<TileCapacity?>(null) }
     var capacityRetry by remember { mutableLongStateOf(0L) }

@@ -16,6 +16,8 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
     SettingsInteractionSuite(instrumentation, report, "native_settings_duration").run { suite, host, reference ->
         val state = mutableStateOf(SettingsNotificationSaveState(false, 60, 3600, true, 1L))
         val interaction = NotificationDurationInteractionState()
+        val sourceInteraction = LegacyNotificationDurationInteractionState()
+        fun interactionPending() = if (reference) sourceInteraction.pending else interaction.pending
         val callbacks = mutableListOf<String>()
         var update: () -> Unit = {}
         fun enabled(value: Boolean) {
@@ -32,7 +34,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         val render = suite.mount(host, reference, source = {
             val current = state.value
             NotificationSaveSettings(current.enabled, current.seconds, current.maximumSeconds, ::enabled, ::seconds,
-                current.interactionReady, current.editRevision, { state.value.editRevision }, interaction)
+                current.interactionReady, current.editRevision, { state.value.editRevision }, sourceInteraction)
         }, native = { parent ->
             val view = SettingsNotificationSaveView(host, state.value, parent.environment, { parent.inputRoot },
                 host.lifecycle, interaction, ::enabled, ::seconds, { state.value.editRevision })
@@ -42,7 +44,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         })
         fun checkpoint(name: String) = suite.capture(name, { callbacks.toList() }, { JSONObject()
             .put("enabled", state.value.enabled).put("seconds", state.value.seconds)
-            .put("revision", state.value.editRevision).put("pending", interaction.pending) })
+            .put("revision", state.value.editRevision).put("pending", interactionPending()) })
         checkpoint("notification-collapsed")
         suite.main { render.click(host.getString(R.string.feature_notification_save)) }
         checkpoint("notification-initial")
@@ -63,13 +65,13 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
             val x = b.left + (b.width() * .81f - 14 * render.density.density).coerceAtLeast(1f) / 6f
             val y = b.exactCenterY()
             render.motion(MotionEvent.ACTION_DOWN, down, x, y)
-            check(interaction.pending)
+            check(interactionPending())
             render.motion(MotionEvent.ACTION_MOVE, down, x, y - 32 * render.density.density)
             state.value = state.value.copy(editRevision = state.value.editRevision + 1)
             update()
             render.motion(MotionEvent.ACTION_CANCEL, down, x, y - 32 * render.density.density)
         }
-        suite.await("cancelled stale wheel settle") { !interaction.pending }
+        suite.await("cancelled stale wheel settle") { !interactionPending() }
         checkpoint("notification-stale-owner")
         check(callbacks == acceptedBefore && state.value.seconds == 61)
         suite.main { render.click(host.getString(R.string.feature_notification_save)) }
@@ -86,10 +88,19 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         }
         val editor = QuickSettingsTilesEditorState()
         var target = QuickSettingsTileEditorTarget().also { editor.target = it }
+        val sourceEditor = LegacyQuickSettingsTilesEditorState()
+        var sourceTarget = LegacyQuickSettingsTileEditorTarget().also { sourceEditor.target = it }
+        fun tileBuffer() = if (reference) sourceTarget.buffer else target.buffer
+        fun tileSeconds() = if (reference) sourceTarget.seconds else target.seconds
+        fun tileRevision() = if (reference) sourceTarget.editRevision else target.editRevision
+        fun tileBusy() = if (reference) sourceTarget.busy else target.busy
+        fun tileClosed() = if (reference) sourceEditor.target == null else editor.target == null
+        fun tileOpen() = if (reference) sourceEditor.target === sourceTarget else editor.target === target
+        fun editorOpen() = if (reference) sourceEditor.editorOpen else editor.editorOpen
         val inputs = NativeQuickTilesInputs(true, true, true, 1L)
         var inline: NativeQuickTileInlineOwner? = null
         fun mountTile(): SettingsInteractionRender = suite.mount(host, reference, audioGroup = false, source = {
-            if (editor.target === target) ReleasedSettingsQuickTileInlineEditor(target, editor,
+            if (sourceEditor.target === sourceTarget) ReleasedSettingsQuickTileInlineEditor(sourceTarget, sourceEditor,
                 true, true, 1L, { 1L }, { 1L })
         }, native = { parent ->
             val container = FrameLayout(host).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -126,8 +137,8 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         }
         val originalWheel = nativeParityOnMain(instrumentation) { tile.wheel() }
         fun tileCheckpoint(name: String) = suite.capture(name, { emptyList() }, { JSONObject()
-            .put("open", editor.target === target).put("buffer", target.buffer.storageCode.toInt())
-            .put("seconds", target.seconds).put("edit_revision", target.editRevision).put("busy", target.busy)
+            .put("open", tileOpen()).put("buffer", tileBuffer().storageCode.toInt())
+            .put("seconds", tileSeconds()).put("edit_revision", tileRevision()).put("busy", tileBusy())
             .put("maximum", capacities.maximumSeconds).put("one_shot_capacity", capacities.oneShotSeconds)
             .put("looping_capacity", capacities.loopingSeconds) })
         tileCheckpoint("tile-initial")
@@ -135,7 +146,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
             ReverbService.BufferSlot.ONE_SHOT).withIndex()) {
             suite.main { tile.click(host.getString(if (buffer == ReverbService.BufferSlot.ONE_SHOT)
                 R.string.buffer_one_shot else R.string.buffer_loop)) }
-            suite.await("selected buffer publication") { target.buffer == buffer }
+            suite.await("selected buffer publication") { tileBuffer() == buffer }
             suite.observeDraws("tile-buffer-$index")
             suite.main { check(tile.wheel() === originalWheel) { "Buffer choice recreated the existing duration wheel" } }
             tileCheckpoint("tile-buffer-$index")
@@ -143,7 +154,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         suite.main {
             tile.click(host.getString(R.string.buffer_loop))
             tile.click(host.getString(R.string.buffer_one_shot))
-            check(target.buffer == ReverbService.BufferSlot.ONE_SHOT)
+            check(tileBuffer() == ReverbService.BufferSlot.ONE_SHOT)
             check(tile.wheel() === originalWheel)
         }
         suite.observeDraws("tile-rapid-switch")
@@ -154,21 +165,24 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
             check(tile.wheelStep(true))
         }
         tileCheckpoint("tile-duration")
-        check(target.seconds == 61)
+        check(tileSeconds() == 61)
         suite.main { tile.click(host.getString(R.string.cancel)) }
-        suite.await("inline Cancel") { editor.target == null }
+        suite.await("inline Cancel") { tileClosed() }
         tileCheckpoint("tile-cancelled")
-        check(!target.busy && !editor.editorOpen)
+        check(!tileBusy() && !editorOpen())
         suite.closeRender()
-        suite.main { target = QuickSettingsTileEditorTarget().also { editor.target = it } }
+        suite.main {
+            target = QuickSettingsTileEditorTarget().also { editor.target = it }
+            sourceTarget = LegacyQuickSettingsTileEditorTarget().also { sourceEditor.target = it }
+        }
         tile = mountTile()
         suite.await("new inline draft capacity") {
             settingsInteractionViews(tile.board).filterIsInstance<RangeDurationWheelView>().count() == 1 &&
                 (reference || inline?.capacityReady == true)
         }
         tileCheckpoint("tile-new-draft")
-        check(target.seconds == DEFAULT_QUICK_SAVE_SECONDS && target.buffer == ReverbService.BufferSlot.LOOPING)
+        check(tileSeconds() == DEFAULT_QUICK_SAVE_SECONDS && tileBuffer() == ReverbService.BufferSlot.LOOPING)
         suite.main { tile.click(host.getString(R.string.cancel)) }
-        suite.await("new draft Cancel") { editor.target == null }
+        suite.await("new draft Cancel") { tileClosed() }
     }
 }

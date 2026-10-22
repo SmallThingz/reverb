@@ -31,12 +31,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
@@ -357,7 +357,7 @@ internal class LibraryParityBoard(
     } else if (dark) darkColorScheme() else lightColorScheme()
     private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
-    private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
+    private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
     private val referenceHost = FrameLayout(context)
     private val reference = ComposeView(context)
@@ -421,7 +421,7 @@ internal class LibraryParityBoard(
         check(!closed && host.hasWindowFocus())
         if (!compose && native == null) {
             val inherited = checkNotNull(referenceScope)
-            val scope = CoroutineScope(inherited.coroutineContext + SupervisorJob(inherited.coroutineContext[Job]))
+            val scope = CoroutineScope(inherited.coroutineContext.withNativeParityClock() + SupervisorJob(inherited.coroutineContext[Job]))
             nativeScope = scope
             val frames = checkNotNull(scope.coroutineContext[MonotonicFrameClock])
             val input = NativeLibraryScreenInput(NativeLibraryInput(true, records, NativeLibraryCallbacks()),

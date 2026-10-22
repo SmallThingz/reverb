@@ -273,7 +273,7 @@ private class RangeParityBoard(
     } else if (dark) darkColorScheme() else lightColorScheme()
     private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
-    private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
+    private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
     private val height = if (compact) (420 * density.density).roundToInt() else host.fixtureRoot.height
     private val width = host.fixtureRoot.width
@@ -293,7 +293,7 @@ private class RangeParityBoard(
     }
     private val composeContext: ComposeViewContext
     private val blob = AudioBlobController()
-    private var referenceState: RangeExportEditorState? = null
+    private var referenceState: LegacyRangeExportEditorState? = null
     private var referenceScope: CoroutineScope? = null
     private var nativeScope: CoroutineScope? = null
     private var nativeOwner: NativeRangeExportOwner? = null
@@ -351,7 +351,7 @@ private class RangeParityBoard(
         check(!closed && host.hasWindowFocus())
         if (!compose && native == null) {
             val inherited = checkNotNull(referenceScope) { "Released reference scope is not ready" }
-            val scope = CoroutineScope(inherited.coroutineContext + SupervisorJob(inherited.coroutineContext[Job]))
+            val scope = CoroutineScope((inherited.coroutineContext + SupervisorJob(inherited.coroutineContext[Job])).withNativeParityClock())
             nativeScope = scope
             val owner = NativeRangeExportOwner(context, host, ReverbService.BufferSlot.ONE_SHOT, 8f,
                 scope, true, ::renderNative)
@@ -362,7 +362,7 @@ private class RangeParityBoard(
                 val location = IntArray(2).also(waveform::getLocationInWindow)
                 val left = (location[0] - rootLocation[0]).toFloat()
                 val top = (location[1] - rootLocation[1]).toFloat()
-                owner.waveformMeasured(Rect(left, top, left + waveform.width, top + waveform.height))
+                owner.waveformMeasured(app.smallthingz.nativeui.geometry.Rect(left, top, left + waveform.width, top + waveform.height))
             }
             native = content
             val side = (18 * density.density).roundToInt()
@@ -381,9 +381,9 @@ private class RangeParityBoard(
             { error("No Close action") }, { error("No export action") })
     }
     fun content(reference: Boolean): View = if (reference) referenceHost else nativeHost
-    fun state(reference: Boolean) = if (reference) checkNotNull(referenceState) else checkNotNull(nativeOwner).state
+    fun state(reference: Boolean) = if (reference) checkNotNull(referenceState).parityState() else checkNotNull(nativeOwner).state.parityState()
     fun ready(reference: Boolean): Boolean {
-        val state = if (reference) referenceState else nativeOwner?.state
+        val state = if (reference) referenceState?.parityState() else nativeOwner?.state?.parityState()
         if (state == null || !state.snapshotReady || state.waveformLoading ||
             state.coarseWaveformBuiltCount != state.coarseWaveform.size ||
             state.detailWaveformBuiltCount != state.detailWaveform.size) return false
@@ -625,3 +625,55 @@ private fun writeRangeEvidence(directory: File, result: JSONObject, primary: Thr
     try { File(directory, "result.json").writeText(result.toString(2)) }
     catch (error: Throwable) { if (primary == null) throw error else primary.addSuppressed(error) }
 }
+
+/** Observation-only projection: each renderer still mutates its own actual state implementation. */
+private data class RangeParityState(
+    val durationSeconds: Float,
+    val startSeconds: Float,
+    val endSeconds: Float,
+    val selectionDurationExactSeconds: Double,
+    val lastTarget: RangeEditTarget,
+    val snapshotReady: Boolean,
+    val waveformLoading: Boolean,
+    val isPlaying: Boolean,
+    val isScrubbing: Boolean,
+    val selectionDurationEditing: Boolean,
+    val coarseWaveformBuiltCount: Int,
+    val detailWaveformBuiltCount: Int,
+    val coarseWaveform: FloatArray,
+    val detailWaveform: FloatArray,
+)
+
+private fun RangeExportEditorState.parityState() = RangeParityState(
+    durationSeconds = durationSeconds,
+    startSeconds = startSeconds,
+    endSeconds = endSeconds,
+    selectionDurationExactSeconds = selectionDurationExactSeconds,
+    lastTarget = lastTarget,
+    snapshotReady = snapshotReady,
+    waveformLoading = waveformLoading,
+    isPlaying = isPlaying,
+    isScrubbing = isScrubbing,
+    selectionDurationEditing = selectionDurationEditing,
+    coarseWaveformBuiltCount = coarseWaveformBuiltCount,
+    detailWaveformBuiltCount = detailWaveformBuiltCount,
+    coarseWaveform = coarseWaveform,
+    detailWaveform = detailWaveform,
+)
+
+private fun LegacyRangeExportEditorState.parityState() = RangeParityState(
+    durationSeconds = durationSeconds,
+    startSeconds = startSeconds,
+    endSeconds = endSeconds,
+    selectionDurationExactSeconds = selectionDurationExactSeconds,
+    lastTarget = lastTarget,
+    snapshotReady = snapshotReady,
+    waveformLoading = waveformLoading,
+    isPlaying = isPlaying,
+    isScrubbing = isScrubbing,
+    selectionDurationEditing = selectionDurationEditing,
+    coarseWaveformBuiltCount = coarseWaveformBuiltCount,
+    detailWaveformBuiltCount = detailWaveformBuiltCount,
+    coarseWaveform = coarseWaveform,
+    detailWaveform = detailWaveform,
+)

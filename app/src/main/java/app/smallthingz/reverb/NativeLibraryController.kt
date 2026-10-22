@@ -5,8 +5,8 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.platform.AccessibilityManager
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.platform.AccessibilityManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner

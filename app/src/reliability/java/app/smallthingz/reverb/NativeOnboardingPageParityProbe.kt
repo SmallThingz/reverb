@@ -17,7 +17,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.AndroidUiDispatcher
@@ -25,7 +25,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import app.smallthingz.reverb.nativeui.OnboardingPageActions
@@ -347,14 +347,14 @@ private fun showOnboardingPageCase(
             ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],
             ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
         )
-        val scrollContext = AndroidUiDispatcher.Main + SupervisorJob()
+        val scrollContext = (AndroidUiDispatcher.Main + SupervisorJob()).withNativeParityClock()
         val scrollScope = CoroutineScope(scrollContext)
         var connection: AutoCloseable? = null
         var accessibility: AutoCloseable? = null
         fun dispose() = closeOnboardingPageResources(connection, accessibility,
             AutoCloseable { scrollScope.cancel() })
         try {
-            val view = OnboardingPageContentView(context, case.page, roles, density, resolver, state, palette,
+            val view = OnboardingPageContentView(context, case.page, roles, density.nativeParityDensity(), resolver, state, palette,
                 scrollState = NativeVerticalScrollState(initial = scroll),
                 scrollFrames = checkNotNull(scrollContext[MonotonicFrameClock]),
                 scrollScope = scrollScope, scrollNested = IsolatedOnboardingNestedHost).apply {

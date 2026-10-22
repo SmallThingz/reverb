@@ -6,10 +6,10 @@ package app.smallthingz.reverb.nativeui
 
 import android.view.View
 import android.view.ViewConfiguration
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.input.pointer.PointerType
-import androidx.compose.ui.unit.Velocity
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
+import app.smallthingz.nativeui.input.pointer.PointerType
+import app.smallthingz.nativeui.unit.Velocity
 import app.smallthingz.reverb.NativeDragAxis
 import app.smallthingz.reverb.NativeDragPointerChange
 import app.smallthingz.reverb.NativeDragPointerEvent

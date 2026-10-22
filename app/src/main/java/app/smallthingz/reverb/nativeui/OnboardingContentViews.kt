@@ -11,9 +11,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.unit.Density
 import androidx.core.view.ViewCompat
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -305,7 +305,7 @@ internal class OnboardingBufferRow(
              interactionEnabled: Boolean, palette: ReverbPalette) {
         this.checked = checked
         ViewCompat.setStateDescription(this, context.getString(
-            if (checked) androidx.compose.ui.R.string.state_on else androidx.compose.ui.R.string.state_off))
+            if (checked) app.smallthingz.nativeui.R.string.state_on else app.smallthingz.nativeui.R.string.state_off))
         val toggle = trailing as ReverbMaterialSwitchView
         toggle.setPalette(palette)
         toggle.setState(checked, visuallyEnabled)
@@ -353,7 +353,7 @@ internal class OnboardingAudioRow(
     fun bind(text: String, checked: Boolean, visuallyEnabled: Boolean, interactionEnabled: Boolean, palette: ReverbPalette) {
         this.checked = checked
         ViewCompat.setStateDescription(this, context.getString(
-            if (checked) androidx.compose.ui.R.string.state_on else androidx.compose.ui.R.string.state_off))
+            if (checked) app.smallthingz.nativeui.R.string.state_on else app.smallthingz.nativeui.R.string.state_off))
         canActivate = visuallyEnabled && interactionEnabled
         input.bind(canActivate, palette.ink)
         isEnabled = canActivate

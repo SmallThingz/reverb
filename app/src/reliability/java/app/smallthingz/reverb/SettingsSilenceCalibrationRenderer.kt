@@ -28,7 +28,7 @@ import kotlinx.coroutines.launch
 internal fun rememberSettingsSilenceCalibration(
     readOwner: (SilenceGateConfig, SilenceCalibrationInput) -> Pair<Long, Int>?,
     onCalibrated: (SilenceGateConfig, SilenceCalibrationHistogram) -> Unit,
-): SettingsSilenceCalibration {
+): LegacySettingsSilenceCalibration {
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -36,7 +36,7 @@ internal fun rememberSettingsSilenceCalibration(
     val latestOwner = rememberUpdatedState(readOwner)
     val latestResult = rememberUpdatedState(onCalibrated)
     val controller = remember(context, view, lifecycle, scope) {
-        SettingsSilenceCalibration(context, scope, view, lifecycle,
+        LegacySettingsSilenceCalibration(context, scope, view, lifecycle,
             readOwner = { config, input -> latestOwner.value(config, input) },
             onCalibrated = { config, histogram -> latestResult.value(config, histogram) })
     }

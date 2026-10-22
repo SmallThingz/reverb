@@ -25,9 +25,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.MainThread
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.text.MultiParagraph
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
+import app.smallthingz.nativeui.text.MultiParagraph
 import kotlin.math.max
 import kotlin.math.min
 

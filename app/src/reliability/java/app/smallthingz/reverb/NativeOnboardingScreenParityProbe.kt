@@ -255,7 +255,7 @@ internal fun showOnboardingScreen(
                 if (mutableQaDraft) { draft = next; view.bind(next) }
             }
             view = NativeOnboardingScreenView.create(context,
-                ReverbViewEnvironment(density, createFontFamilyResolver(context), palette),
+                nativeParityEnvironment(context, density, palette),
                 initial, host, OnboardingPageActions({ request() },
                     { changed(draft.copy(oneShotEnabled = it)) },
                     { changed(draft.copy(loopingEnabled = it)) },

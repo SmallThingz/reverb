@@ -3,8 +3,8 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
+import app.smallthingz.nativeui.text.font.FontWeight
+import app.smallthingz.nativeui.unit.sp
 import app.smallthingz.reverb.AppThemeMode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode

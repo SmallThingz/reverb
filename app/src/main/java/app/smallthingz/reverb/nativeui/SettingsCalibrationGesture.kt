@@ -2,7 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass
-import androidx.compose.ui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Offset
 
 /** Exact Initial/Final detector from released SkipSilenceSettings176–239; callback updates keep it. */
 internal class SettingsCalibrationGesture(

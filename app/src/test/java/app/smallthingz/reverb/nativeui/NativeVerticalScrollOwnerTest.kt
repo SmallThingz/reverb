@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.exponentialDecay
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.animation.core.exponentialDecay
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation

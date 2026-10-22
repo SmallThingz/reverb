@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.view.View
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap
 

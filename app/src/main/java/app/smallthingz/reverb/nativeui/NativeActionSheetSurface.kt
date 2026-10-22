@@ -10,7 +10,9 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import androidx.compose.ui.geometry.Offset
+import app.smallthingz.nativeui.dsl.child
+import app.smallthingz.nativeui.dsl.nativeView
+import app.smallthingz.nativeui.geometry.Offset
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -54,19 +56,19 @@ internal class NativeSheetSurface(
     val appContent:NativeSheetAppContent,
 ) : NativeSheetFrame(context) {
     var sourceChildPresent:((View)->Boolean)?=null
-    val predictiveLayer=NativeSheetFrame(context)
-    val overflowLayer=NativeSheetFrame(context)
+    val predictiveLayer=nativeView(context, ::NativeSheetFrame)
+    val overflowLayer=nativeView(context, ::NativeSheetFrame)
     val painted=PaintedSurface(context,environment)
     val insets=SheetInsets(context)
-    val predictiveContent=NativeSheetFrame(context)
-    val overflowContent=NativeSheetFrame(context)
+    val predictiveContent=nativeView(context, ::NativeSheetFrame)
+    val overflowContent=nativeView(context, ::NativeSheetFrame)
     val column=SheetColumn(context,handle,appContent)
     init {
-        addView(predictiveLayer);predictiveLayer.addView(overflowLayer);overflowLayer.addView(painted)
-        painted.clip.addView(insets);insets.addView(predictiveContent)
-        predictiveContent.addView(overflowContent);overflowContent.addView(column)
+        child(predictiveLayer);predictiveLayer.child(overflowLayer);overflowLayer.child(painted)
+        painted.clip.child(insets);insets.child(predictiveContent)
+        predictiveContent.child(overflowContent);overflowContent.child(column)
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
-        accessibilityPaneTitle=context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_pane_title)
+        accessibilityPaneTitle=context.getString(app.smallthingz.reverb.R.string.native_sheet_pane_title)
         isScreenReaderFocusable=false
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {

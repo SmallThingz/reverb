@@ -1,7 +1,7 @@
 package app.smallthingz.reverb
 
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.platform.AccessibilityManager
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.platform.AccessibilityManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable

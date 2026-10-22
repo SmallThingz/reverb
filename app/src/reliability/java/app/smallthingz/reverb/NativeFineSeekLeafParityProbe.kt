@@ -27,8 +27,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.ComposeView
@@ -431,14 +431,14 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
             nativeRoot.setBackgroundColor(palette.surface)
             val state = NativeVerticalScrollState()
             nativeScroll = state
-            val viewport = NativeVerticalViewport(host, state, density, owner.frames, owner.scope, FineLeafNested)
+            val viewport = NativeVerticalViewport(host, state, density.nativeParityDensity(), owner.frames, owner.scope, FineLeafNested)
             geometry.viewport = viewport
             val configuration = ViewConfiguration.get(host)
             val binding = NativeVerticalPhaseBinding(viewport, { configuration.scaledTouchSlop.toFloat() },
                 { configuration.scaledMaximumFlingVelocity.toFloat() }, { false })
             vertical = binding
             geometry.vertical = binding
-            val fine = ReverbSpringFineSeekView(host, SpringFineSeekEnvironment(palette, density,
+            val fine = ReverbSpringFineSeekView(host, SpringFineSeekEnvironment(palette, density.nativeParityDensity(),
                 configuration.scaledTouchSlop.toFloat(), owner.frames, owner.scope, nativeRoot, binding::interested))
             native = fine
             geometry.fine = fine

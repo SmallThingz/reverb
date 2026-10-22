@@ -5,11 +5,11 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.unit.Density
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner

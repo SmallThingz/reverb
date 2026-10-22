@@ -60,7 +60,7 @@ internal fun QuickSettingsTilesControls(
     active: Boolean,
     interactionReady: Boolean,
     durationSubmissionAllowed: Boolean,
-    editorState: QuickSettingsTilesEditorState,
+    editorState: LegacyQuickSettingsTilesEditorState,
     editRevision: Long,
     readActionRevision: () -> Long?,
     readSheetActionRevision: () -> Long?,
@@ -91,7 +91,7 @@ internal fun QuickSettingsTilesControls(
     fun openCreation() {
         if (!interactive || actionRevision() == null || readEditRevision() != editRevision ||
             failure != null || editorState.editorOpen) return
-        editorState.target = QuickSettingsTileEditorTarget()
+        editorState.target = LegacyQuickSettingsTileEditorTarget()
     }
     fun add(option: QuickSaveTileOption) {
         if (!interactive || actionRevision() == null || editorState.editorOpen || QuickSaveTileOptions.error.value != null) return
@@ -220,8 +220,8 @@ private fun TileStatus(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun QuickTileInlineEditor(
-    target: QuickSettingsTileEditorTarget,
-    owner: QuickSettingsTilesEditorState,
+    target: LegacyQuickSettingsTileEditorTarget,
+    owner: LegacyQuickSettingsTilesEditorState,
     interactionReady: Boolean,
     durationSubmissionAllowed: Boolean,
     editRevision: Long,
@@ -234,8 +234,8 @@ private fun QuickTileInlineEditor(
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val scope = rememberCoroutineScope()
     val chrome = appChrome()
-    val capacityLoad = remember { TileCapacityLoad() }
-    val durationInteraction = remember { NotificationDurationInteractionState() }
+    val capacityLoad = remember { LegacyTileCapacityLoad() }
+    val durationInteraction = remember { LegacyNotificationDurationInteractionState() }
     var message by remember { mutableStateOf<String?>(null) }
     var shortened by remember { mutableStateOf<TileCapacity?>(null) }
     var capacityRetry by remember { mutableLongStateOf(0L) }

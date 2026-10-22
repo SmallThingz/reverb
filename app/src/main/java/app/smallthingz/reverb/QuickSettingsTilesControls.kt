@@ -1,10 +1,10 @@
 package app.smallthingz.reverb
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import app.smallthingz.nativeui.runtime.getValue
+import app.smallthingz.nativeui.runtime.mutableIntStateOf
+import app.smallthingz.nativeui.runtime.mutableLongStateOf
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.runtime.setValue
 
 internal data class TileCapacity(val maximumSeconds: Int, val retainedSeconds: Double?)
 

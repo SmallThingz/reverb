@@ -19,8 +19,8 @@ internal fun rememberPredictiveBackMotion(
     enabled: Boolean,
     onGestureStarted: (() -> PredictiveBackGestureCallbacks)? = null,
     onBack: () -> Unit,
-): PredictiveBackMotionState {
-    val state = remember { PredictiveBackMotionState() }
+): LegacyPredictiveBackMotionState {
+    val state = remember { LegacyPredictiveBackMotionState() }
     val currentOnBack by rememberUpdatedState(onBack)
     val currentOnGestureStarted by rememberUpdatedState(onGestureStarted)
 

@@ -508,8 +508,7 @@ internal class TimelineAudioPreviewController(
 
     private val shuttleCommand = AtomicReference<ShuttleCommand?>(null)
 
-    @Volatile
-    private var activeShuttleToken = 0L
+    private val activeShuttleToken = AtomicLong(0L)
 
     @Volatile
     private var activeTrack: AudioTrack? = null
@@ -633,7 +632,7 @@ internal class TimelineAudioPreviewController(
         if (closed) return
         cancelCurrent()
         val token = generation.incrementAndGet()
-        activeShuttleToken = token
+        activeShuttleToken.set(token)
         shuttleCommand.set(
             ShuttleCommand(
                 positionSeconds = sanitizedShuttlePositionSeconds(atSeconds),
@@ -645,7 +644,7 @@ internal class TimelineAudioPreviewController(
             val source = try {
                 sourceFactory()
             } catch (_: Exception) {
-                if (activeShuttleToken == token) activeShuttleToken = 0L
+                activeShuttleToken.compareAndSet(token, 0L)
                 return@enqueueLatest
             }
             shuttle(
@@ -659,7 +658,7 @@ internal class TimelineAudioPreviewController(
     }
 
     fun updateShuttle(atSeconds: Double, rate: Float) {
-        val token = activeShuttleToken
+        val token = activeShuttleToken.get()
         if (closed || token == 0L || generation.get() != token) return
         shuttleCommand.set(
             ShuttleCommand(
@@ -670,7 +669,7 @@ internal class TimelineAudioPreviewController(
     }
 
     fun stopShuttle() {
-        if (closed || activeShuttleToken == 0L) return
+        if (closed || activeShuttleToken.get() == 0L) return
         cancelCurrent()
     }
 
@@ -696,7 +695,7 @@ internal class TimelineAudioPreviewController(
 
     private fun cancelCurrent() {
         generation.incrementAndGet()
-        activeShuttleToken = 0L
+        activeShuttleToken.set(0L)
         shuttleCommand.set(null)
         executor.queue.clear()
         val track = synchronized(trackLock) {
@@ -936,7 +935,8 @@ internal class TimelineAudioPreviewController(
                 postIfCurrent(token, onFailureAfterStart)
             }
         } finally {
-            if (activeShuttleToken == token) activeShuttleToken = 0L
+            // A retiring worker must not clear a newer gesture published by the UI thread.
+            activeShuttleToken.compareAndSet(token, 0L)
             if (track != null) {
                 synchronized(trackLock) {
                     if (activeTrack === track) activeTrack = null

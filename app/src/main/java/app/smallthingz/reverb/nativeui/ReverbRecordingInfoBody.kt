@@ -4,8 +4,8 @@ import android.content.Context
 import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
 import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
 import app.smallthingz.reverb.NativeViewPhasePointerNode

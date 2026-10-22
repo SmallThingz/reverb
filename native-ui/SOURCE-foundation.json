@@ -1,0 +1,311 @@
+{
+  "version": "AndroidX leaf math1.11.2",
+  "scope": "Selected leaf geometry, units, scalar math, color conversion and Android frame dispatch; no composition/rendering framework",
+  "adaptations": [
+    "Own package",
+    "Remove Compose stability/compiler annotations",
+    "Android-only actual bodies",
+    "SparseArray platform cache"
+  ],
+  "files": [
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/GeometryUtils.kt",
+      "source_sha256": "3bee49379f12809d0c126370cc0c05ec98e1ee89259a6a7ab808e5e1d725775c",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/GeometryUtils.kt"
+    },
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/InlineClassHelper.kt",
+      "source_sha256": "321c1f0295787258230152594d37d87755fc74831fe223522de65b3ec55e206f",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/InlineClassHelper.kt"
+    },
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/Offset.kt",
+      "source_sha256": "cc113338a6aecdb7873debf0c8bbc76f48e19878e02e2c9df563d380f0c2b98e",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/Offset.kt"
+    },
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/Size.kt",
+      "source_sha256": "fddc127753b43ecf052d77fbb1a786e2ea523e2984e5ab8affea2f9d0efde5d4",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/Size.kt"
+    },
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/Rect.kt",
+      "source_sha256": "8538310d40627d704b903794d71752bb205d254148db6d223c2615dcd5fede45",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/Rect.kt"
+    },
+    {
+      "jar": "ui-geometry-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/geometry/MutableRect.kt",
+      "source_sha256": "c7cf50b3e17789822c5d3b6da2a1d9f14c15f35ef27b7d424396784a78211f52",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/geometry/MutableRect.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/Constraints.kt",
+      "source_sha256": "21ead836bf0912bd183b300e012a3b9e42e915adad070ef1971b33787f11d2fb",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/Constraints.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/Density.kt",
+      "source_sha256": "a5d58a98d88dcd823e76cb608ffa96c316f1c87e825f629994efdfbb9398c290",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/Density.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/Dp.kt",
+      "source_sha256": "573146950fec9e356e9bc549350d331aa6fb1537cd367822711cd2d234c3fde0",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/Dp.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/InlineClassHelper.kt",
+      "source_sha256": "650fca8cdd02e912287a842e3bc9a762570a23df36e5031293b6b5cd3888a3f9",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/InlineClassHelper.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/IntOffset.kt",
+      "source_sha256": "12685f7195e0f38b6839bb201a6466ba21b8995070e4a8980e63b862ceb8e5d1",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/IntOffset.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/IntRect.kt",
+      "source_sha256": "edfbbeb51ef19ab3d3a4cdd7b75556a1549ba4ae3a64da4d9b619f6f28d9a9e2",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/IntRect.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/IntSize.kt",
+      "source_sha256": "d1e8b1f9fd7be44800269496379f9d00580c842f6df460706b0f881dc56a9d47",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/IntSize.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/LayoutDirection.kt",
+      "source_sha256": "d1bcca3402db25abf19b80efdc029c21d9c1df69a1b0cf8a70dffe5fef43ee21",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/LayoutDirection.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/TextUnit.kt",
+      "source_sha256": "d8102ed0444570e4a5da18ecc717ca4037f7401b9666d5760b6b2e1513ef6d84",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/TextUnit.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/Velocity.kt",
+      "source_sha256": "1bae2ccb9282d1e051546c2195d75a484438b2be140424c7bde493b1ab96bf4d",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/Velocity.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/unit/ExperimentalUnitApi.kt",
+      "source_sha256": "fcc00cba4886a3611c7e6a207c04091865fc8b87f252e0853e19197a7fd78629",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/ExperimentalUnitApi.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/AndroidDensity.android.kt",
+      "source_sha256": "dc5364115bb62acba184798ceb9c83cacf6e39a0531c0fe015e51f7d3b4f7c24",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/AndroidDensity.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/FontScaling.android.kt",
+      "source_sha256": "69fc5f63d02169f180bb5638c63121a80df540eb8e6f9cdf318103cf64623230",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/FontScaling.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/fontscaling/FontScaleConverter.android.kt",
+      "source_sha256": "4f98c04374adc68b69ddc8505f1012c834a759f36b30b84ed4fc5792092e76ad",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/fontscaling/FontScaleConverter.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/fontscaling/FontScaleConverterFactory.android.kt",
+      "source_sha256": "1a79cbae080b41111e8e330f7d55554816d80f3145f798aeef065d25080907cc",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/fontscaling/FontScaleConverterFactory.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/fontscaling/FontScaleConverterTable.android.kt",
+      "source_sha256": "321b12704cb69b38d9ab61ed5981a922b22f456126033076c61982e353d3f73b",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/fontscaling/FontScaleConverterTable.kt"
+    },
+    {
+      "jar": "ui-unit-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/unit/fontscaling/MathUtils.android.kt",
+      "source_sha256": "1bbd3c1f4d06c39f0f641fd40716caeb104122ee2a081a5916edd87dba3f1893",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/unit/fontscaling/MathUtils.kt"
+    },
+    {
+      "jar": "ui-util-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/util/InlineClassHelper.kt",
+      "source_sha256": "7476a2aac1483f6d369a61c2520c0d502319f2eb1bdc1f300b1a596c20a7a6b2",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/util/InlineClassHelper.kt"
+    },
+    {
+      "jar": "ui-util-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/util/MathHelpers.kt",
+      "source_sha256": "6786287f1faca98254974b3d6d3c0ac9f905ca8a18d4bd592430e9c15458e8db",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/util/MathHelpers.kt"
+    },
+    {
+      "jar": "ui-util-android-1.11.2-sources.jar",
+      "entry": "jvmAndAndroidMain/androidx/compose/ui/util/InlineClassHelper.jvmAndAndroid.kt",
+      "source_sha256": "c4ef740e80652061cc5d3b3995ae322fdda241d08051000d0ddf1201ffeb7af9",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/util/JvmMath.kt"
+    },
+    {
+      "jar": "/home/a/kotlin/reverb/.tmp/perf-critique-20261022/native-dsl/upstream/runtime-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/runtime/MonotonicFrameClock.kt",
+      "source_sha256": "3700d936837fae6d98252ec44e4c9c9b002912e40df9134cd6943e337fa2c1f1",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/runtime/MonotonicFrameClock.kt"
+    },
+    {
+      "jar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/platform/AndroidUiDispatcher.android.kt",
+      "source_sha256": "0a5dc529325cb5ea56e91ed7548ebccdaccd420b1eda837849ce2b9e44f05b2d",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/platform/AndroidUiDispatcher.kt"
+    },
+    {
+      "jar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-android-1.11.2-sources.jar",
+      "entry": "androidMain/androidx/compose/ui/platform/AndroidUiFrameClock.android.kt",
+      "source_sha256": "ce42a7c02b4974f5af0b74c96f66277eed85802b05dcbbb0eb1c6ffd986e13bb",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/platform/AndroidUiFrameClock.kt"
+    },
+    {
+      "jar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/input/pointer/util/VelocityTracker.kt",
+      "source_sha256": "e8db0497644380b35d595289f3fafcf15c531fb770023e6e8a100af4266ee846",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/input/pointer/util/VelocityTracker.kt",
+      "adaptation": "Original-position API only; LSQ2 data and fit algorithms unchanged, no pointer-event framework"
+    },
+    {
+      "jar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "entry": "commonMain/androidx/compose/ui/graphics/Matrix.kt",
+      "source_sha256": "36cb7aa36bbf77b154976a7c59075526d4e05126c82657d586e2c0a1fc17540f",
+      "target": "native-ui/src/main/kotlin/app/smallthingz/nativeui/graphics/Matrix.kt"
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/Color.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/Color.kt",
+      "sourceSha256": "74b7d6e52f4a1c69a14bd58ef4479502addbd53824c0c11040327c910fdda256",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/InlineClassHelper.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/InlineClassHelper.kt",
+      "sourceSha256": "49fc52f1ba75f646ee6909ef346542039929bb9bb224600638c3e92963f27e19",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/Shadow.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/Shadow.kt",
+      "sourceSha256": "ec90920c78d135d6312d9f2ea703b9498df70dc7cf6a948758d7636c519e41f8",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/Adaptation.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/Adaptation.kt",
+      "sourceSha256": "8b9b2a1c56c9e82698b1ac6a946f6d865eb8f4df4ec378e50440dd8442837fbc",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/ColorModel.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/ColorModel.kt",
+      "sourceSha256": "bbbd49186e9b3680218ef042f9dc4360c12745664c92314a0be274b638f544c1",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/ColorSpace.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/ColorSpace.kt",
+      "sourceSha256": "f8fe7ddf3172ab0ee51cb48e2dbd62c3868b929684ee8ce958e9f3e434a6303a",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/Connector.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/Connector.kt",
+      "sourceSha256": "d857a3b8db7f56c3d78a0c567d318dc86fff7c08e936e0612d3bf79989ba1715",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/Illuminant.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/Illuminant.kt",
+      "sourceSha256": "85ca4d5f07eccac963d585e3dfdf57cfe6c2db72faed420c8c6d76c2d10e8c48",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/Rgb.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/Rgb.kt",
+      "sourceSha256": "2c97e1e1f937b13fe155066a0813f02dbdbe1e4318c97c147856b033902c185e",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/TransferParameters.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/TransferParameters.kt",
+      "sourceSha256": "e527eeb69d3be9a8aade70653058d19f9354101317f343e5e28871e2bbfdff85",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/WhitePoint.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/WhitePoint.kt",
+      "sourceSha256": "6457382070145269ede14b998fae960506ed1fde989c284efb44117d46ad766c",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/RenderIntent.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/RenderIntent.kt",
+      "sourceSha256": "90f60f338465168630404499fb01e0746182460377639f4fad1e66e47b401904",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/Oklab.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/Oklab.kt",
+      "sourceSha256": "9a44dd54caed071c9722bf1d3dab07b3a07ffe7ae998e6e50395684b956c6075",
+      "adaptation": "Own namespace; stripped declarative annotations; only scalar color/transform algorithms, no rendering tree. HSV/HSL unused constructors omitted; connector cache uses a bounded 36-entry AtomicReferenceArray (no boxed keys)."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/HalfFloat.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/Float16.kt",
+      "sourceSha256": "336df8e7f1841b777b9ce98b91908a134ebb5e9d14da9add2f1a207ff2261c33",
+      "adaptation": "Exact half conversion functions/constants only, no numeric object API."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/colorspace/ColorSpaces.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "commonMain/androidx/compose/ui/graphics/colorspace/ColorSpaces.kt",
+      "sourceSha256": "9539f3b4c68cadf98bf6cf8c30d8f5b16f47173de3b64c5f23ab5fec1dafbd52",
+      "adaptation": "Registers only application-used sRGB, Unspecified and Oklab; transfer algorithms unchanged."
+    },
+    {
+      "destination": "src/main/kotlin/app/smallthingz/nativeui/graphics/AndroidMatrixConversions.kt",
+      "sourceJar": "/home/a/kotlin/reverb/.worktree/native-views-20261021/.tmp/native-palette-source/ui-graphics-android-1.11.2-sources.jar",
+      "sourceEntry": "androidMain/androidx/compose/ui/graphics/AndroidMatrixConversions.android.kt",
+      "sourceSha256": "701daee969b0c2eaa1b537c106824e2227b16aca8c5cf76cddfd9ee145b0c6b2",
+      "adaptation": "Own namespace only; exact Android Matrix array ordering."
+    }
+  ]
+}

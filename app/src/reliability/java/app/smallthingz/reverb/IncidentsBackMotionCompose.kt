@@ -23,8 +23,8 @@ internal fun rememberIncidentsPredictiveBackMotion(
     onStarted: (interruptedOpenProgress: Float?) -> Float = { 1f },
     onCancelled: () -> Unit = {},
     onDisabled: (interruptedOpenProgress: Float?) -> Unit = {},
-): IncidentsPredictiveBackMotionState {
-    val state = remember { IncidentsPredictiveBackMotionState() }
+): LegacyIncidentsPredictiveBackMotionState {
+    val state = remember { LegacyIncidentsPredictiveBackMotionState() }
     val returnScope = rememberCoroutineScope()
     val currentOnBack by rememberUpdatedState(onBack)
     val currentOnStarted by rememberUpdatedState(onStarted)

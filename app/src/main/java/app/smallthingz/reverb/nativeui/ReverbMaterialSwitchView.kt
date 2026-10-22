@@ -19,10 +19,10 @@ import android.graphics.Paint
 import android.os.Build
 import android.view.Choreographer
 import android.view.View
-import androidx.compose.animation.core.FloatSpringSpec
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.graphics.toArgb
+import app.smallthingz.nativeui.animation.core.FloatSpringSpec
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.compositeOver
+import app.smallthingz.nativeui.graphics.toArgb
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.roundToInt

@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Offset
 import app.smallthingz.reverb.FineSeekInputSession
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass

@@ -2,10 +2,10 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.view.View
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import app.smallthingz.nativeui.runtime.getValue
+import app.smallthingz.nativeui.runtime.mutableLongStateOf
+import app.smallthingz.nativeui.runtime.mutableStateOf
+import app.smallthingz.nativeui.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope

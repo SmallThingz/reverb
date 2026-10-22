@@ -1,10 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
 import android.animation.ValueAnimator
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.runtime.PausableMonotonicFrameClock
-import androidx.compose.ui.MotionDurationScale
-import androidx.compose.ui.platform.AndroidUiDispatcher
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.PausableMonotonicFrameClock
+import app.smallthingz.nativeui.MotionDurationScale
+import app.smallthingz.nativeui.platform.AndroidUiDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel

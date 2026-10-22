@@ -11,9 +11,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.toArgb
+import app.smallthingz.nativeui.unit.dp
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost

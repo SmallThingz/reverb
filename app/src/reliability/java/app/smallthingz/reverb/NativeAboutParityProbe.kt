@@ -45,7 +45,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.DialogWindowProvider
@@ -419,8 +419,9 @@ private class AboutFixture private constructor(
             } else {
                 configuredHost.addView(anchor, FrameLayout.LayoutParams(-1, -1))
                 nativeDialog = ReverbAboutDialog(anchor, AboutContentAppearance(
-                    ReverbPalette.resolve(local, case.dark), typography.headlineSmall,
-                    typography.titleSmall, typography.bodyMedium, typography.bodySmall, density,
+                    ReverbPalette.resolve(local, case.dark), typography.headlineSmall.nativeParityTextStyle(),
+                    typography.titleSmall.nativeParityTextStyle(), typography.bodyMedium.nativeParityTextStyle(),
+                    typography.bodySmall.nativeParityTextStyle(), density.nativeParityDensity(),
                     createFontFamilyResolver(local),
                 ), ::ownerDismissed).also { dialog -> dialog.show(); window = checkNotNull(dialog.window) }
             }

@@ -1,10 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.tween
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.animation.core.AnimationVector1D
+import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.tween
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import app.smallthingz.reverb.RangeWaveformPass
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

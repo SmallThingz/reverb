@@ -7,10 +7,11 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.TypedValue
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.text.font.createFontFamilyResolver
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -61,12 +62,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ReverbNoiseTexture.prepare() // UI-only warmup; never waits or extends the platform splash.
         requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600)
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         installSplashScreen() // No keep-on-screen gate: same released early removal.
         val configuredMode = getConfiguredThemeMode(this)
         setTheme(if (configuredMode.nativeIsDark(systemDark())) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
         super.onCreate(savedInstanceState)
+        val windowBackground = TypedValue()
+        if (theme.resolveAttribute(android.R.attr.colorBackground, windowBackground, true)) {
+            val color = if (windowBackground.resourceId != 0) getColor(windowBackground.resourceId) else windowBackground.data
+            window.setBackgroundDrawable(ReverbNoiseDrawable(resources, color))
+        }
 
         val restoredUi = restoreReleased012SavedUi(
             registry = savedStateRegistry,

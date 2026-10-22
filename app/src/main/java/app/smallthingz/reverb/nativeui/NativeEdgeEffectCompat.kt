@@ -22,8 +22,8 @@ import android.util.AttributeSet
 import android.view.ViewConfiguration
 import android.widget.EdgeEffect
 import androidx.annotation.RequiresApi
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
+import app.smallthingz.nativeui.unit.Density
+import app.smallthingz.nativeui.unit.dp
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln

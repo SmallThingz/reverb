@@ -5,15 +5,15 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.AnimationVector
-import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.AnimationVector2D
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.SpringSpec
-import androidx.compose.animation.core.TargetBasedAnimation
-import androidx.compose.animation.core.TwoWayConverter
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.ui.unit.IntSize
+import app.smallthingz.nativeui.animation.core.AnimationVector
+import app.smallthingz.nativeui.animation.core.AnimationVector1D
+import app.smallthingz.nativeui.animation.core.AnimationVector2D
+import app.smallthingz.nativeui.animation.core.Spring
+import app.smallthingz.nativeui.animation.core.SpringSpec
+import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
+import app.smallthingz.nativeui.animation.core.TwoWayConverter
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.unit.IntSize
 import kotlin.math.roundToLong
 
 /** Source Transition child: raw vector momentum and a shared, delayed transition play time. */

@@ -30,7 +30,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import androidx.compose.runtime.Recomposer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
@@ -404,14 +404,14 @@ private class TransactionBoard(
     private val context = ContextThemeWrapper(host, 0).apply { applyOverrideConfiguration(configuration) }
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
     private val colors = dynamicLightColorScheme(context)
-    private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
+    private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, false))
     private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
     private val lifecycle = TransactionLifecycle()
     private val clockHost = FrameLayout(context)
     private val reference = ComposeView(context)
-    private val runtime = NativeAboutWindowRuntime()
+    private val runtime = LegacyNativeAboutWindowRuntime()
     private val asyncFailure = AtomicReference<Throwable?>(null)
     private val scope = CoroutineScope(runtime.scope.coroutineContext + CoroutineExceptionHandler { _, error ->
         if (!asyncFailure.compareAndSet(null, error)) {
@@ -474,7 +474,7 @@ private class TransactionBoard(
     fun awaitReady(i: Instrumentation, ids: Set<String>) {
         if (!compose) nativeParityOnMain(i) {
             checkAsync()
-            val owned = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+            val owned = CoroutineScope(scope.coroutineContext.withNativeParityClock() + SupervisorJob(scope.coroutineContext[Job]))
             nativeScope = owned
             val callbacks = NativeLibraryCallbacks(onVisibleRecordingsChanged = {
                 visibleIds = it.map(RecordingEntity::id).toSet()

@@ -6,9 +6,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import androidx.activity.OnBackPressedDispatcher
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.nativeui.*

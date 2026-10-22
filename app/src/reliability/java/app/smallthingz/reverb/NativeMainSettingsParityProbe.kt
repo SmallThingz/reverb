@@ -26,7 +26,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
@@ -284,7 +284,7 @@ private class MainSettingsParityRender(
         error("Fixture tried a permission or picker action; do not launch external UI")
     }
     private fun palette() = ReverbPalette.resolve(activity, effectiveDark)
-    private fun environment() = ReverbViewEnvironment(density, resolver, palette())
+    private fun environment() = ReverbViewEnvironment(density.nativeParityDensity(), resolver, palette())
     private fun themeChanged(mode: AppThemeMode?) {
         callbacks.put(mode?.name ?: JSONObject.NULL)
         previewState.value = mode

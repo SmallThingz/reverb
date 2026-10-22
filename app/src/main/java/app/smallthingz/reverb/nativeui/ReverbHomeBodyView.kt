@@ -109,9 +109,9 @@ internal class ReverbHomeBodyView(
         if (showProgress) {
             val indicator = progress ?: ReverbIncidentLoadingView(
                 context, environment.palette.primary,
-                requireNotNull(animationScope.coroutineContext[androidx.compose.runtime.MonotonicFrameClock]),
+                requireNotNull(animationScope.coroutineContext[app.smallthingz.nativeui.runtime.MonotonicFrameClock]),
                 animationScope,
-                { animationScope.coroutineContext[androidx.compose.ui.MotionDurationScale]?.scaleFactor ?: 1f },
+                { animationScope.coroutineContext[app.smallthingz.nativeui.MotionDurationScale]?.scaleFactor ?: 1f },
             ).also {
                 progress = it
                 swipeSurface.addView(it)

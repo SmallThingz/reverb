@@ -5,11 +5,4 @@
             <solid android:color="?android:attr/colorBackground" />
         </shape>
     </item>
-    <item>
-        <bitmap
-            android:src="@drawable/settings_noise_tile"
-            android:tileModeX="repeat"
-            android:tileModeY="repeat"
-            android:gravity="fill" />
-    </item>
 </layer-list>

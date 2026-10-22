@@ -6,9 +6,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
-internal fun rememberIncidentsPanelMotion(open: Boolean, durationMillis: Int): IncidentsPanelMotionState {
+internal fun rememberIncidentsPanelMotion(open: Boolean, durationMillis: Int): LegacyIncidentsPanelMotionState {
     val scope = rememberCoroutineScope()
-    val motion = remember { IncidentsPanelMotionState(open, scope, durationMillis) }
+    val motion = remember { LegacyIncidentsPanelMotionState(open, scope, durationMillis) }
     LaunchedEffect(open) { motion.settleTo(open) }
     return motion
 }

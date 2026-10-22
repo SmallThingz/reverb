@@ -21,11 +21,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.toArgb
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.unit.Density
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.AudioSourceMode
 import app.smallthingz.reverb.ChannelMode

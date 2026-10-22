@@ -1,6 +1,5 @@
 package app.smallthingz.reverb
 
-import androidx.compose.runtime.State
 import app.smallthingz.reverb.nativeui.NativeLibrarySavedScrollPosition
 import app.smallthingz.reverb.nativeui.NativeListSavedPosition
 import app.smallthingz.reverb.nativeui.SettingsListSavedPosition
@@ -58,19 +57,19 @@ internal fun decodeReleased012SavedUi(
         var navigation = NativeMainSavedNavigation()
         var restoredAny = false
         legacyProviderGroup(Released012SavedUiKeys.MAIN, 5, read, rejected)?.let { group ->
-            group.value(0) { (it as? State<*>)?.value as? Boolean }?.let {
+            group.value(0) { released012StateValue(it) as? Boolean }?.let {
                 navigation = navigation.copy(showSettings = it); restoredAny = true
             }
-            group.value(1) { (it as? State<*>)?.value as? Int }?.let {
+            group.value(1) { released012StateValue(it) as? Int }?.let {
                 navigation = navigation.copy(settingsBufferTargetCode = it); restoredAny = true
             }
-            group.value(2) { (it as? State<*>)?.value as? Boolean }?.let {
+            group.value(2) { released012StateValue(it) as? Boolean }?.let {
                 navigation = navigation.copy(showAboutDialog = it); restoredAny = true
             }
-            group.value(3) { (it as? State<*>)?.value as? Boolean }?.let {
+            group.value(3) { released012StateValue(it) as? Boolean }?.let {
                 navigation = navigation.copy(showIncidents = it); restoredAny = true
             }
-            group.value(4) { (it as? State<*>)?.value as? Boolean }?.let {
+            group.value(4) { released012StateValue(it) as? Boolean }?.let {
                 navigation = navigation.copy(showLibrary = it); restoredAny = true
             }
             group.saveRemainder(remaining)
@@ -116,7 +115,7 @@ internal fun decodeReleased012SavedUi(
         }
         var selectedBuffer: Int? = null
         legacyProviderGroup(Released012SavedUiKeys.CAPTURE, 1, read, rejected)?.let { group ->
-            selectedBuffer = group.value(0) { (it as? State<*>)?.value as? ReverbService.BufferSlot }
+            selectedBuffer = group.value(0) { released012StateValue(it) as? ReverbService.BufferSlot }
                 ?.storageCode?.toInt()
             restoredAny = restoredAny || selectedBuffer != null
             group.saveRemainder(remaining)
@@ -196,7 +195,7 @@ internal fun decodeReleased012SavedUi(
                     "compression", "silence")
                 val values = LinkedHashMap<String, Boolean>()
                 fields.forEachIndexed { index, field ->
-                    group.value(index + 1) { (it as? State<*>)?.value as? Boolean }?.let { values[field] = it }
+                    group.value(index + 1) { released012StateValue(it) as? Boolean }?.let { values[field] = it }
                 }
                 onboardingDraft = values.takeUnless { it.isEmpty() }
             }

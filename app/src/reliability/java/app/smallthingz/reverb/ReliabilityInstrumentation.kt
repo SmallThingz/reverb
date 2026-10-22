@@ -39,6 +39,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
             check(!parityOnly || requestedTest in setOf(
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
+                "native_text_backend", "native_motion_spline",
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
                 "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
@@ -51,7 +52,18 @@ class ReliabilityInstrumentation : Instrumentation() {
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
-            if (requestedTest == "native_library_fixture_observation") {
+            if (requestedTest == "native_text_backend") {
+                executed++
+                val result = nativeParityOnMain(this) { nativeTextBackendParity(targetContext) }
+                val evidence = File(targetContext.filesDir, "native-text-backend-" + System.currentTimeMillis() + ".json")
+                evidence.writeText(result.toString(2))
+                report.appendLine("native_text_backend evidence=" + evidence.absolutePath)
+                check(result.getBoolean("pass")) { "Native text backend differences: " + result.getInt("failures") }
+                report.appendLine("PASS native_text_backend cases=" + result.getJSONArray("cases").length())
+            } else if (requestedTest == "native_motion_spline") {
+                executed++
+                verifyNativeMotionSplineParity(report)
+            } else if (requestedTest == "native_library_fixture_observation") {
                 executed++
                 observeNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce)
             } else if (requestedTest == "native_library_fixture_cleanup") {

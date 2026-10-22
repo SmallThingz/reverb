@@ -17,7 +17,7 @@ import app.smallthingz.reverb.NativeClickPhaseNode
 import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.NativeDragPointerChange
-import androidx.compose.ui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Offset
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -47,7 +47,7 @@ internal class NativeMaterialButtonHost(
                 val a=sheet.accessibility
                 val earlier=a.extraClip
                 val own:(View)->NativeTextSemanticsClip={view->if(view===content)
-                    NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(0f,0f,
+                    NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f,0f,
                         view.width.toFloat(),view.height.toFloat()))else earlier(view)}
                 a.extraClip=own
                 AutoCloseable {if(a.extraClip===own)a.extraClip=earlier}

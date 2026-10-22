@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.content.Context
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.core.net.toUri
 import java.io.Closeable
 import java.io.FileDescriptor
@@ -238,16 +237,6 @@ internal class InlinePlayerBookkeeping {
         revokeResume()
         pause()
     }
-}
-
-// The waveform owns this pointer stream. Revoke cancellation before the final seek can resume.
-internal inline fun finishInlineWaveformGesture(
-    release: PointerInputChange?,
-    playback: InlinePlayerBookkeeping,
-    finishSeek: () -> Unit,
-) {
-    rangePointerReleaseWasNormal(release, playback::revokeResume)
-    finishSeek()
 }
 
 // The expansion itself owns playback; an animated outgoing row may still be composed.

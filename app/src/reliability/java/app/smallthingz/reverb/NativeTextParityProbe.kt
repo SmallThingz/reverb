@@ -32,7 +32,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -82,7 +82,7 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
         .put("baseline_commit", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("reference", "Actual released ReverbTypography and callback-free Material3 Text; ui-text 1.11.2")
         .put("metric_reference", "Separate onTextLayout route; its raster must equal the callback-free reference")
-        .put("candidate", "Ordinary native ReverbParagraphView using pinned low-level paragraph engine and native role metadata")
+        .put("candidate", "Ordinary native ReverbParagraphView using Android TextPaint/StaticLayout and native role metadata")
         .put("comparison", "Exact ARGB and text metrics; no masks or tolerance")
         .put("sdk", Build.VERSION.SDK_INT)
         .put("device", "${Build.MANUFACTURER}/${Build.MODEL}")
@@ -209,6 +209,7 @@ private fun showTextParityCase(
     val density = Density(context.resources.displayMetrics.density, fontScale)
     val scale = referenceTextScale(density)
     val sharedFontResolver = createFontFamilyResolver(context)
+    val nativeDensity = app.smallthingz.nativeui.unit.Density(context)
     val colors = when {
         Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(context)
         Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(context)
@@ -267,7 +268,7 @@ private fun showTextParityCase(
                 val label = ReverbParagraphView(
                     context,
                     nativeParagraphTextStyle(sample.role),
-                    density,
+                    nativeDensity,
                     sharedFontResolver,
                     colors.onSurface.toArgb(),
                 ).apply {
@@ -305,7 +306,7 @@ private fun referenceTextScale(density: Density): ReverbTextScale = object : Rev
 }
 
 /** Production role mapping stays independent of the reflected release Typography oracle. */
-private fun nativeParagraphTextStyle(role: ReverbTextRole): TextStyle = ReverbParagraphStyles[role]
+private fun nativeParagraphTextStyle(role: ReverbTextRole): app.smallthingz.nativeui.text.TextStyle = ReverbParagraphStyles[role]
 
 private fun referenceTextStyle(typography: Typography, role: ReverbTextRole): TextStyle = when (role) {
     ReverbTextRole.HEADLINE_SMALL -> typography.headlineSmall

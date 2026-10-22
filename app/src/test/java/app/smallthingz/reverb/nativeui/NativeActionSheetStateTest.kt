@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.snap
-import androidx.compose.foundation.MutatePriority
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.animation.core.snap
+import app.smallthingz.nativeui.foundation.MutatePriority
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation

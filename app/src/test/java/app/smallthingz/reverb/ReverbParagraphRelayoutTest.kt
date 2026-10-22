@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.unit.Constraints
+import app.smallthingz.nativeui.unit.Constraints
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

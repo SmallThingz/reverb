@@ -16,7 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import androidx.compose.ui.text.style.TextOverflow
+import app.smallthingz.nativeui.text.style.TextOverflow
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
@@ -538,7 +538,7 @@ private fun closeTopBarAccessibilityLeases(leases: List<AutoCloseable>, primary:
 }
 
 private fun topBarClipBounds(view: View): NativeTextSemanticsClip = NativeTextSemanticsClip.Rectangle(
-    androidx.compose.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+    app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
 
 private fun appTopBarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
 private fun appTopBarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)

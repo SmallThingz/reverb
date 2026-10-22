@@ -7,8 +7,8 @@ package app.smallthingz.reverb
 
 import android.os.Build
 import android.view.MotionEvent
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.PointerType
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.input.pointer.PointerType
 
 /**
  * Owned at the native window input root, BEFORE child dispatch. Accepts root-space MotionEvents,

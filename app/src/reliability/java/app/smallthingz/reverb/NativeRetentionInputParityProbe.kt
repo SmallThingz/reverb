@@ -236,7 +236,7 @@ private fun showRetentionCase(
         else -> lightColorScheme()
     }
     val palette = ReverbPalette.resolve(context, case.dark)
-    val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context), palette)
+    val environment = nativeParityEnvironment(context, density, palette)
     val width = with(density) { 240.dp.roundToPx() }.coerceAtMost(host.fixtureRoot.width)
     val height = with(density) { 96.dp.roundToPx() }
     check(width > 0 && height <= host.fixtureRoot.height)
@@ -317,9 +317,9 @@ private fun retentionMetrics(render: RetentionRender): JSONObject {
 /** Native editing contract only: this is NOT an injected system IME or a source-equivalence pass. */
 private fun verifyRetentionNativeConnectionContract(host: NativeParityActivity): JSONArray {
     val result = JSONArray()
-    val environment = ReverbViewEnvironment(
+    val environment = nativeParityEnvironment(host,
         Density(host.resources.displayMetrics.density, host.resources.configuration.fontScale),
-        createFontFamilyResolver(host), ReverbPalette.resolve(host, false))
+        ReverbPalette.resolve(host, false))
     for (mode in listOf(RetentionMode.TIME, RetentionMode.SIZE)) {
         var owner = "12"
         var accepts = true

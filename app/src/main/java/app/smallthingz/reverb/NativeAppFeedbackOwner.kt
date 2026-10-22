@@ -2,9 +2,9 @@ package app.smallthingz.reverb
 
 import android.view.View
 import android.view.ViewTreeObserver
-import androidx.compose.runtime.MonotonicFrameClock
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.platform.AccessibilityManager
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.withFrameNanos
+import app.smallthingz.nativeui.platform.AccessibilityManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle

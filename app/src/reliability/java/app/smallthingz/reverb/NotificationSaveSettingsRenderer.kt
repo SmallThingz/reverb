@@ -45,7 +45,7 @@ internal fun NotificationSaveSettings(
     interactionReady: Boolean,
     editRevision: Long,
     readEditRevision: () -> Long?,
-    interactionState: NotificationDurationInteractionState,
+    interactionState: LegacyNotificationDurationInteractionState,
     modifier: Modifier = Modifier,
 ) {
     val chrome = appChrome()
@@ -103,13 +103,13 @@ internal fun NotificationDurationWheel(
     enabled: Boolean,
     editRevision: Long,
     readEditRevision: () -> Long?,
-    interactionState: NotificationDurationInteractionState,
+    interactionState: LegacyNotificationDurationInteractionState,
     modifier: Modifier = Modifier,
     stepDuration: (Int, Int, Boolean) -> Int = ::notificationDurationStepSeconds,
 ) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.range_export_duration)
-    val binding = remember(interactionState) { NotificationDurationBinding(interactionState) }
+    val binding = remember(interactionState) { LegacyNotificationDurationBinding(interactionState) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(binding) { onDispose { binding.release() } }
     DisposableEffect(binding, lifecycle) {

@@ -5,13 +5,13 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.DecayAnimation
-import androidx.compose.animation.core.DecayAnimationSpec
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.foundation.MutatePriority
-import androidx.compose.foundation.MutatorMutex
-import androidx.compose.ui.util.fastRoundToInt
+import app.smallthingz.nativeui.animation.core.AnimationVector1D
+import app.smallthingz.nativeui.animation.core.DecayAnimation
+import app.smallthingz.nativeui.animation.core.DecayAnimationSpec
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.foundation.MutatePriority
+import app.smallthingz.nativeui.foundation.MutatorMutex
+import app.smallthingz.nativeui.util.fastRoundToInt
 import kotlin.math.abs
 import kotlinx.coroutines.coroutineScope
 

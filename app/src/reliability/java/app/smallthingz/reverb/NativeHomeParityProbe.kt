@@ -213,7 +213,7 @@ private class HomeParityBoard(
     val nativeEvents = JSONArray()
     private var completion: CountDownLatch? = null
     private val insets = ReverbHomeInsets(0, 0, 0, 0)
-    private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
+    private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
     private val nativeActions = actions(nativeEvents) { next ->
         nativeSelection = next
@@ -312,8 +312,8 @@ private class HomeParityBoard(
         check(host.hasWindowFocus())
         if (!compose && native == null) {
             val inherited = checkNotNull(referenceScope) { "Reference frame scope was not applied" }
-            val scope = CoroutineScope(inherited.coroutineContext +
-                SupervisorJob(inherited.coroutineContext[Job]))
+            val scope = CoroutineScope((inherited.coroutineContext +
+                SupervisorJob(inherited.coroutineContext[Job])).withNativeParityClock())
             nativeScope = scope
             native = ReverbHomeScreenView(context, environment, nativeState(), nativeSelection,
                 nativeActions, navigation(nativeEvents), case.hasIncidents, insets,

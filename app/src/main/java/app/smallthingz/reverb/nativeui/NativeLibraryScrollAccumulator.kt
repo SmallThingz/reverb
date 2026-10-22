@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.util.fastRoundToInt
+import app.smallthingz.nativeui.util.fastRoundToInt
 import kotlin.math.abs
 
 /**

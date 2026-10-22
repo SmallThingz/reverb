@@ -10,9 +10,9 @@ import android.content.pm.PackageManager
 import android.graphics.Rect as AndroidRect
 import android.graphics.RectF
 import android.view.View
-import androidx.compose.foundation.gestures.BringIntoViewSpec
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.foundation.gestures.BringIntoViewSpec
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Rect
 import kotlin.math.abs
 
 internal enum class NativeVerticalAccessibilityDirection { FORWARD, BACKWARD }

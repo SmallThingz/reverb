@@ -9,8 +9,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
+import app.smallthingz.nativeui.graphics.Color
+import app.smallthingz.nativeui.graphics.toArgb
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost

@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources xmlns:ns0="urn:oasis:names:tc:xliff:document:1.2">
+    <string msgid="7573152094250666567" name="close_sheet">"පත්‍රය වසන්න"</string>
+    <string msgid="8038256446254964252" name="default_error_message">"වලංගු නොවන ආදානයකි"</string>
+    <string msgid="6312721426453364202" name="default_popup_window_title">"උත්පතන කවුළුව"</string>
+    <string msgid="6827826412747255547" name="in_progress">"ප්‍රගතියේ පවතී"</string>
+    <string msgid="4139871816613051306" name="state_empty">"හිස්"</string>
+    <string msgid="5834637030682409883" name="state_off">"ක්‍රියාවිරහිතයි"</string>
+    <string msgid="1490883874751719580" name="state_on">"ක්‍රියාත්මකයි"</string>
+    <string msgid="2561197295334830845" name="switch_role">"මාරු කරන්න"</string>
+    <string msgid="5946805113151406391" name="template_percent">"සියයට <ns0:g id="PERCENTAGE">%1$d</ns0:g>."</string>
+    <string msgid="3124740595719787496" name="tooltip_label">"මෙවලම් ඉඟිය පෙන්වන්න"</string>
+    <string msgid="3765533235322692011" name="tooltip_description">"මෙවලම් ඉඟිය"</string>
+</resources>

@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.exponentialDecay
+import app.smallthingz.nativeui.animation.core.exponentialDecay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

@@ -1,36 +1,31 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.res.Resources
-import android.graphics.BitmapFactory
-import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import androidx.annotation.ColorInt
-import app.smallthingz.reverb.R
 
 /**
  * Native integration candidate; actual rendering still requires release A/B qualification.
  *
- * Draws the existing noise resource in component-local coordinates. A null background is the
+ * Draws generated grain in component-local coordinates. A null background is the
  * appNoise modifier alone; an explicit background reproduces background(color).appNoise(brush).
  * The owning native root must retain AndroidComposeView's isForceDarkAllowed=false on API29+.
  */
 internal class ReverbNoiseDrawable(
-    resources: Resources,
+    @Suppress("UNUSED_PARAMETER") resources: Resources,
     @ColorInt backgroundColor: Int? = null,
-    seed: Int = SEED_BACKGROUND,
+    private val seed: Int = SEED_BACKGROUND,
 ) : Drawable() {
     private val backgroundPaint = Paint(PAINT_FLAGS)
     private val noisePaint = Paint(PAINT_FLAGS).apply {
         // ShaderBrush.applyTo sets black, alpha=1, no color filter, and SrcOver blending.
         color = Color.BLACK
-        shader = NoiseTiles.shader(resources, seed)
+        shader = ReverbNoiseTexture.shader(seed)
     }
     private var drawsBackground = backgroundColor != null
     private var drawableAlpha = 255
@@ -39,6 +34,7 @@ internal class ReverbNoiseDrawable(
 
     init {
         backgroundColor?.let { backgroundPaint.color = it }
+        ReverbNoiseTexture.observe(this)
     }
 
     fun setBackgroundColor(@ColorInt color: Int?) {
@@ -66,7 +62,10 @@ internal class ReverbNoiseDrawable(
                 canvas.saveLayer(0f, 0f, width, height, paint)
             }
             if (drawsBackground) canvas.drawRect(0f, 0f, width, height, backgroundPaint)
-            canvas.drawRect(0f, 0f, width, height, noisePaint)
+            if (noisePaint.shader == null) noisePaint.shader = ReverbNoiseTexture.shader(seed)
+            // First launch may draw before background generation finishes. Keep the exact base
+            // color, with no launch gate/fade; completion invalidates this drawable once.
+            if (noisePaint.shader != null) canvas.drawRect(0f, 0f, width, height, noisePaint)
         } finally {
             canvas.restoreToCount(checkpoint)
         }
@@ -99,28 +98,4 @@ internal class ReverbNoiseDrawable(
             Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG
     }
 
-    /**
-     * Deliberately preserves AppNoiseTile's process lifetime and seed-only key. Each seed decodes
-     * its own authoritative bitmap once, even when two seeds refer to the same resource. The first
-     * Resources for a seed wins for the process lifetime, just as in the release.
-     */
-    private object NoiseTiles {
-        private val cachedShaders = mutableMapOf<Int, BitmapShader>()
-
-        fun shader(resources: Resources, seed: Int): BitmapShader = synchronized(this) {
-            cachedShaders[seed] ?: run {
-                val image = checkNotNull(
-                    BitmapFactory.decodeResource(resources, R.drawable.settings_noise_tile),
-                )
-                BitmapShader(image, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).also { shader ->
-                    if (seed != SEED_BACKGROUND) {
-                        val x = Math.floorMod(seed * 37, image.width).toFloat()
-                        val y = Math.floorMod(seed * 61, image.height).toFloat()
-                        shader.setLocalMatrix(Matrix().apply { setTranslate(x, y) })
-                    }
-                    cachedShaders[seed] = shader
-                }
-            }
-        }
-    }
 }

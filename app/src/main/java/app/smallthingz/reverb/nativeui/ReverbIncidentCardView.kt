@@ -15,10 +15,10 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.text.TextStyle
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.text.font.FontWeight
+import app.smallthingz.nativeui.unit.Density
 import app.smallthingz.reverb.IncidentPresentation
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.NativeClickPhaseEndpoint

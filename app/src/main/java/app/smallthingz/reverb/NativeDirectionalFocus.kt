@@ -2,13 +2,13 @@
  * Copyright 2021 The Android Open Source Project. Apache License 2.0. */
 package app.smallthingz.reverb
 
-import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.FocusDirection.Companion.Left
-import androidx.compose.ui.focus.FocusDirection.Companion.Right
-import androidx.compose.ui.focus.FocusDirection.Companion.Up
-import androidx.compose.ui.focus.FocusDirection.Companion.Down
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.util.fastCoerceAtLeast
+import app.smallthingz.nativeui.focus.FocusDirection
+import app.smallthingz.nativeui.focus.FocusDirection.Companion.Left
+import app.smallthingz.nativeui.focus.FocusDirection.Companion.Right
+import app.smallthingz.nativeui.focus.FocusDirection.Companion.Up
+import app.smallthingz.nativeui.focus.FocusDirection.Companion.Down
+import app.smallthingz.nativeui.geometry.Rect
+import app.smallthingz.nativeui.util.fastCoerceAtLeast
 
 private const val InvalidFocusDirection = "Expected two-dimensional focus direction"
 

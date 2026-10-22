@@ -274,7 +274,7 @@ internal class IncidentsParityBoard(
     } else if (dark) darkColorScheme() else lightColorScheme()
     private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
-    private val environment = ReverbViewEnvironment(density, createFontFamilyResolver(context),
+    private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
     private val history = incidentParityHistory()
     private val expected = IncidentHistoryUiState(
@@ -290,7 +290,7 @@ internal class IncidentsParityBoard(
     private val sourceAccess = if (interactive) IncidentsFixtureAccess(scene, history, true) else null
     private var sourceState by mutableStateOf(expected)
     private var sourceOpen by mutableStateOf(true)
-    private var sourceMotion: IncidentsPanelMotionState? = null
+    private var sourceMotion: LegacyIncidentsPanelMotionState? = null
     private var sourceRendered = false
     private var sourceHistory: IncidentHistoryController? = null
     private var sourceBackCount = 0
@@ -304,7 +304,7 @@ internal class IncidentsParityBoard(
             val first = asyncFailure
             if (first == null) asyncFailure = failure else if (first !== failure) first.addSuppressed(failure)
         })
-    private val frames = checkNotNull(scope.coroutineContext[MonotonicFrameClock])
+    private val nativeScope = CoroutineScope(scope.coroutineContext.withNativeParityClock())
     private val recomposer = Recomposer(scope.coroutineContext)
     private var recomposerJob: Job? = null
     // Static ABAB replaces rendered siblings inside one retained window-focus owner, matching
@@ -392,13 +392,13 @@ internal class IncidentsParityBoard(
             val text = NativeWindowTextAccessibilityOwner(host.fixtureRoot,
                 NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
             windowText = text
-            val events = text.openScrollEvents(scope, { host.fixtureRoot.invalidate() }, {})
+            val events = text.openScrollEvents(nativeScope, { host.fixtureRoot.invalidate() }, {})
             scrollEvents = events
             val source = NativeMainAccessibility(host.fixtureRoot, host.fixtureRoot,
                 { listOfNotNull(native) }, { false }, { view ->
                     if (view.parent is ReverbGroupLayout &&
                         (view.parent as ReverbGroupLayout).pointerContent === view)
-                        NativeTextSemanticsClip.Rectangle(androidx.compose.ui.geometry.Rect(
+                        NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(
                             0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped
                 }, minimumTouch = { view ->
@@ -412,14 +412,14 @@ internal class IncidentsParityBoard(
                 scope.launch { controller.observeHistory { sourceState = it } }
             }
             val historyOwner = IncidentHistoryController(access, waitBeforeRetry = { awaitCancellation() })
-            val panelOwner = NativeIncidentsScreenOwner(context, scope, initiallyOpen = true,
+            val panelOwner = NativeIncidentsScreenOwner(context, nativeScope, initiallyOpen = true,
                 onBackRequested = {
                     if (interactive) { nativeBackCount++; checkNotNull(owner).bindNavigation(false, false) }
                     else { unexpectedCallbacks++; error("Static Incidents fixture must not navigate") }
                 },
                 onAlertChanged = {}, history = historyOwner)
             owner = panelOwner
-            val content = NativeIncidentsScreenView(context, environment, panelOwner, scope,
+            val content = NativeIncidentsScreenView(context, environment, panelOwner, nativeScope,
                 host, host.onBackPressedDispatcher, host.fixtureRoot, text, source::node,
                 scrollEvents = events)
             native = content

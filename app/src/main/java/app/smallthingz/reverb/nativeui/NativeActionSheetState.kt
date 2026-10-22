@@ -5,11 +5,11 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.MutatePriority
-import androidx.compose.foundation.MutatorMutex
+import app.smallthingz.nativeui.animation.core.AnimationSpec
+import app.smallthingz.nativeui.animation.core.animate
+import app.smallthingz.nativeui.animation.core.spring
+import app.smallthingz.nativeui.foundation.MutatePriority
+import app.smallthingz.nativeui.foundation.MutatorMutex
 import kotlin.math.abs
 import kotlin.math.max
 import kotlinx.coroutines.CancellationException

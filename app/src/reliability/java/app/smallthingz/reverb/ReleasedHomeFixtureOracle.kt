@@ -227,7 +227,7 @@ internal fun ReleasedHomeMainCaptureContent(
         // after this branch is entered, so later visualizer/service updates must not move the
         // starting endpoint underneath an in-flight morph.
         val sourceGeometry = remember(rangeBuffer, activeRangeSnapshot) {
-            rangeMorphSourceGeometry(
+            legacyRangeMorphSourceGeometry(
                 rootBoundsInRoot = homeRootBoundsInRoot[0],
                 blobBoundsInRoot = homeBlobBoundsInRoot[0],
                 active = isListening && activeBuffer == rangeBuffer,

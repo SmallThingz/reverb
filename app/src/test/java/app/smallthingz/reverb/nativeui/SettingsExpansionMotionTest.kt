@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.ui.unit.IntSize
+import app.smallthingz.nativeui.unit.IntSize
 import org.junit.Assert.*
 import org.junit.Test
 

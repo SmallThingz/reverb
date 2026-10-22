@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exact native sheet resources from AndroidX Material3 1.4.0 (Apache-2.0).
+     See nativeui/sheet-resources/SOURCE.md; no Material runtime is required. -->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <integer name="reverb_native_sheet_cutout_mode">1</integer>
+    <string name="native_sheet_dismiss_description">Dismiss bottom sheet</string>
+    <string name="native_sheet_drag_handle_description">Drag handle</string>
+    <string name="native_sheet_pane_title">Bottom Sheet</string>
+    <style name="ReverbNativeSheetDialogTheme" parent="android:Theme.DeviceDefault.Dialog">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">@integer/reverb_native_sheet_cutout_mode</item>
+        <item name="android:windowClipToOutline">false</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowElevation">0dp</item>
+    </style>
+    <style name="ReverbNativeSheetWindowTheme">
+        <item name="android:dialogTheme">@style/ReverbNativeSheetDialogTheme</item>
+    </style>
+</resources>

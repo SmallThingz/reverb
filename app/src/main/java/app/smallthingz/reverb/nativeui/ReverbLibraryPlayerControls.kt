@@ -2,7 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import android.animation.ValueAnimator
 import android.content.Context
-import androidx.compose.runtime.MonotonicFrameClock
+import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
 import android.graphics.Rect
@@ -10,7 +10,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import androidx.compose.ui.text.font.FontFamily
+import app.smallthingz.nativeui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost

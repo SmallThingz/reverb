@@ -10,7 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.ReverbClickPhaseEndpoint
-import androidx.compose.ui.unit.IntSize
+import app.smallthingz.nativeui.unit.IntSize
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -18,7 +18,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
-import androidx.compose.ui.text.style.TextOverflow
+import app.smallthingz.nativeui.text.style.TextOverflow
 import app.smallthingz.reverb.R
 import kotlin.math.roundToInt
 
@@ -84,7 +84,7 @@ internal class ReverbLibraryRecordingRow(
     private val column = RecordingCardColumn(context, body)
     private var selectionMotion: LibrarySelectionMotion? = null
     private var expansionMotion = LibraryExpansionMotion(false)
-    private var outerSizeMotion: LibraryTweenValue<IntSize, androidx.compose.animation.core.AnimationVector2D>? = null
+    private var outerSizeMotion: LibraryTweenValue<IntSize, app.smallthingz.nativeui.animation.core.AnimationVector2D>? = null
     private var exitPosted = false
     var onExpansionExit: (() -> Unit)? = null
     private val expansionViewport = LibraryExpansionViewport(context,

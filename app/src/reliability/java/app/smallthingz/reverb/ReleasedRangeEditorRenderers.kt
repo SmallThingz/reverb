@@ -152,7 +152,7 @@ internal fun RangeExportHomeContent(
         getRememberedRangeExport(context, selectedBuffer)
     }
     val state = remember(selectedBuffer, rememberedRangeExport, appContext) {
-        RangeExportEditorState(
+        LegacyRangeExportEditorState(
             initialDurationSeconds = initialDurationSeconds,
             rememberedRangeExport = rememberedRangeExport,
             onPreviewReleaseFailure = { error ->
@@ -382,7 +382,7 @@ internal fun RangeExportHomeContent(
 
 @Composable
 private fun RangeSelectionDurationWheel(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     maxExportDurationSeconds: Double,
     enabled: Boolean,
     inputVisible: Boolean,
@@ -485,7 +485,7 @@ private fun RangeSelectionDurationWheel(
 
 @Composable
 private fun RangeExportTimeline(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     morphProgress: () -> Float,
     modifier: Modifier = Modifier,
     morphStartColor: androidx.compose.ui.graphics.Color? = null,
@@ -737,7 +737,7 @@ internal fun RangeTimelineMarkerVisual(
 @Composable
 private fun RangeTimelineBar(
     target: RangeEditTarget,
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     interactionEnabled: Boolean,
     xPx: () -> Float,
     topPx: Float,
@@ -921,7 +921,7 @@ private fun RangeTimelineBar(
 private fun TimelineTimeLabel(
     target: RangeEditTarget,
     active: Boolean,
-    editorState: RangeExportEditorState,
+    editorState: LegacyRangeExportEditorState,
     visualAlpha: Float,
     modifier: Modifier = Modifier,
 ) {
@@ -960,7 +960,7 @@ private fun TimelineTimeLabel(
 
 @Composable
 private fun SpringFineAdjust(
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1433,7 +1433,7 @@ internal fun SpringFineSeekControl(
 @Composable
 private fun RangeExportControls(
     modifier: Modifier = Modifier,
-    state: RangeExportEditorState,
+    state: LegacyRangeExportEditorState,
     loading: Boolean,
     canExport: Boolean,
     selectedBuffer: ReverbService.BufferSlot,

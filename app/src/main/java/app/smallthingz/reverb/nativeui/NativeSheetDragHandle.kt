@@ -91,9 +91,9 @@ internal class NativeSheetDragHandle(
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
         info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_LONG_CLICK,
-            context.getString(androidx.compose.foundation.R.string.tooltip_label)))
+            context.getString(app.smallthingz.nativeui.R.string.tooltip_label)))
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_DISMISS,
-            context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_dismiss_description)))
+            context.getString(app.smallthingz.reverb.R.string.native_sheet_dismiss_description)))
         sourceNode?.invoke()?.populate(info)
     }
     override fun createAccessibilityNodeInfo():AccessibilityNodeInfo? =
@@ -134,7 +134,7 @@ internal class NativeSheetDragHandle(
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             color=reverbColorWithAlpha(environment.palette.onSurfaceVariant,.45f)
         }
-        init {contentDescription=context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_drag_handle_description)
+        init {contentDescription=context.getString(app.smallthingz.reverb.R.string.native_sheet_drag_handle_description)
             importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false}
         fun bindColor(color:Int) {paint.color=reverbColorWithAlpha(color,.45f);invalidate()}
         override fun onDraw(canvas:Canvas) {

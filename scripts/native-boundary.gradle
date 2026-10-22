@@ -1,0 +1,59 @@
+// Opt-in evidence task: resolves the real production graphs, never QA configurations.
+// Invoke through the single contained validation lane with -I scripts/native-boundary.gradle
+// :app:writeNativeProductionDependencies -PnativeDependencyReport=/absolute/report.json
+allprojects {
+    plugins.withId('com.android.application') {
+        tasks.register('writeNativeProductionDependencies') {
+            doLast {
+                def destination = providers.gradleProperty('nativeDependencyReport').orNull
+                if (!destination) throw new GradleException('nativeDependencyReport is required')
+                def names = [
+                    'debugCompileClasspath', 'debugRuntimeClasspath',
+                    'releaseCompileClasspath', 'releaseRuntimeClasspath',
+                ]
+                def graphs = [:]
+                names.each { name ->
+                    def configuration = configurations.getByName(name)
+                    if (!configuration.canBeResolved) {
+                        throw new GradleException('Production classpath is not resolvable: ' + name)
+                    }
+                    def result = configuration.incoming.resolutionResult
+                    def modules = []
+                    def projects = []
+                    result.allComponents.each { component ->
+                        def id = component.id
+                        if (id instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier) {
+                            modules += [group: id.group, name: id.module, version: id.version]
+                        } else if (id instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier) {
+                            projects += id.projectPath
+                        }
+                    }
+                    def unresolved = result.allDependencies.findAll {
+                        it instanceof org.gradle.api.artifacts.result.UnresolvedDependencyResult
+                    }.collect { [requested: it.requested.displayName, failure: it.failure.message] }
+                    graphs[name] = [
+                        modules: modules.sort { a, b ->
+                            (a.group + ':' + a.name + ':' + a.version) <=>
+                                (b.group + ':' + b.name + ':' + b.version)
+                        },
+                        projects: projects.unique().sort(),
+                        unresolved: unresolved,
+                    ]
+                }
+                def report = [
+                    schema: 1,
+                    rootDirectory: rootProject.projectDir.canonicalPath,
+                    projectPath: project.path,
+                    configurations: graphs,
+                ]
+                def output = new File(destination)
+                output.parentFile?.mkdirs()
+                output.text = groovy.json.JsonOutput.prettyPrint(
+                    groovy.json.JsonOutput.toJson(report)) + '\n'
+                if (graphs.values().any { !it.unresolved.isEmpty() }) {
+                    throw new GradleException('Production dependency resolution failed; see ' + output)
+                }
+            }
+        }
+    }
+}

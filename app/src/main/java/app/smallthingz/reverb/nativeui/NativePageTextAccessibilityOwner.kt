@@ -3,7 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.MainThread
-import androidx.compose.ui.geometry.Rect
+import app.smallthingz.nativeui.geometry.Rect
 import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
 import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap

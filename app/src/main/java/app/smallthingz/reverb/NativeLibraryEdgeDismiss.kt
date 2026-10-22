@@ -1,7 +1,7 @@
 /* Source-derived FilesScreen edge pointerInput and foundation 1.11.2 vertical drag helpers. */
 package app.smallthingz.reverb
 
-import androidx.compose.ui.input.pointer.PointerType
+import app.smallthingz.nativeui.input.pointer.PointerType
 import kotlin.math.abs
 import kotlin.math.sign
 

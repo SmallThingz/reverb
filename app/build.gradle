@@ -7,11 +7,16 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:9.4.0'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0'
-        classpath 'org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.3.0'
+        // The retained released renderer is an opt-in QA source set only.
+        if (gradle.ext.has('reverbReliabilityEnabled') && gradle.ext.reverbReliabilityEnabled) {
+            classpath 'org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.3.0'
+        }
     }
 }
 apply plugin: 'com.android.application'
-apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+if (gradle.ext.has('reverbReliabilityEnabled') && gradle.ext.reverbReliabilityEnabled) {
+    apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+}
 
 repositories {
     google()
@@ -82,7 +87,12 @@ android {
     }
     buildFeatures {
         buildConfig = false
-        compose = true
+        compose = gradle.ext.has('reverbReliabilityEnabled') && gradle.ext.reverbReliabilityEnabled
+    }
+    sourceSets {
+        // Never combine these two legacy wire-name readers with the QA Compose runtime.
+        debug.java.srcDir 'src/nativeCompatibility/java'
+        release.java.srcDir 'src/nativeCompatibility/java'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -128,23 +138,26 @@ if (releaseSigningReady) {
     }
 }
 
+// The native icon library is generated from these pinned source packs. They are
+// explicit reference inputs, never part of a production compile/runtime classpath.
+configurations {
+    nativeIconSources {
+        canBeResolved = true
+        canBeConsumed = false
+        transitive = false
+    }
+}
+
 dependencies {
+    implementation project(':native-ui')
     implementation 'androidx.core:core-ktx:1.18.0'
     implementation 'androidx.core:core-splashscreen:1.2.0'
-    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.activity:activity-ktx:1.13.0'
     implementation 'androidx.documentfile:documentfile:1.1.0'
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
-    implementation platform('androidx.compose:compose-bom:2026.05.01')
-    implementation 'androidx.compose.animation:animation'
-    implementation 'androidx.compose.foundation:foundation'
-    implementation 'androidx.compose.material:material-icons-core'
-    implementation 'androidx.compose.material:material-icons-extended'
 
-    implementation 'androidx.compose.material3:material3'
-    implementation 'androidx.compose.ui:ui'
-    implementation 'androidx.compose.ui:ui-tooling-preview'
-
+    nativeIconSources 'androidx.compose.material:material-icons-core-android:1.7.8:sources@jar'
+    nativeIconSources 'androidx.compose.material:material-icons-extended-android:1.7.8:sources@jar'
     testImplementation 'junit:junit:4.13.2'
 }

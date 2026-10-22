@@ -3,9 +3,9 @@ package app.smallthingz.reverb.nativeui
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.unit.Density
+import app.smallthingz.nativeui.geometry.Offset
+import app.smallthingz.nativeui.geometry.Size
+import app.smallthingz.nativeui.unit.Density
 import app.smallthingz.reverb.NativeClickPhaseNode
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePagerTouchRoot

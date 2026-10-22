@@ -6,15 +6,15 @@
 
 package app.smallthingz.reverb.nativeui
 
-import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.AnimationVector2D
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.TargetBasedAnimation
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.ui.unit.IntOffset
+import app.smallthingz.nativeui.animation.core.AnimationVector1D
+import app.smallthingz.nativeui.animation.core.AnimationVector2D
+import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
+import app.smallthingz.nativeui.animation.core.FiniteAnimationSpec
+import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
+import app.smallthingz.nativeui.animation.core.VectorConverter
+import app.smallthingz.nativeui.animation.core.spring
+import app.smallthingz.nativeui.animation.core.tween
+import app.smallthingz.nativeui.unit.IntOffset
 import app.smallthingz.reverb.predictiveBackCommitDurationMillis
 import kotlin.math.roundToLong
 

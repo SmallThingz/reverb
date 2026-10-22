@@ -128,7 +128,8 @@ private fun pointInFixture(view: View, fixture: View, point: Offset,
     var position = point
     while (current !== fixture) {
         val parent = current.parent as? View ?: error("Native text left its captured fixture")
-        position = nativeTextSemanticsMatrix(current, transformPolicy).map(position) +
+        val mapped = nativeTextSemanticsMatrix(current, transformPolicy).map(position.nativeParityOffset())
+        position = Offset(mapped.x, mapped.y) +
             Offset(current.left.toFloat() - parent.scrollX, current.top.toFloat() - parent.scrollY)
         current = parent
     }

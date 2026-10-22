@@ -177,18 +177,18 @@ fun SettingsScreen(
     val outputSelectionRevision = remember { longArrayOf(0L) }
     val savePanelOwner = remember(active) { Any() }
     val savePanelOwnerState = androidx.compose.runtime.rememberUpdatedState(savePanelOwner)
-    val notificationDurationInteraction = remember { NotificationDurationInteractionState() }
+    val notificationDurationInteraction = remember { LegacyNotificationDurationInteractionState() }
     val activeState = androidx.compose.runtime.rememberUpdatedState(active)
     val inputReadyState = androidx.compose.runtime.rememberUpdatedState(
         active && settingsHydrated && settingsInteractionReady,
     )
     val panelActiveState = androidx.compose.runtime.rememberUpdatedState(isPanelActive)
     val quickTileEditorState = rememberSaveable(
-        saver = listSaver<QuickSettingsTilesEditorState, Any>(
+        saver = listSaver<LegacyQuickSettingsTilesEditorState, Any>(
             save = { it.save(activeState.value && panelActiveState.value()) },
-            restore = QuickSettingsTilesEditorState::restore,
+            restore = LegacyQuickSettingsTilesEditorState::restore,
         ),
-    ) { QuickSettingsTilesEditorState() }
+    ) { LegacyQuickSettingsTilesEditorState() }
     DisposableEffect(active, settingsHydrated, settingsInteractionReady, quickTileEditorState.mutationInProgress) {
         if (!active) quickTileEditorState.closeEditor()
         else quickTileEditorState.restorePendingDraft(settingsHydrated && settingsInteractionReady)
