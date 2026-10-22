@@ -45,9 +45,9 @@ private class CursorResources(
     override fun getDrawable(id: Int, theme: Theme?): Drawable =
         if (id == R.drawable.reverb_native_cursor) cursor else original.getDrawable(id, theme)
 
-    override fun getDrawableForDensity(id: Int, density: Int): Drawable =
+    override fun getDrawableForDensity(id: Int, density: Int): Drawable? =
         if (id == R.drawable.reverb_native_cursor) cursor else original.getDrawableForDensity(id, density)
 
-    override fun getDrawableForDensity(id: Int, density: Int, theme: Theme?): Drawable =
+    override fun getDrawableForDensity(id: Int, density: Int, theme: Theme?): Drawable? =
         if (id == R.drawable.reverb_native_cursor) cursor else original.getDrawableForDensity(id, density, theme)
 }
