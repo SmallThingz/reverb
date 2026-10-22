@@ -422,6 +422,42 @@
           "word": true
         }
       ]
+    },
+    "src/main/java/app/smallthingz/reverb/FilesScreen.kt": {
+      "compiled_sha256": "e507f04b2d3b0f6a4f58ad539be26e7ad228610ed1f6205b1bbacf9d1fd15c70",
+      "normalized_sha256": "f73be342e5ecf7585ef9fd697b3aa3a232831ddceb5cdd4812872b8b906dee68",
+      "inverse": [
+        {
+          "from": "    isVisible: () -> Boolean,\n) {\n    private var isVisibleCallback: (() -> Boolean)? = isVisible\n",
+          "to": "    private val isVisible: () -> Boolean,\n) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        attached = false\n        isVisibleCallback = null\n        onRenamed = null\n",
+          "to": "        attached = false\n        onRenamed = null\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        if (isVisibleCallback?.invoke() != true) {\n",
+          "to": "        if (!isVisible()) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "): Boolean = hasLoaded && listEmpty && !isRefreshing\n",
+          "to": "): Boolean = hasLoaded && listEmpty && !isRefreshing\n\n",
+          "count": 1,
+          "word": false
+        }
+      ],
+      "origin": {
+        "kind": "authorized production helper fix; source-only reconstruction for released renderer guard",
+        "review": "clean-window48/review-20-fix.json",
+        "peer": "clean-window48/review-20-peer.json",
+        "scope": "Detach rename visibility callback; preserve frozen49/released oracle source reconstruction and terminal EOF byte. No renderer modification."
+      }
     }
   },
   "references": {
