@@ -232,7 +232,7 @@ internal class NativeRecordingInlinePlayerController(
                 Lifecycle.Event.ON_RESUME -> {
                     activeTrimReceiver.get()?.setUiVisible(input.screenActive)
                     submitInlinePlaybackAutoStart(playbackBookkeeping, input.playbackOwner, prepared, true,
-                        trimSaving || input.trimRequested || trimMode || !input.screenActive || !ownsPlaybackRow() || playbackBookkeeping.seeks.pending) {
+                        trimSaving || input.trimRequested || trimMode || !input.screenActive || !ownsPlaybackRow()) {
                         seekTo(currentPosition, resume = true)
                     }
                 }

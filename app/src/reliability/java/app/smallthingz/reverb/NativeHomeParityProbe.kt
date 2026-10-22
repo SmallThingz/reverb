@@ -192,12 +192,14 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
 @OptIn(ExperimentalComposeViewContextApi::class)
 private class HomeParityBoard(
     private val host: NativeParityActivity, private val case: HomeCase, dark: Boolean,
+    commonGrain: NativeParityCommonGrainSession? = null,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
             if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
     }
     private val context = host.createConfigurationContext(configuration)
+    private val referenceResources = commonGrain?.referenceResources(context.resources) ?: context.resources
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
     private val colors = if (Build.VERSION.SDK_INT >= 31) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -262,7 +264,7 @@ private class HomeParityBoard(
             SideEffect { referenceScope = scope }
             CompositionLocalProvider(
                 LocalContext provides context, LocalConfiguration provides configuration,
-                LocalResources provides context.resources, LocalDensity provides density,
+                LocalResources provides referenceResources, LocalDensity provides density,
                 LocalLayoutDirection provides if (dark) LayoutDirection.Rtl else LayoutDirection.Ltr,
             ) {
                 MaterialTheme(colorScheme = colors, typography = typography) {
@@ -436,10 +438,23 @@ private enum class HomeGesture(val expectedAction: String?) {
  * not timestamp-aligned frames; no assertion silently drops them or claims continuous smoothness.
  */
 internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, report: StringBuilder) {
+    verifyNativeHomeInputParity(instrumentation, report, normalizeGrain = false)
+}
+
+/** Separate supplemental selector; the raw released-resource selector above remains unchanged. */
+internal fun verifyNativeHomeInputCommonGrainParity(instrumentation: Instrumentation, report: StringBuilder) {
+    verifyNativeHomeInputParity(instrumentation, report, normalizeGrain = true)
+}
+
+private fun verifyNativeHomeInputParity(
+    instrumentation: Instrumentation, report: StringBuilder, normalizeGrain: Boolean,
+) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
-    val directory = File(context.filesDir, "native-home-input-" + System.currentTimeMillis())
+    val selector = if (normalizeGrain) "native_home_input_common_grain" else "native_home_input"
+    val directoryPrefix = if (normalizeGrain) "native-home-input-common-grain-" else "native-home-input-"
+    val directory = File(context.filesDir, directoryPrefix + System.currentTimeMillis())
     check(directory.mkdir())
     val entries = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
@@ -451,7 +466,13 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
     var primary: Throwable? = null
     var completed = 0
     var mismatches = 0
+    var commonGrain: NativeParityCommonGrainSession? = null
     try {
+        if (normalizeGrain) {
+            commonGrain = NativeParityCommonGrainSession()
+            result.put("supplemental", true)
+                .put("reference_input_override", "settings_noise_tile only: exact native procedural grain")
+        }
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -475,11 +496,13 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
                 for (compose in listOf(true, false)) {
                     val route = if (compose) "compose" else "native"
                     val board = nativeParityOnMain(instrumentation) {
-                        HomeParityBoard(activity, homeCases()[1], dark).also { active = it }
+                        HomeParityBoard(activity, homeCases()[1], dark, commonGrain).also { active = it }
                     }
                     // Compose creates the shared, correctly configured window frame scope even
                     // for a native-only route. No reference operation is dispatched on that route.
                     captureNativeParityContent(instrumentation, activity) { board.show(true) }.recycle()
+                    commonGrain?.verifyReferenceLoads()
+                    commonGrain?.verifyNativeReady()
                     val initial = captureNativeParityContent(instrumentation, activity) { board.show(compose) }
                     try { saveNativeParityBitmap(directory, "$name-$route-initial.png", initial) }
                     finally { initial.recycle() }
@@ -587,7 +610,7 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
                     .put("final_difference", difference).put("passed", passed)
                 completed++
                 if (!passed) mismatches++
-                report.append(if (passed) "PASS " else "FAIL ").append("native_home_input ")
+                report.append(if (passed) "PASS " else "FAIL ").append(selector).append(' ')
                     .append(name).append('\n')
             } catch (failure: Throwable) {
                 caseFailure = failure
@@ -601,6 +624,7 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
                     cleanup = failure; caseFailure?.addSuppressed(failure)
                     entry.put("cleanup_error", android.util.Log.getStackTraceString(failure))
                 }
+                commonGrain?.let { result.put("common_grain", it.evidence()) }
                 writeHomeEvidence(directory, result, caseFailure ?: cleanup)
                 if (caseFailure == null) cleanup?.let { throw it }
             }
@@ -608,6 +632,8 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
         val bindings = JSONObject().put("cases", JSONArray()).put("passed", false)
         result.put("home_binding", bindings)
         verifyNativeHomeLeafBindings(instrumentation, activity, bindings, report)
+        commonGrain?.verifyReferenceLoads()
+        commonGrain?.verifyNativeReady()
         check(completed == 6 && mismatches == 0) { "Home input mismatch: $mismatches/$completed" }
     } catch (failure: Throwable) {
         primary = failure
@@ -622,6 +648,7 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
         }
         result.put("completed_cases", completed).put("mismatched_cases", mismatches)
             .put("passed", primary == null && cleanup == null && completed == 6 && mismatches == 0)
+        commonGrain?.let { result.put("common_grain", it.evidence()) }
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         writeHomeEvidence(directory, result, primary ?: cleanup)
         if (primary == null) cleanup?.let { throw it }

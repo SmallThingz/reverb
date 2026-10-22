@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -47,9 +48,23 @@ import org.json.JSONObject
  * No permission, picker, recording, tile, Save, or production Activity route is invoked.
  */
 internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, report: StringBuilder) {
+    verifyNativeMainSettingsParity(instrumentation, report, commonGrainInput = false)
+}
+
+/** Supplemental exact comparison with only the explicitly changed grain input shared. */
+internal fun verifyNativeMainSettingsCommonGrainParity(instrumentation: Instrumentation, report: StringBuilder) {
+    verifyNativeMainSettingsParity(instrumentation, report, commonGrainInput = true)
+}
+
+private fun verifyNativeMainSettingsParity(
+    instrumentation: Instrumentation,
+    report: StringBuilder,
+    commonGrainInput: Boolean,
+) {
     check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(instrumentation.targetContext.applicationContext.javaClass == Application::class.java)
-    val directory = File(instrumentation.targetContext.filesDir, "native-main-settings-${System.currentTimeMillis()}")
+    val directoryPrefix = if (commonGrainInput) "native-main-settings-common-grain" else "native-main-settings"
+    val directory = File(instrumentation.targetContext.filesDir, "$directoryPrefix-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val runs = JSONArray()
     val comparisons = JSONArray()
@@ -60,12 +75,17 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
         .put("unqualified", JSONArray(listOf("physical gesture/frame-phase parity", "TalkBack delivery",
             "keyboard/IME", "Library paths (separate probe)", "production startup/capture")))
         .put("runs", runs).put("comparisons", comparisons).put("passed", false)
+    if (commonGrainInput) result.put("selector", "native_main_settings_parity_common_grain")
+        .put("reference_input_override", "settings_noise_tile only: exact native procedural grain")
+        .put("raw_grain_parity", "Unqualified by this supplemental selector; raw selector remains separate")
     var activity: NativeParityActivity? = null
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
     var comparisonSucceeded = false
+    var commonGrain: NativeParityCommonGrainSession? = null
     val all = ArrayList<List<Pair<File, JSONObject>>>()
     try {
+        if (commonGrainInput) commonGrain = NativeParityCommonGrainSession()
         val host = launchNativeParityActivity(instrumentation)
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
@@ -97,7 +117,7 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
                 requireNativeParityHost(instrumentation, host)
                 render = nativeParityOnMain(instrumentation) {
                     host.fixtureRoot.removeAllViews()
-                    MainSettingsParityRender(host, reference, initialMode, systemDark)
+                    MainSettingsParityRender(host, reference, initialMode, systemDark, commonGrain)
                 }
                 val current = checkNotNull(render)
                 fun capture(step: String, readyAction: Int) {
@@ -166,6 +186,8 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
             if (!passed) mismatches++
         }
         check(mismatches == 0) { "Assembled Main/Settings differs in $mismatches steps; retain raw evidence" }
+        commonGrain?.verifyReferenceLoads()
+        commonGrain?.verifyNativeReady()
         comparisonSucceeded = true
     } catch (error: Throwable) {
         failure = error
@@ -177,6 +199,8 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
         try {
             nativeParityOnMain(instrumentation) { cleanupMainParity(render, activity, finish = true) }
         } catch (cleanup: Throwable) { record(cleanup) }
+        try { commonGrain?.let { result.put("common_grain", it.evidence()) } }
+        catch (evidenceError: Throwable) { record(evidenceError) }
         result.put("passed", comparisonSucceeded && failure == null)
             .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
         try { File(directory, "result.json").writeText(result.toString(2)) }
@@ -187,7 +211,9 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
         report.append("Main/Settings evidence: ").append(directory.absolutePath).append('\n')
     }
     failure?.let { throw it }
-    report.append("PASS native_main_settings_parity exact settled route/preview/Undo; physical input unqualified\n")
+    val selector = if (commonGrainInput) "native_main_settings_parity_common_grain" else "native_main_settings_parity"
+    report.append("PASS ").append(selector)
+        .append(" exact settled route/preview/Undo; physical input unqualified\n")
 }
 
 /** Regression for the assembled dispatcher, not a direct call to Slider.onKeyDown. */
@@ -354,6 +380,7 @@ private class MainSettingsParityRender(
     val reference: Boolean,
     private val initialMode: AppThemeMode,
     private val systemDark: Boolean,
+    private val commonGrain: NativeParityCommonGrainSession?,
 ) : AutoCloseable {
     val board = FrameLayout(activity)
     private val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
@@ -396,10 +423,24 @@ private class MainSettingsParityRender(
             compositionContext = context
             val view = ComposeView(activity)
             compose = view
-            view.setContent {
-                CompositionLocalProvider(LocalContext provides activity, LocalDensity provides density) {
-                    ReverbTheme(darkTheme = effectiveDark) {
-                        ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
+            if (commonGrain == null) {
+                view.setContent {
+                    CompositionLocalProvider(LocalContext provides activity, LocalDensity provides density) {
+                        ReverbTheme(darkTheme = effectiveDark) {
+                            ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
+                        }
+                    }
+                }
+            } else {
+                // Keep Activity, LocalContext, theme and geometry identical; only the oracle's
+                // explicit LocalResources grain decode receives the supplementary input.
+                val referenceResources = commonGrain.referenceResources(activity.resources)
+                view.setContent {
+                    CompositionLocalProvider(LocalContext provides activity, LocalDensity provides density,
+                        LocalResources provides referenceResources) {
+                        ReverbTheme(darkTheme = effectiveDark) {
+                            ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
+                        }
                     }
                 }
             }

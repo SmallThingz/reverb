@@ -27,14 +27,15 @@ internal class NativeMotionPointerSource(
     fun cancel() { previous.clear(); admission.reset() }
 
     fun read(event: MotionEvent): NativeRootPointerFrame? {
-        if (event.actionMasked == MotionEvent.ACTION_CANCEL) { cancel(); return null }
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_CANCEL) { cancel(); return null }
         val indirect = Build.VERSION.SDK_INT >= 34 &&
             (event.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
                 event.classification == MotionEvent.CLASSIFICATION_PINCH)
-        if (!admission.accepts(event.actionMasked, event.source,
+        if (!admission.accepts(action, event.source,
                 (0 until event.pointerCount).any { event.getToolType(it) == MotionEvent.TOOL_TYPE_MOUSE },
                 event.buttonState, indirect)) return null
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) previous.clear()
+        if (action == MotionEvent.ACTION_DOWN) previous.clear()
         val changes = ArrayList<NativeRootPointerChange>(event.pointerCount)
         for (index in 0 until event.pointerCount) {
             val androidId = event.getPointerId(index)
@@ -44,8 +45,8 @@ internal class NativeMotionPointerSource(
             val screen = if (index == 0) Offset(event.rawX, event.rawY)
                 else if (Build.VERSION.SDK_INT >= 29) Offset(event.getRawX(index), event.getRawY(index))
                 else rootToScreen(original)
-            val up = event.actionMasked == MotionEvent.ACTION_UP ||
-                (event.actionMasked == MotionEvent.ACTION_POINTER_UP && index == event.actionIndex)
+            val up = action == MotionEvent.ACTION_UP ||
+                (action == MotionEvent.ACTION_POINTER_UP && index == event.actionIndex)
             val pressed = !up
             val type = when (event.getToolType(index)) {
                 MotionEvent.TOOL_TYPE_FINGER -> if (nativeMouseSource(event.source)) PointerType.Mouse else PointerType.Touch
