@@ -68,8 +68,8 @@ open class ParagraphIntrinsics(
     fun observeFontChanges(onChanged: () -> Unit): AutoCloseable = NativeEmojiFonts.observe(onChanged)
 
     internal val direction: TextDirectionHeuristic =
-        if (this.style.layoutDirection == LayoutDirection.Rtl) TextDirectionHeuristics.FIRSTSTRONG_RTL
-        else TextDirectionHeuristics.FIRSTSTRONG_LTR
+        if (this.style.layoutDirection == LayoutDirection.Rtl) TextDirectionHeuristics.RTL
+        else TextDirectionHeuristics.LTR
     internal val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         this.density = this@ParagraphIntrinsics.density.density
         hinting = Paint.HINTING_ON
@@ -122,7 +122,8 @@ open class ParagraphIntrinsics(
         value
     }
     val minIntrinsicWidth: Float by lazy(LazyThreadSafetyMode.NONE) {
-        val iterator = BreakIterator.getLineInstance(paint.textLocale).apply { setText(text) }
+        val iterator = BreakIterator.getLineInstance(paint.textLocale)
+        iterator.setText(text)
         val longest = PriorityQueue<IntRange>(10, compareBy { it.last - it.first })
         var start = 0
         var end = iterator.next()

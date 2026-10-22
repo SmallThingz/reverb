@@ -71,7 +71,10 @@ internal class ReverbActionSheetDialog(
     private var disposed=false
     private val runtime=NativeAboutWindowRuntime()
     private val anchorLifecycle=anchor.findViewTreeLifecycleOwner()?.lifecycle
-    private val state=NativeActionSheetState({environment.textDensity.density},::stateChanged)
+    private var dismissalAllowed:()->Boolean={true}
+    private var hasDismissalAdmission=false
+    private var previousDismissalAllowed=true
+    private val state=NativeActionSheetState({environment.textDensity.density},::stateChanged) {dismissalAllowed()}
     private val predictive=Animatable(0f)
     private val scrimAnimation=Animatable(0f)
     private val scrimTargets=Channel<Float>(Channel.CONFLATED)
@@ -109,9 +112,12 @@ internal class ReverbActionSheetDialog(
             runtime.scope.launch {predictive.animateTo(0f) {applyMotion()}}
         }
         override fun handleOnBackPressed() {
-            // Source skipPartiallyExpanded branch delivers on completion even if hide was cancelled.
+            if(!dismissalAllowed()) {refreshDismissalAdmission();return}
             val dismissAtRequest=onOwnerDismiss
-            runtime.scope.launch {state.hide()}.invokeOnCompletion {dismissAtRequest()}
+            runtime.scope.launch {state.hide()}.invokeOnCompletion {
+                // Ordinary sheets retain the released completion callback on cancellation.
+                if(!hasDismissalAdmission||(!disposed&&!state.visible&&dismissalAllowed()))dismissAtRequest()
+            }
         }
     }
 
@@ -177,12 +183,29 @@ internal class ReverbActionSheetDialog(
         scrim.bindColor(next.palette.scrim)
         updateWindowColors()
     }
+    /** Busy-policy correction: admission precedes M3's hide-then-callback path. */
+    fun bindDismissalAdmission(allowed:()->Boolean) {
+        hasDismissalAdmission=true
+        dismissalAllowed=allowed
+        refreshDismissalAdmission()
+    }
+    fun refreshDismissalAdmission() {
+        if(disposed)return
+        val allowed=dismissalAllowed()
+        if(previousDismissalAllowed==allowed)return
+        previousDismissalAllowed=allowed
+        if(!allowed) {
+            state.dismissalAdmissionChanged()
+            runtime.scope.launch {predictive.snapTo(0f);applyMotion()}
+            applyMotion()
+        }
+    }
     val contentView:View get()=surface
     val hasCurrentWindowFocus get()=root.isAttachedToWindow&&root.hasWindowFocus()
     val isDisposed get()=disposed
 
     private fun snapPredictive(raw:Float) {
-        runtime.scope.launch {predictive.snapTo(PREDICTIVE_EASING.transform(raw));applyMotion()}
+        runtime.scope.launch {predictive.snapTo(if(dismissalAllowed())PREDICTIVE_EASING.transform(raw)else 0f);applyMotion()}
     }
     private fun handleClick() {
         when(state.currentValue) {
@@ -191,15 +214,16 @@ internal class ReverbActionSheetDialog(
         }
     }
     fun requestAnimatedDismiss() {
+        if(!dismissalAllowed()) {refreshDismissalAdmission();return}
         val dismissAtRequest=onOwnerDismiss
         runtime.scope.launch {state.hide()}.invokeOnCompletion {
-            if(!state.visible)dismissAtRequest()
+            if(!state.visible&&dismissalAllowed())dismissAtRequest()
         }
     }
     private fun settleToDismiss(velocity:Float) {
         val dismissAtRequest=onOwnerDismiss
         runtime.scope.launch {state.settle(velocity)}.invokeOnCompletion {
-            if(!state.visible)dismissAtRequest()
+            if(!state.visible&&dismissalAllowed())dismissAtRequest()
         }
     }
     private fun measured() {
@@ -220,7 +244,7 @@ internal class ReverbActionSheetDialog(
     }
     private fun applyMotion() {
         if(!state.offset.isNaN())surface.applyMotion(state.offset,
-            state.anchors?.minimum?:state.offset,predictive.value)
+            state.anchors?.minimum?:state.offset,if(dismissalAllowed())predictive.value else 0f)
     }
     private fun updateWindowColors() {
         val actual=requireNotNull(window)

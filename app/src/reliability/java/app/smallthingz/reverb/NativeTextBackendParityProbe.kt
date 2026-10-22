@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.app.Application
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -25,15 +26,19 @@ import androidx.compose.ui.unit.TextUnit as ReferenceUnit
 import androidx.compose.ui.unit.TextUnitType as ReferenceUnitType
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import kotlin.math.ceil
 
 /**
  * Isolated QA oracle: real released Compose Paragraph is compared with the native Android backend.
- * Never linked into production. This draws owned Bitmaps only and does not touch app/device state.
+ * Never linked into production. Writes bounded failed Bitmap pairs only in the isolated QA filesDir.
  * It qualifies paragraph metrics/rasterization, not complete screen or hardware-rendering parity.
  */
 internal fun nativeTextBackendParity(context: Context): JSONObject {
+    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
     val results = JSONArray()
+    val artifacts = ParagraphFailureArtifacts(context)
     data class Case(val label: String, val text: String, val widthDp: Int, val maxLines: Int,
                     val ellipsis: Boolean = false, val rtl: Boolean = false)
     val cases = listOf(
@@ -79,7 +84,7 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                     androidx.compose.ui.unit.Constraints(maxWidth = width, maxHeight = maxHeight),
                     case.maxLines, if (case.ellipsis) ReferenceOverflow.Ellipsis else ReferenceOverflow.Clip)
                 compareParagraphs(reference, native, case.text, width,
-                    case.label == "draw-only-decoration", entry)
+                    case.label == "draw-only-decoration", entry, artifacts)
             } catch (error: Exception) {
                 entry.put("pass", false).put("error", error.javaClass.name + ": " + error.message)
             }
@@ -116,14 +121,14 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                     if (index == 0) { firstNative = native; firstReference = reference }
                     val entry = JSONObject().put("case", "retained-intrinsics-$stage")
                         .put("role", role.name).put("fontScale", scale)
-                    compareParagraphs(reference, native, text, width, false, entry)
+                    compareParagraphs(reference, native, text, width, false, entry, artifacts)
                     results.put(entry)
                 }
                 stage = "first-after-relayout"
                 val entry = JSONObject().put("case", "retained-intrinsics-$stage")
                     .put("role", role.name).put("fontScale", scale)
                 compareParagraphs(checkNotNull(firstReference), checkNotNull(firstNative), text,
-                    (dimensions.first().first * nativeDensity.density).toInt(), false, entry)
+                    (dimensions.first().first * nativeDensity.density).toInt(), false, entry, artifacts)
                 results.put(entry)
             } catch (error: Exception) {
                 results.put(JSONObject().put("case", "retained-intrinsics-$stage")
@@ -136,6 +141,8 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
     for (index in 0 until results.length()) if (!results.getJSONObject(index).getBoolean("pass")) failures++
     return JSONObject().put("scope", "native paragraph versus real released paragraph; software bitmap")
         .put("cases", results).put("failures", failures).put("pass", failures == 0)
+        .put("diagnostic_directory", artifacts.directoryPath ?: JSONObject.NULL)
+        .put("captured_failure_pairs", artifacts.capturedPairs)
 }
 
 private fun compareParagraphs(
@@ -145,6 +152,7 @@ private fun compareParagraphs(
     width: Int,
     underline: Boolean,
     entry: JSONObject,
+    artifacts: ParagraphFailureArtifacts,
 ) {
     val differences = JSONArray()
     fun same(name: String, expected: Float, actual: Float) {
@@ -196,9 +204,43 @@ private fun compareParagraphs(
         for (index in expectedPixels.indices) if (expectedPixels[index] != actualPixels[index]) mismatched++
         entry.put("pixelMismatches", mismatched).put("pixelCount", expectedPixels.size)
         entry.put("metrics", differences).put("pass", differences.length() == 0 && mismatched == 0)
+        if (differences.length() != 0 || mismatched != 0) {
+            artifacts.capture(entry, expectedBitmap, actualBitmap, mismatched != 0)
+        }
     } finally {
         expectedBitmap.recycle()
         actualBitmap.recycle()
+    }
+}
+
+/** Exact already-rendered bitmaps, capped independently so metric failures cannot hide pixel failures. */
+private class ParagraphFailureArtifacts(private val context: Context) {
+    private var directory: File? = null
+    private var pixelPairs = 0
+    private var metricPairs = 0
+    private var savedPairs = 0
+    val directoryPath: String? get() = directory?.absolutePath
+    val capturedPairs: Int get() = savedPairs
+
+    fun capture(entry: JSONObject, expected: Bitmap, actual: Bitmap, pixelMismatch: Boolean) {
+        if (if (pixelMismatch) pixelPairs >= 8 else metricPairs >= 2) return
+        if (pixelMismatch) pixelPairs++ else metricPairs++
+        try {
+            val target = directory ?: File(context.filesDir,
+                "native-text-backend-${System.currentTimeMillis()}").also {
+                check(it.mkdir())
+                directory = it
+            }
+            val name = "${entry.getString("role")}-${entry.getString("case")}-${entry.get("fontScale")}"
+            val expectedFile = File(target, "$name-expected.png")
+            val actualFile = File(target, "$name-actual.png")
+            expectedFile.outputStream().use { check(expected.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            actualFile.outputStream().use { check(actual.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            entry.put("expected_png", expectedFile.absolutePath).put("actual_png", actualFile.absolutePath)
+            savedPairs++
+        } catch (error: Exception) {
+            entry.put("diagnostic_error", error.javaClass.name + ": " + error.message)
+        }
     }
 }
 

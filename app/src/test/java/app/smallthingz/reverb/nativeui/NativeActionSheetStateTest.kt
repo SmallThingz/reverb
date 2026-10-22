@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import app.smallthingz.nativeui.animation.core.snap
+import app.smallthingz.nativeui.animation.core.tween
 import app.smallthingz.nativeui.foundation.MutatePriority
 import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CancellationException
@@ -118,6 +119,102 @@ class NativeActionSheetStateTest {
         assertEquals(0f,nested.preFling(500f),0f)
         assertEquals(250f,nested.postFling(0f,250f),0f)
         assertEquals(listOf(-500f,250f),flings)
+    }
+    @Test fun blockedDismissalPreservesOpeningAndKeepsCloseTargetExpanded()=runBlocking {
+        val state=NativeActionSheetState({1f},{},{false})
+        state.measured(600,300)
+        // A non-dismissible progress sheet must still open normally from Hidden.
+        withContext(SteppingFrames()) {state.show();state.hide()}
+        assertEquals(NativeSheetValue.EXPANDED,state.currentValue)
+        assertEquals(300f,state.offset,0f)
+        assertFalse(state.animationRunning)
+    }
+    @Test fun blockedDismissalRejectsBothNestedAndDirectDragOffsets()=runBlocking {
+        val state=NativeActionSheetState({1f},{},{false})
+        state.measured(600,300)
+        withContext(ImmediateFrame) {state.animateTo(NativeSheetValue.EXPANDED,snap())}
+        assertEquals(0f,state.dispatchRawDelta(220f),0f)
+        state.drag {dragTo(590f,900f)}
+        assertEquals(300f,state.offset,0f)
+        assertEquals(0f,state.lastVelocity,0f)
+        withContext(SteppingFrames()) {state.settle(900f)}
+        assertEquals(NativeSheetValue.EXPANDED,state.currentValue)
+    }
+    @Test fun admissionChangingDuringDragRestoresTheVisibleSurfaceBeforeRelease()=runBlocking {
+        var allowed=true
+        val state=NativeActionSheetState({1f},{},{allowed})
+        state.measured(600,300)
+        withContext(ImmediateFrame) {state.animateTo(NativeSheetValue.EXPANDED,snap())}
+        state.drag {
+            dragTo(540f)
+            allowed=false
+            state.dismissalAdmissionChanged()
+            assertEquals(300f,state.offset,0f)
+            dragTo(580f)
+        }
+        withContext(SteppingFrames()) {state.settle(900f)}
+        assertEquals(NativeSheetValue.EXPANDED,state.currentValue)
+        assertEquals(300f,state.offset,0f)
+    }
+    @Test fun busyAdmissionDuringHideCannotResumeAnObsoleteDismissAfterBecomingIdle()=runBlocking {
+        var allowed=true
+        var vetoObserved=false
+        val vetoTargets=mutableListOf<NativeSheetValue>()
+        lateinit var state:NativeActionSheetState
+        state=NativeActionSheetState({1f},{if(vetoObserved)vetoTargets+=state.targetValue},{allowed})
+        state.measured(600,300)
+        withContext(ImmediateFrame) {state.animateTo(NativeSheetValue.EXPANDED,snap())}
+        withContext(SteppingFrames { frame ->
+            if(frame==1) {
+                allowed=false;vetoObserved=true;state.dismissalAdmissionChanged()
+                assertEquals(NativeSheetValue.EXPANDED,state.targetValue)
+            }
+            if(frame==2) {
+                allowed=true
+                assertEquals(NativeSheetValue.EXPANDED,state.targetValue)
+            }
+        }) {state.animateTo(NativeSheetValue.HIDDEN,tween(durationMillis=96))}
+        assertEquals(NativeSheetValue.EXPANDED,state.currentValue)
+        assertEquals(300f,state.offset,0f)
+        assertFalse(state.animationRunning)
+        assertTrue(vetoTargets.isNotEmpty())
+        assertTrue(vetoTargets.all {it==NativeSheetValue.EXPANDED})
+        vetoObserved=false
+        // A fresh dismissal after terminal failure/idle remains available.
+        withContext(ImmediateFrame) {state.animateTo(NativeSheetValue.HIDDEN,snap())}
+        assertEquals(NativeSheetValue.HIDDEN,state.currentValue)
+        assertEquals(600f,state.offset,0f)
+    }
+    @Test fun liveAdmissionIsCheckedInsideHideEvenBeforeAnOwnerRebind()=runBlocking {
+        var allowed=true
+        var vetoObserved=false
+        val vetoTargets=mutableListOf<NativeSheetValue>()
+        lateinit var state:NativeActionSheetState
+        state=NativeActionSheetState({1f},{if(vetoObserved)vetoTargets+=state.targetValue},{allowed})
+        state.measured(600,300)
+        withContext(ImmediateFrame) {state.animateTo(NativeSheetValue.EXPANDED,snap())}
+        withContext(SteppingFrames {frame->
+            if(frame==1) {allowed=false;vetoObserved=true}
+            if(frame==2) {
+                allowed=true
+                assertEquals(NativeSheetValue.EXPANDED,state.targetValue)
+            }
+        }) {
+            state.animateTo(NativeSheetValue.HIDDEN,tween(durationMillis=96))
+        }
+        assertEquals(NativeSheetValue.EXPANDED,state.currentValue)
+        assertEquals(300f,state.offset,0f)
+        assertTrue(vetoTargets.isNotEmpty())
+        assertTrue(vetoTargets.all {it==NativeSheetValue.EXPANDED})
+    }
+    private class SteppingFrames(private val beforeFrame:(Int)->Unit={}):MonotonicFrameClock {
+        private var frame=0
+        override suspend fun <R> withFrameNanos(onFrame:(Long)->R):R {
+            check(frame<1000) {"Sheet animation did not settle"}
+            val current=frame++
+            beforeFrame(current)
+            return onFrame(current*16_000_000L)
+        }
     }
     private object ImmediateFrame:MonotonicFrameClock {
         override suspend fun <R> withFrameNanos(onFrame:(Long)->R):R=onFrame(0L)

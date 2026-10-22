@@ -61,8 +61,10 @@ internal class NativeAndroidInteropDispatch(
     }
 
     fun cancel() {
-        if (state == State.DISPATCHING) {
-            dispatchEmptyCancel()
+        try {
+            if (state == State.DISPATCHING) dispatchEmptyCancel()
+        } finally {
+            // CANCEL ends rejected/intercepted streams too; no later UP will reset them.
             reset()
         }
     }

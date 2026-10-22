@@ -192,6 +192,37 @@ class CaptureSaveFeedbackVisibilityTest {
     }
 
     @Test
+    fun throwingVisibleFailureStillFallsBackOnceAndRetiresTheReceiver() {
+        val primary = IllegalStateException("Failure callback failed")
+        val exportFailure = java.io.IOException("Disk full")
+        val failures = mutableListOf<Pair<String, Throwable?>>()
+        var terminals = 0
+        val gate = SaveUiCallbackGate({}, {}, { throw primary }, {}, canDisplay = { true })
+        val receiver = SaveResultReceiver(
+            uiCallbacks = gate,
+            fallback = object : ReverbService.AudioFileReceiver {
+                override fun fileReady(recording: RecordingEntity) = Unit
+                override fun fileFailed(message: String, error: Throwable?) {
+                    failures += message to error
+                }
+            },
+            defaultFailureMessage = { "Save failed" },
+            onTerminal = { terminals++ },
+        )
+
+        val observed = runCatching { receiver.fileFailed("Disk full", exportFailure) }.exceptionOrNull()
+
+        assertSame(primary, observed)
+        assertEquals(listOf("Disk full" to exportFailure), failures)
+        assertEquals(1, terminals)
+        assertFalse(gate.attached)
+        receiver.fileFailed("late duplicate", exportFailure)
+        receiver.fileCancelled()
+        assertEquals(listOf("Disk full" to exportFailure), failures)
+        assertEquals(1, terminals)
+    }
+
+    @Test
     fun hiddenSavedNoticeDoesNotStartItsVisibleDeadline() = runBlocking {
         val expected = CaptureSaveStatus.Saved(recording("pending"))
         dismissSavedFeedbackAfterTimeout(

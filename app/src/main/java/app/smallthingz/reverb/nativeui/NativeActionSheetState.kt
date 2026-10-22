@@ -58,6 +58,7 @@ internal interface NativeSheetDragScope {
 internal class NativeActionSheetState(
     private val density:()->Float,
     private val changed:()->Unit,
+    private val dismissalAllowed:()->Boolean={true},
 ) {
     private val mutex=MutatorMutex()
     private data class RestartInput(val anchors:NativeSheetAnchors?,val target:NativeSheetValue?)
@@ -71,6 +72,7 @@ internal class NativeActionSheetState(
     var lastVelocity=0f
         private set
     private var dragTarget:NativeSheetValue?=null
+    private var dismissalVetoRevision=0L
     val targetValue get()=dragTarget?:if(offset.isNaN())currentValue else computeTarget(offset,currentValue,0f)
     val visible get()=currentValue!=NativeSheetValue.HIDDEN
     val animationRunning get()=dragTarget!=null
@@ -82,6 +84,36 @@ internal class NativeActionSheetState(
             changed()
         }
     }
+
+    private val userDragScope=object:NativeSheetDragScope {
+        override fun dragTo(offset:Float,velocity:Float) {
+            val expanded=anchors?.expanded
+            val blocked=!dismissalAllowed()&&expanded!=null
+            dragScope.dragTo(if(blocked)checkNotNull(expanded)else offset,if(blocked)0f else velocity)
+        }
+    }
+
+    /** A busy owner can veto a gesture already in flight without leaving its modal surface hidden. */
+    fun dismissalAdmissionChanged() {
+        if(dismissalAllowed())return
+        dismissalVetoRevision++
+        if(currentValue==NativeSheetValue.HIDDEN&&dragTarget!=NativeSheetValue.HIDDEN)return
+        val expanded=anchors?.expanded?:return
+        retainExpandedAfterVeto(expanded)
+    }
+
+    private fun retainExpandedAfterVeto(expanded:Float) {
+        currentValue=NativeSheetValue.EXPANDED
+        if(dragTarget==NativeSheetValue.HIDDEN) {
+            // The scrim follows targetValue, so publish Expanded before the offset callback.
+            dragTarget=NativeSheetValue.EXPANDED
+            publishRestart()
+        }
+        dragScope.dragTo(expanded)
+    }
+
+    private fun admittedTarget(target:NativeSheetValue)=
+        if(target==NativeSheetValue.HIDDEN&&!dismissalAllowed())NativeSheetValue.EXPANDED else target
 
     /** Called from actual measurement; placement uses roundToInt(offset), never View.translationY. */
     fun measured(fullHeight:Int,sheetHeight:Int) {
@@ -121,13 +153,16 @@ internal class NativeActionSheetState(
     }
     fun newOffsetForDelta(delta:Float):Float {
         val a=checkNotNull(anchors)
-        return ((if(offset.isNaN())0f else offset)+delta).coerceIn(a.minimum,a.maximum)
+        val maximum=if(dismissalAllowed())a.maximum else a.minimum
+        return ((if(offset.isNaN())0f else offset)+delta).coerceIn(a.minimum,maximum)
     }
 
     suspend fun drag(priority:MutatePriority=MutatePriority.UserInput,block:suspend NativeSheetDragScope.()->Unit) {
         try {
             mutex.mutate(priority) {
-                restartable(targeted=false) { dragScope.block() }
+                restartable(targeted=false) {
+                    userDragScope.block()
+                }
             }
         } finally { finishClosest() }
     }
@@ -141,13 +176,16 @@ internal class NativeActionSheetState(
         spec:AnimationSpec<Float>,
         velocity:Float=lastVelocity,
     ) {
+        val admitted=admittedTarget(target)
         val initialAnchors=anchors
-        if(initialAnchors==null || initialAnchors.position(target).isNaN()) {
-            currentValue=target;changed();return
+        if(initialAnchors==null || initialAnchors.position(admitted).isNaN()) {
+            currentValue=admitted;changed();return
         }
+        val vetoAtStart=dismissalVetoRevision
+        var hideRejected=false
         try {
             mutex.mutate {
-                dragTarget=target
+                dragTarget=admitted
                 publishRestart();changed()
                 restartable(targeted=true) { input ->
                     val latestTarget=input.target?:targetValue
@@ -155,7 +193,13 @@ internal class NativeActionSheetState(
                     if(!targetOffset.isNaN()) {
                         val start=if(offset.isNaN())0f else offset
                         // Retain the operation's initial velocity across anchor restarts, as source.
-                        animate(start,targetOffset,velocity,spec) { value,speed->dragScope.dragTo(value,speed) }
+                        animate(start,targetOffset,velocity,spec) { value,speed->
+                            if(latestTarget==NativeSheetValue.HIDDEN&&
+                                (!dismissalAllowed()||dismissalVetoRevision!=vetoAtStart))hideRejected=true
+                            val expanded=input.anchors?.expanded
+                            if(hideRejected&&expanded!=null)retainExpandedAfterVeto(expanded)
+                            else dragScope.dragTo(value,speed)
+                        }
                     }
                 }
             }

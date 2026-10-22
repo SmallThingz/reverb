@@ -2191,7 +2191,6 @@ open class ReverbService : Service() {
             Log.e(TAG, "Unable to protect export with a foreground service", error)
             clearExportState(token)
             val message = userFacingError(getString(R.string.save_failed), error)
-            reportError(message)
             finishExportFailure(token, receiver, message, error)
             false
         }
@@ -2521,7 +2520,6 @@ open class ReverbService : Service() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Unable to prepare export file", e)
                     val message = userFacingError(getString(R.string.cant_create_file_generic), e)
-                    reportError(message)
                     finishExportFailure(exportToken, receiver, message, e)
                     return
                 }
@@ -2621,7 +2619,6 @@ open class ReverbService : Service() {
                     (outTarget?.displayName ?: newFileName),
                 e,
             )
-            reportError(message)
             finishExportFailure(exportToken, receiver, message, e)
         } finally {
             closeLeaseOnce()
@@ -2861,6 +2858,8 @@ open class ReverbService : Service() {
         mainHandler.post { receiver.delivery() }
     }
 
+    // The terminal receiver owns user feedback, including detached/throwing-UI fallback.
+    // Do not also put this export failure in the recorder polling error slot.
     private fun finishExportFailure(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,

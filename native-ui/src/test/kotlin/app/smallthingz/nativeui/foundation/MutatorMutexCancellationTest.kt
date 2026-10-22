@@ -137,7 +137,13 @@ class MutatorMutexCancellationTest {
                 mutex.enter(entry, MutatePriority.PreventUserInput) { throw expected }
                 fail("Expected the block's exception")
             } catch (actual: IllegalStateException) {
-                assertTrue(actual === expected)
+                assertEquals(expected.javaClass, actual.javaClass)
+                assertEquals(expected.message, actual.message)
+                // Coroutine debug recovery may copy the exception, retaining it as the cause.
+                assertTrue(
+                    "Expected the original failure or its coroutine recovery copy; cause=${actual.cause}",
+                    actual === expected || actual.cause === expected,
+                )
             }
             assertEquals(23, mutex.enter(entry, MutatePriority.Default) { 23 })
         }

@@ -855,27 +855,50 @@ internal class NativeRecordingInlinePlayerController(
             }
         }
 
+        // These callbacks belong to this exact revision and read its live fields when invoked.
+        // Progress/back publications change visual values, not the action owner or closures.
+        private val presentationActions = LibraryPlayerActions(
+            ::beginWaveform, ::moveWaveform, ::finishWaveform,
+            { target -> if (trimBoundaryInputReady()) fineSeekTarget = target }, ::editTrimBoundary,
+            { if (!trimSaving) { trimMode = false; trimError = null } }, ::saveTrim,
+        )
+        private val fineSeekTogglePlayback: () -> Unit = ::toggleFineSeekPlayback
+        private val fineSeekInteractionStart: () -> Unit = {
+            if (!trimMode) fineSeekTarget = InlineFineSeekTarget.PLAYHEAD
+        }
+        private val fineSeekBeginAdjust: (Float) -> Unit = ::beginInlineFineSeek
+        private val fineSeekAdjust: (Float, Float) -> Unit = { delta, _ -> applyInlineFineSeek(delta) }
+        private val fineSeekUpdateShuttle: (Float, Float) -> Unit = ::updateInlineFineSeekShuttle
+        private val fineSeekEndAdjust: () -> Unit = ::endInlineFineSeek
+        private val fineSeekCancelAdjust: () -> Unit = ::pauseInlinePlayback
+        private var presentationFineSeekTarget = InlineFineSeekTarget.PLAYHEAD
+        private var presentationFineSeekKey = "$key:$presentationFineSeekTarget"
+
+        private fun currentFineSeekInteractionKey(): String {
+            val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
+            if (presentationFineSeekTarget != target) {
+                presentationFineSeekTarget = target
+                presentationFineSeekKey = "$key:$target"
+            }
+            return presentationFineSeekKey
+        }
+
         fun presentation(): NativeInlinePlayerPresentation {
             val enabled = input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
                 prepared && trimMode && !trimSaving && !playbackBookkeeping.released && !isScrubbing &&
                 !playbackBookkeeping.fineSeekShuttleActive && !backActive
             val state = LibraryPlayerUiState(key, prepared, isPlaying, duration, currentPosition, trimMode, trimSaving,
                 trimStartMillis, trimEndMillis, fineSeekTarget, trimError, enabled, backActive, backProgress, backDirection)
-            val actions = LibraryPlayerActions(::beginWaveform, ::moveWaveform, ::finishWaveform,
-                { target -> if (trimBoundaryInputReady()) fineSeekTarget = target }, ::editTrimBoundary,
-                { if (!trimSaving) { trimMode = false; trimError = null } }, ::saveTrim)
             val fineSeek = SpringFineSeekBinding(prepared && !trimSaving, isPlaying, duration.toFloat() / 1000f,
-                "$key:${if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD}",
-                ::toggleFineSeekPlayback, { if (!trimMode) fineSeekTarget = InlineFineSeekTarget.PLAYHEAD },
-                ::beginInlineFineSeek, { delta, _ -> applyInlineFineSeek(delta) }, ::updateInlineFineSeekShuttle,
-                ::endInlineFineSeek, ::pauseInlinePlayback)
+                currentFineSeekInteractionKey(), fineSeekTogglePlayback, fineSeekInteractionStart,
+                fineSeekBeginAdjust, fineSeekAdjust, fineSeekUpdateShuttle, fineSeekEndAdjust, fineSeekCancelAdjust)
             if (lastWaveform == null || lastCoarse !== coarseWaveform || lastDetail !== detailWaveform ||
                 lastCoarseCount != coarseBuiltCount || lastDetailCount != detailBuiltCount || lastPass != waveformPass) {
                 lastWaveform = ProgressiveWaveformData(coarseWaveform, coarseBuiltCount, detailWaveform, detailBuiltCount, waveformPass)
                 lastCoarse = coarseWaveform; lastDetail = detailWaveform
                 lastCoarseCount = coarseBuiltCount; lastDetailCount = detailBuiltCount; lastPass = waveformPass
             }
-            return NativeInlinePlayerPresentation(state, actions, fineSeek, checkNotNull(lastWaveform), waveformLoading, waveformMorphStarted)
+            return NativeInlinePlayerPresentation(state, presentationActions, fineSeek, checkNotNull(lastWaveform), waveformLoading, waveformMorphStarted)
         }
 
         override fun close() {

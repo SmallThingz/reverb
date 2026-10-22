@@ -32,23 +32,24 @@ class NativeAndroidInteropDispatchTest {
         assertEquals(listOf("event", "event"), h.calls)
         h.down()
         h.owner.cancel()
+        h.owner.cancel()
         assertEquals(listOf("event", "event", "event", "empty-cancel"), h.calls)
     }
 
-    @Test fun rejectedDownDoesNotReceiveMovesUpOrCancelButNextStreamCanBeAccepted() {
+    @Test fun rejectedDownThenCancelAdmitsNextStreamWithoutWaitingForUp() {
         val h = Harness()
         h.accept = false
         assertFalse(h.down().changes.single().consumed)
         h.passes(event())
         h.owner.cancel()
-        h.passes(event(pressed = false, previous = true))
+        h.owner.cancel()
         assertEquals(listOf("event"), h.calls)
         h.accept = true
-        h.down()
+        assertTrue(h.down().changes.single().consumed)
         assertEquals(listOf("event", "event"), h.calls)
     }
 
-    @Test fun unconsumedMoveReachesViewBeforeParentDragThenIsCanceledAfterParentWins() {
+    @Test fun parentWinThenCancelAdmitsNextStreamWithoutWaitingForUp() {
         val h = Harness()
         h.down()
         val move = event()
@@ -59,7 +60,13 @@ class NativeAndroidInteropDispatchTest {
         h.owner.dispatch(move, NativePointerPass.FINAL, false)
         h.passes(event())
         h.owner.cancel()
+        h.owner.cancel()
         assertEquals(listOf("event", "event", "cancel"), h.calls)
+        assertTrue(h.down().changes.single().consumed)
+        assertEquals(listOf("event", "event", "cancel", "event"), h.calls)
+        h.passes(event(pressed = false, previous = true))
+        h.owner.cancel()
+        assertEquals(listOf("event", "event", "cancel", "event", "event"), h.calls)
     }
 
     @Test fun viewDisallowRequestDuringInitialMoveConsumesBeforeParentMain() {

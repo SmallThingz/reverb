@@ -159,7 +159,11 @@ private class CaptureClearProgressSheet(
         anchor.context.getString(R.string.cancel), onCancel)
     private val actions = LibrarySheetActions(anchor.context, dialog.contentContext, listOf(cancel))
     private var closed = false
-    init { dialog.setContent(body, actions, listOf(actions.hitLayout)); bind(initial, environment) }
+    init {
+        dialog.bindDismissalAdmission { false }
+        dialog.setContent(body, actions, listOf(actions.hitLayout))
+        bind(initial, environment)
+    }
     fun show() = dialog.show()
     fun bind(status: BufferClearStatus, next: ReverbViewEnvironment) {
         if (closed) return

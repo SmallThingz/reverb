@@ -537,8 +537,43 @@ internal class LibraryParityBoard(
         val renderer = if (compose) "compose" else "native"
         nativeParityOnMain(instrumentation) { show(compose) }
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        var previousNativePresentation: NativeInlinePlayerPresentation? = null
         fun state() = nativeParityOnMain(instrumentation) { playbackState(compose) }
-        fun record(name: String) = checkpoint(name, state())
+        fun record(name: String) {
+            val observed = state()
+            if (!compose) nativeParityOnMain(instrumentation) {
+                playbackGuard()
+                val current = checkNotNull(native?.activePlayerLeases()?.singleOrNull()?.currentPresentation)
+                val previous = previousNativePresentation
+                if (previous != null) {
+                    check(previous.state.recordingRevisionKey == current.state.recordingRevisionKey)
+                    check(previous.actions === current.actions) { "Revision-stable player actions were rebuilt" }
+                    val before = previous.fineSeek
+                    val after = current.fineSeek
+                    check(before.onTogglePlayback === after.onTogglePlayback &&
+                        before.onInteractionStart === after.onInteractionStart &&
+                        before.onBeginFineAdjust === after.onBeginFineAdjust &&
+                        before.onFineAdjust === after.onFineAdjust &&
+                        before.onUpdateFineAdjustShuttle === after.onUpdateFineAdjustShuttle &&
+                        before.onEndFineAdjust === after.onEndFineAdjust &&
+                        before.onCancelFineAdjust === after.onCancelFineAdjust) {
+                        "Revision-stable fine-seek callbacks were rebuilt"
+                    }
+                    if (before.interactionKey == after.interactionKey) {
+                        check(before.interactionKey === after.interactionKey) { "Unchanged interaction key was rebuilt" }
+                    }
+                    observed.put("stable_callback_identity", true)
+                }
+                check(current.fineSeek.isPlaying == current.state.isPlaying &&
+                    current.fineSeek.enabled == (current.state.prepared && !current.state.trimSaving) &&
+                    current.fineSeek.durationSeconds.toRawBits() ==
+                    (current.state.durationMillis.toFloat() / 1000f).toRawBits()) {
+                    "Cached callbacks hid changed presentation values"
+                }
+                previousNativePresentation = current
+            }
+            checkpoint(name, observed)
+        }
         fun capture(name: String) {
             val bitmap = captureNativeParityContent(instrumentation, host) { show(compose) }
             try { saveNativeParityBitmap(directory, "$renderer-$name.png", bitmap) }
@@ -660,6 +695,7 @@ internal class LibraryParityBoard(
         checkpoint("trim", nativeParityOnMain(instrumentation) {
             JSONObject().put("playing", isPlaying(compose)).put("labels", JSONArray(playbackTexts(compose)))
         })
+        record("trim-callbacks")
         capture("trim")
         nativeParityOnMain(instrumentation) { clickPlaybackText(compose, context.getString(R.string.cancel)) }
         awaitCondition(instrumentation, "Trim Cancel leaves paused player") {
