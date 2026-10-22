@@ -147,7 +147,6 @@ internal class ReverbSingleLineInputView private constructor(
         paint.hinting = Paint.HINTING_ON
         paint.isSubpixelText = false
         paint.isLinearText = false
-        paint.isElegantTextHeight = false
         paint.textSkewX = 0f
         paint.isFakeBoldText = false
         fontFeatureSettings = ""

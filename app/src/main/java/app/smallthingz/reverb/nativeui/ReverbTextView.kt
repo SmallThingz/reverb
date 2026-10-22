@@ -55,7 +55,6 @@ internal class ReverbTextView(
         paint.hinting = Paint.HINTING_ON
         paint.isSubpixelText = false
         paint.isLinearText = false
-        paint.isElegantTextHeight = false
         includeFontPadding = false
         setFallbackLineSpacing(true)
         breakStrategy = Layout.BREAK_STRATEGY_SIMPLE

@@ -79,7 +79,6 @@ open class ParagraphIntrinsics(
         hinting = Paint.HINTING_ON
         isSubpixelText = false
         isLinearText = false
-        isElegantTextHeight = false
         val s = this@ParagraphIntrinsics.style
         textSize = with(this@ParagraphIntrinsics.density) { s.fontSize.toPx() }
         typeface = fontFamilyResolver.resolve(s.fontFamily, s.fontWeight ?: FontWeight.Normal,
