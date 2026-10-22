@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -48,6 +49,12 @@ import androidx.compose.ui.unit.LayoutDirection
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.nativeui.ReverbAppTopBarActions
 import app.smallthingz.reverb.nativeui.ReverbHomeActions
+import app.smallthingz.reverb.nativeui.HomeClickable
+import app.smallthingz.reverb.nativeui.ReverbHomeBlobControl
+import app.smallthingz.reverb.nativeui.ReverbHomeBlobState
+import app.smallthingz.reverb.nativeui.ReverbHomeControls
+import app.smallthingz.reverb.nativeui.ReverbHomeControlsState
+import app.smallthingz.reverb.nativeui.ReverbHomeFlipFrame
 import app.smallthingz.reverb.nativeui.ReverbHomeBodyState
 import app.smallthingz.reverb.nativeui.ReverbHomeInsets
 import app.smallthingz.reverb.nativeui.ReverbHomeScreenView
@@ -344,6 +351,53 @@ private class HomeParityBoard(
                 blob.width, blob.height)))
     }
 
+    // Bind the actual mounted leaves: rebinding only the screen would let the owner's existing
+    // presentationActions indirection conceal a stale callback retained inside a leaf.
+    private fun nativeDescendants(): List<View> = buildList {
+        fun visit(view: View) {
+            add(view)
+            if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+        }
+        visit(checkNotNull(native))
+    }
+
+    fun bindingTarget(blob: Boolean): View {
+        val views = nativeDescendants()
+        if (blob) return views.filterIsInstance<ReverbHomeBlobControl>().single()
+        val description = context.getString(R.string.record_all_memory)
+        val glyph = views.single { it.contentDescription == description }
+        return checkNotNull(glyph.parent as? HomeClickable)
+    }
+
+    fun bindNativeLeaves(label: String, enabled: Boolean = true, slot: BufferSlot = BufferSlot.ONE_SHOT) {
+        val views = nativeDescendants()
+        fun record(action: String) = event(nativeEvents, "$label:$action")
+        val callbacks = ReverbHomeActions(
+            selectBuffer = { record("select:" + it.name) },
+            activateBuffer = { record("activate:" + it.name) },
+            openBufferSettings = { record("buffer-settings:" + it.name) },
+            exportFull = { record("export-full:" + it.name) },
+            exportCustom = { record("export-custom:" + it.name) },
+            clearBuffer = { record("clear:" + it.name) },
+            openLibrary = { record("library") },
+        )
+        val frame = ReverbHomeFlipFrame()
+        views.filterIsInstance<ReverbHomeControls>().single().bind(ReverbHomeControlsState(
+            slot, null, false, true, false, true, true, !enabled, true, false,
+        ), frame, callbacks)
+        views.filterIsInstance<ReverbHomeBlobControl>().single().bind(ReverbHomeBlobState(
+            if (slot == BufferSlot.ONE_SHOT) nativeOne else nativeLoop,
+            false, !enabled, true, enabled, false, false, null, null, false,
+        ), frame) { callbacks.activateBuffer(slot) }
+    }
+
+    fun reattachNative() {
+        val view = checkNotNull(native)
+        host.fixtureRoot.removeView(view)
+        check(!view.isAttachedToWindow)
+        host.fixtureRoot.addView(view, FrameLayout.LayoutParams(-1, -1))
+    }
+
     fun setCompletion(latch: CountDownLatch?) { completion = latch }
     fun selected(compose: Boolean) = if (compose) referenceSelection else nativeSelection
     fun events(compose: Boolean) = if (compose) referenceEvents else nativeEvents
@@ -551,6 +605,9 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
                 if (caseFailure == null) cleanup?.let { throw it }
             }
         }
+        val bindings = JSONObject().put("cases", JSONArray()).put("passed", false)
+        result.put("home_binding", bindings)
+        verifyNativeHomeLeafBindings(instrumentation, activity, bindings, report)
         check(completed == 6 && mismatches == 0) { "Home input mismatch: $mismatches/$completed" }
     } catch (failure: Throwable) {
         primary = failure
@@ -567,6 +624,125 @@ internal fun verifyNativeHomeInputParity(instrumentation: Instrumentation, repor
             .put("passed", primary == null && cleanup == null && completed == 6 && mismatches == 0)
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         writeHomeEvidence(directory, result, primary ?: cleanup)
+        if (primary == null) cleanup?.let { throw it }
+    }
+}
+
+/** Additive action assertions only. Existing A/B cases and the captured renderer remain unchanged. */
+private fun verifyNativeHomeLeafBindings(
+    instrumentation: Instrumentation, activity: NativeParityActivity,
+    result: JSONObject, report: StringBuilder,
+) {
+    result.put("scope", "Actual mounted Home control/blob leaves; synthetic own-root touch/key dispatch")
+        .put("limits", "Native callback/lifecycle assertions only; no reference, pixel or animation-midpoint claim")
+    val entries = result.getJSONArray("cases")
+    var board: HomeParityBoard? = null
+    var primary: Throwable? = null
+    var completed = 0
+    try {
+        val current = nativeParityOnMain(instrumentation) {
+            HomeParityBoard(activity, homeCases()[1], false).also { board = it }
+        }
+        // Reuse the existing board's real window/frame scope and native mounting seam.
+        captureNativeParityContent(instrumentation, activity) { current.show(true) }.recycle()
+        captureNativeParityContent(instrumentation, activity) { current.show(false) }.recycle()
+        for (blob in listOf(false, true)) for (keyboard in listOf(false, true)) {
+            for (scenario in listOf("replace", "disable", "reattach", "current-slot")) {
+                val name = (if (blob) "blob" else "export") + "-" +
+                    (if (keyboard) "key" else "pointer") + "-" + scenario
+                val entry = JSONObject().put("name", name).put("input", JSONArray()).put("passed", false)
+                entries.put(entry)
+                requireNativeParityHost(instrumentation, activity)
+                val root = nativeParityOnMain(instrumentation) {
+                    current.bindNativeLeaves("old")
+                    current.content(false)
+                }
+                awaitNativeParityDraw(instrumentation, root)
+                val target = nativeParityOnMain(instrumentation) { current.bindingTarget(blob) }
+                val start = nativeParityOnMain(instrumentation) { current.nativeEvents.length() }
+                var downTime = 0L
+                fun send(down: Boolean) {
+                    requireNativeParityHost(instrumentation, activity)
+                    nativeParityOnMain(instrumentation) {
+                        check(root.isAttachedToWindow && root.isShown && root.hasWindowFocus())
+                        check(target === current.bindingTarget(blob) && target.isAttachedToWindow)
+                        val now = SystemClock.uptimeMillis()
+                        if (down) downTime = now
+                        val handled = if (keyboard) {
+                            // Programmatic focus belongs to this isolated fixture window.
+                            if (down) check(target.requestFocusFromTouch() && target.isFocused)
+                            root.dispatchKeyEvent(KeyEvent(downTime, now,
+                                if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP,
+                                KeyEvent.KEYCODE_ENTER, 0))
+                        } else {
+                            val origin = IntArray(2).also(root::getLocationInWindow)
+                            val location = IntArray(2).also(target::getLocationInWindow)
+                            val x = location[0] - origin[0] + target.width / 2f
+                            val y = location[1] - origin[1] + target.height / 2f
+                            val pointer = MotionEvent.PointerProperties().apply {
+                                id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER
+                            }
+                            val coordinates = MotionEvent.PointerCoords().apply {
+                                this.x = x; this.y = y; pressure = 1f; size = 1f
+                            }
+                            val event = MotionEvent.obtain(downTime, now,
+                                if (down) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_UP,
+                                1, arrayOf(pointer), arrayOf(coordinates), 0, 0,
+                                1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                            try { root.dispatchTouchEvent(event) } finally { event.recycle() }
+                        }
+                        entry.getJSONArray("input").put(JSONObject().put("down", down)
+                            .put("handled", handled).put("event_ms", now))
+                        if (down) check(handled) { "$name did not admit DOWN" }
+                    }
+                }
+                fun assertActions(expected: List<String>) {
+                    val observed = nativeParityOnMain(instrumentation) {
+                        val events = current.nativeEvents
+                        (start until events.length()).map { events.getJSONObject(it).getString("action") }
+                    }
+                    entry.put("callbacks", JSONArray(observed)).put("expected", JSONArray(expected))
+                    check(observed == expected) { "$name callbacks $observed != $expected" }
+                }
+                send(true)
+                awaitNativeParityDraw(instrumentation, root)
+                nativeParityOnMain(instrumentation) {
+                    when (scenario) {
+                        "disable" -> current.bindNativeLeaves("disabled", enabled = false)
+                        "reattach" -> current.reattachNative()
+                    }
+                    current.bindNativeLeaves("new", slot = if (scenario == "current-slot")
+                        BufferSlot.LOOPING else BufferSlot.ONE_SHOT)
+                }
+                awaitNativeParityDraw(instrumentation, root)
+                send(false)
+                val action = (if (blob) "activate:" else "export-full:") +
+                    (if (scenario == "current-slot") "LOOPING" else "ONE_SHOT")
+                val expected = listOf("new:$action")
+                if (scenario == "disable" || scenario == "reattach") {
+                    assertActions(emptyList()) // Old ownership must not survive either boundary.
+                    send(true)
+                    send(false)
+                }
+                assertActions(expected)
+                send(false) // An unmatched second UP must never duplicate the callback.
+                assertActions(expected)
+                entry.put("passed", true)
+                completed++
+                report.append("PASS native_home_binding ").append(name).append('\n')
+            }
+        }
+        check(completed == 16)
+    } catch (failure: Throwable) {
+        primary = failure
+        result.put("terminal_error", android.util.Log.getStackTraceString(failure))
+        throw failure
+    } finally {
+        var cleanup: Throwable? = null
+        try { nativeParityOnMain(instrumentation) { board?.close() } }
+        catch (failure: Throwable) { cleanup = failure; primary?.addSuppressed(failure) }
+        result.put("completed_cases", completed).put("expected_cases", 16)
+            .put("passed", primary == null && cleanup == null && completed == 16)
         if (primary == null) cleanup?.let { throw it }
     }
 }

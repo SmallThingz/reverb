@@ -798,8 +798,13 @@ internal class NativeRecordingInlinePlayerController(
                 trimSaving = true
                 trimError = null
                 acceptedInput.callbacks.onBusyChange(true)
-                lateinit var receiver: InlineTrimResultReceiver
-                receiver = InlineTrimResultReceiver(
+                // Keep only accepted operation values outside the detachable UI callback gate.
+                val trimContext = appContext
+                val targetRecording = recording
+                val startMillis = trimStartMillis
+                val endMillis = trimEndMillis
+                val receiverSlot = activeTrimReceiver
+                val receiver = InlineTrimResultReceiver(
                     onSaved = { trimmed ->
                         trimSaving = false
                         acceptedInput.callbacks.onBusyChange(false)
@@ -826,27 +831,27 @@ internal class NativeRecordingInlinePlayerController(
                     uiVisible = input.screenActive &&
                         lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
                     onDetachedSuccess = { trimmed ->
-                        NotifyFileReceiver(appContext).fileReady(trimmed)
+                        NotifyFileReceiver(trimContext).fileReady(trimmed)
                     },
                     onDetachedFailure = { error ->
-                        NotifyFileReceiver(appContext).fileFailed(
-                            recordingTrimFailureMessage(appContext, error),
+                        NotifyFileReceiver(trimContext).fileFailed(
+                            recordingTrimFailureMessage(trimContext, error),
                             error,
                         )
                     },
                     onTerminal = { completed ->
-                        activeTrimReceiver.compareAndSet(completed, null)
+                        receiverSlot.compareAndSet(completed, null)
                     },
                 )
-                activeTrimReceiver.set(receiver)
+                receiverSlot.set(receiver)
                 rowScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     runCommittedInlineTrim(
                         save = {
                             saveTrimmedRecordingCopy(
-                                context = appContext,
-                                recording = recording,
-                                startMillis = trimStartMillis,
-                                endMillis = trimEndMillis,
+                                context = trimContext,
+                                recording = targetRecording,
+                                startMillis = startMillis,
+                                endMillis = endMillis,
                             )
                         },
                         onTerminal = receiver::terminal,

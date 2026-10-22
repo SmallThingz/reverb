@@ -156,6 +156,7 @@ internal class ReverbIncidentCardView(
 
     /** Call on theme/configuration/font-resolver updates, not during drawing. */
     fun setAppearance(value: IncidentCardAppearance) {
+        if (appearance == value) return
         appearance = value
         body.setAppearance(value)
         rebuildOuterClip()

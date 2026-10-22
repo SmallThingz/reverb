@@ -101,6 +101,12 @@ class RecordingRenameTerminalTest {
 
         hidden = false
         gate.detach()
+        // Functional rejection alone missed an immutable visibility lambda retaining its Activity.
+        assertFalse("Detached rename gate retains a UI callback or visibility predicate",
+            gate.javaClass.declaredFields.any { field ->
+                field.isAccessible = true
+                field.get(gate) is Function<*>
+            })
         assertFalse(gate.uncertain())
         assertFalse(uncertain)
         assertFalse(hidden)
@@ -231,6 +237,38 @@ class RecordingRenameTerminalTest {
 
         assertSame(primary, observed)
         assertEquals(listOf(fallback), primary.suppressed.toList())
+    }
+
+    @Test
+    fun detachedAcceptedRename_survivesOwnerCancellationAndFinishesFallbackOnce() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val renamed = recording().copy(displayName = "accepted.wav")
+        val events = mutableListOf<String>()
+        val receiver = RenameResultReceiver(
+            onRenamed = { error("retired UI received success") },
+            onRejected = { error("retired UI received rejection") },
+            onUncertain = { error("retired UI received uncertainty") },
+            onHiddenTerminal = { error("retired UI received hidden terminal") },
+            isUiVisible = { error("retired UI visibility was queried") },
+            onDetachedSuccess = { assertSame(renamed, it); events += "fallback" },
+            onDetachedFailure = { error("unexpected detached failure") },
+            onTerminal = { events += "terminal" },
+        )
+        val owner = launch {
+            runCommittedRecordingRename(
+                rename = { started.complete(Unit); release.await(); renamed },
+                onTerminal = receiver::terminal,
+            )
+        }
+        started.await()
+        receiver.detachUi()
+        owner.cancel()
+        release.complete(Unit)
+        owner.join()
+        receiver.terminal(Result.success(renamed))
+
+        assertEquals(listOf("fallback", "terminal"), events)
     }
 
 }

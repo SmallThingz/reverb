@@ -95,6 +95,11 @@ class InlineTrimTerminalTest {
         assertTrue(failed)
 
         gate.detach()
+        assertFalse("Detached trim gate retains a UI callback",
+            gate.javaClass.declaredFields.any { field ->
+                field.isAccessible = true
+                field.get(gate) is Function<*>
+            })
         failed = false
         assertFalse(gate.failed(error))
         assertFalse(failed)
@@ -173,6 +178,36 @@ class InlineTrimTerminalTest {
         receiver.terminal(Result.success(saved))
 
         assertEquals(listOf("fallback", "finish"), events)
+    }
+
+    @Test
+    fun detachedAcceptedTrim_survivesOwnerCancellationAndReportsFailureOnce() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val failure = IOException("accepted trim failed")
+        val events = mutableListOf<String>()
+        val receiver = InlineTrimResultReceiver(
+            onSaved = { error("retired UI received success") },
+            onFailed = { error("retired UI received failure") },
+            uiVisible = true,
+            onDetachedSuccess = { error("unexpected detached success") },
+            onDetachedFailure = { assertSame(failure, it); events += "fallback" },
+            onTerminal = { events += "terminal" },
+        )
+        val owner = launch {
+            runCommittedInlineTrim(
+                save = { started.complete(Unit); release.await(); throw failure },
+                onTerminal = receiver::terminal,
+            )
+        }
+        started.await()
+        receiver.detachUi()
+        owner.cancel()
+        release.complete(Unit)
+        owner.join()
+        receiver.terminal(Result.failure(failure))
+
+        assertEquals(listOf("fallback", "terminal"), events)
     }
 
 }

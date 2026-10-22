@@ -9,11 +9,13 @@ internal class RetentionMaintenanceSchedulerState {
     private var admissionGeneration = 0L
     private var queuedAdmissionGeneration: Long? = null
     private var failureBlocked = false
+    private var recheckPending = false
 
     /** Only a completed configuration reopens failed maintenance; cleanup is never recovery. */
     fun rearmAfterConfiguration() = synchronized(lock) {
         admissionGeneration++
         failureBlocked = false
+        if (active) recheckPending = true
         // A queued/running pass still owns its physical work and foreground lifetime.
     }
 
@@ -51,11 +53,14 @@ internal class RetentionMaintenanceSchedulerState {
             return@synchronized null
         }
         if (queuedPassId != null) {
+            // A release/configuration may arrive after a worker sampled its blocked store.
+            // Remember even a negative observation: Clear or Off may have removed the backlog.
+            recheckPending = true
             active = true
             return@synchronized null
         }
         if (active) {
-            if (!needed) return@synchronized null
+            // A fresh worker, rather than this possibly stale observation, retires ownership.
             return@synchronized claimPassLocked()
         }
         if (!needed) return@synchronized null
@@ -74,12 +79,26 @@ internal class RetentionMaintenanceSchedulerState {
      * Releases exactly the pass that was claimed. A clear/new claim invalidates an older worker,
      * so its late completion cannot resurrect backlog or revoke ownership from newer work.
      */
-    fun completePass(passId: Long, needsMore: Boolean): Boolean = synchronized(lock) {
-        if (queuedPassId != passId) return@synchronized false
+    fun completePass(passId: Long, needsMore: Boolean): Boolean =
+        settlePass(passId, needsMore, mayWaitForLease = { false }) != RetentionPassCompletion.STALE
+
+    /** Park only if no wake/configuration crossed this pass and capture still permits waiting. */
+    fun settlePass(
+        passId: Long,
+        needsMore: Boolean,
+        mayWaitForLease: () -> Boolean,
+    ): RetentionPassCompletion = synchronized(lock) {
+        if (queuedPassId != passId) return@synchronized RetentionPassCompletion.STALE
+        val mustRecheck = recheckPending || queuedAdmissionGeneration != admissionGeneration
         queuedPassId = null
         queuedAdmissionGeneration = null
+        recheckPending = false
         active = needsMore && !failureBlocked
-        true
+        when {
+            !active -> RetentionPassCompletion.COMPLETE
+            !mustRecheck && mayWaitForLease() -> RetentionPassCompletion.WAIT_FOR_LEASE
+            else -> RetentionPassCompletion.RETRY
+        }
     }
 
     fun ownsPass(passId: Long): Boolean = synchronized(lock) { active && queuedPassId == passId }
@@ -122,17 +141,21 @@ internal class RetentionMaintenanceSchedulerState {
         active = false
         queuedPassId = null
         queuedAdmissionGeneration = null
+        recheckPending = false
     }
 
     private fun claimPassLocked(): Long {
         val passId = nextPassId++
         queuedPassId = passId
         queuedAdmissionGeneration = admissionGeneration
+        recheckPending = false
         return passId
     }
 }
 
 internal enum class RetentionPassFailure { BLOCKED, ALREADY_BLOCKED, SUPERSEDED, IGNORED }
+
+internal enum class RetentionPassCompletion { STALE, COMPLETE, RETRY, WAIT_FOR_LEASE }
 
 /** Store observations cannot cross a successful configuration or a latched failure boundary. */
 internal fun observeRetentionMaintenancePass(

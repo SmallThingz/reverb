@@ -463,14 +463,15 @@ internal class NativeCaptureUiOwner(
     }
 
     private fun startOwnedExport(recorder: ReverbService?, range: ExportRange, snapshot: ReverbService.TimelineSnapshot?) {
+        val exportBookkeeping = bookkeeping
         startExport(context, recorder, range, snapshot,
             setSaving = { isSaving = it; publish() },
             onStatus = { saveStatus = it; publish() },
             onError = { errorMessage = it; publish() },
             onSaved = { callbacks.onRecordingSaved() }, canDisplay = ::canDisplaySaveFeedback,
-            onReceiverCreated = { bookkeeping.activeSaveReceiver = it },
+            onReceiverCreated = { exportBookkeeping.activeSaveReceiver = it },
             onReceiverTerminal = {
-                if (bookkeeping.activeSaveReceiver === it) bookkeeping.activeSaveReceiver = null
+                if (exportBookkeeping.activeSaveReceiver === it) exportBookkeeping.activeSaveReceiver = null
             })
     }
     private fun queueOrStartExport(recorder: ReverbService?, range: ExportRange, snapshot: ReverbService.TimelineSnapshot) {

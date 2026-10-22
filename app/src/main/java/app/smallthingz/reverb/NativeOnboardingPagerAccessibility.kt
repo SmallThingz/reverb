@@ -93,7 +93,10 @@ internal class NativeOnboardingPagerAccessibility(
     override fun onViewAttachedToWindow(view: View) {
         if (closed) return
         check(events == null) { "Pager already owns an attached scroll registration" }
-        events = windowEvents.register(host, ::isNodePresent, ::readRange)
+        // sourceStateChanged already checked semantic presence in this same synchronous call.
+        // The queue uses this callback only for admission after plain invalidate() calls, never
+        // during delayed delivery. Recheck lifetime without rebuilding identical node geometry.
+        events = windowEvents.register(host, { !closed && host.isAttachedToWindow }, ::readRange)
         previousOffset = null // Each attached source observation seeds its initial range.
     }
 

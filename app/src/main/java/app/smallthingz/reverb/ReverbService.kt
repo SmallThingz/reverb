@@ -4484,11 +4484,13 @@ open class ReverbService : Service() {
         }
         var needsMore = false
         var blocked = false
+        var waitsOnlyForLeases = false
         try {
             val loopingStep = loopingAudioChunkStore.performRetentionMaintenanceStep()
             val oneShotStep = oneShotAudioChunkStore.performRetentionMaintenanceStep()
             needsMore = loopingStep.needsMore || oneShotStep.needsMore
             blocked = loopingStep.blocked || oneShotStep.blocked
+            waitsOnlyForLeases = retentionPassWaitsOnlyForLeases(loopingStep, oneShotStep)
         } catch (error: Exception) {
             failRetentionMaintenancePass(passId, "apply retention maintenance", error)
             return
@@ -4498,7 +4500,12 @@ open class ReverbService : Service() {
             retentionMaintenanceState.cancelPass(passId)
             return
         }
-        if (!retentionMaintenanceState.completePass(passId, needsMore)) {
+        val completion = retentionMaintenanceState.settlePass(passId, needsMore) {
+            // Read capture state at settlement. Start configures and wakes maintenance before
+            // opening the microphone; ongoing capture retains its existing retry cadence.
+            waitsOnlyForLeases && state != STATE_LISTENING
+        }
+        if (completion == RetentionPassCompletion.STALE) {
             // Terminal clear or a newer claim superseded this worker while its durability step
             // was in flight. Never let this stale result reschedule work or revoke newer ownership.
             mainHandler.post {
@@ -4506,6 +4513,7 @@ open class ReverbService : Service() {
             }
             return
         }
+        if (completion == RetentionPassCompletion.WAIT_FOR_LEASE) return
         if (needsMore && retentionMaintenanceState.isActive()) {
             if (blocked) {
                 mainHandler.postDelayed(
@@ -4607,6 +4615,9 @@ open class ReverbService : Service() {
             true
         }
         if (!finished) return
+        // Completed or partially cancelled Clear can remove a parked lease boundary. Recheck
+        // even when no storage work remains so that its retention lifetime can settle.
+        scheduleRetentionMaintenanceIfNeeded()
         publishBufferClearTerminalState(operation, phase)
         refreshForegroundAfterBufferClear()
     }

@@ -54,13 +54,15 @@ internal class RenameUiCallbackGate(
     private var onRejected: (() -> Unit)?,
     private var onUncertain: (() -> Unit)?,
     private var onHiddenTerminal: (() -> Unit)?,
-    private val isVisible: () -> Boolean,
+    isVisible: () -> Boolean,
 ) {
+    private var isVisibleCallback: (() -> Boolean)? = isVisible
     var attached: Boolean = true
         private set
 
     fun detach() {
         attached = false
+        isVisibleCallback = null
         onRenamed = null
         onRejected = null
         onUncertain = null
@@ -75,7 +77,7 @@ internal class RenameUiCallbackGate(
 
     private inline fun deliverVisible(deliver: () -> Unit): Boolean {
         if (!attached) return false
-        if (!isVisible()) {
+        if (isVisibleCallback?.invoke() != true) {
             onHiddenTerminal?.invoke()
             return false
         }
@@ -181,4 +183,3 @@ internal fun libraryEmptyStateVisible(
     listEmpty: Boolean,
     isRefreshing: Boolean,
 ): Boolean = hasLoaded && listEmpty && !isRefreshing
-

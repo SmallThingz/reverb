@@ -90,10 +90,11 @@ internal class NativeNotificationDurationWheel(
         view.setDurationSeconds(binding.seconds.toDouble())
     }
     private fun commit(value:Int):Boolean {
-        val accepted=binding.commitInput(value,readOwner(),change)?:return false
-        view.setDurationSeconds(accepted.toDouble())
-        interactionChanged()
-        return true
+        try {
+            val accepted=binding.commitInput(value,readOwner(),change)?:return false
+            view.setDurationSeconds(accepted.toDouble())
+            return true
+        } finally {interactionChanged()}
     }
     private fun step(forward:Boolean)=commit(stepDuration(binding.seconds,maximum,forward))
     override fun close() {

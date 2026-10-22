@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.SystemClock
 import android.view.View
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
@@ -31,6 +32,8 @@ import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
 import org.json.JSONArray
@@ -39,7 +42,8 @@ import org.json.JSONObject
 /**
  * First assembled Main route check. The isolated QA package supplies permissions=false, so the
  * released CaptureScreen/native Capture owner are never mounted. Settings is opened through its
- * actual semantic action; the only edit is an unsaved theme preview followed by Undo and Back.
+ * actual semantic action; captured edits are an unsaved theme preview followed by Undo and Back.
+ * After all captures, the final native pass checks page-key dispatch using an unsaved draft.
  * No permission, picker, recording, tile, Save, or production Activity route is invoked.
  */
 internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, report: StringBuilder) {
@@ -127,6 +131,9 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
                 check(nativeParityOnMain(instrumentation) { current.effectiveDark } == initialDark)
                 click(R.string.onboarding_back)
                 capture("main-restored", R.string.open_settings)
+                // Acquiring keyboard focus changes touch mode; do it only after every parity capture.
+                if (pass == 3) run.put("settings_page_key_dispatch",
+                    verifyMainSettingsPageKeyDispatch(instrumentation, host, current))
                 check(nativeParityOnMain(instrumentation) { current.forbiddenCalls == 0 })
             } catch (error: Throwable) {
                 passFailure = error
@@ -181,6 +188,150 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
     }
     failure?.let { throw it }
     report.append("PASS native_main_settings_parity exact settled route/preview/Undo; physical input unqualified\n")
+}
+
+/** Regression for the assembled dispatcher, not a direct call to Slider.onKeyDown. */
+private fun verifyMainSettingsPageKeyDispatch(
+    instrumentation: Instrumentation,
+    host: NativeParityActivity,
+    render: MainSettingsParityRender,
+): JSONObject {
+    check(!render.reference)
+    fun <T> main(action: () -> T): T {
+        requireNativeParityHost(instrumentation, host)
+        return nativeParityOnMain(instrumentation, action)
+    }
+    main { render.click(host.getString(R.string.open_settings)) }
+    awaitMainParityAction(instrumentation, host, render, host.getString(R.string.onboarding_back))
+    val root = main { mainParityViews(render.board).filterIsInstance<NativeMainScreenView>().single() }
+    val settings = main { mainParityViews(root).filterIsInstance<NativeSettingsScreenContent>().single() }
+    val viewport = main { checkNotNull(settings.listViewport) }
+    val baseline = main {
+        check(settings.inputAllowed && !settings.owner.state.hasUnsavedChanges)
+        settings.owner.snapshot
+    }
+    var slider: CompressionSliderView? = null
+    var toggle: SettingsToggleRowView? = null
+    var fallbackPixels = 0
+    var fallbackAnimated = false
+    val scrollEvents = object : RecyclerView.OnScrollListener() {
+        override fun onScrolled(view: RecyclerView, dx: Int, dy: Int) { fallbackPixels += dy }
+        override fun onScrollStateChanged(view: RecyclerView, state: Int) {
+            if (state == RecyclerView.SCROLL_STATE_SETTLING) fallbackAnimated = true
+        }
+    }
+    val result = JSONObject().put("dispatch", "NativeMainScreenView.dispatchKeyEvent")
+    fun settledPosition(): SettingsListSavedPosition {
+        var previous: SettingsListSavedPosition? = null
+        var stable = 0
+        repeat(100) {
+            requireNativeParityHost(instrumentation, host)
+            awaitNativeParityDraw(instrumentation, render.board)
+            val position = main {
+                settings.savePosition().takeIf {
+                    viewport.scrollState == RecyclerView.SCROLL_STATE_IDLE && !viewport.isLayoutRequested
+                }
+            }
+            stable = if (position != null && position == previous) stable + 1 else 0
+            previous = position
+            if (stable >= 3) return checkNotNull(position)
+        }
+        error("Settings list did not settle within 100 observed frames")
+    }
+    fun dispatchPair(code: Int): Pair<Boolean, Boolean> = main {
+        val downTime = SystemClock.uptimeMillis()
+        val down = root.dispatchKeyEvent(KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, code, 0))
+        val up = root.dispatchKeyEvent(KeyEvent(downTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, code, 0))
+        down to up
+    }
+    try {
+        main {
+            settings.owner.outputCompressionChanged(settings.owner.state.activation, true)
+            settings.owner.compressionLevelChanged(settings.owner.state.activation, 4)
+            check(settings.owner.snapshot.format == ExportFormat.FLAC && settings.owner.snapshot.flacCompression == 4)
+            val adapter = checkNotNull(viewport.adapter)
+            val recording = (0 until adapter.itemCount).single {
+                adapter.getItemViewType(it) == SettingsSectionKey.RECORDING.ordinal
+            }
+            (viewport.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(recording, 0)
+        }
+        settledPosition()
+        val focusedSlider = main {
+            mainParityViews(settings).filterIsInstance<CompressionSliderView>().single().also {
+                slider = it
+                check(it.isEnabled && it.requestFocusFromTouch() && root.findFocus() === it)
+            }
+        }
+        settledPosition()
+        val sliderEvents = ArrayList<Pair<Int, Int>>()
+        main {
+            check(focusedSlider.getGlobalVisibleRect(Rect())) { "Focused compression slider is not visible" }
+            focusedSlider.setOnKeyListener { _, code, event ->
+                if (code == KeyEvent.KEYCODE_PAGE_UP || code == KeyEvent.KEYCODE_PAGE_DOWN)
+                    sliderEvents += code to event.action
+                false // Observe; the real CompressionSliderView must consume each event.
+            }
+        }
+        for ((code, expected) in listOf(KeyEvent.KEYCODE_PAGE_UP to 3, KeyEvent.KEYCODE_PAGE_DOWN to 4)) {
+            val before = settledPosition()
+            main { check(root.findFocus() === focusedSlider) }
+            check(dispatchPair(code) == (true to true)) { "Focused slider did not consume both page-key events" }
+            main { check(settings.owner.snapshot.flacCompression == expected) { "Page key did not edit compression once" } }
+            check(settledPosition() == before) { "Consumed slider page key also scrolled Settings" }
+        }
+        check(sliderEvents == listOf(KeyEvent.KEYCODE_PAGE_UP to KeyEvent.ACTION_DOWN,
+            KeyEvent.KEYCODE_PAGE_UP to KeyEvent.ACTION_UP, KeyEvent.KEYCODE_PAGE_DOWN to KeyEvent.ACTION_DOWN,
+            KeyEvent.KEYCODE_PAGE_DOWN to KeyEvent.ACTION_UP)) { "Slider received missing or duplicate page-key dispatch" }
+        result.put("slider_page_up_level", 3).put("slider_page_down_level", 4)
+            .put("slider_events_once", true).put("slider_scroll_unchanged", true)
+
+        val toggleEvents = ArrayList<Int>()
+        main {
+            focusedSlider.setOnKeyListener(null)
+            val compression = mainParityViews(settings).filterIsInstance<SettingsOutputCompressionView>().single()
+            toggle = mainParityViews(compression).filterIsInstance<SettingsToggleRowView>().single().also {
+                check(it.isEnabled && it.requestFocusFromTouch() && root.findFocus() === it)
+                it.setOnKeyListener { _, code, event ->
+                    if (code == KeyEvent.KEYCODE_PAGE_DOWN) toggleEvents += event.action
+                    false // The actual toggle declines PageDown, so Settings owns the fallback.
+                }
+            }
+        }
+        val beforeFallback = settledPosition()
+        main {
+            check(root.findFocus() === toggle)
+            check(viewport.canScrollVertically(1)) { "Fixture lacks room to observe Settings page fallback" }
+            viewport.addOnScrollListener(scrollEvents)
+        }
+        check(dispatchPair(KeyEvent.KEYCODE_PAGE_DOWN).first) { "Unconsumed PageDown did not reach Settings" }
+        check(settledPosition() != beforeFallback) { "Unconsumed PageDown did not scroll Settings" }
+        main {
+            check(settings.owner.snapshot.flacCompression == 4)
+            check(!fallbackAnimated && fallbackPixels in 1..viewport.height &&
+                (fallbackPixels == viewport.height || !viewport.canScrollVertically(1))) {
+                "Page fallback used stock animation or exceeded one source viewport: $fallbackPixels/${viewport.height}"
+            }
+        }
+        check(toggleEvents.count { it == KeyEvent.ACTION_DOWN } == 1 &&
+            toggleEvents.count { it == KeyEvent.ACTION_UP } <= 1) { "Toggle received missing DOWN or duplicate dispatch" }
+        // Scrolling can detach the old focused row before UP; dispatch still runs once through Main.
+        result.put("unconsumed_page_down_scrolled", true).put("fallback_changed_compression", false)
+            .put("fallback_pixels", fallbackPixels).put("fallback_viewport_height", main { viewport.height })
+            .put("fallback_used_stock_animation", fallbackAnimated)
+            .put("fallback_key_up_delivered_to_retained_target", KeyEvent.ACTION_UP in toggleEvents)
+    } finally {
+        main {
+            viewport.removeOnScrollListener(scrollEvents)
+            slider?.setOnKeyListener(null)
+            toggle?.setOnKeyListener(null)
+            if (settings.owner.state.hasUnsavedChanges)
+                settings.owner.navigateBack(settings.owner.state.activation) // Existing Undo, never Save.
+            check(settings.owner.snapshot == baseline && !settings.owner.state.hasUnsavedChanges) {
+                "Keyboard regression did not discard its unsaved Settings draft"
+            }
+        }
+    }
+    return result.put("draft_discarded", true).put("passed", true)
 }
 
 private fun cleanupMainParity(render: MainSettingsParityRender?, host: NativeParityActivity?, finish: Boolean) {

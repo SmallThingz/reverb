@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -65,6 +66,8 @@ internal class ReverbHomeBlobControl(
     private val renderer = AudioBlobView(context)
     private val overlay = BlobOverlay(context, initialEnvironment)
     private val ownerKey = Any()
+    private val performCurrentClick: () -> Unit = { performClick() }
+    private var clickBinding: NativeClickBinding? = null
     private val presses = LinkedHashSet<NativePressToken>()
     private val pressMotion = LibraryTweenValue(1f, Float.VectorConverter, tween<Float>(100),
         { AnimationVector1D(0f) })
@@ -120,7 +123,11 @@ internal class ReverbHomeBlobControl(
         val enabled = current?.let { it.clickableEnabled && !it.saving } == true
         isEnabled = enabled
         isFocusable = enabled
-        click.bind(NativeClickBinding(ownerKey, enabled, onClick = { performClick() }))
+        if (clickBinding?.enabled != enabled) {
+            val binding = NativeClickBinding(ownerKey, enabled, onClick = performCurrentClick)
+            clickBinding = binding
+            click.bind(binding)
+        }
     }
 
     private fun renderState() {
@@ -167,6 +174,7 @@ internal class ReverbHomeBlobControl(
 
     override fun onDetachedFromWindow() {
         click.detached()
+        clickBinding = null // Reattach must restore the binding cleared by detached().
         attachedController?.detach(renderer)
         attachedController = null
         frames.cancel()
@@ -177,6 +185,7 @@ internal class ReverbHomeBlobControl(
         if (closed) return
         closed = true
         click.detached()
+        clickBinding = null
         attachedController?.detach(renderer)
         attachedController = null
         frames.cancel()
@@ -223,6 +232,9 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
     private var environment = initialEnvironment
     private var state: ReverbHomeBlobState? = null
     private val icon = HomeBlobIcon(context, initialEnvironment)
+    private var filledDescription = context.getString(R.string.buffer_filled)
+    private var activeDescription = context.getString(R.string.tap_to_pause_buffer)
+    private var readyDescription = context.getString(R.string.tap_to_start_buffer)
     private val primary = initialEnvironment.paragraph(context, "", ReverbTextRole.TITLE_LARGE)
     private val secondary = initialEnvironment.paragraph(context, "", ReverbTextRole.LABEL_MEDIUM)
 
@@ -238,8 +250,18 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
 
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
+        filledDescription = context.getString(R.string.buffer_filled)
+        activeDescription = context.getString(R.string.tap_to_pause_buffer)
+        readyDescription = context.getString(R.string.tap_to_start_buffer)
         bindTypography()
         state?.let { bind(it, alpha) }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        filledDescription = context.getString(R.string.buffer_filled)
+        activeDescription = context.getString(R.string.tap_to_pause_buffer)
+        readyDescription = context.getString(R.string.tap_to_start_buffer)
     }
 
     private fun bindTypography() {
@@ -261,8 +283,7 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
             value.active -> colors.onPrimary
             else -> colors.onSurfaceVariant }
         icon.bind(if (value.filled) ReverbIcon.Check else if (value.active) ReverbIcon.Pause else ReverbIcon.Capture,
-            tint, context.getString(if (value.filled) R.string.buffer_filled
-                else if (value.active) R.string.tap_to_pause_buffer else R.string.tap_to_start_buffer))
+            tint, if (value.filled) filledDescription else if (value.active) activeDescription else readyDescription)
         primary.visibility = if (value.primaryText != null) VISIBLE else GONE
         primary.setText(value.primaryText.orEmpty())
         primary.setTextColor(tint)
@@ -314,13 +335,20 @@ private class HomeBlobIcon(context: Context, environment: ReverbViewEnvironment)
         ReverbIcon.Capture to ReverbIconDrawable(ReverbIcon.Capture, environment.textDensity.density, environment.palette.ink),
     )
     private var drawable = checkNotNull(icons[ReverbIcon.Capture])
+    private var boundIcon: ReverbIcon? = null
+    private var boundTint = 0
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES }
     fun bind(icon: ReverbIcon, color: Int, description: String) {
-        drawable = checkNotNull(icons[icon])
-        drawable.setTint(color)
-        drawable.setBounds(0, 0, width, height)
-        contentDescription = description
-        invalidate()
+        val appearanceChanged = boundIcon != icon || boundTint != color
+        if (appearanceChanged) {
+            boundIcon = icon
+            boundTint = color
+            drawable = checkNotNull(icons[icon])
+            drawable.setTint(color)
+            drawable.setBounds(0, 0, width, height)
+        }
+        if (contentDescription != description) contentDescription = description
+        if (appearanceChanged) invalidate()
     }
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         drawable.setBounds(0, 0, w, h)

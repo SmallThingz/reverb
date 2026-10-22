@@ -263,6 +263,94 @@ internal class RecordingTileHandoff(
         snapshot.commandGeneration == commandGeneration && snapshot.listening && snapshot.activeBuffer == target
 }
 
+internal enum class RecordingTilePresence { UNKNOWN, PRESENT, REMOVED }
+
+/** A token has no Service reference; a replacement incarnation revokes every older callback. */
+internal class RecordingTileObservation internal constructor(val bufferSlot: ReverbService.BufferSlot) {
+    internal var presence = RecordingTilePresence.UNKNOWN
+    internal var active = true
+}
+
+internal enum class RecordingTileHandoffRefresh { SOURCE_RETRY, TARGET_ONLY, FULL_REFRESH }
+
+/** Called under the live-listener lock. Presence is process-local and never inferred from unbinding. */
+internal class RecordingTileHandoffController {
+    private val observations = mutableMapOf<ReverbService.BufferSlot, RecordingTileObservation>()
+    private var nextGeneration = 0L
+    var pending: RecordingTileHandoff? = null
+        private set
+
+    fun beginObservation(bufferSlot: ReverbService.BufferSlot): RecordingTileObservation =
+        RecordingTileObservation(bufferSlot).also { observations[bufferSlot] = it }
+
+    fun isCurrent(observation: RecordingTileObservation): Boolean =
+        observation.active && observations[observation.bufferSlot] === observation
+
+    fun observePresent(observation: RecordingTileObservation): Boolean {
+        if (!isCurrent(observation)) return false
+        observation.presence = RecordingTilePresence.PRESENT
+        return true
+    }
+
+    fun observeRemoved(observation: RecordingTileObservation): RecordingTileHandoff? {
+        if (!isCurrent(observation)) return null
+        observation.presence = RecordingTilePresence.REMOVED
+        return pending?.takeIf { it.source == observation.bufferSlot }
+    }
+
+    fun endObservation(observation: RecordingTileObservation) {
+        // Destruction revokes callbacks, but does not revoke an explicit removal observation.
+        observation.active = false
+    }
+
+    fun sourceWasRemoved(bufferSlot: ReverbService.BufferSlot): Boolean =
+        observations[bufferSlot]?.presence == RecordingTilePresence.REMOVED
+
+    fun begin(source: ReverbService.BufferSlot, target: ReverbService.BufferSlot,
+              cacheGeneration: Long, commandGeneration: Long) {
+        if (source == target) return
+        pending = RecordingTileHandoff(source, target, ++nextGeneration, cacheGeneration, commandGeneration)
+    }
+
+    fun awaitingRefresh(snapshot: RecordingTileSnapshot, cacheGeneration: Long): RecordingTileHandoff? {
+        val handoff = pending ?: return null
+        if (handoff.shouldRetireFor(snapshot, cacheGeneration)) {
+            pending = null
+            return null
+        }
+        return handoff.takeIf { it.awaitsSourceRefresh(snapshot, cacheGeneration) }
+    }
+
+    fun acknowledgeSource(observation: RecordingTileObservation, snapshot: RecordingTileSnapshot): ReverbService.BufferSlot? {
+        if (!isCurrent(observation)) return null
+        val handoff = pending ?: return null
+        if (!handoff.acknowledgesSource(observation.bufferSlot, snapshot)) return null
+        pending = null
+        return handoff.target
+    }
+
+    fun nextRefresh(expected: RecordingTileHandoff, snapshot: RecordingTileSnapshot,
+                    cacheGeneration: Long): RecordingTileHandoffRefresh? {
+        if (pending !== expected) return null
+        val handoff = awaitingRefresh(snapshot, cacheGeneration) ?: run {
+            // Removal can arrive before capture adoption. A later live target publication
+            // must still be able to schedule this marker if the current wake-up cannot.
+            if (pending === expected) expected.sourceRefreshScheduled = false
+            return null
+        }
+        if (sourceWasRemoved(handoff.source)) {
+            pending = null
+            return RecordingTileHandoffRefresh.TARGET_ONLY
+        }
+        handoff.sourceRefreshAttempts++
+        if (handoff.sourceRefreshAttempts >= 50) {
+            pending = null
+            return RecordingTileHandoffRefresh.FULL_REFRESH
+        }
+        return RecordingTileHandoffRefresh.SOURCE_RETRY
+    }
+}
+
 internal object RecordingQuickTileStateCache {
     private val stateLock = Any()
     private val oneShotFullPreferenceLock = Any()
@@ -579,10 +667,32 @@ internal object RecordingQuickTiles {
     // unregister them deterministically. WeakHashMap can mutate its table while GC clears weak
     // keys, which makes even externally synchronized iteration unsafe on Android.
     private val listeningServices = IdentityHashMap<RecordingTileService, Unit>()
-    private var pendingHandoff: RecordingTileHandoff? = null
-    private var nextHandoffGeneration = 0L
+    private val handoffs = RecordingTileHandoffController()
     private const val HANDOFF_SOURCE_REFRESH_RETRY_MILLIS = 100L
-    private const val MAX_HANDOFF_SOURCE_REFRESH_ATTEMPTS = 50
+
+    fun beginObservation(bufferSlot: ReverbService.BufferSlot): RecordingTileObservation =
+        synchronized(listeningServices) { handoffs.beginObservation(bufferSlot) }
+
+    fun observePresent(observation: RecordingTileObservation): Boolean =
+        synchronized(listeningServices) { handoffs.observePresent(observation) }
+
+    fun observeRemoved(service: RecordingTileService, observation: RecordingTileObservation) {
+        val handoff = synchronized(listeningServices) {
+            listeningServices.remove(service)
+            handoffs.observeRemoved(observation)
+        } ?: return
+        retryHandoffSourceRefresh(service.applicationContext, handoff)
+    }
+
+    fun endObservation(service: RecordingTileService, observation: RecordingTileObservation) {
+        synchronized(listeningServices) {
+            listeningServices.remove(service)
+            handoffs.endObservation(observation)
+        }
+    }
+
+    fun observationIsCurrent(observation: RecordingTileObservation): Boolean =
+        synchronized(listeningServices) { handoffs.isCurrent(observation) }
 
     fun register(service: RecordingTileService) {
         synchronized(listeningServices) { listeningServices[service] = Unit }
@@ -603,9 +713,7 @@ internal object RecordingQuickTiles {
         if (source == target) return
         synchronized(listeningServices) {
             RecordingQuickTileStateCache.withCurrentSnapshot { _, cacheGeneration ->
-                nextHandoffGeneration++
-                pendingHandoff = RecordingTileHandoff(source, target, nextHandoffGeneration, cacheGeneration,
-                    commandGeneration)
+                handoffs.begin(source, target, cacheGeneration, commandGeneration)
             }
         }
         // Do not ask SystemUI to refresh until the recorder publishes the target snapshot.
@@ -617,21 +725,16 @@ internal object RecordingQuickTiles {
         bufferSlot: ReverbService.BufferSlot,
         snapshot: RecordingTileSnapshot,
     ): Boolean = synchronized(listeningServices) {
-        pendingHandoff?.suppressesRecordingState(bufferSlot, snapshot) == true
+        handoffs.pending?.suppressesRecordingState(bufferSlot, snapshot) == true
     }
 
     fun onTileRendered(
         service: RecordingTileService,
+        observation: RecordingTileObservation,
         snapshot: RecordingTileSnapshot,
     ) {
         val targetToRefresh = synchronized(listeningServices) {
-            val handoff = pendingHandoff ?: return@synchronized null
-            if (handoff.acknowledgesSource(service.tileBufferSlot(), snapshot)) {
-                pendingHandoff = null
-                handoff.target
-            } else {
-                null
-            }
+            handoffs.acknowledgeSource(observation, snapshot)
         } ?: return
         requestRefresh(context = service, only = targetToRefresh)
     }
@@ -640,23 +743,28 @@ internal object RecordingQuickTiles {
         context: Context,
         handoff: RecordingTileHandoff,
     ) {
-        val fallbackTarget = synchronized(listeningServices) {
-            val current = pendingHandoff?.takeIf { it.generation == handoff.generation }
-                ?: return
-            current.sourceRefreshAttempts++
-            if (current.sourceRefreshAttempts >= MAX_HANDOFF_SOURCE_REFRESH_ATTEMPTS) {
-                pendingHandoff = null
-                current.target
-            } else {
-                null
-            }
-        }
-        if (fallbackTarget != null) {
-            // If SystemUI never instantiates the source service (for example because the
-            // tile was removed), stop retrying. A final full refresh keeps any remaining
-            // configured tile converging on the live snapshot without background churn.
-            requestRefresh(context)
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // Lifecycle observations are main-thread events. A queued refresh must re-read them,
+            // not carry a removed-source decision across a new incarnation/add/listen callback.
+            mainHandler.post { retryHandoffSourceRefresh(context, handoff) }
             return
+        }
+        when (synchronized(listeningServices) {
+            RecordingQuickTileStateCache.withCurrentSnapshot { current, cacheGeneration ->
+                handoffs.nextRefresh(handoff, current, cacheGeneration)
+            }
+        }) {
+            null -> return
+            RecordingTileHandoffRefresh.TARGET_ONLY -> {
+                requestRefresh(context, only = handoff.target)
+                return
+            }
+            RecordingTileHandoffRefresh.FULL_REFRESH -> {
+                // Unknown/present source retains the existing bounded acknowledgement fallback.
+                requestRefresh(context)
+                return
+            }
+            RecordingTileHandoffRefresh.SOURCE_RETRY -> Unit
         }
         requestRefresh(context, only = handoff.source)
         mainHandler.postDelayed(
@@ -682,11 +790,8 @@ internal object RecordingQuickTiles {
             // Lock order is handoff registry -> cache. Cache writers dispatch only after
             // releasing stateLock, so a delayed hydration is a wake-up, never old authority.
             RecordingQuickTileStateCache.withCurrentSnapshot { current, cacheGeneration ->
-                val handoff = pendingHandoff
-                if (handoff != null && handoff.shouldRetireFor(current, cacheGeneration)) {
-                    pendingHandoff = null
-                } else if (requestSystemRefresh && handoff != null &&
-                    handoff.awaitsSourceRefresh(current, cacheGeneration)) {
+                val handoff = handoffs.awaitingRefresh(current, cacheGeneration)
+                if (requestSystemRefresh && handoff != null) {
                     requestFullRefresh = false
                     if (!handoff.sourceRefreshScheduled) {
                         handoff.sourceRefreshScheduled = true
@@ -737,6 +842,12 @@ abstract class RecordingTileService : TileService() {
 
     private var tileListening = false
     private var tileDestroyed = false
+    private lateinit var tileObservation: RecordingTileObservation
+
+    override fun onCreate() {
+        super.onCreate()
+        tileObservation = RecordingQuickTiles.beginObservation(bufferSlot)
+    }
 
     private fun refreshFromCacheAndHydrate() {
         updateTile(readRecordingTileSnapshotNonBlocking())
@@ -745,11 +856,19 @@ abstract class RecordingTileService : TileService() {
 
     override fun onTileAdded() {
         super.onTileAdded()
+        if (!RecordingQuickTiles.observePresent(tileObservation)) return
         refreshFromCacheAndHydrate()
+    }
+
+    override fun onTileRemoved() {
+        tileListening = false
+        RecordingQuickTiles.observeRemoved(this, tileObservation)
+        super.onTileRemoved()
     }
 
     override fun onStartListening() {
         super.onStartListening()
+        if (!RecordingQuickTiles.observePresent(tileObservation)) return
         tileListening = true
         RecordingQuickTiles.register(this)
         refreshFromCacheAndHydrate()
@@ -774,7 +893,7 @@ abstract class RecordingTileService : TileService() {
     override fun onDestroy() {
         tileDestroyed = true
         tileListening = false
-        RecordingQuickTiles.unregister(this)
+        RecordingQuickTiles.endObservation(this, tileObservation)
         super.onDestroy()
     }
 
@@ -801,7 +920,7 @@ abstract class RecordingTileService : TileService() {
         recordingTileRefreshPriority(bufferSlot, snapshot)
 
     internal fun refreshFromSnapshot(snapshot: RecordingTileSnapshot) {
-        if (tileListening) updateTile(snapshot)
+        if (tileListening && RecordingQuickTiles.observationIsCurrent(tileObservation)) updateTile(snapshot)
     }
 
     private fun updateTile(snapshot: RecordingTileSnapshot) {
@@ -866,7 +985,7 @@ abstract class RecordingTileService : TileService() {
             }
         }
         tile.updateTile()
-        RecordingQuickTiles.onTileRendered(this, snapshot)
+        RecordingQuickTiles.onTileRendered(this, tileObservation, snapshot)
     }
 
 }

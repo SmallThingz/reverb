@@ -164,7 +164,8 @@ private fun verifyNativePagerScrollAttachmentCases(host: ViewGroup): List<String
     subtree.addView(viewport, FrameLayout.LayoutParams(100, 100))
     val clock = NativeScrollCaseClock()
     val scope = CoroutineScope(clock + SupervisorJob())
-    val queue = NativeWindowScrollAccessibilityEvents(host, scope, {}, {}, {})
+    var geometryChanges = 0
+    val queue = NativeWindowScrollAccessibilityEvents(host, scope, { geometryChanges++ }, {}, {})
     queue.accessibilityForceEnabledForTesting = true
     val sent = mutableListOf<Int>()
     queue.onSendAccessibilityEvent = { event -> sent += event.eventType; true }
@@ -182,8 +183,13 @@ private fun verifyNativePagerScrollAttachmentCases(host: ViewGroup): List<String
     val pager = NativeOnboardingPager(scope, Density(1f)).also { it.updateLayout(100) }
     val geometry = NativePlainTextViewGeometry(host,
         NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
+    var sourcePresent = true
+    var sourceReads = 0
     fun create(source: ViewGroup) = NativeOnboardingPagerAccessibility(source, pager, scope,
-        geometry, { true }, { NativeOnboardingPagerNode(true, false, true, emptyList()) }, tracked)
+        geometry, { true }, {
+            sourceReads++
+            NativeOnboardingPagerNode(sourcePresent, false, sourcePresent, emptyList())
+        }, tracked)
     var delegate: NativeOnboardingPagerAccessibility? = null
     var other: NativeOnboardingPagerAccessibility? = null
     var primaryFailure: Throwable? = null
@@ -201,6 +207,18 @@ private fun verifyNativePagerScrollAttachmentCases(host: ViewGroup): List<String
         host.addView(subtree, ViewGroup.LayoutParams(100, 100))
         check(viewport.isAttachedToWindow && registrations == 1)
         created.sourceStateChanged()
+        check(sourceReads == 0 && geometryChanges == 0) // Initial offset only seeds observation.
+        pager.dispatchRawDelta(1f)
+        created.sourceStateChanged()
+        check(sourceReads == 1 && geometryChanges == 1)
+        created.sourceStateChanged()
+        check(sourceReads == 1 && geometryChanges == 1) // Unchanged offset does no geometry work.
+        sourcePresent = false
+        pager.dispatchRawDelta(1f)
+        created.sourceStateChanged()
+        check(sourceReads == 2 && geometryChanges == 1) // Absent source never reaches invalidation.
+        sourcePresent = true
+        passed += "pager changed offset captures source once; initial, unchanged and absent admission stay distinct"
         created.sourceLayoutChanged() // Retire while this notification is still queued.
         host.removeView(subtree)
         check(retirements == 1)
@@ -211,10 +229,12 @@ private fun verifyNativePagerScrollAttachmentCases(host: ViewGroup): List<String
         pager.requestScrollToPage(1)
         pager.updateLayout(100)
         created.sourceStateChanged() // Detached state changes cannot enqueue or seed reattachment.
+        check(sourceReads == 2 && geometryChanges == 1)
         host.addView(reparented, ViewGroup.LayoutParams(100, 100))
         reparented.addView(subtree, FrameLayout.LayoutParams(100, 100))
         check(registrations == 2)
         created.sourceStateChanged()
+        check(sourceReads == 2 && geometryChanges == 1) // Reattachment seeds a fresh observation.
         clock.advanceBy(100)
         check(sent.isEmpty())
         created.sourceLayoutChanged()

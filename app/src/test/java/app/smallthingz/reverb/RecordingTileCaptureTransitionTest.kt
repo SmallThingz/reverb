@@ -172,4 +172,152 @@ class RecordingTileCaptureTransitionTest {
         assertEquals(RecordingTileCaptureState.RECORDING,
             recordingTileCaptureState(true, true, 2L, 2L))
     }
+
+    private fun beginObservedHandoff(controller: RecordingTileHandoffController): RecordingTileHandoff {
+        controller.begin(source, target, cacheGeneration = 1L, commandGeneration = 2L)
+        return requireNotNull(controller.pending)
+    }
+
+    @Test
+    fun explicitlyRemovedSourceBeforeHandoffNeedsOneTargetRefreshAndNoRetry() {
+        val controller = RecordingTileHandoffController()
+        val sourceObservation = controller.beginObservation(source)
+        assertTrue(controller.observePresent(sourceObservation))
+        assertNull(controller.observeRemoved(sourceObservation)) // No pending handoff yet.
+        controller.endObservation(sourceObservation)
+        assertTrue(controller.sourceWasRemoved(source))
+        assertFalse(controller.observePresent(sourceObservation)) // Destroyed callbacks are revoked.
+
+        val handoff = beginObservedHandoff(controller)
+        assertEquals(RecordingTileHandoffRefresh.TARGET_ONLY,
+            controller.nextRefresh(handoff, snapshot(2L), 2L))
+        assertEquals(0, handoff.sourceRefreshAttempts)
+        assertNull(controller.pending)
+        assertNull(controller.nextRefresh(handoff, snapshot(2L), 2L))
+    }
+
+    @Test
+    fun removalBeforeCaptureAdoptionWaitsForCurrentTargetPublication() {
+        val controller = RecordingTileHandoffController()
+        val sourceObservation = controller.beginObservation(source)
+        val handoff = beginObservedHandoff(controller)
+        assertTrue(controller.observeRemoved(sourceObservation) === handoff)
+        assertNull(controller.nextRefresh(handoff, snapshot(1L), 2L))
+        assertTrue(controller.pending === handoff)
+        assertEquals(0, handoff.sourceRefreshAttempts)
+        assertEquals(RecordingTileHandoffRefresh.TARGET_ONLY,
+            controller.nextRefresh(handoff, snapshot(2L), 3L))
+    }
+
+    @Test
+    fun removalDuringSourceRetrySettlesMatchingHandoffAndQueuedRetryBecomesNoOp() {
+        val controller = RecordingTileHandoffController()
+        val sourceObservation = controller.beginObservation(source)
+        controller.observePresent(sourceObservation)
+        val handoff = beginObservedHandoff(controller)
+        assertEquals(RecordingTileHandoffRefresh.SOURCE_RETRY,
+            controller.nextRefresh(handoff, snapshot(2L), 2L))
+        val queuedRetry = { controller.nextRefresh(handoff, snapshot(2L), 2L) }
+
+        assertTrue(controller.observeRemoved(sourceObservation) === handoff)
+        assertEquals(RecordingTileHandoffRefresh.TARGET_ONLY,
+            controller.nextRefresh(handoff, snapshot(2L), 2L))
+        assertNull(queuedRetry())
+        assertEquals(1, handoff.sourceRefreshAttempts)
+        assertNull(controller.pending)
+    }
+
+    @Test
+    fun newIncarnationRevokesRemovedProofAndRejectsAllOlderLifecycleCallbacks() {
+        val controller = RecordingTileHandoffController()
+        val old = controller.beginObservation(source)
+        val handoff = beginObservedHandoff(controller)
+        controller.observeRemoved(old)
+        val queuedRefresh = { controller.nextRefresh(handoff, snapshot(2L), 2L) }
+
+        val replacement = controller.beginObservation(source)
+        assertFalse(controller.sourceWasRemoved(source))
+        assertNull(controller.observeRemoved(old))
+        assertFalse(controller.observePresent(old))
+        controller.endObservation(old)
+        assertTrue(controller.isCurrent(replacement))
+        assertNull(controller.acknowledgeSource(old, snapshot(2L)))
+        assertEquals(RecordingTileHandoffRefresh.SOURCE_RETRY, queuedRefresh())
+        assertTrue(requireNotNull(controller.pending).suppressesRecordingState(target, snapshot(2L)))
+        assertTrue(controller.observePresent(replacement))
+        assertEquals(target, controller.acknowledgeSource(replacement, snapshot(2L)))
+        assertNull(controller.pending)
+    }
+
+    @Test
+    fun reAddOrStartListeningBeforeQueuedRefreshRevokesSameIncarnationRemoval() {
+        val controller = RecordingTileHandoffController()
+        val sourceObservation = controller.beginObservation(source)
+        val handoff = beginObservedHandoff(controller)
+        controller.observeRemoved(sourceObservation)
+        val queuedRefresh = { controller.nextRefresh(handoff, snapshot(2L), 2L) }
+
+        // Both actual lifecycle callbacks call observePresent before any render.
+        assertTrue(controller.observePresent(sourceObservation))
+        assertFalse(controller.sourceWasRemoved(source))
+        assertEquals(RecordingTileHandoffRefresh.SOURCE_RETRY, queuedRefresh())
+        assertTrue(handoff.suppressesRecordingState(target, snapshot(2L)))
+        assertEquals(target, controller.acknowledgeSource(sourceObservation, snapshot(2L)))
+    }
+
+    @Test
+    fun unknownPresentAndDestroyedWithoutRemovalRetainTheSameBoundedFallback() {
+        for (mode in 0..3) {
+            val controller = RecordingTileHandoffController()
+            if (mode != 0) {
+                val observation = controller.beginObservation(source)
+                if (mode >= 2) controller.observePresent(observation)
+                if (mode == 3) controller.endObservation(observation)
+            }
+            val handoff = beginObservedHandoff(controller)
+            val decisions = (1..50).map { controller.nextRefresh(handoff, snapshot(2L), 2L) }
+            assertEquals(49, decisions.count { it == RecordingTileHandoffRefresh.SOURCE_RETRY })
+            assertEquals(1, decisions.count { it == RecordingTileHandoffRefresh.FULL_REFRESH })
+            assertFalse(decisions.contains(RecordingTileHandoffRefresh.TARGET_ONLY))
+            // Each SOURCE_RETRY emits one request and one delayed callback; FULL_REFRESH emits two.
+            assertEquals(51, decisions.sumOf { if (it == RecordingTileHandoffRefresh.SOURCE_RETRY) 1 else 2 })
+            assertNull(controller.pending)
+            assertNull(controller.nextRefresh(handoff, snapshot(2L), 2L))
+        }
+    }
+
+    @Test
+    fun targetRemovalCannotAcknowledgeSourceAndRestartedProcessHasNoAbsenceProof() {
+        val controller = RecordingTileHandoffController()
+        val targetObservation = controller.beginObservation(target)
+        val handoff = beginObservedHandoff(controller)
+        assertNull(controller.observeRemoved(targetObservation))
+        assertEquals(RecordingTileHandoffRefresh.SOURCE_RETRY,
+            controller.nextRefresh(handoff, snapshot(2L), 2L))
+        val sourceObservation = controller.beginObservation(source)
+        controller.observeRemoved(sourceObservation)
+        assertTrue(controller.sourceWasRemoved(source))
+        assertFalse(RecordingTileHandoffController().sourceWasRemoved(source))
+    }
+
+    @Test
+    fun oldRetryAndRemovalCannotRetireANewerHandoffOrOverrideCurrentStop() {
+        val controller = RecordingTileHandoffController()
+        val oldSource = controller.beginObservation(source)
+        val oldHandoff = beginObservedHandoff(controller)
+        controller.begin(target, source, cacheGeneration = 2L, commandGeneration = 3L)
+        val newHandoff = requireNotNull(controller.pending)
+        val staleSource = controller.beginObservation(target)
+        val newerSource = controller.beginObservation(target)
+        assertNull(controller.observeRemoved(staleSource))
+        controller.observeRemoved(oldSource) // This is now the target, not the source.
+        val current = snapshot(3L, commandGeneration = 3L, activeBuffer = source)
+        assertNull(controller.nextRefresh(oldHandoff, current, 3L))
+        assertTrue(controller.pending === newHandoff)
+        assertTrue(controller.observePresent(newerSource))
+        assertEquals(RecordingTileHandoffRefresh.SOURCE_RETRY,
+            controller.nextRefresh(newHandoff, current, 3L))
+        assertNull(controller.nextRefresh(newHandoff, current.copy(listening = false, commandGeneration = 4L), 4L))
+        assertNull(controller.pending)
+    }
 }

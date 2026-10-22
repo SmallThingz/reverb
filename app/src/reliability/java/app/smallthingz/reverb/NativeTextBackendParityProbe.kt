@@ -159,10 +159,14 @@ private fun appendUnresolvedSemanticsCases(
     data class Case(val label: String, val text: String, val widthDp: Int, val maxLines: Int,
                     val ellipsis: Boolean = false)
     val previousLocales = LocaleList.getDefault()
+    val previousAdjustedLocales = LocaleList.getAdjustedDefault()
     val previousLocale = Locale.getDefault()
-    val previousIndex = (0 until previousLocales.size()).firstOrNull {
-        previousLocales[it] == previousLocale
-    } ?: 0
+    val previousDisplayLocale = Locale.getDefault(Locale.Category.DISPLAY)
+    val previousFormatLocale = Locale.getDefault(Locale.Category.FORMAT)
+    // Public setDefault restores only index zero. Do not mutate a system-selected nonfirst default.
+    check(previousLocales[0] == previousLocale && previousAdjustedLocales == previousLocales) {
+        "Unresolved-text QA requires a first-entry process default locale for exact public-API restoration; no locale was changed"
+    }
     try {
         for (locale in listOf(Locale.ENGLISH, Locale.forLanguageTag("ar"))) {
             // Only this isolated QA process's defaults change; no Android locale setting is written.
@@ -218,8 +222,13 @@ private fun appendUnresolvedSemanticsCases(
             }
         }
     } finally {
-        LocaleList.setDefault(previousLocales, previousIndex)
-        check(Locale.getDefault() == previousLocale && LocaleList.getDefault() == previousLocales) {
+        LocaleList.setDefault(previousLocales)
+        Locale.setDefault(Locale.Category.DISPLAY, previousDisplayLocale)
+        Locale.setDefault(Locale.Category.FORMAT, previousFormatLocale)
+        check(Locale.getDefault() == previousLocale && LocaleList.getDefault() == previousLocales &&
+            LocaleList.getAdjustedDefault() == previousAdjustedLocales &&
+            Locale.getDefault(Locale.Category.DISPLAY) == previousDisplayLocale &&
+            Locale.getDefault(Locale.Category.FORMAT) == previousFormatLocale) {
             "QA process locale restoration failed"
         }
     }

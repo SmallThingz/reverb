@@ -362,8 +362,17 @@ internal class NativeSettingsOwner(
         if (featureInputReady(owner)) editSnapshot(snapshot.copy(quickSaveEnabled = enabled))
     }
 
-    /** The authoritative duration binding has already checked its current owner/revision. */
-    fun notificationSecondsChanged(seconds: Int) = editSnapshot(snapshot.copy(quickSaveSeconds = seconds))
+    /** The wheel publishes after its binding accepts the receipt, including terminal/error paths. */
+    fun notificationSecondsChanged(seconds: Int) {
+        // Rebinding this wheel synchronously would invalidate its own admitted commit.
+        // Keep the draft/revision current, then let childInteractionChanged publish the result.
+        draftReconciliationDepth++
+        try {
+            editSnapshot(snapshot.copy(quickSaveSeconds = seconds))
+        } finally {
+            draftReconciliationDepth--
+        }
+    }
 
     fun wakeLockChanged(owner: Any, enabled: Boolean) {
         if (acceptsInput(owner)) editSnapshot(snapshot.copy(wakeLockEnabled = enabled))

@@ -494,6 +494,17 @@ internal class NativeMainScreenView private constructor(
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val focused = findFocus()
+        val settingsAtDispatch = settings
+        val settingsViewport = settingsAtDispatch?.listViewport
+        val settingsKeys = settingsPointer
+        if (settingsAtDispatch?.inputAllowed == true && settingsViewport != null && focused != null &&
+            (event.keyCode == KeyEvent.KEYCODE_PAGE_UP || event.keyCode == KeyEvent.KEYCODE_PAGE_DOWN) &&
+            belongsTo(focused, settingsViewport)) {
+            // Source Scrollable bubbles after the focused child. Bypass RecyclerView's own
+            // Page-key smooth scrolling, including when the viewport itself owns focus.
+            if (focused !== settingsViewport && focused.dispatchKeyEvent(event)) return true
+            return settingsKeys?.pageKey(focused, event) == true
+        }
         if (incidentsPointer.pageKey(focused, event) ||
             settingsPointer?.pageKey(focused, event) == true ||
             libraryPointer?.pageKey(focused, event) == true) return true

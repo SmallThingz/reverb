@@ -2,6 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
@@ -63,6 +64,17 @@ internal class ReverbHomeControls(
     animationScope: CoroutineScope,
 ) : ReverbHomeControlSurface(context) {
     private var environment = initialEnvironment
+    private var oneShotLabel = context.getString(R.string.buffer_one_shot)
+    private var loopingLabel = context.getString(R.string.buffer_loop)
+    private var currentActions: ReverbHomeActions? = null
+    private var selectedBuffer = BufferSlot.ONE_SHOT
+    private val selectOneShot: () -> Unit = { currentActions?.selectBuffer(BufferSlot.ONE_SHOT) }
+    private val selectLooping: () -> Unit = { currentActions?.selectBuffer(BufferSlot.LOOPING) }
+    private val exportFull: () -> Unit = { currentActions?.exportFull(selectedBuffer) }
+    private val exportCustom: () -> Unit = { currentActions?.exportCustom(selectedBuffer) }
+    private val clearBuffer: () -> Unit = { currentActions?.clearBuffer(selectedBuffer) }
+    private val openLibrary: () -> Unit = { currentActions?.openLibrary() }
+    private val libraryFrame = ReverbHomeFlipFrame()
     private val oneShot = HomeBufferSegment(context, initialEnvironment, nativeInputRoot, animationScope)
     private val looping = HomeBufferSegment(context, initialEnvironment, nativeInputRoot, animationScope)
     private val buttons = listOf(
@@ -86,32 +98,41 @@ internal class ReverbHomeControls(
     }
 
     fun bind(state: ReverbHomeControlsState, flip: ReverbHomeFlipFrame, actions: ReverbHomeActions) {
+        // Publish actions/slot even when the visual and interaction inputs are unchanged.
+        currentActions = actions
         val slot = state.selectedBuffer
-        oneShot.bind(context.getString(R.string.buffer_one_shot),
+        selectedBuffer = slot
+        oneShot.bind(oneShotLabel,
             if (state.oneShotFull) ReverbIcon.Check else ReverbIcon.OneShot,
             slot == BufferSlot.ONE_SHOT,
             isBufferActivelyRecording(BufferSlot.ONE_SHOT, state.listening, state.activeBuffer),
-            state.oneShotEnabled && !state.oneShotFull, state.oneShotFull) {
-            actions.selectBuffer(BufferSlot.ONE_SHOT)
-        }
-        looping.bind(context.getString(R.string.buffer_loop), ReverbIcon.Looping,
+            state.oneShotEnabled && !state.oneShotFull, state.oneShotFull, next = selectOneShot)
+        looping.bind(loopingLabel, ReverbIcon.Looping,
             slot == BufferSlot.LOOPING,
             isBufferActivelyRecording(BufferSlot.LOOPING, state.listening, state.activeBuffer),
-            state.loopingEnabled, false) { actions.selectBuffer(BufferSlot.LOOPING) }
+            state.loopingEnabled, false, next = selectLooping)
         val canExport = state.serviceReady && !state.saving && state.hasHistory
-        buttons[0].bind(canExport, false, flip) { actions.exportFull(slot) }
-        buttons[1].bind(canExport, false, flip) { actions.exportCustom(slot) }
-        buttons[2].bind(canExport && !state.selectedRecording, true, flip) { actions.clearBuffer(slot) }
+        buttons[0].bind(canExport, false, flip, exportFull)
+        buttons[1].bind(canExport, false, flip, exportCustom)
+        buttons[2].bind(canExport && !state.selectedRecording, true, flip, clearBuffer)
         // Library is the one icon not flipped with the selected buffer.
-        buttons[3].bind(!state.saving, false, ReverbHomeFlipFrame(), actions.openLibrary)
+        buttons[3].bind(!state.saving, false, libraryFrame, openLibrary)
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
+        oneShotLabel = context.getString(R.string.buffer_one_shot)
+        loopingLabel = context.getString(R.string.buffer_loop)
         setSurfaceEnvironment(value)
         oneShot.setEnvironment(value); looping.setEnvironment(value)
         buttons.forEach { it.setEnvironment(value) }
         requestLayout()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        oneShotLabel = context.getString(R.string.buffer_one_shot)
+        loopingLabel = context.getString(R.string.buffer_loop)
     }
 
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
@@ -191,6 +212,8 @@ internal abstract class HomeClickable(
     protected val indication = ReverbRowIndication.install(this, currentEnvironment.palette.ink,
         ValueAnimator::getDurationScale)
     private val key = Any()
+    private val performCurrentClick: () -> Unit = { performClick() }
+    private var clickBinding: NativeClickBinding? = null
     private val input = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = nativeRoot()
         override val minimumTouchWidthPx get() = 48f * currentEnvironment.textDensity.density
@@ -242,13 +265,19 @@ internal abstract class HomeClickable(
         action = next
         isEnabled = enabled
         isFocusable = enabled
-        input.bind(NativeClickBinding(key, enabled, onClick = { performClick() }))
+        if (clickBinding?.enabled != enabled) {
+            val binding = NativeClickBinding(key, enabled, onClick = performCurrentClick)
+            clickBinding = binding
+            input.bind(binding)
+        }
     }
     override fun onAttachedToWindow() {
         super.onAttachedToWindow(); input.attached(); bindClick(isEnabled, action)
     }
     override fun onDetachedFromWindow() {
-        input.detached(); super.onDetachedFromWindow()
+        input.detached()
+        clickBinding = null // The controller clears its binding; reattach must publish it again.
+        super.onDetachedFromWindow()
     }
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
@@ -293,12 +322,14 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     }
     fun bind(text: String, icon: ReverbIcon, selected: Boolean, recording: Boolean,
         enabled: Boolean, filled: Boolean, interactionEnabled: Boolean = true, next: () -> Unit) {
+        val appearanceChanged = !initialized || selection != selected || this.recording != recording ||
+            bufferEnabled != enabled || this.filled != filled
         selection = selected; this.recording = recording; bufferEnabled = enabled; this.filled = filled
         isSelected = selected
         glyph.setIcon(icon)
         label.setText(text)
         bindClick(interactionEnabled, next) // Disabled/full buffers remain selectable; Home keeps the true default.
-        updateTargets()
+        if (appearanceChanged) updateTargets()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
         currentEnvironment = value
@@ -445,11 +476,16 @@ private class HomeGlyph(context: Context, private var environment: ReverbViewEnv
         invalidate()
     }
     fun setIcon(value: ReverbIcon) {
-        if (icon != value) { icon = value; drawable = ReverbIconDrawable(value, environment.textDensity.density, tint) }
+        if (icon == value) return
+        icon = value
+        drawable = ReverbIconDrawable(value, environment.textDensity.density, tint)
         drawable.setBounds(0, 0, width, height); drawable.layoutDirection = layoutDirection
         invalidate()
     }
-    fun setTint(value: Int) { tint = value; drawable.setTint(value); invalidate() }
+    fun setTint(value: Int) {
+        if (tint == value) return
+        tint = value; drawable.setTint(value); invalidate()
+    }
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { drawable.setBounds(0, 0, w, h) }
     override fun onRtlPropertiesChanged(direction: Int) {
         super.onRtlPropertiesChanged(direction); drawable.layoutDirection = direction; invalidate()

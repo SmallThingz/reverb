@@ -30,10 +30,11 @@ class RetentionMaintenanceSchedulerTest {
         assertTrue(state.isActive())
 
         // This result may have been sampled before the prior pass published known backlog.
-        assertTrue(state.claimObservedNeed(needed = false) == null)
+        // It may request a fresh worker, but cannot itself retire the known backlog.
+        val retryPassId = requireNotNull(state.claimObservedNeed(needed = false))
         assertTrue(state.isActive())
 
-        val retryPassId = requireNotNull(state.claimActiveRetry())
+        assertTrue(state.claimActiveRetry() == null)
         assertTrue(state.isActive())
         assertTrue(state.completePass(retryPassId, needsMore = false))
         assertFalse(state.isActive())
