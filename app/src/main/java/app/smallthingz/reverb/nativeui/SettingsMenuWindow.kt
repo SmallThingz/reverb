@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.ViewTreeObserver
 import android.view.WindowManager
@@ -69,6 +70,7 @@ internal class SettingsMenuWindow(
     private val visibleFrame = Rect()
     private val location = IntArray(2)
     private val transition = SettingsMenuTransition()
+    private val animationLayer = SettingsMenuAnimationLayer(menu)
     private var frameJob: Job? = null
     private var back: Any? = null
     private var added = false
@@ -109,10 +111,10 @@ internal class SettingsMenuWindow(
             }
         }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        menu.scaleX = transition.scale
-        menu.scaleY = transition.scale
-        menu.alpha = 0f
-        addView(menu)
+        animationLayer.scaleX = transition.scale
+        animationLayer.scaleY = transition.scale
+        animationLayer.alpha = 0f
+        addView(animationLayer)
     }
 
     fun show() {
@@ -146,9 +148,9 @@ internal class SettingsMenuWindow(
                     if (!closed) {
                         updatePosition()
                         transition.frame(time,ValueAnimator.getDurationScale())
-                        menu.scaleX = transition.scale
-                        menu.scaleY = transition.scale
-                        menu.alpha = if (positioned && anchor.isAttachedToWindow) transition.alpha else 0f
+                        animationLayer.scaleX = transition.scale
+                        animationLayer.scaleY = transition.scale
+                        animationLayer.alpha = if (positioned && anchor.isAttachedToWindow) transition.alpha else 0f
                         if (!transition.shouldExist) onTerminal()
                     }
                 }
@@ -168,8 +170,8 @@ internal class SettingsMenuWindow(
 
     override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
         anchor.getWindowVisibleDisplayFrame(visibleFrame)
-        menu.measure(atMost(visibleFrame.width()),atMost(visibleFrame.height()))
-        setMeasuredDimension(menu.measuredWidth,menu.measuredHeight)
+        animationLayer.measure(atMost(visibleFrame.width()),atMost(visibleFrame.height()))
+        setMeasuredDimension(animationLayer.measuredWidth,animationLayer.measuredHeight)
         menuMeasured = true
         // Compose's onSizeChanged publishes placement during measure, before ViewRoot's initial
         // relayout and renderer light-center setup. Waiting for onLayout leaves the first setup
@@ -178,7 +180,7 @@ internal class SettingsMenuWindow(
     }
 
     override fun onLayout(changed: Boolean,l: Int,t: Int,r: Int,b: Int) {
-        menu.layout(0,0,menu.measuredWidth,menu.measuredHeight)
+        animationLayer.layout(0,0,animationLayer.measuredWidth,animationLayer.measuredHeight)
         params.width = menu.measuredWidth
         params.height = menu.measuredHeight
         if (added && !closed) {
@@ -214,8 +216,8 @@ internal class SettingsMenuWindow(
             anchor.layoutDirection == LAYOUT_DIRECTION_RTL,(48f*density.density).roundToInt())
         params.x = placement.x
         params.y = placement.y
-        menu.pivotX = placement.pivotX * menuWidth
-        menu.pivotY = placement.pivotY * menuHeight
+        animationLayer.pivotX = placement.pivotX * menuWidth
+        animationLayer.pivotY = placement.pivotY * menuHeight
         if (Build.VERSION.SDK_INT >= 29)
             systemGestureExclusionRects = listOf(Rect(0,0,windowWidth,windowHeight))
         manager.updateViewLayout(this,params)
@@ -268,6 +270,30 @@ internal class SettingsMenuWindow(
         }
         cleanup { menu.close() }
         failure?.let { throw it }
+    }
+}
+
+/** Menu.kt applies motion outside Surface's separate shadow/background/content layers. */
+private class SettingsMenuAnimationLayer(private val menu: SettingsMenuContent) : ViewGroup(menu.context) {
+    init {
+        clipChildren = false
+        clipToPadding = false
+        clipToOutline = false
+        isFocusable = false
+        isClickable = false
+        descendantFocusability = FOCUS_AFTER_DESCENDANTS
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
+        addView(menu)
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        menu.measure(widthMeasureSpec, heightMeasureSpec)
+        setMeasuredDimension(menu.measuredWidth, menu.measuredHeight)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        menu.layout(0, 0, menu.measuredWidth, menu.measuredHeight)
     }
 }
 
