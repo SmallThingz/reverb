@@ -398,7 +398,10 @@ internal class NativeOnboardingScreenOwner(
             calibrating = controller?.running == true,
             holdingCalibration = controller?.holding == true,
             calibrationProgress = controller?.progress,
-            calibrationError = controller?.error ?: inputRefreshError,
+            calibrationError = controller?.error?.let { error ->
+                if (error == activity.getString(R.string.silence_input_changed))
+                    activity.getString(R.string.onboarding_silence_input_changed) else error
+            } ?: inputRefreshError,
             calibrationUnavailableReason = activity.getString(if (!microphoneAllowed)
                 R.string.permission_required_message else R.string.audio_input_init_failed),
         )

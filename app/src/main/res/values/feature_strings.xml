@@ -52,6 +52,7 @@
     <string name="silence_curve_raise_cutoff">Raise cutoff</string>
     <string name="silence_graph_description">Silence cutoff curve. Drag a point to adjust it. Arrow keys select points and change the cutoff. Shift+Left or Right changes frequency.</string>
     <string name="silence_input_changed">Input has changed. Reopen Settings to calibrate.</string>
+    <string name="onboarding_silence_input_changed">Input changed. Try calibrating again.</string>
     <string name="silence_invalid_settings">Silence settings could not be read. All audio is being kept.</string>
     <string name="silence_release_to_finish">Release to finish</string>
     <string name="silence_sample_busy">The audio input changed. Sample the room again.</string>

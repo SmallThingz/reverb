@@ -104,7 +104,7 @@ internal class NativeOnboardingScreenView private constructor(
         ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],
         ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
     )
-    private val pages = List(3) { page -> createPage(page, initialState) }
+    private val pages: List<OnboardingPageContentView> = List(3) { page -> createPage(page, initialState) }
     private lateinit var viewport: NativeOnboardingPlacedPagerViewport
     private lateinit var horizontal: NativeOnboardingPagerPhaseBinding
     private val vertical = java.util.IdentityHashMap<NativeVerticalViewport, NativeVerticalPhaseBinding>()
@@ -300,7 +300,7 @@ internal class NativeOnboardingScreenView private constructor(
         scrollStates.map { it.value },
     )
 
-    private fun createPage(page: Int, value: OnboardingPageContentState) = OnboardingPageContentView(
+    private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost, interactions,
         inputRoot = { this },
@@ -604,19 +604,20 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
         }
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(view).local(screen)
         override fun withinLayerBounds(local: Offset): Boolean {
-            val width = view.width.toFloat()
-            val height = view.height.toFloat()
+            val target = view
+            val width = target.width.toFloat()
+            val height = target.height.toFloat()
             val margin = with(environment.textDensity) { 30.dp.roundToPx() }.toFloat()
             return when {
-                root.isPager(view) -> local.x >= 0f && local.x < width && local.y >= -margin && local.y < height + margin
-                view is NativeVerticalViewport -> local.y >= 0f && local.y < height && local.x >= -margin && local.x < width + margin
-                view is SettingsExpansionView -> local.x >= 0f && local.x < width && local.y >= 0f && local.y < height
-                view is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
-                view is ReverbGroupLayout -> view.containsVisualPoint(local.x, local.y)
-                view is SettingsOutputCompressionView || view is SettingsSilenceView -> true // One outer group clips both consecutive controls.
-                view.parent is ReverbGroupLayout -> reverbGroupGeometry(width, height, environment.textDensity.density, 20f)
+                root.isPager(target) -> local.x >= 0f && local.x < width && local.y >= -margin && local.y < height + margin
+                target is NativeVerticalViewport -> local.y >= 0f && local.y < height && local.x >= -margin && local.x < width + margin
+                target is SettingsExpansionView -> local.x >= 0f && local.x < width && local.y >= 0f && local.y < height
+                target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
+                target is ReverbGroupLayout -> target.containsVisualPoint(local.x, local.y)
+                target is SettingsOutputCompressionView || target is SettingsSilenceView -> true // One outer group clips both consecutive controls.
+                target.parent is ReverbGroupLayout -> reverbGroupGeometry(width, height, environment.textDensity.density, 20f)
                     .contains(local.x, local.y)
-                root.isFooterButton(view) -> reverbGroupGeometry(width, height, environment.textDensity.density,
+                root.isFooterButton(target) -> reverbGroupGeometry(width, height, environment.textDensity.density,
                     minOf(width, height) / (2f * environment.textDensity.density)).contains(local.x, local.y)
                 else -> true // The remaining released Column/Box/page/body boundaries have no clip.
             }

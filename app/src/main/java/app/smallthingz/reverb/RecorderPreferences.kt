@@ -477,7 +477,11 @@ internal fun finishOnboarding(
                         .putInt(PrefKey.OUTPUT_FORMAT, audio.outputFormat.storageCode.toInt())
                         .putInt(PrefKey.FLAC_COMPRESSION_LEVEL, audio.flacCompression)
                         .putString(PrefKey.SILENCE_GATE, encodedSilence)
-                        .putString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM, audio.silenceHistogram)
+                        .apply {
+                            val histogram = audio.silenceHistogram
+                            if (histogram == null) remove(PrefKey.SILENCE_CALIBRATION_HISTOGRAM)
+                            else putString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM, histogram)
+                        }
                         .putInt(PrefKey.RETENTION_MODE, updated.mode.storageCode.toInt())
                         .putLong(PrefKey.ONE_SHOT_RETENTION_SECONDS, updated.oneShotSeconds)
                         .putLong(PrefKey.ONE_SHOT_AUDIO_MEMORY_SIZE, updated.oneShotSizeBytes)
