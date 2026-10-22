@@ -52,6 +52,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
+            if (requestedTest == "native_text_backend" || requestedTest == "native_motion_spline") {
+                requireNativeMathProbeHost(targetContext.packageName, parityOnly)
+            }
             if (requestedTest == "native_text_backend") {
                 executed++
                 val result = nativeParityOnMain(this) { nativeTextBackendParity(targetContext) }

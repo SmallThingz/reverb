@@ -286,7 +286,7 @@ internal class ReverbRenameFieldView(
             }
             AccessibilityNodeInfo.ACTION_LONG_CLICK -> {editor.performLongClick();true}
             AccessibilityNodeInfo.ACTION_SET_TEXT -> editor.setTextFromSemantics(
-                args?.getString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE).orEmpty())
+                args?.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)?.toString().orEmpty())
             AccessibilityNodeInfo.ACTION_SET_SELECTION -> editor.setSelectionFromSemantics(
                 args?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,-1)?:-1,
                 args?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,-1)?:-1)

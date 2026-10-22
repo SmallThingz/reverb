@@ -223,6 +223,20 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 entry.put("initial_raw", initialRaw)
                 check(initialRaw == records[0].displayName.substringBeforeLast('.'))
                 capture("rename-initial")
+                if (!compose) {
+                    // Intentional inherited-bug correction, not a released-renderer parity claim:
+                    // Android ACTION_SET_TEXT accepts CharSequence, including styled text.
+                    val accessibilityDraft = android.text.SpannableString("Accessibility draft \uD83D\uDE03")
+                    val argument = current.setNativeCharSequence(instrumentation, accessibilityDraft)
+                    current.awaitRaw(instrumentation, accessibilityDraft.toString())
+                    entry.put("native_char_sequence_action", argument
+                        .put("accepted_raw", current.raw(instrumentation)))
+                    // Retain an explicit ordinary String regression after the non-String value.
+                    val ordinaryDraft = "Ordinary String draft"
+                    current.setRaw(instrumentation, ordinaryDraft)
+                    current.awaitRaw(instrumentation, ordinaryDraft)
+                    entry.put("native_string_action_after_char_sequence", current.raw(instrumentation))
+                }
                 // Newlines are valid raw input and normalize to spaces on commit. Slash is illegal;
                 // combine both to exercise the error state without committing an unintended rename.
                 val invalidDraft = "bad/\nname"
@@ -705,6 +719,19 @@ private class TransactionBoard(
             check(editor.config.getOrNull(SemanticsActions.SetText)!!.action!!.invoke(AnnotatedString(raw)))
         } else check(nativeEditor().performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT,
             Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, raw) }))
+    }
+    fun setNativeCharSequence(i: Instrumentation, raw: CharSequence): JSONObject = nativeParityOnMain(i) {
+        guard()
+        check(!compose && raw is android.text.SpannableString)
+        val arguments = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, raw)
+        }
+        val delivered = checkNotNull(arguments.getCharSequence(
+            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE))
+        check(delivered is android.text.SpannableString && delivered.toString() == raw.toString())
+        check(nativeEditor().performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments))
+        JSONObject().put("argument_class", delivered.javaClass.name)
+            .put("expected_raw", raw.toString()).put("action_returned", true)
     }
     fun capture(i: Instrumentation, evidence: File, name: String, settle: Boolean,
                 observation: JSONObject, observeMenu: Boolean, requireLandscapeTouch: Boolean = false): File {

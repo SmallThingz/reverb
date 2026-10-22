@@ -47,24 +47,30 @@ private val releasedTypography = Typography(
 class ReverbParagraphStylesTest {
     @Test fun allRolesEqualReleasedUnresolvedStyles() {
         for (role in ReverbTextRole.entries) {
-            val expected = when (role) {
-                ReverbTextRole.DISPLAY_LARGE -> releasedTypography.displayLarge
-                ReverbTextRole.DISPLAY_MEDIUM -> releasedTypography.displayMedium
-                ReverbTextRole.DISPLAY_SMALL -> releasedTypography.displaySmall
-                ReverbTextRole.HEADLINE_LARGE -> releasedTypography.headlineLarge
-                ReverbTextRole.HEADLINE_MEDIUM -> releasedTypography.headlineMedium
-                ReverbTextRole.HEADLINE_SMALL -> releasedTypography.headlineSmall
-                ReverbTextRole.TITLE_LARGE -> releasedTypography.titleLarge
-                ReverbTextRole.TITLE_MEDIUM -> releasedTypography.titleMedium
-                ReverbTextRole.TITLE_SMALL -> releasedTypography.titleSmall
-                ReverbTextRole.BODY_LARGE -> releasedTypography.bodyLarge
-                ReverbTextRole.BODY_MEDIUM -> releasedTypography.bodyMedium
-                ReverbTextRole.BODY_SMALL -> releasedTypography.bodySmall
-                ReverbTextRole.LABEL_LARGE -> releasedTypography.labelLarge
-                ReverbTextRole.LABEL_MEDIUM -> releasedTypography.labelMedium
-                ReverbTextRole.LABEL_SMALL -> releasedTypography.labelSmall
-            }
+            val expected = releasedRoleStyle(role)
             assertReleasedStyle(role.name, expected, ReverbParagraphStyles[role])
+        }
+    }
+
+    @Test fun layoutCacheComparisonMatchesReleasedRolesAndDrawOnlyChanges() {
+        for (first in ReverbTextRole.entries) for (second in ReverbTextRole.entries) {
+            val expected = releasedRoleStyle(first).hasSameLayoutAffectingAttributes(releasedRoleStyle(second))
+            val actual = ReverbParagraphStyles[first].hasSameLayoutAffectingAttributes(ReverbParagraphStyles[second])
+            assertEquals("$first -> $second", expected, actual)
+        }
+        for (role in ReverbTextRole.entries) {
+            val source = releasedRoleStyle(role)
+            val native = ReverbParagraphStyles[role]
+            assertEquals(source.hasSameLayoutAffectingAttributes(source.copy(
+                color = androidx.compose.ui.graphics.Color.Red,
+                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)),
+                native.hasSameLayoutAffectingAttributes(native.copy(
+                    color = app.smallthingz.nativeui.graphics.Color.Red,
+                    textDecoration = app.smallthingz.nativeui.text.style.TextDecoration.Underline)))
+            assertEquals(source.hasSameLayoutAffectingAttributes(source.copy(lineHeight = 17.sp)),
+                native.hasSameLayoutAffectingAttributes(native.copy(
+                    lineHeight = app.smallthingz.nativeui.unit.TextUnit(17f,
+                        app.smallthingz.nativeui.unit.TextUnitType.Sp))))
         }
     }
 
@@ -139,3 +145,21 @@ private fun assertLineHeightStyle(name: String, expected: androidx.compose.ui.te
     assertEquals(name, expected.mode == androidx.compose.ui.text.style.LineHeightStyle.Mode.Fixed,
         actual.mode == app.smallthingz.nativeui.text.style.LineHeightStyle.Mode.Fixed)
 }
+
+private fun releasedRoleStyle(role: ReverbTextRole): TextStyle = when (role) {
+                ReverbTextRole.DISPLAY_LARGE -> releasedTypography.displayLarge
+                ReverbTextRole.DISPLAY_MEDIUM -> releasedTypography.displayMedium
+                ReverbTextRole.DISPLAY_SMALL -> releasedTypography.displaySmall
+                ReverbTextRole.HEADLINE_LARGE -> releasedTypography.headlineLarge
+                ReverbTextRole.HEADLINE_MEDIUM -> releasedTypography.headlineMedium
+                ReverbTextRole.HEADLINE_SMALL -> releasedTypography.headlineSmall
+                ReverbTextRole.TITLE_LARGE -> releasedTypography.titleLarge
+                ReverbTextRole.TITLE_MEDIUM -> releasedTypography.titleMedium
+                ReverbTextRole.TITLE_SMALL -> releasedTypography.titleSmall
+                ReverbTextRole.BODY_LARGE -> releasedTypography.bodyLarge
+                ReverbTextRole.BODY_MEDIUM -> releasedTypography.bodyMedium
+                ReverbTextRole.BODY_SMALL -> releasedTypography.bodySmall
+                ReverbTextRole.LABEL_LARGE -> releasedTypography.labelLarge
+                ReverbTextRole.LABEL_MEDIUM -> releasedTypography.labelMedium
+                ReverbTextRole.LABEL_SMALL -> releasedTypography.labelSmall
+            }

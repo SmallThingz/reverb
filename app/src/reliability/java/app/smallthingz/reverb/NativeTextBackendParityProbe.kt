@@ -46,6 +46,7 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
         Case("empty", "", 120, 1),
         Case("final-newline", "Recording\n", 120, 3),
         Case("clipped-hidden-lines", "First line\nSecond line\nאבג", 120, 1),
+        Case("draw-only-decoration", "Output compression", 240, 1),
     )
     val roles = listOf(ReverbTextRole.BODY_LARGE, ReverbTextRole.LABEL_LARGE,
         ReverbTextRole.HEADLINE_LARGE, ReverbTextRole.LABEL_SMALL)
@@ -110,8 +111,15 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                 val expectedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 val actualBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 try {
-                    reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
-                    native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+                    if (case.label == "draw-only-decoration") {
+                        reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black, null,
+                            androidx.compose.ui.text.style.TextDecoration.Underline)
+                        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black,
+                            app.smallthingz.nativeui.text.style.TextDecoration.Underline)
+                    } else {
+                        reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
+                        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+                    }
                     val expectedPixels = IntArray(width * height)
                     val actualPixels = IntArray(width * height)
                     expectedBitmap.getPixels(expectedPixels, 0, width, 0, 0, width, height)

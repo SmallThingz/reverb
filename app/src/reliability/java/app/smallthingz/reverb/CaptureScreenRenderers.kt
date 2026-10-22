@@ -832,7 +832,7 @@ fun CaptureScreen(
                 .collectLatest { visible ->
                     if (!visible) return@collectLatest
                     // A retained hidden notice restarts its full visible deadline on return.
-                    dismissSavedFeedbackAfterTimeout(
+                    legacyDismissSavedFeedbackAfterTimeout(
                         expected = current,
                         accessibilityManager = accessibilityManager,
                         currentStatus = { saveStatus },

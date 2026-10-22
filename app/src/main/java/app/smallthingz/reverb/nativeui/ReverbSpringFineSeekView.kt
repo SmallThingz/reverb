@@ -17,7 +17,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import app.smallthingz.nativeui.runtime.MonotonicFrameClock
 import app.smallthingz.nativeui.graphics.Color
 import app.smallthingz.nativeui.graphics.compositeOver
-import app.smallthingz.nativeui.graphics.lerp
 import app.smallthingz.nativeui.graphics.toArgb
 import app.smallthingz.nativeui.unit.Density
 import app.smallthingz.reverb.NativeClickPhaseNode
@@ -61,6 +60,7 @@ internal class ReverbSpringFineSeekView(
     private val environment: SpringFineSeekEnvironment,
 ) : ViewGroup(context) {
     private var palette = environment.palette
+    private val colors = FineSeekColorPalette(palette.primary, palette.secondary, palette.tertiary)
     private var binding: SpringFineSeekBinding? = null
     private var inputActive = false
     private var attachedScope: CoroutineScope? = null
@@ -105,6 +105,7 @@ internal class ReverbSpringFineSeekView(
     fun setPalette(value: ReverbPalette) {
         if (palette == value) return
         palette = value
+        colors.update(value.primary, value.secondary, value.tertiary)
         binding?.let(puck::bind)
         invalidate()
     }
@@ -222,12 +223,8 @@ internal class ReverbSpringFineSeekView(
 
         val power = abs(liveX).pow(.72f)
         val yMagnitude = (abs(liveY) / .72f).coerceIn(0f, 1f)
-        // Reuse pinned Color.lerp: Oklab conversion/quantization is not ArgbEvaluator.
-        val color = when {
-            liveY < 0f -> lerp(Color(palette.primary), Color(palette.tertiary), yMagnitude)
-            liveY > 0f -> lerp(Color(palette.primary), Color(palette.secondary), yMagnitude)
-            else -> Color(palette.primary)
-        }
+        // Keep packed Oklab endpoint quantization; only the palette-dependent work is cached.
+        val color = colors.color(liveY, yMagnitude)
         val alpha = .12f + .13f * power + .06f * yMagnitude
         paint.color = android.graphics.Color.BLACK
         paint.alpha = 255

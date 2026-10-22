@@ -763,7 +763,7 @@ fun ReleasedLibraryFilesScreen(
         undoNotice = ReleasedLibraryLibraryUndoNotice(message, undoWindow)
         deletionJob[0]?.cancel()
         deletionJob[0] = scope.launch {
-            runLibraryUndoDeadline(deletionState, undoWindow, accessibilityManager) {
+            legacyRunLibraryUndoDeadline(deletionState, undoWindow, accessibilityManager) {
                 clearUndoNotice(undoWindow)
                 // The deadline owns foreground commit before the notice/job is cleared, so
                 // stale Undo and lifecycle handoff cannot take the same batch.

@@ -13,12 +13,18 @@ import app.smallthingz.nativeui.text.Paragraph
 import app.smallthingz.nativeui.text.ParagraphIntrinsics
 import app.smallthingz.nativeui.text.TextStyle
 import app.smallthingz.nativeui.text.font.createFontFamilyResolver
+import app.smallthingz.nativeui.text.font.FontFamily
+import app.smallthingz.nativeui.text.font.FontStyle
+import app.smallthingz.nativeui.text.font.FontSynthesis
+import app.smallthingz.nativeui.text.font.FontWeight
+import app.smallthingz.nativeui.text.font.ResolvedTypeface
 import app.smallthingz.nativeui.unit.Density
 import app.smallthingz.nativeui.unit.sp
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
@@ -67,8 +73,8 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
             check(loader.started.await(5, TimeUnit.SECONDS)) { "Emoji metadata loader did not start" }
             return loader
         }
-        fun createView(): ReverbParagraphView = ReverbParagraphView(
-            host, style, density, fonts, 0xff111111.toInt(),
+        fun createView(resolver: FontFamily.Resolver = fonts): ReverbParagraphView = ReverbParagraphView(
+            host, style, density, resolver, 0xff111111.toInt(),
         ).apply { setText("Audio ready 😀") }
         fun attach(view: ReverbParagraphView) {
             check(host.hasWindowFocus())
@@ -150,7 +156,60 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
             check(EmojiCompat.get().loadState == EmojiCompat.LOAD_STATE_SUCCEEDED)
         }
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
-        cases.put(JSONObject().put("name", "completion-before-registration").put("passed", true))
+        cases.put(JSONObject().put("name", "ready-before-intrinsics-construction").put("passed", true))
+
+        // Real public resolver seam: Intrinsics has captured "not ready" before resolve(),
+        // but the View has not subscribed yet. Delegate glyph selection unchanged, complete once,
+        // then require the actual View's stale-generation check to schedule its own second layout.
+        val raceLoader = startLoading()
+        val raceCompleted = AtomicBoolean()
+        val raceResolver = object : FontFamily.Resolver {
+            override fun resolve(fontFamily: FontFamily?, fontWeight: FontWeight,
+                                 fontStyle: FontStyle, fontSynthesis: FontSynthesis): ResolvedTypeface {
+                val resolved = fonts.resolve(fontFamily, fontWeight, fontStyle, fontSynthesis)
+                if (raceCompleted.compareAndSet(false, true)) raceLoader.complete()
+                return resolved
+            }
+        }
+        lateinit var raced: ReverbParagraphView
+        var firstRaceParagraph: Paragraph? = null
+        val raceLayout = CountDownLatch(1)
+        val raceDraw = CountDownLatch(1)
+        lateinit var raceLayoutListener: ViewTreeObserver.OnGlobalLayoutListener
+        lateinit var raceDrawListener: ViewTreeObserver.OnDrawListener
+        instrumentation.runOnMainSync {
+            raced = createView(raceResolver)
+            raceLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
+                raced.currentParagraph?.let { current ->
+                    if (firstRaceParagraph == null) firstRaceParagraph = current
+                    else if (current !== firstRaceParagraph) raceLayout.countDown()
+                }
+            }
+            raceDrawListener = ViewTreeObserver.OnDrawListener {
+                if (raceLayout.count == 0L && raced.currentParagraph !== firstRaceParagraph)
+                    raceDraw.countDown()
+            }
+            host.fixtureRoot.viewTreeObserver.addOnGlobalLayoutListener(raceLayoutListener)
+            host.fixtureRoot.viewTreeObserver.addOnDrawListener(raceDrawListener)
+            attach(raced)
+        }
+        try {
+            check(raceLayout.await(5, TimeUnit.SECONDS)) {
+                "Readiness between Intrinsics construction and observation did not replace the stale paragraph"
+            }
+            check(raceDraw.await(5, TimeUnit.SECONDS)) { "Construction-to-observation recovery did not draw" }
+            check(raceCompleted.get() && firstRaceParagraph != null)
+            requireNativeParityHost(instrumentation, host)
+        } finally {
+            instrumentation.runOnMainSync {
+                if (host.fixtureRoot.viewTreeObserver.isAlive) {
+                    host.fixtureRoot.viewTreeObserver.removeOnGlobalLayoutListener(raceLayoutListener)
+                    host.fixtureRoot.viewTreeObserver.removeOnDrawListener(raceDrawListener)
+                }
+            }
+        }
+        cases.put(JSONObject().put("name", "readiness-during-construction-before-observation")
+            .put("automatic_layout", true).put("automatic_draw", true).put("passed", true))
 
         val canceledLoader = startLoading()
         val callbacks = AtomicInteger()
@@ -198,7 +257,7 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
             terminalFailure?.addSuppressed(error)
             result.put("cleanup_error", android.util.Log.getStackTraceString(error))
         }
-        result.put("passed", terminalFailure == null && cleanupFailure == null && cases.length() == 5)
+        result.put("passed", terminalFailure == null && cleanupFailure == null && cases.length() == 6)
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         try { File(directory, "result.json").writeText(result.toString(2)) }
         catch (error: Throwable) {

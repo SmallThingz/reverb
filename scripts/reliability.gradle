@@ -29,7 +29,14 @@ allprojects {
                 }
             }
         }
+        // AGP 9.4 enables unit tests only for testBuildType (debug) by default.
+        // Keep the opt-in oracle tests on their own dependency/source classpath.
+        androidComponents.beforeVariants(androidComponents.selector().withBuildType('reliability')) { variant ->
+            variant.hostTests.get('UnitTest').enable = true
+        }
         dependencies {
+            // The QA font probe exercises EmojiCompat initialization directly.
+            reliabilityImplementation 'androidx.emoji2:emoji2:1.4.0'
             reliabilityImplementation 'androidx.activity:activity-compose:1.13.0'
             reliabilityImplementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
             reliabilityImplementation platform('androidx.compose:compose-bom:2026.05.01')
@@ -106,7 +113,7 @@ allprojects {
                     }
                     // Native backends change namespaces; QA keeps pinned old implementations.
                     // Invert only declared mechanical seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != 'f4b32ac0ac2ed301a3e92189e3e5c95f3b8ec6fe16f4fe7790327f3e5fe4b5d9') {
+                    if (splitSha256(backendSourceMapFile.bytes) != '8908fcd0dc7ec38300daa3322f4f12f7cccb6192a0633088d2cd0562abd26d1e') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]

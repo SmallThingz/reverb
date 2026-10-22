@@ -394,10 +394,10 @@ open class Paragraph(
         return Rect(horizontal, getLineTop(line), horizontal, getLineBottom(line))
     }
 
-    fun paint(canvas: Canvas, color: Color = paragraphIntrinsics.style.color) {
+    fun paint(canvas: Canvas, color: Color = paragraphIntrinsics.style.color,
+              decoration: TextDecoration = paragraphIntrinsics.style.textDecoration ?: TextDecoration.None) {
         if (!canvas.getClipBounds(drawClip)) return
         paint.color = color.toArgb()
-        val decoration = paragraphIntrinsics.style.textDecoration ?: TextDecoration.None
         paint.isUnderlineText = TextDecoration.Underline in decoration
         paint.isStrikeThruText = TextDecoration.LineThrough in decoration
         val saved = canvas.save()

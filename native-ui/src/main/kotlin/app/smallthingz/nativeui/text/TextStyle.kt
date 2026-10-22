@@ -26,6 +26,14 @@ data class TextStyle(
     val textDecoration: TextDecoration? = null,
     val layoutDirection: LayoutDirection? = null,
 ) {
+    /** Same released cache boundary: foreground and decoration redraw without reshaping text. */
+    fun hasSameLayoutAffectingAttributes(other: TextStyle): Boolean = this === other ||
+        (fontSize == other.fontSize && fontWeight == other.fontWeight &&
+            fontStyle == other.fontStyle && fontSynthesis == other.fontSynthesis &&
+            fontFamily == other.fontFamily && letterSpacing == other.letterSpacing &&
+            lineHeight == other.lineHeight && platformStyle == other.platformStyle &&
+            lineHeightStyle == other.lineHeightStyle && layoutDirection == other.layoutDirection)
+
     fun merge(other: TextStyle?): TextStyle {
         if (other == null || other == Default) return this
         return TextStyle(

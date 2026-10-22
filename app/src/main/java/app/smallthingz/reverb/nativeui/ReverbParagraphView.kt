@@ -36,6 +36,7 @@ import app.smallthingz.nativeui.text.MultiParagraphIntrinsics
 import app.smallthingz.nativeui.text.TextStyle
 import app.smallthingz.nativeui.text.font.FontFamily
 import app.smallthingz.nativeui.text.resolveDefaults
+import app.smallthingz.nativeui.text.style.TextDecoration
 import app.smallthingz.nativeui.text.style.TextOverflow
 import app.smallthingz.nativeui.unit.Constraints
 import app.smallthingz.nativeui.unit.Density
@@ -544,7 +545,7 @@ internal class ReverbParagraphView(
         try {
             canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
             if (clipParagraph) canvas.clipRect(0, 0, measuredContentSize.width, measuredContentSize.height)
-            current.paint(canvas, textColor)
+            current.paint(canvas, textColor, textStyle.textDecoration ?: TextDecoration.None)
         } finally {
             canvas.restoreToCount(saved)
         }

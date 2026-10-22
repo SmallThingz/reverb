@@ -70,7 +70,7 @@ internal fun AppFeedbackHost(
                         .distinctUntilChangedBy { next -> next?.id }
                         .collect { next ->
                             if (next == null) return@collect
-                            deliverFeedbackEvent(
+                            legacyDeliverFeedbackEvent(
                                 event = next,
                                 canDisplay = {
                                     currentDeliveryAllowed.value && window.isWindowFocused &&

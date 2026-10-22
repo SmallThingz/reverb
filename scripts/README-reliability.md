@@ -210,17 +210,24 @@ Text as its oracle, with a separately raster-checked callback route for metrics.
 Its six light/dark and font-scale 1/1.5/2 scenes compare exact pixels, baselines,
 line counts, and measured dimensions against the native paragraph View.
 
-Run `native_font_notifications` alone in a fresh instrumentation process, before
-any Compose rendering. It asserts the pinned GlobalSnapshotManager has never
-started, then exercises attached asynchronous font completion, detached completion
-and reattachment, and completion before paragraph registration. Built-in typefaces
-and a controlled loader avoid downloads or permissions. Automatic layout/draw must
-occur before any post-completion capture invalidation; the fixture never manually
-applies snapshots. Detached assertions cover observable invalidation, not private
-callback counts. Two synthetic font-read state cases additionally test tracked versus
-unrelated write scheduling, scope disposal, and the bridge's read-to-registration
-handoff. That helper race is not a private ParagraphIntrinsics race hook. This is
-native-host lifecycle evidence, not a text raster oracle.
+Run `native_font_notifications` alone in a fresh UI-only instrumentation process.
+It exercises native EmojiCompat readiness with a controlled real metadata loader:
+attached automatic layout/draw, detached completion and reattachment, readiness before
+Intrinsics construction, readiness during construction before observation, queued-callback
+cancellation, and failed-load fallback. The construction race delegates the public native
+font resolver unchanged and completes the loader once during resolution; the actual View
+must replace its stale paragraph and draw again without manual invalidation. Empty metadata
+avoids downloads and tests callback lifecycle only, not emoji glyph rasterization. The
+previous EmojiCompat singleton is restored afterward. The retired Compose downloaded-font
+and Snapshot bridge cases are no longer claimed as native coverage.
+
+`native_text_backend` compares 108 bounded software Paragraph cases against real Compose
+Paragraph using equivalent inputs. It reports exact metrics/pixel differences; it does not
+prove hardware/whole-screen parity or independently validate the role table. The separate
+Typography metadata test and `native_text_parity` provide those role/reference checks.
+`native_motion_spline` compares the real released/native decay engines numerically using
+Android's friction value; it does not measure frame scheduling or smoothness. Both selectors
+require the same exact UI-only package and plain Application as the other native probes.
 
 The icon probe compares 32 released vectors with reused native Drawables through
 grow/shrink/rectangle/retint-alpha/return states at current/160/280dpi. It checks

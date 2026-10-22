@@ -142,9 +142,15 @@
       ]
     },
     "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt": {
-      "compiled_sha256": "22cbadf52dbee13e586dc660e84bc15baf3c19b0cdd08f6b241ebcd475c565a0",
+      "compiled_sha256": "c53243a042c4a4f570d85d06bbfc60c5f84362560617e88c8d96cc2d65f14052",
       "normalized_sha256": "0bf912d0759ec78331eff2acd35e2356639b69bdaee6555f4562ead4b01b7ea2",
       "inverse": [
+        {
+          "from": "legacyDismissSavedFeedbackAfterTimeout",
+          "to": "dismissSavedFeedbackAfterTimeout",
+          "count": 1,
+          "word": true
+        },
         {
           "from": "legacyRangeMorphSourceGeometry",
           "to": "rangeMorphSourceGeometry",
@@ -154,9 +160,15 @@
       ]
     },
     "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt": {
-      "compiled_sha256": "6ba63fce00ec53ce89125b1be76298e38fe025a02b22c4b288c0a5f79a84e7dd",
+      "compiled_sha256": "66c2c365a3bc107cf57387ca802101d5279f282cc90b56fa5c9b706383899fe5",
       "normalized_sha256": "2e8bd369cf290d3d7653c788a615c872f8ee63e15ca3465b49aa5e2b11599656",
       "inverse": [
+        {
+          "from": "legacyRunLibraryUndoDeadline",
+          "to": "runLibraryUndoDeadline",
+          "count": 1,
+          "word": true
+        },
         {
           "from": "LegacyLibraryDeletionState",
           "to": "LibraryDeletionState",
@@ -268,9 +280,15 @@
       ]
     },
     "src/reliability/java/app/smallthingz/reverb/ReleasedLibraryFilesScreen.kt": {
-      "compiled_sha256": "16f5188627b1524f5267dd1b48c1f2cf1ce0ec2940f91a295623b19997d8c838",
+      "compiled_sha256": "369efd81de247a6314c39d20fb514801c28d529cb1070c133deabaa9fd47c69b",
       "normalized_sha256": "eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489",
       "inverse": [
+        {
+          "from": "legacyRunLibraryUndoDeadline",
+          "to": "runLibraryUndoDeadline",
+          "count": 1,
+          "word": true
+        },
         {
           "from": "LegacyLibraryDeletionState",
           "to": "LibraryDeletionState",
@@ -389,6 +407,18 @@
           "from": "LegacySettingsSilenceCalibration",
           "to": "SettingsSilenceCalibration",
           "count": 2,
+          "word": true
+        }
+      ]
+    },
+    "src/reliability/java/app/smallthingz/reverb/AppFeedbackRenderer.kt": {
+      "compiled_sha256": "59054a178a5d01b84a8e7a1f9fdc3ce46107da9ba39658bbb03547525df45178",
+      "normalized_sha256": "db835fd8b84090cce2f84af0aef69d573a698d8cb73121c3087c2d8f9ae7150c",
+      "inverse": [
+        {
+          "from": "legacyDeliverFeedbackEvent",
+          "to": "deliverFeedbackEvent",
+          "count": 1,
           "word": true
         }
       ]
@@ -890,6 +920,98 @@
       "normalized_sha256": "962f452235fd62d569f6517a039da8f1423331e1596482262aba01dc0c50b37a",
       "inverse": [],
       "origin": "Exact two pointer bridge bodies extracted from frozen44 main; production has no callers"
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyFeedbackDeliveryOracle.kt": {
+      "compiled_sha256": "8519a08f8a26bed2f7d6e3c9e01d3baf32c9a3d54be00e61efbdfdf7420282f7",
+      "normalized_sha256": "8b405732dbf8ad3b9db6a443af43ce634c190b229a59e17cd7f57cfc35b0052f",
+      "inverse": [
+        {
+          "from": "package app.smallthingz.reverb\n\nimport androidx.compose.ui.platform.AccessibilityManager\nimport kotlinx.coroutines.currentCoroutineContext\nimport kotlinx.coroutines.delay\nimport kotlinx.coroutines.ensureActive\n\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "legacyRecommendedFeedbackTimeoutMillis",
+          "to": "recommendedFeedbackTimeoutMillis",
+          "count": 2,
+          "word": true
+        },
+        {
+          "from": "legacyDeliverFeedbackEvent",
+          "to": "deliverFeedbackEvent",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/AppFeedback.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
+        "selectedSha256": "8b405732dbf8ad3b9db6a443af43ce634c190b229a59e17cd7f57cfc35b0052f",
+        "spans": [
+          {
+            "symbol": "recommendedFeedbackTimeoutMillis+deliverFeedbackEvent",
+            "startLine": 63,
+            "endLine": 107,
+            "sha256": "8b405732dbf8ad3b9db6a443af43ce634c190b229a59e17cd7f57cfc35b0052f"
+          }
+        ],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyFeedbackDeliveryOracle.kt",
+        "candidateSha256": "8519a08f8a26bed2f7d6e3c9e01d3baf32c9a3d54be00e61efbdfdf7420282f7",
+        "prefix": "package app.smallthingz.reverb\n\nimport androidx.compose.ui.platform.AccessibilityManager\nimport kotlinx.coroutines.currentCoroutineContext\nimport kotlinx.coroutines.delay\nimport kotlinx.coroutines.ensureActive\n\n",
+        "inverseExact": true,
+        "replacements": {
+          "recommendedFeedbackTimeoutMillis": "legacyRecommendedFeedbackTimeoutMillis",
+          "deliverFeedbackEvent": "legacyDeliverFeedbackEvent"
+        }
+      }
+    },
+    "src/reliability/java/app/smallthingz/reverb/LegacyLocalFeedbackTimeoutOracle.kt": {
+      "compiled_sha256": "2d82d999013b020b4973a1bb17930a49c64f1560a0704c2528d016c7cdcddf7a",
+      "normalized_sha256": "4a9eded54933d1e6abb062dccb77ee2a6a63e86f2a7e810e63c5e3f8dc1995aa",
+      "inverse": [
+        {
+          "from": "legacyRecommendedFeedbackTimeoutMillis",
+          "to": "recommendedFeedbackTimeoutMillis",
+          "count": 2,
+          "word": true
+        },
+        {
+          "from": "legacyRunLibraryUndoDeadline",
+          "to": "runLibraryUndoDeadline",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "legacyDismissSavedFeedbackAfterTimeout",
+          "to": "dismissSavedFeedbackAfterTimeout",
+          "count": 1,
+          "word": true
+        },
+        {
+          "from": "LegacyLibraryDeletionState",
+          "to": "LibraryDeletionState",
+          "count": 1,
+          "word": true
+        }
+      ],
+      "origin": {
+        "source": "app/src/main/java/app/smallthingz/reverb/LocalFeedbackTimeout.kt",
+        "sourceCommit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
+        "sourceSha256": "4a9eded54933d1e6abb062dccb77ee2a6a63e86f2a7e810e63c5e3f8dc1995aa",
+        "selectedSha256": "4a9eded54933d1e6abb062dccb77ee2a6a63e86f2a7e810e63c5e3f8dc1995aa",
+        "spans": [],
+        "candidate": "app/src/reliability/java/app/smallthingz/reverb/LegacyLocalFeedbackTimeoutOracle.kt",
+        "candidateSha256": "2d82d999013b020b4973a1bb17930a49c64f1560a0704c2528d016c7cdcddf7a",
+        "inverseExact": true,
+        "replacements": {
+          "recommendedFeedbackTimeoutMillis": "legacyRecommendedFeedbackTimeoutMillis",
+          "runLibraryUndoDeadline": "legacyRunLibraryUndoDeadline",
+          "dismissSavedFeedbackAfterTimeout": "legacyDismissSavedFeedbackAfterTimeout",
+          "LibraryDeletionState": "LegacyLibraryDeletionState"
+        }
+      }
     }
   }
 }

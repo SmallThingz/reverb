@@ -1,1 +1,16 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
+// Share one toolchain classloader between the app and native UI library.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:9.4.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0'
+        // Only the explicitly requested released-renderer QA lane needs this plugin.
+        if (gradle.ext.has('reverbReliabilityEnabled') && gradle.ext.reverbReliabilityEnabled) {
+            classpath 'org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.3.0'
+        }
+    }
+}
