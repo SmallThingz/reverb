@@ -15,6 +15,7 @@ class ReliabilityInstrumentation : Instrumentation() {
     private var fixtureSessionNonce: String? = null
     private var fixtureObservationDirectory: String? = null
     private var fixtureObservationSha256: String? = null
+    private var fixtureRecoveryLedgerSha256: String? = null
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -23,6 +24,7 @@ class ReliabilityInstrumentation : Instrumentation() {
         fixtureSessionNonce = arguments?.getString("fixture_session_nonce")
         fixtureObservationDirectory = arguments?.getString("fixture_observation_directory")
         fixtureObservationSha256 = arguments?.getString("fixture_observation_sha256")
+        fixtureRecoveryLedgerSha256 = arguments?.getString("fixture_recovery_ledger_sha256")
         start()
     }
 
@@ -45,6 +47,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
                 "native_library_fixture_observation",
                 "native_library_fixture_cleanup",
+                "native_transaction_fixture_recovery",
             )) {
                 "The native-parity APK requires an explicit UI-only fixture"
             }
@@ -55,6 +58,9 @@ class ReliabilityInstrumentation : Instrumentation() {
                 executed++
                 cleanupNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce,
                     fixtureObservationDirectory, fixtureObservationSha256)
+            } else if (requestedTest == "native_transaction_fixture_recovery") {
+                executed++
+                recoverExactNativeTransactionFixture(this, report, fixtureSessionNonce, fixtureRecoveryLedgerSha256)
             } else if (requestedTest == "native_fine_seek_leaf") {
                 executed++
                 verifyNativeFineSeekLeafParity(this, report)

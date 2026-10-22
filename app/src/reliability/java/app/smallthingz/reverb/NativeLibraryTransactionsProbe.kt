@@ -173,13 +173,17 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 entry.put("initial_raw", initialRaw)
                 check(initialRaw == records[0].displayName.substringBeforeLast('.'))
                 capture("rename-initial")
-                // This is the existing invalid-draft case, also retaining the source raw-newline contract.
-                current.setRaw(instrumentation, "bad\nname")
+                // Newlines are valid raw input and normalize to spaces on commit. Slash is illegal;
+                // combine both to exercise the error state without committing an unintended rename.
+                val invalidDraft = "bad/\nname"
+                current.setRaw(instrumentation, invalidDraft)
+                current.awaitRaw(instrumentation, invalidDraft)
+                entry.put("invalid_raw_before_submit", current.raw(instrumentation))
                 current.click(instrumentation, context.getString(R.string.rename_recording))
                 current.awaitText(instrumentation, context.getString(R.string.rename_recording_illegal_chars))
                 val invalidRaw = current.raw(instrumentation)
                 entry.put("invalid_raw", invalidRaw)
-                check(invalidRaw == "bad\nname")
+                check(invalidRaw == invalidDraft)
                 capture("rename-invalid-newline")
                 current.click(instrumentation, context.getString(R.string.cancel))
                 current.awaitActivity(instrumentation)
@@ -193,6 +197,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                     "Cancelled Rename draft leaked into reopened editor"
                 }
                 current.setRaw(instrumentation, "Library transaction renamed")
+                current.awaitRaw(instrumentation, "Library transaction renamed")
                 current.click(instrumentation, context.getString(R.string.rename_recording))
                 current.awaitActivity(instrumentation)
                 val renamed = ledger.acceptRename(records[0], "Library transaction renamed.wav")
@@ -619,10 +624,15 @@ private class TransactionBoard(
     } == 1
     fun raw(i: Instrumentation): String = nativeParityOnMain(i) {
         guard()
+        currentRaw()
+    }
+    fun awaitRaw(i: Instrumentation, expected: String) = await(i, "exact Rename raw draft") {
+        currentRaw() == expected
+    }
+    private fun currentRaw(): String =
         if (compose) nodes().single { it.config.getOrNull(SemanticsActions.SetText)?.action != null }
             .config.getOrNull(SemanticsProperties.EditableText)!!.text
         else nativeEditor().createAccessibilityNodeInfo().text.toString()
-    }
     fun setRaw(i: Instrumentation, raw: String) = nativeParityOnMain(i) {
         guard()
         if (compose) {
