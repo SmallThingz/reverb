@@ -80,6 +80,18 @@ internal class ReverbLibraryStatusView(
         requestLayout()
     }
 
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first == children.size) return
+        val scroll = viewport
+        if (scroll?.sourceAccessibilityNode?.invoke()?.present == false) {
+            for (index in children.lastIndex downTo first) {
+                if (children[index] === scroll) children.removeAt(index)
+            }
+        }
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
@@ -127,6 +139,18 @@ private class LibraryStatusColumn(
         empty?.bind(value)
         requestLayout()
     }
+
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first == children.size) return
+        if (failure?.isAccessibilityNodePresent() == false) {
+            for (index in children.lastIndex downTo first) {
+                if (children[index] === failure) children.removeAt(index)
+            }
+        }
+    }
+
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)

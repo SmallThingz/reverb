@@ -56,6 +56,59 @@ internal fun verifyNativeMainSettingsCommonGrainParity(instrumentation: Instrume
     verifyNativeMainSettingsParity(instrumentation, report, commonGrainInput = true)
 }
 
+/** Bounded Library structural-parent regression using the existing isolated native Main host. */
+internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumentation, report: StringBuilder) {
+    check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(instrumentation.targetContext.applicationContext.javaClass == Application::class.java)
+    val directory = File(instrumentation.targetContext.filesDir, "native-library-admission-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val result = JSONObject().put("selector", "native_library_admission").put("passed", false)
+    var activity: NativeParityActivity? = null
+    var render: MainSettingsParityRender? = null
+    var failure: Throwable? = null
+    try {
+        val host = launchNativeParityActivity(instrumentation)
+        activity = host
+        awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        val automation = nativeParityUiAutomation(instrumentation)
+        requireNativeParityHost(instrumentation, host)
+        val current = nativeParityOnMain(instrumentation) {
+            WindowCompat.setDecorFitsSystemWindows(host.window, false)
+            @Suppress("DEPRECATION")
+            host.window.statusBarColor = android.graphics.Color.TRANSPARENT
+            @Suppress("DEPRECATION")
+            host.window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            MainSettingsParityRender(host, false, getConfiguredThemeMode(host),
+                host.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES,
+                commonGrain = null)
+        }
+        render = current
+        awaitNativeParityDraw(instrumentation, current.board)
+        result.put("admission", current.verifyLibraryAdmission(instrumentation, automation) { partial ->
+            result.put("admission", partial)
+            File(directory, "result.json").writeText(result.toString(2))
+        })
+        check(nativeParityOnMain(instrumentation) { current.forbiddenCalls == 0 })
+        result.put("passed", true)
+    } catch (error: Throwable) {
+        failure = error
+    } finally {
+        fun record(error: Throwable) {
+            val primary = failure
+            if (primary == null) failure = error else if (primary !== error) primary.addSuppressed(error)
+        }
+        try { nativeParityOnMain(instrumentation) { cleanupMainParity(render, activity, finish = true) } }
+        catch (cleanup: Throwable) { record(cleanup) }
+        result.put("passed", result.getBoolean("passed") && failure == null)
+            .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
+        try { File(directory, "result.json").writeText(result.toString(2)) }
+        catch (write: Throwable) { record(write) }
+        report.append("Library admission evidence: ").append(directory.absolutePath).append('\n')
+    }
+    failure?.let { throw it }
+    report.appendLine("PASS native_library_admission actual Ready/Empty/Error parents; both platform importance paths")
+}
+
 private fun verifyNativeMainSettingsParity(
     instrumentation: Instrumentation,
     report: StringBuilder,
@@ -525,6 +578,7 @@ private class MainSettingsParityRender(
     private val previewState = mutableStateOf<AppThemeMode?>(null)
     private val callbacks = JSONArray()
     private var native: NativeMainScreenView? = null
+    private var nativeText: NativeWindowTextAccessibilityOwner? = null
     private var compose: ComposeView? = null
     private var compositionContext: ComposeViewContext? = null
     private var runtime: NativeAboutWindowRuntime? = null
@@ -591,6 +645,7 @@ private class MainSettingsParityRender(
             val text = NativeWindowTextAccessibilityOwner(board, NativeTextSemanticsClipPolicy {
                 NativeTextSemanticsClip.Unclipped
             })
+            nativeText = text
             val view = NativeMainScreenView.create(activity, environment(), NativeMainScreenInput(false, false),
                 activity, activity.onBackPressedDispatcher, frames.scope,
                 NativeActivityAccessibilityManager(activity), board, text, null, ::forbidden, ::themeChanged,
@@ -614,6 +669,18 @@ private class MainSettingsParityRender(
     }
     private fun palette() = ReverbPalette.resolve(activity, effectiveDark)
     private fun environment() = ReverbViewEnvironment(density.nativeParityDensity(), resolver, palette())
+    fun verifyLibraryAdmission(
+        instrumentation: Instrumentation,
+        automation: android.app.UiAutomation,
+        preserveFailure: (JSONObject) -> Unit,
+    ): JSONObject {
+        val inputs = nativeParityOnMain(instrumentation) {
+            check(!reference && !closed)
+            Triple(environment(), checkNotNull(runtime).scope, checkNotNull(nativeText))
+        }
+        return verifyNativeLibraryAdmission(instrumentation, activity, board, automation,
+            inputs.first, inputs.second, inputs.third, preserveFailure)
+    }
     private fun themeChanged(mode: AppThemeMode?) {
         callbacks.put(mode?.name ?: JSONObject.NULL)
         previewState.value = mode

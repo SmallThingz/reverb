@@ -566,8 +566,11 @@ internal class ReverbParagraphView(
         return super.getParentForAccessibility()
     }
 
+    /** Structural parents use the same admission as this node's provider. */
+    internal fun isAccessibilityNodePresent(): Boolean = sourceAccessibilityNode?.invoke()?.present != false
+
     override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (sourceAccessibilityNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
+        if (isAccessibilityNodePresent()) super.createAccessibilityNodeInfo() else null
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)

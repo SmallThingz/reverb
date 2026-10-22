@@ -110,6 +110,17 @@ internal class ReverbLibraryListView(
         updateInsets()
     }
 
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first == children.size) return
+        if (list.sourceAccessibilityNode?.invoke()?.present == false) {
+            for (index in children.lastIndex downTo first) {
+                if (children[index] === list) children.removeAt(index)
+            }
+        }
+    }
+
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
         updateInsets()

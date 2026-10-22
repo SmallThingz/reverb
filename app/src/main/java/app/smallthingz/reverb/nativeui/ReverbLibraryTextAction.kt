@@ -36,6 +36,18 @@ internal class ReverbLibraryTextAction(context: Context, environment: ReverbView
         visual.bind(environment, text, textColor, onClick)
         requestLayout()
     }
+
+    override fun addChildrenForAccessibility(children: ArrayList<View>) {
+        val first = children.size
+        super.addChildrenForAccessibility(children)
+        if (first == children.size) return
+        if (!visual.mergedRowAccessibility.isNodePresent()) {
+            for (index in children.lastIndex downTo first) {
+                if (children[index] === visual) children.removeAt(index)
+            }
+        }
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         visual.measure(widthMeasureSpec, heightMeasureSpec)
         val minimum = (48f * density).roundToInt()
