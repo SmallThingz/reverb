@@ -205,11 +205,20 @@ internal class NativeRecordingInlinePlayerController(
         private var lastCoarseCount = -1
         private var lastDetailCount = -1
         private var lastPass: RangeWaveformPass? = null
-        private var trimEffectKey: List<Any?>? = null
+        // The revision key is fixed for this lifetime; position publications compare only live dependencies.
+        private var trimEffectInitialized = false
+        private var trimEffectRequested = false
+        private var trimEffectPrepared = false
+        private var trimEffectDuration = 0
         private var trimEffect: Job? = null
-        private var autoEffectKey: List<Any?>? = null
+        private var autoEffectInitialized = false
+        private var autoEffectScreenActive = false
+        private var autoEffectPrepared = false
+        private var autoEffectOwner: InlinePlaybackRowOwner? = null
         private var autoEffect: Job? = null
-        private var progressEffectKey: Pair<Boolean, Boolean>? = null
+        private var progressEffectInitialized = false
+        private var progressEffectPlaying = false
+        private var progressEffectScrubbing = false
         private var progressEffect: Job? = null
         private val fineSeekPreviewController = TimelineAudioPreviewController(
             onTrackReleaseFailure = { error ->
@@ -712,17 +721,31 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         fun reconcileEffects() {
-            val trimKey = listOf(input.trimRequested, key, prepared, duration)
-            if (trimEffectKey != trimKey) {
-                trimEffectKey = trimKey
+            val trimRequested = input.trimRequested
+            val trimPrepared = prepared
+            val trimDuration = duration
+            if (!trimEffectInitialized || trimEffectRequested != trimRequested ||
+                trimEffectPrepared != trimPrepared || trimEffectDuration != trimDuration
+            ) {
+                trimEffectInitialized = true
+                trimEffectRequested = trimRequested
+                trimEffectPrepared = trimPrepared
+                trimEffectDuration = trimDuration
                 trimEffect?.cancel()
                 val requested = input.trimRequested
                 val consumed = input.callbacks.onTrimRequestConsumed
                 trimEffect = revisionScope.launch { if (requested && enterTrimMode()) consumed() }
             }
-            val autoKey = listOf(input.screenActive, prepared, input.playbackOwner)
-            if (autoEffectKey != autoKey) {
-                autoEffectKey = autoKey
+            val screenActive = input.screenActive
+            val autoPrepared = prepared
+            val playbackOwner = input.playbackOwner
+            if (!autoEffectInitialized || autoEffectScreenActive != screenActive ||
+                autoEffectPrepared != autoPrepared || autoEffectOwner != playbackOwner
+            ) {
+                autoEffectInitialized = true
+                autoEffectScreenActive = screenActive
+                autoEffectPrepared = autoPrepared
+                autoEffectOwner = playbackOwner
                 autoEffect?.cancel()
                 val effectInput = input
                 val effectPrepared = prepared
@@ -734,9 +757,12 @@ internal class NativeRecordingInlinePlayerController(
                     }
                 }
             }
-            val progressKey = isPlaying to isScrubbing
-            if (progressEffectKey != progressKey) {
-                progressEffectKey = progressKey
+            val playing = isPlaying
+            val scrubbing = isScrubbing
+            if (!progressEffectInitialized || progressEffectPlaying != playing || progressEffectScrubbing != scrubbing) {
+                progressEffectInitialized = true
+                progressEffectPlaying = playing
+                progressEffectScrubbing = scrubbing
                 progressEffect?.cancel()
                 progressEffect = if (isPlaying && !isScrubbing) revisionScope.launch {
                     while (true) {

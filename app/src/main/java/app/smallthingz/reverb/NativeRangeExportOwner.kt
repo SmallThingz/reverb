@@ -207,10 +207,19 @@ internal class NativeRangeExportOwner(
 
     private fun refreshAndRender() {
         if (closed) return
-        val key = WaveformKey(state.coarseWaveform, state.coarseWaveformBuiltCount,
-            state.detailWaveform, state.detailWaveformBuiltCount, state.waveformPass)
-        if (waveformKey != key || waveformLoading != state.waveformLoading) {
-            if (waveformKey != key) {
+        val coarse = state.coarseWaveform
+        val coarseCount = state.coarseWaveformBuiltCount
+        val detail = state.detailWaveform
+        val detailCount = state.detailWaveformBuiltCount
+        val pass = state.waveformPass
+        val previousKey = waveformKey
+        val waveformChanged = previousKey == null ||
+            previousKey.coarse !== coarse || previousKey.coarseCount != coarseCount ||
+            previousKey.detail !== detail || previousKey.detailCount != detailCount ||
+            previousKey.pass != pass
+        if (waveformChanged || waveformLoading != state.waveformLoading) {
+            if (waveformChanged) {
+                val key = WaveformKey(coarse, coarseCount, detail, detailCount, pass)
                 waveformKey = key
                 waveformData = ProgressiveWaveformData(key.coarse, key.coarseCount,
                     key.detail, key.detailCount, key.pass)

@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.app.Instrumentation
+import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
@@ -64,6 +65,56 @@ private val textParitySamples = listOf(
     TextParitySample("trailing-newline", "One-shot\n", ReverbTextRole.BODY_MEDIUM, 2),
 )
 
+// Pure viewport planning; no sample is cropped, scaled, skipped or reordered.
+internal data class NativeTextViewportBatch(val first: Int, val endExclusive: Int, val height: Int)
+
+internal fun nativeTextViewportBatches(heights: List<Int>, availableHeight: Int): List<NativeTextViewportBatch> {
+    require(availableHeight > 0 && heights.isNotEmpty())
+    require(heights.all { it in 1..availableHeight }) { "A text sample exceeds the physical viewport" }
+    val batches = mutableListOf<NativeTextViewportBatch>()
+    var first = 0
+    var used = 0
+    heights.forEachIndexed { index, height ->
+        if (height > availableHeight - used) {
+            batches += NativeTextViewportBatch(first, index, used)
+            first = index
+            used = 0
+        }
+        used += height
+    }
+    batches += NativeTextViewportBatch(first, heights.size, used)
+    return batches
+}
+
+private data class TextParityLayout(
+    val configuration: Configuration,
+    val context: Context,
+    val density: Density,
+    val marginPx: Int,
+    val width: Int,
+    val rowHeights: List<Int>,
+    val viewportWidth: Int,
+    val viewportHeight: Int,
+)
+
+private fun textParityLayout(activity: NativeParityActivity, dark: Boolean, fontScale: Float): TextParityLayout {
+    val configuration = Configuration(activity.resources.configuration).apply {
+        this.fontScale = fontScale
+        uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+            if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+    }
+    val context = activity.createConfigurationContext(configuration)
+    val density = Density(context.resources.displayMetrics.density, fontScale)
+    val scale = referenceTextScale(density)
+    val marginPx = with(density) { 8.dp.roundToPx() }
+    val width = minOf(with(density) { 360.dp.roundToPx() }, activity.fixtureRoot.width - marginPx * 2)
+    val heights = textParitySamples.map { sample ->
+        ceil(sample.role.style.resolveMetrics(scale).lineHeightPx * sample.maxLines).toInt() + marginPx
+    }
+    return TextParityLayout(configuration, context, density, marginPx, width, heights,
+        activity.fixtureRoot.width, activity.fixtureRoot.height)
+}
+
 /** Six stable scenes; compares actual pixels and paragraph metrics without modifying device settings. */
 internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
@@ -83,7 +134,9 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
         .put("reference", "Actual released ReverbTypography and callback-free Material3 Text; ui-text 1.11.2")
         .put("metric_reference", "Separate onTextLayout route; its raster must equal the callback-free reference")
         .put("candidate", "Ordinary native ReverbParagraphView using Android TextPaint/StaticLayout and native role metadata")
-        .put("comparison", "Exact ARGB and text metrics; no masks or tolerance")
+        .put("comparison", "Exact ARGB and text metrics per viewport batch; no masks or tolerance")
+        .put("schema", "native_text_viewport_batches_v1")
+        .put("sample_names", JSONArray(textParitySamples.map { it.name }))
         .put("sdk", Build.VERSION.SDK_INT)
         .put("device", "${Build.MANUFACTURER}/${Build.MODEL}")
         .put("cases", cases)
@@ -100,60 +153,100 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
             val name = "${if (dark) "dark" else "light"}-font${fontScale}"
             val entry = JSONObject().put("name", name).put("dark", dark).put("font_scale", fontScale.toDouble())
             cases.put(entry)
-            val bitmaps = mutableListOf<Bitmap>()
-            val metrics = List(5) { linkedMapOf<String, JSONObject>() }
+            val batchEntries = JSONArray()
+            entry.put("batches", batchEntries)
             var caseFailure: Throwable? = null
             try {
-                repeat(5) { pass ->
-                    bitmaps += captureNativeParityContent(instrumentation, host) {
-                        showTextParityCase(
-                            host, typography, dark, fontScale,
-                            compose = pass % 2 == 0,
-                            collectReferenceMetrics = pass == 4,
-                            metrics = metrics[pass],
-                        )
+                val layout = nativeParityOnMain(instrumentation) { textParityLayout(host, dark, fontScale) }
+                val availableHeight = layout.viewportHeight - layout.marginPx * 2
+                val plan = nativeTextViewportBatches(layout.rowHeights, availableHeight)
+                entry.put("viewport_width", layout.viewportWidth).put("viewport_height", layout.viewportHeight)
+                    .put("margin_px", layout.marginPx).put("fixture_width", layout.width)
+                    .put("available_height", availableHeight)
+                    .put("sample_heights", JSONArray(layout.rowHeights))
+                check(layout.width > 0)
+                val coveredSamples = mutableListOf<String>()
+                var scenePassed = true
+                var differentPixels = 0L
+                var metricRouteDifferentPixels = 0L
+                var sceneMetricsEqual = true
+                for ((batchIndex, batch) in plan.withIndex()) {
+                    val selectedSamples = textParitySamples.subList(batch.first, batch.endExclusive)
+                    val batchName = "$name-batch$batchIndex"
+                    val batchEntry = JSONObject().put("index", batchIndex)
+                        .put("first_sample", batch.first).put("end_sample_exclusive", batch.endExclusive)
+                        .put("sample_names", JSONArray(selectedSamples.map { it.name }))
+                        .put("width", layout.width).put("height", batch.height)
+                    batchEntries.put(batchEntry)
+                    val bitmaps = mutableListOf<Bitmap>()
+                    val metrics = List(5) { linkedMapOf<String, JSONObject>() }
+                    try {
+                        repeat(5) { pass ->
+                            bitmaps += captureNativeParityContent(instrumentation, host) {
+                                showTextParityCase(
+                                    host, typography, dark, fontScale, batch, layout,
+                                    compose = pass % 2 == 0,
+                                    collectReferenceMetrics = pass == 4,
+                                    metrics = metrics[pass],
+                                )
+                            }
+                        }
+                        check(bitmaps.all { it.width == layout.width && it.height == batch.height })
+                        val names = listOf("compose", "native", "compose-repeat", "native-repeat", "compose-metric-route")
+                        val pngNames = names.map { "$batchName-$it.png" }
+                        bitmaps.forEachIndexed { index, bitmap ->
+                            saveNativeParityBitmap(directory, pngNames[index], bitmap)
+                        }
+                        batchEntry.put("png_files", JSONArray(pngNames))
+                        val referenceStable = compareNativeParityPixels(bitmaps[0], bitmaps[2])
+                        val nativeStable = compareNativeParityPixels(bitmaps[1], bitmaps[3])
+                        val difference = compareNativeParityPixels(bitmaps[0], bitmaps[1])
+                        val metricRouteAgreement = compareNativeParityPixels(bitmaps[0], bitmaps[4])
+                        val metricEntries = JSONArray()
+                        var metricsEqual = true
+                        for (sample in selectedSamples) {
+                            val reference = checkNotNull(metrics[4][sample.name]) { "Reference metrics missing: ${sample.name}" }
+                            val candidate = checkNotNull(metrics[1][sample.name]) { "Native metrics missing: ${sample.name}" }
+                            val equal = listOf("width", "height", "line_count", "first_baseline", "last_baseline", "alignment_first_baseline", "alignment_last_baseline").all { key ->
+                                reference.getDouble(key) == candidate.getDouble(key)
+                            }
+                            metricsEqual = metricsEqual && equal
+                            metricEntries.put(JSONObject().put("sample", sample.name)
+                                .put("reference", reference).put("candidate", candidate).put("equal", equal))
+                        }
+                        val passed = metricsEqual &&
+                            referenceStable.getLong("different_pixels") == 0L &&
+                            nativeStable.getLong("different_pixels") == 0L &&
+                            metricRouteAgreement.getLong("different_pixels") == 0L &&
+                            difference.getLong("different_pixels") == 0L
+                        batchEntry.put("reference_stability", referenceStable).put("native_stability", nativeStable)
+                            .put("reference_metric_route_agreement", metricRouteAgreement)
+                            .put("difference", difference).put("paragraph_metrics", metricEntries).put("passed", passed)
+                        coveredSamples += selectedSamples.map { it.name }
+                        scenePassed = scenePassed && passed
+                        differentPixels += difference.getLong("different_pixels")
+                        metricRouteDifferentPixels += metricRouteAgreement.getLong("different_pixels")
+                        sceneMetricsEqual = sceneMetricsEqual && metricsEqual
+                    } catch (error: Throwable) {
+                        batchEntry.put("passed", false).put("error", android.util.Log.getStackTraceString(error))
+                        throw error
+                    } finally {
+                        bitmaps.forEach(Bitmap::recycle)
                     }
                 }
-                val names = listOf("compose", "native", "compose-repeat", "native-repeat", "compose-metric-route")
-                bitmaps.forEachIndexed { index, bitmap ->
-                    saveNativeParityBitmap(directory, "$name-${names[index]}.png", bitmap)
-                }
-                val referenceStable = compareNativeParityPixels(bitmaps[0], bitmaps[2])
-                val nativeStable = compareNativeParityPixels(bitmaps[1], bitmaps[3])
-                val difference = compareNativeParityPixels(bitmaps[0], bitmaps[1])
-                val metricRouteAgreement = compareNativeParityPixels(bitmaps[0], bitmaps[4])
-                val metricEntries = JSONArray()
-                var metricsEqual = true
-                for (sample in textParitySamples) {
-                    val reference = checkNotNull(metrics[4][sample.name]) { "Reference metrics missing: ${sample.name}" }
-                    val candidate = checkNotNull(metrics[1][sample.name]) { "Native metrics missing: ${sample.name}" }
-                    val equal = listOf("width", "height", "line_count", "first_baseline", "last_baseline", "alignment_first_baseline", "alignment_last_baseline").all { key ->
-                        reference.getDouble(key) == candidate.getDouble(key)
-                    }
-                    metricsEqual = metricsEqual && equal
-                    metricEntries.put(JSONObject().put("sample", sample.name)
-                        .put("reference", reference).put("candidate", candidate).put("equal", equal))
-                }
-                val passed = metricsEqual &&
-                    referenceStable.getLong("different_pixels") == 0L &&
-                    nativeStable.getLong("different_pixels") == 0L &&
-                    metricRouteAgreement.getLong("different_pixels") == 0L &&
-                    difference.getLong("different_pixels") == 0L
-                entry.put("reference_stability", referenceStable).put("native_stability", nativeStable)
-                    .put("reference_metric_route_agreement", metricRouteAgreement)
-                    .put("difference", difference).put("paragraph_metrics", metricEntries).put("passed", passed)
+                check(coveredSamples == textParitySamples.map { it.name }) { "Text batch coverage is incomplete or reordered" }
+                entry.put("completed_samples", JSONArray(coveredSamples)).put("passed", scenePassed)
                 completed++
-                if (!passed) mismatches++
-                report.append(if (passed) "PASS " else "FAIL ").append("native_text_parity ")
-                    .append(name).append(" differing_pixels=").append(difference.getLong("different_pixels"))
-                    .append(" metric_route_differing_pixels=").append(metricRouteAgreement.getLong("different_pixels"))
-                    .append(" metrics_equal=").append(metricsEqual).append('\n')
+                if (!scenePassed) mismatches++
+                report.append(if (scenePassed) "PASS " else "FAIL ").append("native_text_parity ")
+                    .append(name).append(" differing_pixels=").append(differentPixels)
+                    .append(" metric_route_differing_pixels=").append(metricRouteDifferentPixels)
+                    .append(" metrics_equal=").append(sceneMetricsEqual).append('\n')
             } catch (error: Throwable) {
                 caseFailure = error
                 entry.put("passed", false).put("error", android.util.Log.getStackTraceString(error))
                 throw error
             } finally {
-                bitmaps.forEach(Bitmap::recycle)
                 writeTextParityEvidence(directory, result, caseFailure)
             }
         }
@@ -195,19 +288,20 @@ private fun showTextParityCase(
     typography: Typography,
     dark: Boolean,
     fontScale: Float,
+    batch: NativeTextViewportBatch,
+    planned: TextParityLayout,
     compose: Boolean,
     collectReferenceMetrics: Boolean,
     metrics: MutableMap<String, JSONObject>,
 ): View {
     check(activity.hasWindowFocus())
-    val configuration = Configuration(activity.resources.configuration).apply {
-        this.fontScale = fontScale
-        uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
-            if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
-    }
-    val context = activity.createConfigurationContext(configuration)
-    val density = Density(context.resources.displayMetrics.density, fontScale)
-    val scale = referenceTextScale(density)
+    val layout = textParityLayout(activity, dark, fontScale)
+    check(layout.width == planned.width && layout.rowHeights == planned.rowHeights &&
+        layout.viewportWidth == planned.viewportWidth && layout.viewportHeight == planned.viewportHeight &&
+        layout.marginPx == planned.marginPx) { "Text fixture viewport changed during capture" }
+    val configuration = layout.configuration
+    val context = layout.context
+    val density = layout.density
     val sharedFontResolver = createFontFamilyResolver(context)
     val nativeDensity = app.smallthingz.nativeui.unit.Density(context)
     val colors = when {
@@ -216,14 +310,12 @@ private fun showTextParityCase(
         dark -> darkColorScheme()
         else -> lightColorScheme()
     }
-    val marginPx = with(density) { 8.dp.roundToPx() }
-    val width = minOf(with(density) { 360.dp.roundToPx() }, activity.fixtureRoot.width - marginPx * 2)
-    val heights = textParitySamples.map { sample ->
-        ceil(sample.role.style.resolveMetrics(scale).lineHeightPx * sample.maxLines).toInt() + marginPx
-    }
-    val height = heights.sum()
+    val marginPx = layout.marginPx
+    val width = layout.width
+    val heights = layout.rowHeights
+    val height = batch.height
     check(width > 0 && height <= activity.fixtureRoot.height - marginPx * 2) {
-        "Text fixture ${width}x${height} exceeds physical viewport ${activity.fixtureRoot.width}x${activity.fixtureRoot.height}"
+        "Text batch ${width}x${height} exceeds physical viewport ${activity.fixtureRoot.width}x${activity.fixtureRoot.height}"
     }
     activity.fixtureRoot.removeAllViews()
     activity.fixtureRoot.setBackgroundColor(colors.surface.toArgb())
@@ -239,7 +331,8 @@ private fun showTextParityCase(
                 ) {
                     MaterialTheme(colorScheme = colors, typography = typography) {
                         Column(Modifier.fillMaxSize().background(colors.surface)) {
-                            textParitySamples.forEachIndexed { index, sample ->
+                            for (index in batch.first until batch.endExclusive) {
+                                val sample = textParitySamples[index]
                                 Box(Modifier.fillMaxWidth().height(with(density) { heights[index].toDp() })) {
                                     Text(
                                         text = sample.text,
@@ -263,7 +356,8 @@ private fun showTextParityCase(
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             setBackgroundColor(colors.surface.toArgb())
-            textParitySamples.forEachIndexed { index, sample ->
+            for (index in batch.first until batch.endExclusive) {
+                val sample = textParitySamples[index]
                 val row = FrameLayout(context)
                 val label = ReverbParagraphView(
                     context,
