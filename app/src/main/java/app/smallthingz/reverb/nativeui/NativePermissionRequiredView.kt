@@ -149,6 +149,17 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
     override fun addChildrenForAccessibility(outChildren:ArrayList<View>) {
         val start=outChildren.size
         super.addChildrenForAccessibility(outChildren)
+        if(start==outChildren.size)return
+        val admit=host.admitChildren
+        if(admit!=null) {
+            // Main owns the bound action nodes; wrappers map to those nodes in one capture.
+            admit(outChildren,start) {child->when {
+                child===allow->allow.accessibilitySemanticView
+                child===libraryAction->libraryAction.accessibilitySemanticView
+                else->child
+            }}
+            return
+        }
         for(index in outChildren.lastIndex downTo start) {
             val child=outChildren[index]
             val present=when {
@@ -225,6 +236,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     }
     override fun onMeasure(w:Int,h:Int){surface.measure(w,h);setMeasuredDimension(surface.measuredWidth,surface.measuredHeight)}
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int){surface.layout(0,0,width,height)}
+    val accessibilitySemanticView:View get()=visual
     fun isAccessibilityNodePresent():Boolean=visual.mergedRowAccessibility.isNodePresent()
     override fun close(){action=null;click.cancel();controller.detached();glyphLease.close();parentLease.close();clipLease.close()}
 

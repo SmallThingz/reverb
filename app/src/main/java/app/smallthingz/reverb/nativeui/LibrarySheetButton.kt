@@ -33,6 +33,7 @@ internal class NativeMaterialButtonHost(
     val registerTextClip:(View)->AutoCloseable,
     private val createHit:(View,List<NativeViewPhasePointerNode>,()->List<NativeViewPointerHitLayout>,
                            (Offset)->Boolean)->NativeViewPointerHitLayout,
+    val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
 ) {
     fun sourceNode(view:View,minimumTouch:Float=0f)=sourceFacts(view,minimumTouch)
     fun hit(view:View,nodes:List<NativeViewPhasePointerNode>,
@@ -82,6 +83,7 @@ internal class LibrarySheetButton(
         addView(surface)
     }
     fun bind(text:String,enabled:Boolean,onClick:()->Unit)=surface.bind(text,enabled,onClick)
+    internal val accessibilitySemanticView:View get()=surface
     internal fun isAccessibilityNodePresent():Boolean=surface.mergedRowAccessibility.isNodePresent()
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(closed || environment===next)return
