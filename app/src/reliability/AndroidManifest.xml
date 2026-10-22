@@ -22,6 +22,7 @@
         <activity
             android:name="app.smallthingz.reverb.NativeParityActivity"
             android:exported="false"
+            android:screenOrientation="landscape"
             android:theme="@style/Theme.Reverb" />
         <provider
             android:name="app.smallthingz.reverb.ReliabilityDocumentsProvider"

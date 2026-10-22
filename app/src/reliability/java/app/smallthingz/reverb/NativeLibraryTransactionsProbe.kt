@@ -93,7 +93,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("limits", "Semantic/View actions, not physical keyboard/IME or full MediaPlayer playback; no Share, Trim, import, permissions or production store")
         .put("passed", false)
     result.put("selector", selector)
-    if (menuOnly) result.put("scope", "One Light/LTR recording menu per renderer; same QA-owned MediaStore fixtures, no menu action")
+    if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no menu action")
     val cases = JSONArray()
     result.put("cases", cases)
     val windowTransitions = JSONArray().also { result.put("window_transitions", it) }
@@ -131,8 +131,29 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        if (menuOnly) {
+            requireNativeParityHost(instrumentation, activity)
+            result.put("landscape_before_touch_mode", nativeParityOnMain(instrumentation) {
+                transactionLandscapeMenuState(activity, activity.window.decorView, requireTouchMode = false)
+            })
+            requireNativeParityHost(instrumentation, activity)
+            // Public test input setup, only while this physical-display QA Activity owns focus.
+            // An unsupported/denied call fails this probe; there is no settings or permission fallback.
+            instrumentation.setInTouchMode(true)
+            awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+            requireNativeParityHost(instrumentation, activity)
+            result.put("landscape_after_touch_mode", nativeParityOnMain(instrumentation) {
+                transactionLandscapeMenuState(activity, activity.window.decorView)
+            })
+        }
         for (compose in listOf(true, false)) {
             val renderer = if (compose) "compose" else "native"
+            if (menuOnly) {
+                requireNativeParityHost(instrumentation, activity)
+                result.put("${renderer}_landscape_before_fixtures", nativeParityOnMain(instrumentation) {
+                    transactionLandscapeMenuState(activity, activity.window.decorView)
+                })
+            }
             val ledger = TransactionFixtures(context, directory, renderer)
             fixtures = ledger
             ledger.admit()
@@ -145,7 +166,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 val scene = captureRegions.optJSONObject(name) ?: JSONObject().also { captureRegions.put(name, it) }
                 val observation = JSONObject().also { scene.put(renderer, it) }
                 val file = current.capture(instrumentation, directory, "$renderer-$name", settle,
-                    observation, observeMenu = name == "menu")
+                    observation, observeMenu = name == "menu", requireLandscapeTouch = menuOnly)
                 captures.getOrPut(name) { linkedMapOf() }[renderer] = file
             }
             if (menuOnly) {
@@ -686,7 +707,7 @@ private class TransactionBoard(
             Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, raw) }))
     }
     fun capture(i: Instrumentation, evidence: File, name: String, settle: Boolean,
-                observation: JSONObject, observeMenu: Boolean): File {
+                observation: JSONObject, observeMenu: Boolean, requireLandscapeTouch: Boolean = false): File {
         if (settle) {
             val duration = (900f * ValueAnimator.getDurationScale().coerceAtLeast(1f)).toLong()
             check(duration <= 15_000L)
@@ -711,6 +732,7 @@ private class TransactionBoard(
                 "Owned transaction capture viewport changed: $name"
             }
             transactionCaptureWindowState(root).also {
+                if (requireLandscapeTouch) it.put("landscape_touch_condition", transactionLandscapeMenuState(host, root))
                 if (observeMenu) it.put("source_owned_layers", observeLibraryMenuLayers(root))
             }
         }
@@ -784,6 +806,22 @@ private class TransactionBoard(
 }
 
 /** Platform-owned overlay regions; do not intersect source/native crops to hide a mismatch. */
+/** Exact retained QA37 condition; callers establish current own-window focus before observation. */
+private fun transactionLandscapeMenuState(host: NativeParityActivity, root: View,
+                                          requireTouchMode: Boolean = true): JSONObject {
+    val bounds = host.windowManager.currentWindowMetrics.bounds
+    val orientation = host.resources.configuration.orientation
+    val state = JSONObject().put("orientation", orientation)
+        .put("window_bounds", bounds.flattenToString()).put("display_id", root.display?.displayId)
+        .put("touch_mode", root.isInTouchMode).put("root_class", root.javaClass.name)
+    check(orientation == Configuration.ORIENTATION_LANDSCAPE &&
+        bounds.width() == 2400 && bounds.height() == 1080 && root.display?.displayId == 0) {
+        "Original landscape menu condition is not present: $state"
+    }
+    check(!requireTouchMode || root.isInTouchMode) { "Original touch-mode menu condition is not present: $state" }
+    return state
+}
+
 private fun transactionCaptureRegion(host: NativeParityActivity, fixture: Rect): Pair<Rect, JSONObject> {
     val decor = host.window.decorView
     val location = IntArray(2).also(decor::getLocationOnScreen)
