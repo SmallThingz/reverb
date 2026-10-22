@@ -52,3 +52,26 @@ internal fun <T : Any, R> nativeRequestSourceOwnerFocus(
 
 internal fun nativeReportsSourceFocusAvailability(retainedAndroidView: Boolean): Boolean =
     retainedAndroidView // UI1.11.2 isInitialFocusOnFocusableAvailable=false.
+
+/** A source focusProperties.onEnter boundary, independent of individual child focusability. */
+internal interface NativeSourceFocusEntryBoundary {
+    val sourceFocusEntryAllowed: Boolean
+}
+
+/** Entering a blocked ancestor is cancelled; moving within it or leaving it remains possible. */
+internal inline fun <T : Any> nativeMayEnterSourceFocus(
+    target: T,
+    active: T?,
+    parent: (T) -> T?,
+): Boolean {
+    var ancestor: T? = target
+    while (ancestor != null) {
+        if (ancestor is NativeSourceFocusEntryBoundary && !ancestor.sourceFocusEntryAllowed) {
+            var source = active
+            while (source != null && source !== ancestor) source = parent(source)
+            if (source == null) return false
+        }
+        ancestor = parent(ancestor)
+    }
+    return true
+}

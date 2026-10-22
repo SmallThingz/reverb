@@ -372,6 +372,11 @@ internal class AudioBlobView(context: Context) : View(context) {
         private val path = Path()
         private val x = FloatArray(FALLBACK_POINTS)
         private val y = FloatArray(FALLBACK_POINTS)
+        private val angles = FloatArray(FALLBACK_POINTS) { index ->
+            index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f
+        }
+        private val cosines = FloatArray(FALLBACK_POINTS) { cos(angles[it]) }
+        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }
         private var width = 0
         private var height = 0
         private var primary = 0
@@ -410,15 +415,15 @@ internal class AudioBlobView(context: Context) : View(context) {
             val cy = height * 0.5f
             val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))
             for (index in 0 until FALLBACK_POINTS) {
-                val angle = index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f
+                val angle = angles[index]
                 val band = bands[index * BAND_COUNT / FALLBACK_POINTS]
                 val idle = if (active) {
                     sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +
                         sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f
                 } else 0f
                 val radius = base + if (active) band * minSize * 0.105f + idle else 0f
-                x[index] = cx + cos(angle) * radius
-                y[index] = cy + sin(angle) * radius
+                x[index] = cx + cosines[index] * radius
+                y[index] = cy + sines[index] * radius
             }
             path.reset()
             path.moveTo((x[0] + x[1]) * 0.5f, (y[0] + y[1]) * 0.5f)

@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import app.smallthingz.reverb.nativeui.ReverbGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbGroupRow
 import app.smallthingz.reverb.nativeui.ReverbPalette
+import java.util.ArrayDeque
 import kotlin.math.roundToInt
 
 /** Keep assertion failures on the instrumentation thread so fixture cleanup and reports still run. */
@@ -64,9 +66,25 @@ class NativeParityActivity : ComponentActivity() {
         private set
     internal var legacyPaletteOracleStatus: String = "Not checked"
         private set
+    private val parityFocusEvents = ArrayDeque<String>(32)
+    private var parityCaptureOrdinal = 0
+
+    private fun recordParityFocusEvent(event: String) {
+        if (parityFocusEvents.size == 32) parityFocusEvents.removeFirst()
+        parityFocusEvents.addLast("${SystemClock.uptimeMillis()}:$event")
+    }
+
+    internal fun recordParityHostCheck(phase: String, beginCapture: Boolean) {
+        if (beginCapture) parityCaptureOrdinal++
+        recordParityFocusEvent("capture=$parityCaptureOrdinal phase=$phase")
+    }
+
+    internal fun parityFocusDiagnostics(): String =
+        "capture=$parityCaptureOrdinal trace=${parityFocusEvents.joinToString(prefix = "[", postfix = "]")}"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        recordParityFocusEvent("onCreate")
         check(packageName == "app.smallthingz.reverb.nativeparity.reliability")
         check(application.javaClass == Application::class.java) {
             "Build with -PreverbNativeParity=true; production Application initialization is forbidden here"
@@ -78,6 +96,36 @@ class NativeParityActivity : ComponentActivity() {
             fixtureRoot.isForceDarkAllowed = false
         }
         setContentView(fixtureRoot)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        recordParityFocusEvent("onStart")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        recordParityFocusEvent("onResume")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        recordParityFocusEvent("onPause")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        recordParityFocusEvent("onStop")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        recordParityFocusEvent("onDestroy")
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        recordParityFocusEvent("onWindowFocusChanged=$hasFocus")
     }
 
     internal fun showCase(case: NativeGroupCase, composeReference: Boolean): View {

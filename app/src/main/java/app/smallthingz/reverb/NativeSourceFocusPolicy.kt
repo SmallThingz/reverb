@@ -181,6 +181,9 @@ internal class NativeSourceFocusPolicy(
     }
 
     private fun requestTarget(candidate: View, direction: Int): Boolean {
+        // Direct leaf requests bypass ViewGroup.addFocusables/onRequestFocusInDescendants.
+        // Keep source candidate ordering, but honor its ancestor onEnter before transferring focus.
+        if (!nativeMayEnterSourceFocus(candidate, state.active) { it.parent as? View }) return false
         // FocusGroupNode supplies the prior actual target rect in the embedded View's coordinates.
         val previous = state.active?.let(::bounds)
         val local = if (retainedAndroidView(candidate) != null && previous != null) {

@@ -178,7 +178,7 @@ internal fun captureNativeParityContent(
     activity: NativeParityActivity,
     render: () -> View,
 ): Bitmap {
-    requireNativeParityHost(instrumentation, activity)
+    requireNativeParityHost(instrumentation, activity, phase = "capture-before-render", beginCapture = true)
     lateinit var content: View
     nativeParityOnMain(instrumentation) { content = render() }
     instrumentation.waitForIdleSync()
@@ -186,7 +186,7 @@ internal fun captureNativeParityContent(
     // A second draw and frame boundary lets queued hardware rendering settle. Repeated
     // reference/native captures above independently reject a nondeterministic result.
     awaitNativeParityDraw(instrumentation, content)
-    requireNativeParityHost(instrumentation, activity)
+    requireNativeParityHost(instrumentation, activity, phase = "capture-after-draw")
     val rectangle = Rect()
     nativeParityOnMain(instrumentation) {
         check(content.isLaidOut && !content.isLayoutRequested && content.isShown && content.isHardwareAccelerated)
@@ -211,7 +211,7 @@ internal fun captureNativeParityContent(
         }
         check(copied.await(5, TimeUnit.SECONDS)) { "PixelCopy timed out" }
         check(status == PixelCopy.SUCCESS) { "PixelCopy failed: $status" }
-        requireNativeParityHost(instrumentation, activity)
+        requireNativeParityHost(instrumentation, activity, phase = "capture-after-pixelcopy")
         return bitmap
     } catch (error: Throwable) {
         try {
@@ -227,18 +227,24 @@ internal fun captureNativeParityContent(
     }
 }
 
-internal fun requireNativeParityHost(instrumentation: Instrumentation, activity: NativeParityActivity) {
+internal fun requireNativeParityHost(
+    instrumentation: Instrumentation,
+    activity: NativeParityActivity,
+    phase: String = "host-check",
+    beginCapture: Boolean = false,
+) {
     nativeParityOnMain(instrumentation) {
+        activity.recordParityHostCheck(phase, beginCapture)
         val finishing = activity.isFinishing
         val windowFocus = activity.hasWindowFocus()
         val shown = activity.fixtureRoot.isShown
         check(!finishing && windowFocus && shown) {
             "QA host is no longer the focused visible Activity; stop without reclaiming focus " +
                 "(finishing=$finishing, ownWindowFocus=$windowFocus, shown=$shown, " +
-                "display=${activity.fixtureRoot.display?.displayId})"
+                "display=${activity.fixtureRoot.display?.displayId}, phase=$phase, ${activity.parityFocusDiagnostics()})"
         }
         check(activity.fixtureRoot.display?.displayId == Display.DEFAULT_DISPLAY) {
-            "Parity fixture requires the actual physical display"
+            "Parity fixture requires the actual physical display (phase=$phase, ${activity.parityFocusDiagnostics()})"
         }
     }
 }

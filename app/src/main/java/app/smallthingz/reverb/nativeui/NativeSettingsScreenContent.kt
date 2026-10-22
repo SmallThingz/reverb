@@ -38,7 +38,7 @@ internal class NativeSettingsScreenContent(
     parentInterested:(NativeDragPointerChange)->Boolean,
     restoredPosition:SettingsListSavedPosition?=null,
     private val changedNodes:()->Unit,
-):ViewGroup(context),AutoCloseable {
+):ViewGroup(context),AutoCloseable,NativeSourceFocusEntryBoundary {
     private var input=initial
     private var environment=initialEnvironment
     private var closed=false
@@ -65,6 +65,7 @@ internal class NativeSettingsScreenContent(
     val sectionContent:SettingsSectionListView? get()=list
     val listViewport:ReverbLibraryRecyclerView? get()=list?.viewport
     val inputAllowed:Boolean get()=owner.acceptsInput()
+    override val sourceFocusEntryAllowed:Boolean get()=inputAllowed
     val gateNode=object:NativeViewPhasePointerNode {
         override val view:View get()=this@NativeSettingsScreenContent
         override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass) {

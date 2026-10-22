@@ -460,12 +460,30 @@
       }
     },
     "src/main/java/app/smallthingz/reverb/AudioBlobView.kt": {
-      "compiled_sha256": "911074b387f5d00e54f2f1e9466d5ef415b7193e95abbcbfc8720a26ffda9e4f",
+      "compiled_sha256": "3fc0556a0df09a3e1440cd22c3076fe8ebd3574002a0903450c7b10720e582d3",
       "normalized_sha256": "85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8",
       "inverse": [
         {
           "from": "        val attackMix = 1f - (1f - 0.68f).pow(normalized)\n        val releaseMix = 1f - (1f - 0.13f).pow(normalized)\n        for (index in currentBands.indices) {\n            val mix = if (targetBands[index] > currentBands[index]) attackMix else releaseMix\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
           "to": "        for (index in currentBands.indices) {\n            val rate = if (targetBands[index] > currentBands[index]) 0.68f else 0.13f\n            val mix = 1f - (1f - rate).pow(normalized)\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        private val angles = FloatArray(FALLBACK_POINTS) { index ->\n            index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f\n        }\n        private val cosines = FloatArray(FALLBACK_POINTS) { cos(angles[it]) }\n        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                val angle = angles[index]\n",
+          "to": "                val angle = index.toFloat() / FALLBACK_POINTS * (PI.toFloat() * 2f) - PI.toFloat() / 2f\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                x[index] = cx + cosines[index] * radius\n                y[index] = cy + sines[index] * radius\n",
+          "to": "                x[index] = cx + cos(angle) * radius\n                y[index] = cy + sin(angle) * radius\n",
           "count": 1,
           "word": false
         }
