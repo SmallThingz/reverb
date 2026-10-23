@@ -362,7 +362,7 @@ private class RangeParityBoard(
                 val location = IntArray(2).also(waveform::getLocationInWindow)
                 val left = (location[0] - rootLocation[0]).toFloat()
                 val top = (location[1] - rootLocation[1]).toFloat()
-                owner.waveformMeasured(app.smallthingz.nativeui.geometry.Rect(left, top, left + waveform.width, top + waveform.height))
+                owner.waveformMeasured(smallthingz.ui.geometry.Rect(left, top, left + waveform.width, top + waveform.height))
             }
             native = content
             val side = (18 * density.density).roundToInt()

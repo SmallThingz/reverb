@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
 import android.os.Bundle
@@ -9,7 +9,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.text.font.FontFamily
+import smallthingz.ui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.InlineFineSeekTarget
 import app.smallthingz.reverb.NativeDragPointerEvent

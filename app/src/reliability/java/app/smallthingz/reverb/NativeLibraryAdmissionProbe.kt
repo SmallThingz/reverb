@@ -6,7 +6,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

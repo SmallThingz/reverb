@@ -31,12 +31,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi

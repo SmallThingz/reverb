@@ -11,9 +11,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.MainThread
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
-import app.smallthingz.nativeui.unit.roundToIntRect
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
+import smallthingz.ui.unit.roundToIntRect
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -76,7 +76,7 @@ internal fun nativeMergedRoleBoundsInScreen(
     parentPlaced: Boolean,
 ): Rect {
     val root = if (parentPlaced) parentGeometry.visibleBoundsInRoot
-        else app.smallthingz.nativeui.geometry.Rect(0f, 0f, 10f, 10f)
+        else smallthingz.ui.geometry.Rect(0f, 0f, 10f, 10f)
     val rounded = root.roundToIntRect()
     val first = parentGeometry.rootToScreen(Offset(rounded.left.toFloat(), rounded.top.toFloat()))
     val second = parentGeometry.rootToScreen(Offset(rounded.right.toFloat(), rounded.bottom.toFloat()))
@@ -197,14 +197,14 @@ internal class ReverbMergedRowAccessibility(
         val compat = AccessibilityNodeInfoCompat.wrap(info)
         compat.roleDescription = null
         compat.stateDescription = if (role == NativeMergedRowRole.SWITCH) host.context.getString(
-            if (current.checked == true) app.smallthingz.nativeui.R.string.state_on
-            else app.smallthingz.nativeui.R.string.state_off) else null
+            if (current.checked == true) smallthingz.ui.R.string.state_on
+            else smallthingz.ui.R.string.state_off) else null
         info.isCheckable = role == NativeMergedRowRole.SWITCH
         info.isChecked = role == NativeMergedRowRole.SWITCH && current.checked == true
         info.isSelected = current.selected == true
         if (role == NativeMergedRowRole.RADIO_BUTTON) {
             compat.stateDescription = host.context.getString(if (current.selected == true)
-                app.smallthingz.nativeui.R.string.selected else app.smallthingz.nativeui.R.string.not_selected)
+                smallthingz.ui.R.string.selected else smallthingz.ui.R.string.not_selected)
             info.isCheckable = true
             info.isChecked = current.selected == true
             info.isSelected = false
@@ -265,9 +265,9 @@ internal class ReverbMergedRowAccessibility(
             NativeMergedRowRole.BUTTON -> info.className = "android.widget.Button"
             NativeMergedRowRole.RADIO_BUTTON -> info.className = "android.widget.RadioButton"
             NativeMergedRowRole.SWITCH -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
-                host.context.getString(app.smallthingz.nativeui.R.string.switch_role)
+                host.context.getString(smallthingz.ui.R.string.switch_role)
             NativeMergedRowRole.TAB -> AccessibilityNodeInfoCompat.wrap(info).roleDescription =
-                host.context.getString(app.smallthingz.nativeui.R.string.tab)
+                host.context.getString(smallthingz.ui.R.string.tab)
         }
     }
 

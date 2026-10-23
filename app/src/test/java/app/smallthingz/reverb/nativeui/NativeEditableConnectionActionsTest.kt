@@ -2,12 +2,12 @@ package app.smallthingz.reverb.nativeui
 
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
-import app.smallthingz.nativeui.text.TextRange
-import app.smallthingz.nativeui.text.input.CommitTextCommand
-import app.smallthingz.nativeui.text.input.EditCommand
-import app.smallthingz.nativeui.text.input.EditProcessor
-import app.smallthingz.nativeui.text.input.SetSelectionCommand
-import app.smallthingz.nativeui.text.input.TextFieldValue
+import smallthingz.ui.text.TextRange
+import smallthingz.ui.text.input.CommitTextCommand
+import smallthingz.ui.text.input.EditCommand
+import smallthingz.ui.text.input.EditProcessor
+import smallthingz.ui.text.input.SetSelectionCommand
+import smallthingz.ui.text.input.TextFieldValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

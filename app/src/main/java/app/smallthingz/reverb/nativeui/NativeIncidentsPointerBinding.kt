@@ -3,9 +3,9 @@ package app.smallthingz.reverb.nativeui
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.NativeClickPhaseNode
 import app.smallthingz.reverb.NativeDragPointerChange

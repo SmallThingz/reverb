@@ -13,7 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import app.smallthingz.nativeui.text.style.TextOverflow
+import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.NativeClickPhaseEndpoint

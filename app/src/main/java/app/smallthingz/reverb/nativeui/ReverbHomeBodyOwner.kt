@@ -5,8 +5,8 @@ import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
 import app.smallthingz.reverb.NativeHomeHorizontalDrag
 import app.smallthingz.reverb.NativePagerTouchRoot
 import app.smallthingz.reverb.ReverbService.BufferSlot

@@ -1,11 +1,11 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.animation.core.Animatable
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.runtime.derivedStateOf
-import app.smallthingz.nativeui.runtime.getValue
-import app.smallthingz.nativeui.runtime.mutableFloatStateOf
-import app.smallthingz.nativeui.runtime.setValue
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.runtime.derivedStateOf
+import smallthingz.ui.runtime.getValue
+import smallthingz.ui.runtime.mutableFloatStateOf
+import smallthingz.ui.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job

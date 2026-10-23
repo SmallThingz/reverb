@@ -4,9 +4,9 @@ import android.content.Context
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewTreeObserver
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.runtime.withFrameNanos
-import app.smallthingz.nativeui.platform.AccessibilityManager
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.withFrameNanos
+import smallthingz.ui.platform.AccessibilityManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle

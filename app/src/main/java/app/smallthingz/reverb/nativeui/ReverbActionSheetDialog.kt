@@ -20,12 +20,12 @@ import android.view.WindowManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentDialog
 import androidx.activity.OnBackPressedCallback
-import app.smallthingz.nativeui.animation.core.Animatable
-import app.smallthingz.nativeui.animation.core.CubicBezierEasing
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
-import app.smallthingz.nativeui.graphics.Color as ComposeColor
-import app.smallthingz.nativeui.graphics.luminance
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.CubicBezierEasing
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
+import smallthingz.ui.graphics.Color as ComposeColor
+import smallthingz.ui.graphics.luminance
 import androidx.core.graphics.Insets
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -389,7 +389,7 @@ internal class SheetScrim(context:Context,color:Int,private val action:()->Unit)
     var opacity=0f
         set(value) {if(field!=value){field=value;invalidate()}}
     init {
-        contentDescription=context.getString(app.smallthingz.nativeui.R.string.close_sheet)
+        contentDescription=context.getString(smallthingz.ui.R.string.close_sheet)
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
         isClickable=true
         isScreenReaderFocusable=true

@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.runtime.MutableFloatState
-import app.smallthingz.nativeui.runtime.MutableIntState
-import app.smallthingz.nativeui.runtime.MutableState
+import smallthingz.ui.runtime.MutableFloatState
+import smallthingz.ui.runtime.MutableIntState
+import smallthingz.ui.runtime.MutableState
 
 /**
  * Native-render invalidation only. Storage remains the exact released snapshot state, including

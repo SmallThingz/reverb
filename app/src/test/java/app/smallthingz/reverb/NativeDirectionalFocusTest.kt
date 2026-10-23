@@ -1,7 +1,7 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.focus.FocusDirection
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.focus.FocusDirection
+import smallthingz.ui.geometry.Rect
 import org.junit.Assert.*
 import org.junit.Test
 

@@ -3,7 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope

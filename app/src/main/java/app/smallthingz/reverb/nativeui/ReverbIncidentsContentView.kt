@@ -9,8 +9,8 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import androidx.core.graphics.Insets
 import androidx.recyclerview.widget.DiffUtil
@@ -125,7 +125,7 @@ internal class ReverbIncidentsContentView(
     fun semanticsClip(view: View): NativeTextSemanticsClip = when {
         view === this || view === list ||
             (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).getChildAt(0) === view) ->
-            NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+            NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }
 

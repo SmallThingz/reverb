@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
-import app.smallthingz.nativeui.input.pointer.PointerType
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
+import smallthingz.ui.input.pointer.PointerType
 import org.junit.Assert.*
 import org.junit.Test
 

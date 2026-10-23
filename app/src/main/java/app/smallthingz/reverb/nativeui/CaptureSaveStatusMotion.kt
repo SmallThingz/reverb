@@ -4,12 +4,12 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.AnimationVector2D
-import app.smallthingz.nativeui.animation.core.Spring
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.unit.IntOffset
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.AnimationVector2D
+import smallthingz.ui.animation.core.Spring
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.unit.IntOffset
 import kotlin.math.roundToLong
 
 /** Slide/fade never changes measured card height; only the completed exit removes the subtree. */

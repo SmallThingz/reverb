@@ -8,17 +8,17 @@ import android.animation.ValueAnimator
 import android.view.Choreographer
 import android.view.View
 import androidx.annotation.MainThread
-import app.smallthingz.nativeui.animation.VectorConverter
-import app.smallthingz.nativeui.animation.core.AnimationVector
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.AnimationVector4D
-import app.smallthingz.nativeui.animation.core.SpringSpec
-import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
-import app.smallthingz.nativeui.animation.core.TwoWayConverter
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.VisibilityThreshold
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.unit.Dp
+import smallthingz.ui.animation.VectorConverter
+import smallthingz.ui.animation.core.AnimationVector
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.AnimationVector4D
+import smallthingz.ui.animation.core.SpringSpec
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.TwoWayConverter
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.VisibilityThreshold
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.unit.Dp
 
 /**
  * The released animate*AsState spring math and interruption seam, without Composition,

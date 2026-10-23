@@ -42,8 +42,8 @@ internal class NativeRangeEndpointActions(
         R.string.range_start_accessibility else R.string.range_end_accessibility)
     private val earlier = view.context.getString(R.string.range_endpoint_earlier)
     private val later = view.context.getString(R.string.range_endpoint_later)
-    private val earlierId = app.smallthingz.nativeui.R.id.accessibility_custom_action_0
-    private val laterId = app.smallthingz.nativeui.R.id.accessibility_custom_action_1
+    private val earlierId = smallthingz.ui.R.id.accessibility_custom_action_0
+    private val laterId = smallthingz.ui.R.id.accessibility_custom_action_1
     private val textAccessibility = PlainTextAccessibility(view, window,
         snapshot = { PlainTextAccessibilitySnapshot(label, { null }, { null }) },
         exposed = { alive && sourceNode().present }, descriptionOnly = true)

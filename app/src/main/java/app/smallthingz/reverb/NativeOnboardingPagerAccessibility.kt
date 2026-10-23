@@ -16,8 +16,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.MainThread
 import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
 import app.smallthingz.reverb.nativeui.nativeMergedRoleBoundsInScreen
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToLong

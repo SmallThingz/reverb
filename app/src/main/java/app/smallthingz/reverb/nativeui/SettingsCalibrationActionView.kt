@@ -11,8 +11,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.toArgb
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.toArgb
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost

@@ -91,7 +91,7 @@ internal class NativeSheetDragHandle(
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
         info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_LONG_CLICK,
-            context.getString(app.smallthingz.nativeui.R.string.tooltip_label)))
+            context.getString(smallthingz.ui.R.string.tooltip_label)))
         info.addAction(AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_DISMISS,
             context.getString(app.smallthingz.reverb.R.string.native_sheet_dismiss_description)))
         sourceNode?.invoke()?.populate(info)

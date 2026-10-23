@@ -63,11 +63,30 @@ class NativeUiBootstrapTest(unittest.TestCase):
         self.assertEqual('HEAD', self.git(clone / 'native-ui', 'rev-parse', '--abbrev-ref', 'HEAD'))
         self.assertEqual('', self.git(clone, 'status', '--porcelain'))
         self.assertFalse(self.bootstrap(clone, '--check')['initialized'])
+        remote = 'https://github.com/SmallThingz/kotlin-ui.git'
+        self.assertEqual(remote, self.git(clone, 'config', '--local', '--get',
+                                         'submodule.native-ui.url'))
+        self.assertEqual(remote, self.git(clone / 'native-ui', 'remote', 'get-url', 'origin'))
+
+    def test_existing_local_remote_overrides_are_preserved(self):
+        root = self.project(repository=True)
+        self.bootstrap(root)
+        parent_remote = 'https://example.invalid/parent-override.git'
+        child_remote = 'https://example.invalid/library-override.git'
+        self.git(root, 'config', '--local', 'submodule.native-ui.url', parent_remote)
+        self.git(root / 'native-ui', 'remote', 'set-url', 'origin', child_remote)
+        self.bootstrap(root)
+        self.bootstrap(root, '--check')
+        self.assertEqual(parent_remote, self.git(root, 'config', '--local', '--get',
+                                                'submodule.native-ui.url'))
+        self.assertEqual(child_remote, self.git(root / 'native-ui', 'remote', 'get-url', 'origin'))
 
     def test_source_archive_initializes_without_parent_git(self):
         root = self.project()
         self.assertFalse(self.bootstrap(root)['parent_gitlink_verified'])
         self.assertFalse(self.bootstrap(root)['initialized'])
+        self.assertEqual('https://github.com/SmallThingz/kotlin-ui.git',
+                         self.git(root / 'native-ui', 'remote', 'get-url', 'origin'))
 
     def test_ignored_build_cache_does_not_block(self):
         root = self.project()

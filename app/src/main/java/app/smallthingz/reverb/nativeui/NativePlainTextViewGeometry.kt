@@ -13,10 +13,10 @@ import android.os.Build
 import android.view.View
 import androidx.annotation.MainThread
 import androidx.annotation.RequiresApi
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
-import app.smallthingz.nativeui.graphics.Matrix
-import app.smallthingz.nativeui.graphics.setFrom
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
+import smallthingz.ui.graphics.Matrix
+import smallthingz.ui.graphics.setFrom
 
 /** Explicit source semantics clips; absence of knowledge differs from a known unclipped layer. */
 internal sealed interface NativeTextSemanticsClip {

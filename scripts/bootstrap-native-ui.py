@@ -62,9 +62,8 @@ def check_child(path, commit):
 
 
 def register_child():
-    # Absolute paths live only in this checkout's untracked Git configuration.
-    git('config', '--local', 'submodule.native-ui.url', str(BUNDLE))
-    git('config', '--local', 'submodule.native-ui.active', 'true')
+    # Register the published locator without fetching or replacing local overrides.
+    git('submodule', 'init', '--', 'native-ui')
     git('submodule', 'absorbgitdirs', '--', 'native-ui')
 
 
@@ -98,6 +97,10 @@ def main():
             git('clone', '--quiet', '--no-checkout', str(BUNDLE), str(staging))
             git('checkout', '--quiet', '--detach', commit, cwd=staging)
             check_child(staging, commit)
+            # The bundle is the offline transport, not the library's upstream.
+            remote = git('config', '--file', str(ROOT / '.gitmodules'),
+                         '--get', 'submodule.native-ui.url')
+            git('remote', 'set-url', 'origin', remote, cwd=staging)
             if MODULE.exists():
                 require(MODULE.is_dir() and not MODULE.is_symlink() and not any(MODULE.iterdir()),
                         'native-ui changed during bootstrap; existing work was preserved')

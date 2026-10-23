@@ -3,7 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.unit.sp
+import smallthingz.ui.unit.sp
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import java.util.Locale

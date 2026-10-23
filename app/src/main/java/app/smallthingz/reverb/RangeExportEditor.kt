@@ -1,12 +1,12 @@
 package app.smallthingz.reverb
 
 import android.os.SystemClock
-import app.smallthingz.nativeui.runtime.getValue
-import app.smallthingz.nativeui.runtime.mutableFloatStateOf
-import app.smallthingz.nativeui.runtime.mutableIntStateOf
-import app.smallthingz.nativeui.runtime.mutableStateOf
-import app.smallthingz.nativeui.runtime.setValue
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.runtime.getValue
+import smallthingz.ui.runtime.mutableFloatStateOf
+import smallthingz.ui.runtime.mutableIntStateOf
+import smallthingz.ui.runtime.mutableStateOf
+import smallthingz.ui.runtime.setValue
+import smallthingz.ui.geometry.Rect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive

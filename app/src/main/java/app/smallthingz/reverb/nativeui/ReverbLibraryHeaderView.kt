@@ -2,7 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.view.ViewGroup
-import app.smallthingz.nativeui.unit.sp
+import smallthingz.ui.unit.sp
 import kotlin.math.roundToInt
 
 /** FilesScreen.HeaderItem only. The containing list owns its separate 16dp horizontal inset. */

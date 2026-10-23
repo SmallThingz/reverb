@@ -4,23 +4,23 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.VectorConverter
-import app.smallthingz.nativeui.animation.core.AnimationVector
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.AnimationVector2D
-import app.smallthingz.nativeui.animation.core.AnimationVector4D
-import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.animation.core.FiniteAnimationSpec
-import app.smallthingz.nativeui.animation.core.Spring
-import app.smallthingz.nativeui.animation.core.SpringSpec
-import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
-import app.smallthingz.nativeui.animation.core.TwoWayConverter
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.toArgb
-import app.smallthingz.nativeui.unit.IntSize
+import smallthingz.ui.animation.VectorConverter
+import smallthingz.ui.animation.core.AnimationVector
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.AnimationVector2D
+import smallthingz.ui.animation.core.AnimationVector4D
+import smallthingz.ui.animation.core.FastOutSlowInEasing
+import smallthingz.ui.animation.core.FiniteAnimationSpec
+import smallthingz.ui.animation.core.Spring
+import smallthingz.ui.animation.core.SpringSpec
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.TwoWayConverter
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.toArgb
+import smallthingz.ui.unit.IntSize
 import kotlin.math.roundToLong
 
 /** Animatable clock/velocity semantics used by animateAsState and animateContentSize. */

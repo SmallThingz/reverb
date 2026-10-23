@@ -8,7 +8,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
-import app.smallthingz.nativeui.platform.AccessibilityManager
+import smallthingz.ui.platform.AccessibilityManager
 
 /** The source timeout adapter only; reads current user services, never enables or changes them. */
 internal class NativeActivityAccessibilityManager(context: Context) : AccessibilityManager {

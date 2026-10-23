@@ -5,11 +5,11 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.unit.Density
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -90,7 +90,7 @@ internal class OnboardingPageContentView(
     private val progressAccessibility = java.util.IdentityHashMap<SettingsCalibrationProgressView, AutoCloseable>()
     private val accessibilityClips = NativeTextSemanticsClipPolicy { view ->
         if (view === viewport || view is SettingsExpansionView || view.parent is ReverbGroupLayout)
-            NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+            NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else NativeTextSemanticsClip.Unclipped
     }
     private val viewport = NativeVerticalViewport(context, scrollState, density, scrollFrames, scrollScope, scrollNested)

@@ -1,11 +1,11 @@
 package app.smallthingz.reverb
 
 import androidx.activity.OnBackPressedDispatcher
-import app.smallthingz.nativeui.animation.core.Animatable
-import app.smallthingz.nativeui.animation.core.AnimationSpec
-import app.smallthingz.nativeui.animation.core.snap
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.AnimationSpec
+import smallthingz.ui.animation.core.snap
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.NativeLibraryPredictiveBack
 import kotlinx.coroutines.CoroutineScope

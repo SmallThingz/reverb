@@ -20,11 +20,11 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
-import app.smallthingz.nativeui.animation.splineBasedDecay
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.unit.Density
-import app.smallthingz.nativeui.unit.dp
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
+import smallthingz.ui.animation.splineBasedDecay
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.unit.Density
+import smallthingz.ui.unit.dp
+import smallthingz.ui.geometry.Rect as ComposeRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob

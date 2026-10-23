@@ -9,9 +9,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
-import app.smallthingz.nativeui.graphics.Matrix
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
+import smallthingz.ui.graphics.Matrix
 
 /** A copied transform. No mutable View/Matrix state escapes a geometry capture. */
 internal class NativeTextGeometryLayer(

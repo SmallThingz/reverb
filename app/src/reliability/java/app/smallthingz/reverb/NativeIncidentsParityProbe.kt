@@ -398,7 +398,7 @@ internal class IncidentsParityBoard(
                 { listOfNotNull(native) }, { false }, { view ->
                     if (view.parent is ReverbGroupLayout &&
                         (view.parent as ReverbGroupLayout).pointerContent === view)
-                        NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(
+                        NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(
                             0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped
                 }, minimumTouch = { view ->

@@ -11,17 +11,17 @@ import androidx.compose.ui.graphics.toArgb as oracleArgb
 import androidx.compose.ui.input.pointer.util.VelocityTracker as OracleVelocityTracker
 import androidx.compose.ui.unit.Constraints as OracleConstraints
 import androidx.compose.ui.unit.Velocity as OracleVelocity
-import app.smallthingz.nativeui.geometry.Offset as NativeOffset
-import app.smallthingz.nativeui.geometry.Rect as NativeRect
-import app.smallthingz.nativeui.geometry.Size as NativeSize
-import app.smallthingz.nativeui.graphics.Color as NativeColor
-import app.smallthingz.nativeui.graphics.Matrix as NativeMatrix
-import app.smallthingz.nativeui.graphics.colorspace.ColorSpaces as NativeColorSpaces
-import app.smallthingz.nativeui.graphics.lerp as nativeColorLerp
-import app.smallthingz.nativeui.graphics.toArgb as nativeArgb
-import app.smallthingz.nativeui.input.pointer.util.VelocityTracker as NativeVelocityTracker
-import app.smallthingz.nativeui.unit.Constraints as NativeConstraints
-import app.smallthingz.nativeui.unit.Velocity as NativeVelocity
+import smallthingz.ui.geometry.Offset as NativeOffset
+import smallthingz.ui.geometry.Rect as NativeRect
+import smallthingz.ui.geometry.Size as NativeSize
+import smallthingz.ui.graphics.Color as NativeColor
+import smallthingz.ui.graphics.Matrix as NativeMatrix
+import smallthingz.ui.graphics.colorspace.ColorSpaces as NativeColorSpaces
+import smallthingz.ui.graphics.lerp as nativeColorLerp
+import smallthingz.ui.graphics.toArgb as nativeArgb
+import smallthingz.ui.input.pointer.util.VelocityTracker as NativeVelocityTracker
+import smallthingz.ui.unit.Constraints as NativeConstraints
+import smallthingz.ui.unit.Velocity as NativeVelocity
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.random.Random

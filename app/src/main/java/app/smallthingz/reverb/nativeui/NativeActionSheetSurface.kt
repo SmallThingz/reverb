@@ -10,9 +10,9 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import app.smallthingz.nativeui.dsl.child
-import app.smallthingz.nativeui.dsl.nativeView
-import app.smallthingz.nativeui.geometry.Offset
+import smallthingz.ui.dsl.child
+import smallthingz.ui.dsl.nativeView
+import smallthingz.ui.geometry.Offset
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt

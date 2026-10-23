@@ -65,12 +65,12 @@ class ReverbParagraphStylesTest {
                 color = androidx.compose.ui.graphics.Color.Red,
                 textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)),
                 native.hasSameLayoutAffectingAttributes(native.copy(
-                    color = app.smallthingz.nativeui.graphics.Color.Red,
-                    textDecoration = app.smallthingz.nativeui.text.style.TextDecoration.Underline)))
+                    color = smallthingz.ui.graphics.Color.Red,
+                    textDecoration = smallthingz.ui.text.style.TextDecoration.Underline)))
             assertEquals(source.hasSameLayoutAffectingAttributes(source.copy(lineHeight = 17.sp)),
                 native.hasSameLayoutAffectingAttributes(native.copy(
-                    lineHeight = app.smallthingz.nativeui.unit.TextUnit(17f,
-                        app.smallthingz.nativeui.unit.TextUnitType.Sp))))
+                    lineHeight = smallthingz.ui.unit.TextUnit(17f,
+                        smallthingz.ui.unit.TextUnitType.Sp))))
         }
     }
 
@@ -112,7 +112,7 @@ class ReverbParagraphStylesTest {
 
 // Compare independent oracle metadata field-by-field across the production/native type boundary.
 private fun assertReleasedStyle(name: String, expected: TextStyle,
-                                actual: app.smallthingz.nativeui.text.TextStyle) {
+                                actual: smallthingz.ui.text.TextStyle) {
     assertEquals(name, expected.color.value, actual.color.value)
     assertEquals(name, expected.fontSize.isSp, actual.fontSize.isSp)
     assertEquals(name, expected.fontSize.value, actual.fontSize.value, 0f)
@@ -126,7 +126,7 @@ private fun assertReleasedStyle(name: String, expected: TextStyle,
     assertEquals(name, expected.fontFamily == null, actual.fontFamily == null)
     if (expected.fontFamily != null) {
         assertEquals(name, androidx.compose.ui.text.font.FontFamily.SansSerif, expected.fontFamily)
-        assertEquals(name, app.smallthingz.nativeui.text.font.FontFamily.SansSerif, actual.fontFamily)
+        assertEquals(name, smallthingz.ui.text.font.FontFamily.SansSerif, actual.fontFamily)
     }
     assertEquals(name, expected.platformStyle?.paragraphStyle?.includeFontPadding, actual.platformStyle?.includeFontPadding)
     assertLineHeightStyle(name, expected.lineHeightStyle, actual.lineHeightStyle)
@@ -135,15 +135,15 @@ private fun assertReleasedStyle(name: String, expected: TextStyle,
 }
 
 private fun assertLineHeightStyle(name: String, expected: androidx.compose.ui.text.style.LineHeightStyle?,
-                                 actual: app.smallthingz.nativeui.text.style.LineHeightStyle?) {
+                                 actual: smallthingz.ui.text.style.LineHeightStyle?) {
     assertEquals(name, expected == null, actual == null)
     if (expected == null || actual == null) return
     assertEquals(name, expected.alignment == androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
-        actual.alignment == app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Center)
+        actual.alignment == smallthingz.ui.text.style.LineHeightStyle.Alignment.Center)
     assertEquals(name, expected.trim == androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
-        actual.trim == app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.None)
+        actual.trim == smallthingz.ui.text.style.LineHeightStyle.Trim.None)
     assertEquals(name, expected.mode == androidx.compose.ui.text.style.LineHeightStyle.Mode.Fixed,
-        actual.mode == app.smallthingz.nativeui.text.style.LineHeightStyle.Mode.Fixed)
+        actual.mode == smallthingz.ui.text.style.LineHeightStyle.Mode.Fixed)
 }
 
 private fun releasedRoleStyle(role: ReverbTextRole): TextStyle = when (role) {

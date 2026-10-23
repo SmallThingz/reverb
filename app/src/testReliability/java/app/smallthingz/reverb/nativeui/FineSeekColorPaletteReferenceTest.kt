@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.graphics.toArgb as nativeArgb
+import smallthingz.ui.graphics.toArgb as nativeArgb
 import androidx.compose.ui.graphics.Color as ReleasedColor
 import androidx.compose.ui.graphics.lerp as releasedLerp
 import androidx.compose.ui.graphics.toArgb as releasedArgb

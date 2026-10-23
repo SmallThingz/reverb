@@ -4,9 +4,15 @@
   "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
   "normalizations": {
     "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
-      "compiled_sha256": "6f6234c434d115367902753474bf95805b2157ab120338fed2995617847420de",
+      "compiled_sha256": "a584415941699f4fcd226e97be79dd5e5c047e7ebb97f507c58282f0b59ded09",
       "normalized_sha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.",
           "to": "androidx.compose.ui.",
@@ -16,9 +22,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": {
-      "compiled_sha256": "ec3a3c0f3236fdffc3af61fa9cc9835a5de5694374111ab49e41654ecdff2286",
+      "compiled_sha256": "d7879a706a22388312213bad950330b55a7d0e7e71ee821b68b9ba2bd9d60c0b",
       "normalized_sha256": "08b827a9566af730fae1519005de8d48142d6551cfa0aa98aa0760215d6f242c",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 6,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.animation.",
           "to": "androidx.compose.animation.",
@@ -34,9 +46,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": {
-      "compiled_sha256": "3cd97b30c1a4e3a46ce0cc0041f9eaa0d5d2b79f1f2e862ada6fcbd7db0343cc",
+      "compiled_sha256": "b597fed989a48e28ffeffff9e59cdc2cd8b2e5b2343675e7a294d76ea1e009f5",
       "normalized_sha256": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 6,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.animation.",
           "to": "androidx.compose.animation.",
@@ -52,9 +70,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": {
-      "compiled_sha256": "8d2bdb97f5c9ef3b93372e5f5bf548fb6fa6371e449d3b2e05148e2aa2b4e81e",
+      "compiled_sha256": "41c8ae421d81a23ca9e0ed1832ad06a8b80c9872cb811e2026c183e378a9e4f1",
       "normalized_sha256": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 3,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.runtime.",
           "to": "androidx.compose.runtime.",
@@ -64,9 +88,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": {
-      "compiled_sha256": "ab3b9030ad4ccf7d167981f5fa3b0467940cf3557cd6f7f633bb5427ac4ab30b",
+      "compiled_sha256": "6b75438fe5de0cc3ca68e3f668e78ae3228d744cc2f1c3c4fab14a74b5b8ebd6",
       "normalized_sha256": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 5,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.animation.",
           "to": "androidx.compose.animation.",
@@ -82,9 +112,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": {
-      "compiled_sha256": "4649177cad7944890e3d1ea42329914fc41059592cbfa3ac5d961abe021513ab",
+      "compiled_sha256": "c2cde2ee3d6a62298fa1919d393b8936bace4b705bab44fd6d8c9d131d90d2ef",
       "normalized_sha256": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 5,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.runtime.",
           "to": "androidx.compose.runtime.",
@@ -94,9 +130,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "87f1c7c1e72b8e248873b71dd403fb1996de8335c0bff8a57eed99dfb2af51b3",
+      "compiled_sha256": "2b480c11eedd388e3a1b8673f3fe6ac58d6261c00258042ab4f714f36cb4a2b1",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 6,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.runtime.",
           "to": "androidx.compose.runtime.",
@@ -130,9 +172,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": {
-      "compiled_sha256": "063281317d40365b11ea0b5f8de9c6bdb76657f1eb17ce18febcb8dc5ad3509a",
+      "compiled_sha256": "26d886106f039fa25db2d41327592b85af5b91611d732a843928c762704ba086",
       "normalized_sha256": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
       "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 4,
+          "word": false
+        },
         {
           "from": "app.smallthingz.nativeui.runtime.",
           "to": "androidx.compose.runtime.",

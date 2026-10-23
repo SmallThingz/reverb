@@ -22,8 +22,8 @@ import android.view.WindowManager
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.annotation.RequiresApi
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.unit.Density
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.findViewTreeViewModelStoreOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -65,7 +65,7 @@ internal class SettingsMenuWindow(
         width = WindowManager.LayoutParams.WRAP_CONTENT
         height = WindowManager.LayoutParams.WRAP_CONTENT
         format = PixelFormat.TRANSLUCENT
-        title = context.getString(app.smallthingz.nativeui.R.string.default_popup_window_title)
+        title = context.getString(smallthingz.ui.R.string.default_popup_window_title)
     }
     private val visibleFrame = Rect()
     private val location = IntArray(2)

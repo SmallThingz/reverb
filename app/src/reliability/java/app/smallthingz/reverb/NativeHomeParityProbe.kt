@@ -977,7 +977,7 @@ private fun bindHomeParityAccessibility(host: NativeParityActivity, home: Reverb
     fun clip(view: View): NativeTextSemanticsClip = home.topBar.sourceClip(view) ?: when {
         (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view) ||
             view is ReverbHomeControlSurface -> NativeTextSemanticsClip.Rectangle(
-                app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }
     val source = NativeMainAccessibility(host.fixtureRoot, host.fixtureRoot, { listOf(home) },

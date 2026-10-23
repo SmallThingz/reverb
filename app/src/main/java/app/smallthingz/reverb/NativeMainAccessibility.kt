@@ -8,11 +8,11 @@ import android.graphics.Rect
 import android.graphics.Region
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
-import app.smallthingz.nativeui.unit.roundToIntRect
-import app.smallthingz.nativeui.graphics.Matrix
-import app.smallthingz.nativeui.graphics.setFrom
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
+import smallthingz.ui.unit.roundToIntRect
+import smallthingz.ui.graphics.Matrix
+import smallthingz.ui.graphics.setFrom
 import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.nativeui.*
 import java.util.IdentityHashMap

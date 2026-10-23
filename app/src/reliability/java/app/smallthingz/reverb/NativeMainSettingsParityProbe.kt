@@ -28,7 +28,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import app.smallthingz.nativeui.text.font.createFontFamilyResolver
+import smallthingz.ui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle

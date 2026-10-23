@@ -3,7 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.unit.IntSize
+import smallthingz.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.roundToInt
 

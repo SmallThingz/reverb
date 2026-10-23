@@ -18,10 +18,10 @@ import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
-import app.smallthingz.nativeui.animation.core.withInfiniteAnimationFrameNanos
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.animation.core.withInfiniteAnimationFrameNanos
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import kotlinx.coroutines.CoroutineScope
@@ -198,7 +198,7 @@ internal class ReverbIndeterminateLinearProgressView(
         info.contentDescription = null
         info.setBoundsInParent(android.graphics.Rect())
         info.rangeInfo = null
-        AccessibilityNodeInfoCompat.wrap(info).stateDescription = context.getString(app.smallthingz.nativeui.R.string.in_progress)
+        AccessibilityNodeInfoCompat.wrap(info).stateDescription = context.getString(smallthingz.ui.R.string.in_progress)
         info.actionList.toList().forEach(info::removeAction)
         info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

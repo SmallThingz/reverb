@@ -334,17 +334,17 @@ private fun verifyPublicPointerSubset(
                     onClick = {}, onLongClick = { longClicks++ }))
                 val endpoint = ReverbClickPhaseEndpoint(target.view.controller)
                 val node = NativeClickPhaseNode(target.view, endpoint) { false }
-                val point = app.smallthingz.nativeui.geometry.Offset(12.25f, 24.5f)
+                val point = smallthingz.ui.geometry.Offset(12.25f, 24.5f)
                 val transform = NativePointerCoordinates(android.graphics.Matrix(), android.graphics.Matrix(),
-                    app.smallthingz.nativeui.geometry.Offset.Zero)
+                    smallthingz.ui.geometry.Offset.Zero)
                 fun deliver(action: Int, before: Boolean) {
                     val originalClassified = checkNotNull(MotionEvent.obtain(
                         100, 110, action, 3, properties, coords(0), 0, 0, 1f, 1f, 7, 0,
                         InputDevice.SOURCE_STYLUS, host.display!!.displayId, 0, MotionEvent.CLASSIFICATION_DEEP_PRESS))
                     try {
                         val change = NativeDragPointerChange(1, 110, point, point, true, before,
-                            app.smallthingz.nativeui.input.pointer.PointerType.Stylus, point)
-                        val event = NativeDragPointerEvent(listOf(change), app.smallthingz.nativeui.geometry.Offset.Zero)
+                            smallthingz.ui.input.pointer.PointerType.Stylus, point)
+                        val event = NativeDragPointerEvent(listOf(change), smallthingz.ui.geometry.Offset.Zero)
                         node.bindMotion(originalClassified, transform, 1 shl 23)
                         node.dispatch(event, NativePointerPass.INITIAL)
                         node.dispatch(event, NativePointerPass.MAIN)

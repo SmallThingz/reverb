@@ -1,10 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
 import android.view.View
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.unit.Density
 import kotlinx.coroutines.CoroutineScope
 import java.util.EnumMap
 

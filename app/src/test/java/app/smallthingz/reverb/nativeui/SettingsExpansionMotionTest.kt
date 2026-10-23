@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.unit.IntSize
+import smallthingz.ui.unit.IntSize
 import org.junit.Assert.*
 import org.junit.Test
 

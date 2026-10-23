@@ -7,10 +7,10 @@ package app.smallthingz.reverb.nativeui
 import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
-import app.smallthingz.nativeui.animation.core.Animatable
-import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.FastOutSlowInEasing
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.predictiveBackCommitDurationMillis
 import app.smallthingz.reverb.predictiveBackHorizontalDirection

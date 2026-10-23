@@ -30,7 +30,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.compose.runtime.Recomposer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView

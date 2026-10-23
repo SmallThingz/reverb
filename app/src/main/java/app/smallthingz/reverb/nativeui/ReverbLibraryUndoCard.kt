@@ -3,9 +3,9 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.compositeOver
-import app.smallthingz.nativeui.graphics.toArgb
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.compositeOver
+import smallthingz.ui.graphics.toArgb
 import app.smallthingz.reverb.R
 import kotlin.math.ln
 import kotlin.math.max

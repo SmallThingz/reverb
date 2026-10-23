@@ -14,11 +14,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.compositeOver
-import app.smallthingz.nativeui.graphics.toArgb
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.compositeOver
+import smallthingz.ui.graphics.toArgb
+import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.NativeClickPhaseNode
 import app.smallthingz.reverb.NativeDragPointerChange
 import app.smallthingz.reverb.NativeDragPointerEvent

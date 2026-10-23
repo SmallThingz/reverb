@@ -8,11 +8,11 @@ import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.MotionDurationScale
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
-import app.smallthingz.nativeui.platform.AccessibilityManager
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
+import smallthingz.ui.platform.AccessibilityManager
 import androidx.core.view.WindowInsetsCompat
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope

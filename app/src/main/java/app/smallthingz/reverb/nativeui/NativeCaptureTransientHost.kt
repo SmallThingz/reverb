@@ -6,7 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import app.smallthingz.reverb.CaptureSaveStatus
 import app.smallthingz.reverb.NativeCaptureUiOwner
 import app.smallthingz.reverb.NativeCaptureUiState
@@ -184,7 +184,7 @@ private class CaptureStatusBranch(
     private val frames = requireNotNull(scope.coroutineContext[MonotonicFrameClock])
     private val progress: ReverbIncidentLoadingView? = if (saving) object : ReverbIncidentLoadingView(
         context, environment.palette.primary, frames, scope,
-        { scope.coroutineContext[app.smallthingz.nativeui.MotionDurationScale]?.scaleFactor ?: 1f },
+        { scope.coroutineContext[smallthingz.ui.MotionDurationScale]?.scaleFactor ?: 1f },
         strokeWidthDp = 2.5f,
     ) {
         override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =

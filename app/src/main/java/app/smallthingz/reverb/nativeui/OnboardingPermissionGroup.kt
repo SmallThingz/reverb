@@ -2,8 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.view.View
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.unit.Density
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner

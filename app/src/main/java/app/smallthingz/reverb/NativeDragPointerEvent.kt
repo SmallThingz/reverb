@@ -4,10 +4,10 @@
  */
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.input.pointer.PointerType
-import app.smallthingz.nativeui.input.pointer.util.VelocityTracker
-import app.smallthingz.nativeui.unit.Velocity
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.pointer.PointerType
+import smallthingz.ui.input.pointer.util.VelocityTracker
+import smallthingz.ui.unit.Velocity
 
 internal enum class NativePointerPass { INITIAL, MAIN, FINAL }
 internal enum class NativeDragAxis { HORIZONTAL, VERTICAL }

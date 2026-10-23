@@ -1,9 +1,9 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.runtime.getValue
-import app.smallthingz.nativeui.runtime.mutableIntStateOf
-import app.smallthingz.nativeui.runtime.mutableStateOf
-import app.smallthingz.nativeui.runtime.setValue
+import smallthingz.ui.runtime.getValue
+import smallthingz.ui.runtime.mutableIntStateOf
+import smallthingz.ui.runtime.mutableStateOf
+import smallthingz.ui.runtime.setValue
 
 internal class OnboardingBackTarget(val sourcePage: Int, val destinationPage: Int)
 

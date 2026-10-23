@@ -45,9 +45,10 @@ python3 scripts/bootstrap-native-ui.py
 ./gradlew :app:assembleRelease
 ```
 
-The native UI library is a separate Git repository pinned as `native-ui`.
+The native UI library is a separate Git repository pinned as `native-ui`, with
+`https://github.com/SmallThingz/kotlin-ui.git` as its upstream locator.
 The bootstrap command verifies and restores it from the committed offline bundle;
 it does not fetch from a network or overwrite local library changes. Use the same
-step after a plain clone, in a fresh CI checkout or in a source archive. The bundled
-locator uses this bootstrap flow, not `git clone --recurse-submodules` or generic
-`git submodule update --init`. See [Native UI](docs/native-ui.md).
+step after a plain clone, in a fresh CI checkout or in a source archive. Standard
+Git submodule commands use the upstream network locator; the bootstrap remains
+the offline alternative. See [Native UI](docs/native-ui.md).

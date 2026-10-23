@@ -4,10 +4,10 @@ import androidx.compose.runtime.MonotonicFrameClock as OracleClock
 import androidx.compose.runtime.PausableMonotonicFrameClock as OraclePausableClock
 import androidx.compose.runtime.mutableFloatStateOf as oracleFloatState
 import androidx.compose.runtime.mutableStateOf as oracleState
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock as NativeClock
-import app.smallthingz.nativeui.runtime.PausableMonotonicFrameClock as NativePausableClock
-import app.smallthingz.nativeui.runtime.mutableFloatStateOf as nativeFloatState
-import app.smallthingz.nativeui.runtime.mutableStateOf as nativeState
+import smallthingz.ui.runtime.MonotonicFrameClock as NativeClock
+import smallthingz.ui.runtime.PausableMonotonicFrameClock as NativePausableClock
+import smallthingz.ui.runtime.mutableFloatStateOf as nativeFloatState
+import smallthingz.ui.runtime.mutableStateOf as nativeState
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin

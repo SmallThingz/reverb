@@ -5,7 +5,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.util.lerp
+import smallthingz.ui.util.lerp
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min

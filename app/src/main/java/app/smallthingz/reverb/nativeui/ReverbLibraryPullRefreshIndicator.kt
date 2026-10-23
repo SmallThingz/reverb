@@ -15,9 +15,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.animation.core.Animatable
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import kotlinx.coroutines.CoroutineScope
@@ -52,8 +52,8 @@ internal class ReverbLibraryPullRefreshIndicator(
     private var currentRefreshing = owner.isRefreshing
     private var arrow: PullArrowView? = null
     private var spinner: ReverbIncidentLoadingView? = null
-    private var arrowFade: Animatable<Float, app.smallthingz.nativeui.animation.core.AnimationVector1D>? = null
-    private var spinnerFade: Animatable<Float, app.smallthingz.nativeui.animation.core.AnimationVector1D>? = null
+    private var arrowFade: Animatable<Float, smallthingz.ui.animation.core.AnimationVector1D>? = null
+    private var spinnerFade: Animatable<Float, smallthingz.ui.animation.core.AnimationVector1D>? = null
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -321,7 +321,7 @@ private class PullArrowView(
                 else -> (normalized * 100f).roundToInt().coerceIn(1, 99)
             }
             AccessibilityNodeInfoCompat.wrap(info).stateDescription =
-                context.getString(app.smallthingz.nativeui.R.string.template_percent, percent)
+                context.getString(smallthingz.ui.R.string.template_percent, percent)
         }
     }
 }

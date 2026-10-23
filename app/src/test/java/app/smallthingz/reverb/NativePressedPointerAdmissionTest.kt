@@ -2,8 +2,8 @@ package app.smallthingz.reverb
 
 import android.view.InputDevice
 import android.view.MotionEvent
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.input.pointer.PointerType
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.pointer.PointerType
 import org.junit.Assert.*
 import org.junit.Test
 

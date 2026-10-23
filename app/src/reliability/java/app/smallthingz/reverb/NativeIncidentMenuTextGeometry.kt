@@ -11,8 +11,8 @@ import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.Paragraph
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject

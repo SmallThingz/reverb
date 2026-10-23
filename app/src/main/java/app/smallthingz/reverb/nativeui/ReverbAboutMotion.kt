@@ -6,15 +6,15 @@
 
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.AnimationVector2D
-import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.animation.core.FiniteAnimationSpec
-import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.unit.IntOffset
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.AnimationVector2D
+import smallthingz.ui.animation.core.FastOutSlowInEasing
+import smallthingz.ui.animation.core.FiniteAnimationSpec
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.unit.IntOffset
 import app.smallthingz.reverb.predictiveBackCommitDurationMillis
 import kotlin.math.roundToLong
 

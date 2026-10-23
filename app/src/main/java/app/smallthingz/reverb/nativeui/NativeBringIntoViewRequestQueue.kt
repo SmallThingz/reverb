@@ -17,7 +17,7 @@
 package app.smallthingz.reverb.nativeui
 
 import app.smallthingz.reverb.nativeui.NativeContentInViewOwner.Request
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.geometry.Rect
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.contract
 import kotlin.coroutines.resume

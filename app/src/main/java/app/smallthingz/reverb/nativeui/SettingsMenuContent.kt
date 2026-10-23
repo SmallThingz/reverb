@@ -20,10 +20,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.unit.Density
 import androidx.core.view.ViewCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.max

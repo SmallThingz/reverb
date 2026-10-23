@@ -5,7 +5,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import app.smallthingz.nativeui.text.TextStyle
+import smallthingz.ui.text.TextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -51,7 +51,7 @@ class ReverbAboutRepositoryColorTest {
         val palette = base.copy(surfaceContainerHighest = base.surfaceVariant)
         val explicit = Color(0x80426A91)
         assertEquals(explicit.toArgb(),
-            reverbAboutRepositoryTitleColor(palette, TextStyle(color = app.smallthingz.nativeui.graphics.Color(explicit.toArgb()))))
+            reverbAboutRepositoryTitleColor(palette, TextStyle(color = smallthingz.ui.graphics.Color(explicit.toArgb()))))
         assertEquals(base.onSurfaceVariant, reverbAboutRepositoryContentColor(palette))
     }
 }

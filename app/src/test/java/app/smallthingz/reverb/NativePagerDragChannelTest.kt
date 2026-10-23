@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.unit.Density
-import app.smallthingz.nativeui.unit.Velocity
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.unit.Density
+import smallthingz.ui.unit.Velocity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

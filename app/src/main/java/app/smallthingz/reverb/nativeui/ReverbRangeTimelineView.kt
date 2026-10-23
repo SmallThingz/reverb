@@ -5,11 +5,11 @@ import android.graphics.Outline
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import app.smallthingz.nativeui.geometry.Rect
-import app.smallthingz.nativeui.text.PlatformTextStyle
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.text.font.FontWeight
-import app.smallthingz.nativeui.unit.sp
+import smallthingz.ui.geometry.Rect
+import smallthingz.ui.text.PlatformTextStyle
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.text.font.FontWeight
+import smallthingz.ui.unit.sp
 import app.smallthingz.reverb.NativeRangeExportPresentation
 import app.smallthingz.reverb.RangeEditTarget
 import app.smallthingz.reverb.RangeExportEditorState
@@ -263,7 +263,7 @@ internal class ReverbRangeTimelineView(
             }
             surface.addRow(content, ReverbGroupLayout.LayoutParams(-1, -1))
             addView(surface)
-            text.setTextLayout(true, 1, app.smallthingz.nativeui.text.style.TextOverflow.Clip)
+            text.setTextLayout(true, 1, smallthingz.ui.text.style.TextOverflow.Clip)
         }
         fun bind(seconds: Float, active: Boolean) {
             val palette = environment.palette
@@ -271,7 +271,7 @@ internal class ReverbRangeTimelineView(
             surface.elevation = if (active) density else 0f
             text.setText(formatRangeTimeInput(seconds.toDouble()))
             text.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_MEDIUM].copy(
-                color = app.smallthingz.nativeui.graphics.Color(if (active) palette.onPrimaryContainer else palette.onSurfaceVariant),
+                color = smallthingz.ui.graphics.Color(if (active) palette.onPrimaryContainer else palette.onSurfaceVariant),
                 fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
                 fontSize = 11.sp, lineHeight = 13.sp, platformStyle = PlatformTextStyle(includeFontPadding = false),
             ), environment.textDensity, environment.sharedFontResolver)

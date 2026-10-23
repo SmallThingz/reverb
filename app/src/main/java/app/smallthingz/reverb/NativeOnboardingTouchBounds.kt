@@ -4,8 +4,8 @@
  */
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.geometry.Rect
-import app.smallthingz.nativeui.geometry.Size
+import smallthingz.ui.geometry.Rect
+import smallthingz.ui.geometry.Size
 
 /** NodeCoordinator.touchBoundsInRoot initial padding; this is semantic geometry, not View layout. */
 internal fun nativeOnboardingMinimumTouchBounds(size: Size, minimum: Size): Rect {

@@ -16,13 +16,13 @@
 
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationConstants.UnspecifiedTime
-import app.smallthingz.nativeui.animation.core.AnimationSpec
-import app.smallthingz.nativeui.animation.core.AnimationState
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.runtime.withFrameNanos
-import app.smallthingz.nativeui.MotionDurationScale
+import smallthingz.ui.animation.core.AnimationConstants.UnspecifiedTime
+import smallthingz.ui.animation.core.AnimationSpec
+import smallthingz.ui.animation.core.AnimationState
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.runtime.withFrameNanos
+import smallthingz.ui.MotionDurationScale
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.contract
 import kotlin.coroutines.coroutineContext

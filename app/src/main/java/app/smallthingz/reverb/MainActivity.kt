@@ -10,8 +10,8 @@ import android.provider.Settings
 import android.util.TypedValue
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import app.smallthingz.nativeui.text.font.createFontFamilyResolver
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.text.font.createFontFamilyResolver
+import smallthingz.ui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.DefaultLifecycleObserver

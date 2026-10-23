@@ -1,10 +1,10 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.runtime.PausableMonotonicFrameClock
-import app.smallthingz.nativeui.runtime.mutableFloatStateOf
-import app.smallthingz.nativeui.runtime.mutableIntStateOf
-import app.smallthingz.nativeui.runtime.mutableStateOf
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.PausableMonotonicFrameClock
+import smallthingz.ui.runtime.mutableFloatStateOf
+import smallthingz.ui.runtime.mutableIntStateOf
+import smallthingz.ui.runtime.mutableStateOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
@@ -28,7 +28,7 @@ class RangeUiStateNotificationsTest {
         val second = String(charArrayOf('a'))
         // A custom delegate deliberately replaces equal values. The notification wrapper must
         // preserve that delegate's behavior, without imposing the default cell's equality rule.
-        val storage = object : app.smallthingz.nativeui.runtime.MutableState<String> {
+        val storage = object : smallthingz.ui.runtime.MutableState<String> {
             override var value = first
         }
         var observed: String? = null

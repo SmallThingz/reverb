@@ -4,15 +4,15 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.AnimationVector2D
-import app.smallthingz.nativeui.animation.core.Spring
-import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
-import app.smallthingz.nativeui.animation.core.TwoWayConverter
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.unit.IntOffset
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.AnimationVector2D
+import smallthingz.ui.animation.core.Spring
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.TwoWayConverter
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.unit.IntOffset
+import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive

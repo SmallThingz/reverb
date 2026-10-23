@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.suspendCancellableCoroutine
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.unit.Density
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers

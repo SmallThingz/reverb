@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
-import app.smallthingz.nativeui.graphics.Matrix
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
+import smallthingz.ui.graphics.Matrix
 import app.smallthingz.reverb.populateOnboardingPreviewSemanticTransform
 import org.junit.Assert.assertEquals
 import org.junit.Test

@@ -10,8 +10,8 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityOptionsCompat
-import app.smallthingz.nativeui.text.font.createFontFamilyResolver
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.text.font.createFontFamilyResolver
+import smallthingz.ui.unit.Density
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.smallthingz.reverb.nativeui.*

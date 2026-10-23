@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.colorspace.ColorSpaces
-import app.smallthingz.nativeui.graphics.lerp
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.colorspace.ColorSpaces
+import smallthingz.ui.graphics.lerp
 
 /**
  * Palette endpoints do not change during a drag. Retain their packed Oklab conversions rather than

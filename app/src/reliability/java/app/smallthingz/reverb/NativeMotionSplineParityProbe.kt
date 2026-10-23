@@ -2,7 +2,7 @@ package app.smallthingz.reverb
 
 import android.view.ViewConfiguration
 import androidx.compose.animation.SplineBasedFloatDecayAnimationSpec as SourceDecay
-import app.smallthingz.nativeui.animation.SplineBasedFloatDecayAnimationSpec as NativeDecay
+import smallthingz.ui.animation.SplineBasedFloatDecayAnimationSpec as NativeDecay
 
 /**
  * Runs both real decay engines on Android. The platform supplies friction to both.
@@ -20,7 +20,7 @@ internal fun verifyNativeMotionSplineParity(report: StringBuilder) {
     check(friction > 0f && friction.isFinite())
     for (density in listOf(1f, 421f / 160f, 3.5f)) {
         val source = SourceDecay(androidx.compose.ui.unit.Density(density))
-        val native = NativeDecay(app.smallthingz.nativeui.unit.Density(density))
+        val native = NativeDecay(smallthingz.ui.unit.Density(density))
         exact("threshold", source.absVelocityThreshold, native.absVelocityThreshold)
         for (initial in listOf(0f, -42.125f, 1000f)) {
             for (velocity in listOf(0f, 1f, -1f, 100f, -100f, 3000f, -10000f, 40000f)) {

@@ -13,8 +13,8 @@ import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityEventCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
@@ -134,7 +134,7 @@ internal class SettingsCalibrationProgressView(
         info.setBoundsInParent(android.graphics.Rect())
         info.rangeInfo=AccessibilityNodeInfo.RangeInfo.obtain(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,0f,1f,progress)
         AccessibilityNodeInfoCompat.wrap(info).stateDescription=context.getString(
-            app.smallthingz.nativeui.R.string.template_percent,calibrationProgressPercent(progress))
+            smallthingz.ui.R.string.template_percent,calibrationProgressPercent(progress))
         info.actionList.toList().forEach(info::removeAction)
         info.addAction(if(isAccessibilityFocused)AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

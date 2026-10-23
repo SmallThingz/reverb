@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.foundation.gestures.ScrollScope
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.unit.Velocity
+import smallthingz.ui.foundation.gestures.ScrollScope
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.unit.Velocity
 import app.smallthingz.reverb.nativeui.NativeHorizontalOverscroll
 import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource

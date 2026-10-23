@@ -8,10 +8,10 @@ import android.graphics.Rect
 import android.graphics.Region
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
-import app.smallthingz.nativeui.unit.roundToIntRect
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
+import smallthingz.ui.geometry.Rect as ComposeRect
+import smallthingz.ui.unit.roundToIntRect
 import app.smallthingz.reverb.nativeui.*
 import java.util.IdentityHashMap
 

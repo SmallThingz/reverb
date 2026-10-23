@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import androidx.compose.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.graphics.Color
+import smallthingz.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
-import app.smallthingz.nativeui.unit.IntSize
+import smallthingz.ui.unit.IntSize
 import org.junit.Assert.*
 import org.junit.Test
 

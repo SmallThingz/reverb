@@ -21,8 +21,8 @@ package app.smallthingz.reverb.nativeui
 // Only adapters changed: MultiParagraph geometry, supplied visible-node bounds, and package/type names.
 // First-use process locale retention intentionally matches the pinned iterator implementation.
 
-import app.smallthingz.nativeui.text.MultiParagraph
-import app.smallthingz.nativeui.text.style.ResolvedTextDirection
+import smallthingz.ui.text.MultiParagraph
+import smallthingz.ui.text.style.ResolvedTextDirection
 import kotlin.math.roundToInt
 import java.text.BreakIterator
 import java.util.Locale

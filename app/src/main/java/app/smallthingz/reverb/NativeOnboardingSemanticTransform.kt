@@ -1,6 +1,6 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.graphics.Matrix
+import smallthingz.ui.graphics.Matrix
 
 /**
  * Released preview graphicsLayer has the default center pivot, translation and uniform scale.

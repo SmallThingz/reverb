@@ -6,10 +6,10 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.SpringSpec
-import app.smallthingz.nativeui.animation.core.TargetBasedAnimation
-import app.smallthingz.nativeui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.SpringSpec
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.VectorConverter
 import kotlin.math.roundToLong
 
 /**

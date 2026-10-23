@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.lerp
-import app.smallthingz.nativeui.graphics.toArgb
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.lerp
+import smallthingz.ui.graphics.toArgb
 import java.util.Random
 import org.junit.Assert.assertEquals
 import org.junit.Test

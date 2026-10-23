@@ -6,7 +6,7 @@ import android.os.Build
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
+import smallthingz.ui.geometry.Rect as ComposeRect
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass
 import app.smallthingz.reverb.NativeViewPhasePointerNode

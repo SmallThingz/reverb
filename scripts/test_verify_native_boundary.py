@@ -58,7 +58,7 @@ class NativeBoundaryTests(unittest.TestCase):
 
     def test_referenced_and_defined_types_are_both_rejected(self):
         result = gate.inspect_dex(dex([
-            "Lapp/smallthingz/nativeui/View;",
+            "Lsmallthingz/ui/View;",
             "Landroidx/compose/runtime/State;",
             "Landroidx/compose/material3/Button;",
         ], defined=(0, 2)))

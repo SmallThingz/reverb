@@ -9,7 +9,7 @@ import android.graphics.Matrix
 import android.os.Build
 import android.view.MotionEvent
 import android.view.View
-import app.smallthingz.nativeui.geometry.Offset
+import smallthingz.ui.geometry.Offset
 import java.util.IdentityHashMap
 
 /**

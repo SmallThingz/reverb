@@ -33,7 +33,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import app.smallthingz.nativeui.text.font.createFontFamilyResolver
+import smallthingz.ui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -303,7 +303,7 @@ private fun showTextParityCase(
     val context = layout.context
     val density = layout.density
     val sharedFontResolver = createFontFamilyResolver(context)
-    val nativeDensity = app.smallthingz.nativeui.unit.Density(context)
+    val nativeDensity = smallthingz.ui.unit.Density(context)
     val colors = when {
         Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(context)
         Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(context)
@@ -400,7 +400,7 @@ private fun referenceTextScale(density: Density): ReverbTextScale = object : Rev
 }
 
 /** Production role mapping stays independent of the reflected release Typography oracle. */
-private fun nativeParagraphTextStyle(role: ReverbTextRole): app.smallthingz.nativeui.text.TextStyle = ReverbParagraphStyles[role]
+private fun nativeParagraphTextStyle(role: ReverbTextRole): smallthingz.ui.text.TextStyle = ReverbParagraphStyles[role]
 
 private fun referenceTextStyle(typography: Typography, role: ReverbTextRole): TextStyle = when (role) {
     ReverbTextRole.HEADLINE_SMALL -> typography.headlineSmall

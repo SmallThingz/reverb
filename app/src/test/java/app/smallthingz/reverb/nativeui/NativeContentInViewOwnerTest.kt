@@ -1,10 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.exponentialDecay
-import app.smallthingz.nativeui.foundation.gestures.BringIntoViewSpec
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.MotionDurationScale
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.animation.core.exponentialDecay
+import smallthingz.ui.foundation.gestures.BringIntoViewSpec
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.geometry.Rect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async

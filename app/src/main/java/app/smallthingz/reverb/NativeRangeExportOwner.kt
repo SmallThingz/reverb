@@ -2,13 +2,13 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.util.Log
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.tween
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.MotionDurationScale
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.FastOutSlowInEasing
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.tween
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.geometry.Rect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner

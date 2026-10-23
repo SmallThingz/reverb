@@ -24,7 +24,7 @@ import android.os.Build
 import android.view.MotionEvent
 import android.widget.EdgeEffect
 import androidx.annotation.RequiresApi
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.nativeui.NativeEdgeEffectCompat.absorbToRelaxIfNeeded
 import app.smallthingz.reverb.nativeui.NativeEdgeEffectCompat.distanceCompat
 import app.smallthingz.reverb.nativeui.NativeEdgeEffectCompat.onAbsorbCompat

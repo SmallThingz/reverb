@@ -22,14 +22,14 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.ViewTreeObserver
 import android.view.WindowManager
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.spring
-import app.smallthingz.nativeui.foundation.MutatePriority
-import app.smallthingz.nativeui.foundation.MutatorMutex
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
-import app.smallthingz.nativeui.input.pointer.PointerType
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
+import smallthingz.ui.foundation.MutatePriority
+import smallthingz.ui.foundation.MutatorMutex
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
+import smallthingz.ui.input.pointer.PointerType
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.findViewTreeViewModelStoreOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -230,7 +230,7 @@ private class NativePlainTooltipWindow(
         token=anchor.applicationWindowToken
         width=WindowManager.LayoutParams.WRAP_CONTENT;height=WindowManager.LayoutParams.WRAP_CONTENT
         format=PixelFormat.TRANSLUCENT
-        title=context.getString(app.smallthingz.nativeui.R.string.default_popup_window_title)
+        title=context.getString(smallthingz.ui.R.string.default_popup_window_title)
     }
     private val bubble=TooltipBubble(context,environment,description)
     private val visibleFrame=Rect()
@@ -262,7 +262,7 @@ private class NativePlainTooltipWindow(
         if(Build.VERSION.SDK_INT>=29)isForceDarkAllowed=false
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
         accessibilityLiveRegion=ACCESSIBILITY_LIVE_REGION_ASSERTIVE
-        accessibilityPaneTitle=context.getString(app.smallthingz.nativeui.R.string.tooltip_description)
+        accessibilityPaneTitle=context.getString(smallthingz.ui.R.string.tooltip_description)
         bubble.alpha=0f
         bubble.label.isScreenReaderFocusable=true
     }

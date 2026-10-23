@@ -8,9 +8,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.MotionDurationScale
-import app.smallthingz.nativeui.text.font.FontWeight
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.text.font.FontWeight
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.RangeExportEditorState

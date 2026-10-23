@@ -1,7 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
-import app.smallthingz.nativeui.geometry.Offset
+import smallthingz.ui.geometry.Offset
 
 /**
  * Only the released Home's blob area and control cluster opt into parent phase composition.

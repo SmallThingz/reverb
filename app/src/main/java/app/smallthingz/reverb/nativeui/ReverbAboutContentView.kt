@@ -21,9 +21,9 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
-import app.smallthingz.nativeui.geometry.Rect as ComposeRect
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
+import smallthingz.ui.geometry.Rect as ComposeRect
 import app.smallthingz.reverb.NativePagerTouchRoot
 import app.smallthingz.reverb.NativeWindowPointerCoordinates
 import app.smallthingz.reverb.NativePointerCoordinates
@@ -34,12 +34,12 @@ import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.nativeui.graphics.Color
-import app.smallthingz.nativeui.graphics.compositeOver
-import app.smallthingz.nativeui.graphics.toArgb
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.text.font.FontFamily
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.compositeOver
+import smallthingz.ui.graphics.toArgb
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.unit.Density
 import androidx.core.graphics.Insets
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat

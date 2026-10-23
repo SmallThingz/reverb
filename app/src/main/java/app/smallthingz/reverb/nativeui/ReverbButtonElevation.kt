@@ -19,9 +19,9 @@ import android.os.Looper
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewOutlineProvider
-import app.smallthingz.nativeui.animation.core.CubicBezierEasing
-import app.smallthingz.nativeui.animation.core.FastOutSlowInEasing
-import app.smallthingz.nativeui.animation.core.FloatTweenSpec
+import smallthingz.ui.animation.core.CubicBezierEasing
+import smallthingz.ui.animation.core.FastOutSlowInEasing
+import smallthingz.ui.animation.core.FloatTweenSpec
 import java.io.Closeable
 import kotlin.math.min
 

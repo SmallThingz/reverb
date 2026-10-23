@@ -9,17 +9,17 @@ import androidx.compose.ui.geometry.Size as ReferenceSize
 import androidx.compose.ui.unit.Density as ReferenceDensity
 import androidx.compose.ui.unit.dp as referenceDp
 import androidx.compose.ui.unit.sp as referenceSp
-import app.smallthingz.nativeui.MotionDurationScale as NativeMotionDurationScale
-import app.smallthingz.nativeui.geometry.Offset as NativeOffset
-import app.smallthingz.nativeui.geometry.Rect as NativeRect
-import app.smallthingz.nativeui.geometry.Size as NativeSize
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock as NativeFrameClock
-import app.smallthingz.nativeui.text.font.createFontFamilyResolver
-import app.smallthingz.nativeui.unit.Density as NativeDensity
-import app.smallthingz.nativeui.unit.Dp as NativeDp
-import app.smallthingz.nativeui.unit.TextUnit as NativeTextUnit
-import app.smallthingz.nativeui.unit.TextUnitType as NativeTextUnitType
-import app.smallthingz.nativeui.unit.sp as nativeSp
+import smallthingz.ui.MotionDurationScale as NativeMotionDurationScale
+import smallthingz.ui.geometry.Offset as NativeOffset
+import smallthingz.ui.geometry.Rect as NativeRect
+import smallthingz.ui.geometry.Size as NativeSize
+import smallthingz.ui.runtime.MonotonicFrameClock as NativeFrameClock
+import smallthingz.ui.text.font.createFontFamilyResolver
+import smallthingz.ui.unit.Density as NativeDensity
+import smallthingz.ui.unit.Dp as NativeDp
+import smallthingz.ui.unit.TextUnit as NativeTextUnit
+import smallthingz.ui.unit.TextUnitType as NativeTextUnitType
+import smallthingz.ui.unit.sp as nativeSp
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import kotlin.coroutines.CoroutineContext
@@ -76,19 +76,19 @@ internal fun CoroutineContext.withNativeParityClock(): CoroutineContext {
 }
 
 /** Exact application-supported style inputs; unsupported source styles fail instead of degrading. */
-internal fun androidx.compose.ui.text.TextStyle.nativeParityTextStyle(): app.smallthingz.nativeui.text.TextStyle {
-    fun androidx.compose.ui.unit.TextUnit.native(): app.smallthingz.nativeui.unit.TextUnit = when (type) {
-        androidx.compose.ui.unit.TextUnitType.Sp -> app.smallthingz.nativeui.unit.TextUnit(value, NativeTextUnitType.Sp)
-        androidx.compose.ui.unit.TextUnitType.Em -> app.smallthingz.nativeui.unit.TextUnit(value, NativeTextUnitType.Em)
+internal fun androidx.compose.ui.text.TextStyle.nativeParityTextStyle(): smallthingz.ui.text.TextStyle {
+    fun androidx.compose.ui.unit.TextUnit.native(): smallthingz.ui.unit.TextUnit = when (type) {
+        androidx.compose.ui.unit.TextUnitType.Sp -> smallthingz.ui.unit.TextUnit(value, NativeTextUnitType.Sp)
+        androidx.compose.ui.unit.TextUnitType.Em -> smallthingz.ui.unit.TextUnit(value, NativeTextUnitType.Em)
         else -> NativeTextUnit.Unspecified
     }
     val family = when (fontFamily) {
         null -> null
-        androidx.compose.ui.text.font.FontFamily.Default -> app.smallthingz.nativeui.text.font.FontFamily.Default
-        androidx.compose.ui.text.font.FontFamily.SansSerif -> app.smallthingz.nativeui.text.font.FontFamily.SansSerif
-        androidx.compose.ui.text.font.FontFamily.Serif -> app.smallthingz.nativeui.text.font.FontFamily.Serif
-        androidx.compose.ui.text.font.FontFamily.Monospace -> app.smallthingz.nativeui.text.font.FontFamily.Monospace
-        androidx.compose.ui.text.font.FontFamily.Cursive -> app.smallthingz.nativeui.text.font.FontFamily.Cursive
+        androidx.compose.ui.text.font.FontFamily.Default -> smallthingz.ui.text.font.FontFamily.Default
+        androidx.compose.ui.text.font.FontFamily.SansSerif -> smallthingz.ui.text.font.FontFamily.SansSerif
+        androidx.compose.ui.text.font.FontFamily.Serif -> smallthingz.ui.text.font.FontFamily.Serif
+        androidx.compose.ui.text.font.FontFamily.Monospace -> smallthingz.ui.text.font.FontFamily.Monospace
+        androidx.compose.ui.text.font.FontFamily.Cursive -> smallthingz.ui.text.font.FontFamily.Cursive
         else -> error("Unsupported QA font family: $fontFamily")
     }
     check(brush == null && shadow == null && background == androidx.compose.ui.graphics.Color.Unspecified)
@@ -98,58 +98,58 @@ internal fun androidx.compose.ui.text.TextStyle.nativeParityTextStyle(): app.sma
     check(textDirection == androidx.compose.ui.text.style.TextDirection.Unspecified)
     check(lineBreak == androidx.compose.ui.text.style.LineBreak.Unspecified)
     check(hyphens == androidx.compose.ui.text.style.Hyphens.Unspecified)
-    return app.smallthingz.nativeui.text.TextStyle(
-        color = app.smallthingz.nativeui.graphics.Color(color.value),
+    return smallthingz.ui.text.TextStyle(
+        color = smallthingz.ui.graphics.Color(color.value),
         fontSize = fontSize.native(),
-        fontWeight = fontWeight?.let { app.smallthingz.nativeui.text.font.FontWeight(it.weight) },
+        fontWeight = fontWeight?.let { smallthingz.ui.text.font.FontWeight(it.weight) },
         fontStyle = when (fontStyle) {
             null -> null
-            androidx.compose.ui.text.font.FontStyle.Normal -> app.smallthingz.nativeui.text.font.FontStyle.Normal
-            androidx.compose.ui.text.font.FontStyle.Italic -> app.smallthingz.nativeui.text.font.FontStyle.Italic
+            androidx.compose.ui.text.font.FontStyle.Normal -> smallthingz.ui.text.font.FontStyle.Normal
+            androidx.compose.ui.text.font.FontStyle.Italic -> smallthingz.ui.text.font.FontStyle.Italic
             else -> error("Unsupported QA font style")
         },
         fontSynthesis = when (fontSynthesis) {
             null -> null
-            androidx.compose.ui.text.font.FontSynthesis.None -> app.smallthingz.nativeui.text.font.FontSynthesis.None
-            androidx.compose.ui.text.font.FontSynthesis.All -> app.smallthingz.nativeui.text.font.FontSynthesis.All
-            androidx.compose.ui.text.font.FontSynthesis.Weight -> app.smallthingz.nativeui.text.font.FontSynthesis.Weight
-            androidx.compose.ui.text.font.FontSynthesis.Style -> app.smallthingz.nativeui.text.font.FontSynthesis.Style
+            androidx.compose.ui.text.font.FontSynthesis.None -> smallthingz.ui.text.font.FontSynthesis.None
+            androidx.compose.ui.text.font.FontSynthesis.All -> smallthingz.ui.text.font.FontSynthesis.All
+            androidx.compose.ui.text.font.FontSynthesis.Weight -> smallthingz.ui.text.font.FontSynthesis.Weight
+            androidx.compose.ui.text.font.FontSynthesis.Style -> smallthingz.ui.text.font.FontSynthesis.Style
             else -> error("Unsupported QA font synthesis")
         },
         fontFamily = family,
         letterSpacing = letterSpacing.native(),
         lineHeight = lineHeight.native(),
         platformStyle = platformStyle?.paragraphStyle?.let {
-            app.smallthingz.nativeui.text.PlatformTextStyle(it.includeFontPadding)
+            smallthingz.ui.text.PlatformTextStyle(it.includeFontPadding)
         },
         lineHeightStyle = lineHeightStyle?.let {
-            app.smallthingz.nativeui.text.style.LineHeightStyle(
+            smallthingz.ui.text.style.LineHeightStyle(
                 alignment = when (it.alignment) {
-                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Top -> app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Top
-                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center -> app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Center
-                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Proportional -> app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Proportional
-                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Bottom -> app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Bottom
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Top -> smallthingz.ui.text.style.LineHeightStyle.Alignment.Top
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center -> smallthingz.ui.text.style.LineHeightStyle.Alignment.Center
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Proportional -> smallthingz.ui.text.style.LineHeightStyle.Alignment.Proportional
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Bottom -> smallthingz.ui.text.style.LineHeightStyle.Alignment.Bottom
                     else -> error("Unsupported QA line-height alignment")
                 },
                 mode = when (it.mode) {
-                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Fixed -> app.smallthingz.nativeui.text.style.LineHeightStyle.Mode.Fixed
-                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Minimum -> app.smallthingz.nativeui.text.style.LineHeightStyle.Mode.Minimum
-                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Tight -> app.smallthingz.nativeui.text.style.LineHeightStyle.Mode.Tight
+                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Fixed -> smallthingz.ui.text.style.LineHeightStyle.Mode.Fixed
+                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Minimum -> smallthingz.ui.text.style.LineHeightStyle.Mode.Minimum
+                    androidx.compose.ui.text.style.LineHeightStyle.Mode.Tight -> smallthingz.ui.text.style.LineHeightStyle.Mode.Tight
                     else -> error("Unsupported QA line-height mode")
                 },
                 trim = when (it.trim) {
-                    androidx.compose.ui.text.style.LineHeightStyle.Trim.None -> app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.None
-                    androidx.compose.ui.text.style.LineHeightStyle.Trim.FirstLineTop -> app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.FirstLineTop
-                    androidx.compose.ui.text.style.LineHeightStyle.Trim.LastLineBottom -> app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.LastLineBottom
-                    androidx.compose.ui.text.style.LineHeightStyle.Trim.Both -> app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.Both
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.None -> smallthingz.ui.text.style.LineHeightStyle.Trim.None
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.FirstLineTop -> smallthingz.ui.text.style.LineHeightStyle.Trim.FirstLineTop
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.LastLineBottom -> smallthingz.ui.text.style.LineHeightStyle.Trim.LastLineBottom
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.Both -> smallthingz.ui.text.style.LineHeightStyle.Trim.Both
                     else -> error("Unsupported QA line-height trim")
                 },
             )
         },
         textDecoration = textDecoration?.let {
-            var result = app.smallthingz.nativeui.text.style.TextDecoration.None
-            if (androidx.compose.ui.text.style.TextDecoration.Underline in it) result += app.smallthingz.nativeui.text.style.TextDecoration.Underline
-            if (androidx.compose.ui.text.style.TextDecoration.LineThrough in it) result += app.smallthingz.nativeui.text.style.TextDecoration.LineThrough
+            var result = smallthingz.ui.text.style.TextDecoration.None
+            if (androidx.compose.ui.text.style.TextDecoration.Underline in it) result += smallthingz.ui.text.style.TextDecoration.Underline
+            if (androidx.compose.ui.text.style.TextDecoration.LineThrough in it) result += smallthingz.ui.text.style.TextDecoration.LineThrough
             result
         },
     )

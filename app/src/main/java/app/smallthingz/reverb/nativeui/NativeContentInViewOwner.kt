@@ -5,10 +5,10 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.foundation.gestures.BringIntoViewSpec
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Rect
+import smallthingz.ui.foundation.gestures.BringIntoViewSpec
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect
 import kotlin.math.abs
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException

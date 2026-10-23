@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
-import app.smallthingz.nativeui.runtime.PausableMonotonicFrameClock
-import app.smallthingz.nativeui.MotionDurationScale
-import app.smallthingz.nativeui.unit.IntSize
+import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.PausableMonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking

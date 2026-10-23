@@ -1,6 +1,6 @@
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.platform.AccessibilityManager
+import smallthingz.ui.platform.AccessibilityManager
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay

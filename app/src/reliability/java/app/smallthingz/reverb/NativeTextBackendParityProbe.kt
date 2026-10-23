@@ -11,11 +11,11 @@ import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.util.Locale
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextRole
-import app.smallthingz.nativeui.text.Paragraph as NativeParagraph
-import app.smallthingz.nativeui.text.ParagraphIntrinsics as NativeIntrinsics
-import app.smallthingz.nativeui.text.TextStyle as NativeStyle
-import app.smallthingz.nativeui.text.style.TextOverflow as NativeOverflow
-import app.smallthingz.nativeui.unit.LayoutDirection as NativeDirection
+import smallthingz.ui.text.Paragraph as NativeParagraph
+import smallthingz.ui.text.ParagraphIntrinsics as NativeIntrinsics
+import smallthingz.ui.text.TextStyle as NativeStyle
+import smallthingz.ui.text.style.TextOverflow as NativeOverflow
+import smallthingz.ui.unit.LayoutDirection as NativeDirection
 import androidx.compose.ui.graphics.Canvas as ReferenceCanvas
 import androidx.compose.ui.graphics.Color as ReferenceColor
 import androidx.compose.ui.text.Paragraph as ReferenceParagraph
@@ -63,16 +63,16 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
         val configured = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
             fontScale = scale
         })
-        val nativeDensity = app.smallthingz.nativeui.unit.Density(configured)
+        val nativeDensity = smallthingz.ui.unit.Density(configured)
         val referenceDensity = androidx.compose.ui.unit.Density(configured)
-        val nativeFonts = app.smallthingz.nativeui.text.font.createFontFamilyResolver(configured)
+        val nativeFonts = smallthingz.ui.text.font.createFontFamilyResolver(configured)
         val referenceFonts = androidx.compose.ui.text.font.createFontFamilyResolver(configured)
         for (role in roles) for (case in cases) {
             val entry = JSONObject().put("case", case.label).put("role", role.name).put("fontScale", scale)
             try {
                 val direction = if (case.rtl) NativeDirection.Rtl else NativeDirection.Ltr
                 val nativeStyle = ReverbParagraphStyles[role]
-                val resolvedNative = app.smallthingz.nativeui.text.resolveDefaults(nativeStyle, direction)
+                val resolvedNative = smallthingz.ui.text.resolveDefaults(nativeStyle, direction)
                 val referenceStyle = androidx.compose.ui.text.resolveDefaults(nativeStyle.referenceStyle(),
                     if (case.rtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr)
                 val width = (case.widthDp * nativeDensity.density).toInt()
@@ -80,7 +80,7 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                     (nativeDensity.density * 40).toInt() else 10000
                 val native = NativeParagraph(NativeIntrinsics(case.text, resolvedNative,
                     density = nativeDensity, fontFamilyResolver = nativeFonts),
-                    app.smallthingz.nativeui.unit.Constraints(maxWidth = width, maxHeight = maxHeight),
+                    smallthingz.ui.unit.Constraints(maxWidth = width, maxHeight = maxHeight),
                     case.maxLines, if (case.ellipsis) NativeOverflow.Ellipsis else NativeOverflow.Clip)
                 val reference = ReferenceParagraph(ReferenceIntrinsics(case.text, referenceStyle,
                     annotations = emptyList(), placeholders = emptyList(),
@@ -104,7 +104,7 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
             try {
                 val nativeStyle = ReverbParagraphStyles[role]
                 val nativeIntrinsics = NativeIntrinsics(text,
-                    app.smallthingz.nativeui.text.resolveDefaults(nativeStyle, NativeDirection.Ltr),
+                    smallthingz.ui.text.resolveDefaults(nativeStyle, NativeDirection.Ltr),
                     density = nativeDensity, fontFamilyResolver = nativeFonts)
                 val referenceIntrinsics = ReferenceIntrinsics(text,
                     androidx.compose.ui.text.resolveDefaults(nativeStyle.referenceStyle(),
@@ -117,7 +117,7 @@ internal fun nativeTextBackendParity(context: Context): JSONObject {
                     stage = "layout-$index"
                     val width = (dimension.first * nativeDensity.density).toInt()
                     val native = NativeParagraph(nativeIntrinsics,
-                        app.smallthingz.nativeui.unit.Constraints(maxWidth = width,
+                        smallthingz.ui.unit.Constraints(maxWidth = width,
                             maxHeight = dimension.second), 3, NativeOverflow.Ellipsis)
                     val reference = ReferenceParagraph(referenceIntrinsics,
                         androidx.compose.ui.unit.Constraints(maxWidth = width,
@@ -184,9 +184,9 @@ private fun appendUnresolvedSemanticsCases(
                     fontScale = scale
                     setLocales(LocaleList(locale))
                 })
-                val nativeDensity = app.smallthingz.nativeui.unit.Density(configured)
+                val nativeDensity = smallthingz.ui.unit.Density(configured)
                 val referenceDensity = androidx.compose.ui.unit.Density(configured)
-                val nativeFonts = app.smallthingz.nativeui.text.font.createFontFamilyResolver(configured)
+                val nativeFonts = smallthingz.ui.text.font.createFontFamilyResolver(configured)
                 val referenceFonts = androidx.compose.ui.text.font.createFontFamilyResolver(configured)
                 for (role in listOf(ReverbTextRole.TITLE_MEDIUM, ReverbTextRole.BODY_LARGE)) for (case in cases) {
                     val entry = JSONObject().put("case", "unresolved-${locale.language}-${case.label}")
@@ -236,7 +236,7 @@ private fun appendUnresolvedSemanticsCases(
 
 private fun compareSemanticsParagraphs(
     reference: androidx.compose.ui.text.MultiParagraph,
-    native: app.smallthingz.nativeui.text.MultiParagraph,
+    native: smallthingz.ui.text.MultiParagraph,
     text: String,
     width: Int,
     entry: JSONObject,
@@ -271,7 +271,7 @@ private fun compareSemanticsParagraphs(
         same("box[$offset].right", expected.right, actual.right)
         same("box[$offset].bottom", expected.bottom, actual.bottom)
         if ((reference.getParagraphDirection(offset) == androidx.compose.ui.text.style.ResolvedTextDirection.Ltr) !=
-            (native.getParagraphDirection(offset) == app.smallthingz.nativeui.text.style.ResolvedTextDirection.Ltr)) {
+            (native.getParagraphDirection(offset) == smallthingz.ui.text.style.ResolvedTextDirection.Ltr)) {
             differences.put("direction[$offset]")
         }
     }
@@ -280,7 +280,7 @@ private fun compareSemanticsParagraphs(
     val actualBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     try {
         reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
-        native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+        native.paint(Canvas(actualBitmap), smallthingz.ui.graphics.Color.Black)
         val expectedPixels = IntArray(width * height)
         val actualPixels = IntArray(width * height)
         expectedBitmap.getPixels(expectedPixels, 0, width, 0, 0, width, height)
@@ -343,11 +343,11 @@ private fun compareParagraphs(
         if (underline) {
             reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black, null,
                 androidx.compose.ui.text.style.TextDecoration.Underline)
-            native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black,
-                app.smallthingz.nativeui.text.style.TextDecoration.Underline)
+            native.paint(Canvas(actualBitmap), smallthingz.ui.graphics.Color.Black,
+                smallthingz.ui.text.style.TextDecoration.Underline)
         } else {
             reference.paint(ReferenceCanvas(Canvas(expectedBitmap)), ReferenceColor.Black)
-            native.paint(Canvas(actualBitmap), app.smallthingz.nativeui.graphics.Color.Black)
+            native.paint(Canvas(actualBitmap), smallthingz.ui.graphics.Color.Black)
         }
         val expectedPixels = IntArray(width * height)
         val actualPixels = IntArray(width * height)
@@ -398,7 +398,7 @@ private class ParagraphFailureArtifacts(private val context: Context) {
 }
 
 private fun NativeStyle.referenceStyle(): ReferenceStyle {
-    fun app.smallthingz.nativeui.unit.TextUnit.reference(): ReferenceUnit = when {
+    fun smallthingz.ui.unit.TextUnit.reference(): ReferenceUnit = when {
         isSp -> ReferenceUnit(value, ReferenceUnitType.Sp)
         isEm -> ReferenceUnit(value, ReferenceUnitType.Em)
         else -> ReferenceUnit.Unspecified
@@ -407,11 +407,11 @@ private fun NativeStyle.referenceStyle(): ReferenceStyle {
         fontSize = fontSize.reference(),
         fontWeight = fontWeight?.let { ReferenceWeight(it.weight) },
         fontFamily = when (fontFamily) {
-            app.smallthingz.nativeui.text.font.FontFamily.SansSerif -> ReferenceFamily.SansSerif
-            app.smallthingz.nativeui.text.font.FontFamily.Serif -> ReferenceFamily.Serif
-            app.smallthingz.nativeui.text.font.FontFamily.Monospace -> ReferenceFamily.Monospace
-            app.smallthingz.nativeui.text.font.FontFamily.Cursive -> ReferenceFamily.Cursive
-            app.smallthingz.nativeui.text.font.FontFamily.Default -> ReferenceFamily.Default
+            smallthingz.ui.text.font.FontFamily.SansSerif -> ReferenceFamily.SansSerif
+            smallthingz.ui.text.font.FontFamily.Serif -> ReferenceFamily.Serif
+            smallthingz.ui.text.font.FontFamily.Monospace -> ReferenceFamily.Monospace
+            smallthingz.ui.text.font.FontFamily.Cursive -> ReferenceFamily.Cursive
+            smallthingz.ui.text.font.FontFamily.Default -> ReferenceFamily.Default
             else -> null
         },
         letterSpacing = letterSpacing.reference(),
@@ -420,16 +420,16 @@ private fun NativeStyle.referenceStyle(): ReferenceStyle {
         lineHeightStyle = lineHeightStyle?.let {
             ReferenceLineHeight(
                 alignment = when (it.alignment) {
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Top -> ReferenceLineHeight.Alignment.Top
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Center -> ReferenceLineHeight.Alignment.Center
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Bottom -> ReferenceLineHeight.Alignment.Bottom
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Alignment.Proportional -> ReferenceLineHeight.Alignment.Proportional
+                    smallthingz.ui.text.style.LineHeightStyle.Alignment.Top -> ReferenceLineHeight.Alignment.Top
+                    smallthingz.ui.text.style.LineHeightStyle.Alignment.Center -> ReferenceLineHeight.Alignment.Center
+                    smallthingz.ui.text.style.LineHeightStyle.Alignment.Bottom -> ReferenceLineHeight.Alignment.Bottom
+                    smallthingz.ui.text.style.LineHeightStyle.Alignment.Proportional -> ReferenceLineHeight.Alignment.Proportional
                 },
                 trim = when (it.trim) {
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.None -> ReferenceLineHeight.Trim.None
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.FirstLineTop -> ReferenceLineHeight.Trim.FirstLineTop
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.LastLineBottom -> ReferenceLineHeight.Trim.LastLineBottom
-                    app.smallthingz.nativeui.text.style.LineHeightStyle.Trim.Both -> ReferenceLineHeight.Trim.Both
+                    smallthingz.ui.text.style.LineHeightStyle.Trim.None -> ReferenceLineHeight.Trim.None
+                    smallthingz.ui.text.style.LineHeightStyle.Trim.FirstLineTop -> ReferenceLineHeight.Trim.FirstLineTop
+                    smallthingz.ui.text.style.LineHeightStyle.Trim.LastLineBottom -> ReferenceLineHeight.Trim.LastLineBottom
+                    smallthingz.ui.text.style.LineHeightStyle.Trim.Both -> ReferenceLineHeight.Trim.Both
                 },
             )
         },

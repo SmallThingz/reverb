@@ -29,8 +29,8 @@ import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.geometry.Size
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ComposeViewContext
 import androidx.compose.ui.platform.ExperimentalComposeViewContextApi
@@ -393,7 +393,7 @@ internal class SettingsInteractionRender(
                 val clips = NativeTextSemanticsClipPolicy { view ->
                     if (view is SettingsExpansionView ||
                         (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view))
-                        NativeTextSemanticsClip.Rectangle(app.smallthingz.nativeui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                        NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped
                 }
                 text = NativeWindowTextAccessibilityOwner(board, clips).bindContent(root, clips, sourceExposure = { it.isShown })

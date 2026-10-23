@@ -5,8 +5,8 @@
  */
 package app.smallthingz.reverb
 
-import app.smallthingz.nativeui.geometry.Offset
-import app.smallthingz.nativeui.input.pointer.PointerType
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.pointer.PointerType
 import kotlin.math.abs
 import kotlin.math.sign
 

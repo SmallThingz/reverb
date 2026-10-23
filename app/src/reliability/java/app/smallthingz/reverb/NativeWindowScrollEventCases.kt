@@ -5,7 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
-import app.smallthingz.nativeui.unit.Density
+import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
 import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
 import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy

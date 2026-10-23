@@ -15,13 +15,14 @@ The compatibility reference is released **v0.1.2**, commit `3e16f8ddb78dca15df4b
 
 `ReverbViewEnvironment` contains an immutable palette, the actual configuration's `Density`, and a shared font resolver. It owns no View or listener. Use `ReverbPalette` roles and `ReverbParagraphStyles`; use `reverbButtonTextStyle` when the released label inherits Button/TextButton typography. Palette previews rebind existing owners and controls; they do not recreate a sheet, discard a draft or restart a gesture.
 
-Reuse is ordinary Kotlin construction and direct binding. `environment.paragraph(...)` returns the actual paragraph View; `ReverbGroupLayout.addRow(...)` attaches actual child Views. Shared shapes, icon paths, noise, indications, switches, buttons, viewports and sheets live in `nativeui/`. There is no separate UI-description tree to interpret or reconcile.
+Reuse is ordinary Kotlin construction and direct binding. `environment.paragraph(...)` returns the actual paragraph View; `ReverbGroupLayout.addRow(...)` attaches actual child Views. App-specific shapes, icon paths, indications, switches, buttons, viewports and sheets live in `nativeui/`. Procedural grain generation, its process cache and the native noise Drawable live in `smallthingz.ui.graphics`; Reverb keeps only small source-compatible aliases. There is no separate UI-description tree to interpret or reconcile.
 
 The reusable primitives and inline construction DSL live in the independent
-`native-ui` Git repository. Reverb pins its commit as a Git submodule while keeping
-the Gradle project name `:native-ui` and namespace `app.smallthingz.nativeui`.
+`kotlin-ui` Git repository. Reverb pins its commit as a Git submodule while keeping
+the Gradle project name `:native-ui` and namespace `smallthingz.ui`.
 `third_party/native-ui.json` binds that commit and the SHA-256 of the accompanying
-compact Git bundle. No unpublished remote URL or absolute sibling path is needed.
+compact Git bundle. The upstream locator is
+`https://github.com/SmallThingz/kotlin-ui.git`; an absolute sibling path is not needed.
 
 After a plain clone, or in a fresh CI checkout or source archive, run:
 
@@ -37,14 +38,15 @@ It writes no global Git configuration. Ordinary Gradle development builds do not
 reject intentional library edits; source/release qualification pins the exact tree
 separately. The library's own wrapper supports independent builds and tests; when
 included in Reverb it inherits the existing Android/Kotlin toolchain classloader.
-The bundled locator is supported by this bootstrap, not generic recursive clone
-or `git submodule update --init` commands.
+Standard recursive clones and `git submodule update --init` use the upstream
+network locator. The bootstrap always restores from the verified offline bundle,
+then configures newly restored checkouts with that upstream origin; it preserves
+existing local remote overrides.
 
 To update the library, commit its change in the independent repository, export a
 full bundle containing that commit, update the bundle checksum and commit in the
 pin file, and stage the matching `native-ui` gitlink in Reverb. Keep all four inputs
-together. A published remote can replace the bundled locator in a later explicit
-publication change; this extraction does not publish one.
+together, and ensure the pinned commit is available from the upstream repository.
 
 ## Window services and input
 

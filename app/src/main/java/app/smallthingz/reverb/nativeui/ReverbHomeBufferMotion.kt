@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.animation.core.AnimationVector1D
-import app.smallthingz.nativeui.animation.core.VectorConverter
-import app.smallthingz.nativeui.animation.core.tween
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.tween
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.bufferSwipeProgress
 import app.smallthingz.reverb.bufferTransitionDepthScale

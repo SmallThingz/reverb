@@ -6,7 +6,7 @@ import android.graphics.Paint
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.NativeAndroidInteropHost
 import app.smallthingz.reverb.NativeAndroidInteropRequests

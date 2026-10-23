@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.nativeui.text.PlatformTextStyle
-import app.smallthingz.nativeui.text.TextStyle
-import app.smallthingz.nativeui.text.style.LineHeightStyle
+import smallthingz.ui.text.PlatformTextStyle
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.text.style.LineHeightStyle
 
 private val inheritedButtonBase = TextStyle.Default.copy(
     platformStyle = PlatformTextStyle(includeFontPadding = false),

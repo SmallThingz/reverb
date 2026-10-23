@@ -5,7 +5,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedDispatcher
-import app.smallthingz.nativeui.runtime.MonotonicFrameClock
+import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.InlinePlaybackRowOwner
 import app.smallthingz.reverb.NativeInlinePlayerCallbacks
