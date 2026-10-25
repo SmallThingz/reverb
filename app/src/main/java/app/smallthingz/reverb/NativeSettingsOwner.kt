@@ -150,20 +150,26 @@ internal class NativeSettingsOwner(
             values.oneShotTimeText, values.loopingTimeText, values.oneShotSizeText, values.loopingSizeText)
     }
 
-    fun tileActionRevision(): Long? = state.editRevision.takeIf { featureOwnerReady() }
+    fun tileActionRevision(): Long? {
+        val current = state
+        return current.editRevision.takeIf { featureOwnerReady(current.activation) }
+    }
     fun tileActionAdmission(): Long? = tileActionRevision()?.takeIf { view.hasWindowFocus() }
     fun tileDraftRevision(): Long? = tileActionRevision()?.let {
         settingsTileDurationRevision(it, tileCapacityDraftReady())
     }
     fun tileDraftAdmission(): Long? = tileDraftRevision()?.takeIf { view.hasWindowFocus() }
-    fun notificationEditRevision(): Long? =
-        state.editRevision.takeIf { featureInputReady() && snapshot.quickSaveEnabled }
+    fun notificationEditRevision(): Long? {
+        val current = state
+        return current.editRevision.takeIf { featureInputReady(current.activation) && snapshot.quickSaveEnabled }
+    }
 
     /** Wheel/tile owners call this after their complete state transition, not on every draw. */
     fun childInteractionChanged() {
         if (closed) return
-        if (!state.active) quickTileEditorState.closeEditor()
-        else quickTileEditorState.restorePendingDraft(state.hydrated && state.interactionReady)
+        val current = state
+        if (!current.active) quickTileEditorState.closeEditor()
+        else quickTileEditorState.restorePendingDraft(current.hydrated && current.interactionReady)
         notifyChanged()
     }
 
@@ -227,7 +233,8 @@ internal class NativeSettingsOwner(
                 submittedOwner = renderedActivation,
                 persistSettings = ::persistSettings,
                 currentVisibleOwner = {
-                    state.activation.takeIf { state.active && isPanelActive() && scope.isActive }
+                    val visible = state
+                    visible.activation.takeIf { visible.active && isPanelActive() && scope.isActive }
                 },
                 onSaved = { releaseInputFocus(); onBack() },
             )
@@ -253,24 +260,28 @@ internal class NativeSettingsOwner(
     }
 
     private fun undo() {
-        if (!state.hasUnsavedChanges) return
+        val current = state
+        if (!current.hasUnsavedChanges) return
         errors = NativeSettingsRetentionErrors()
-        audioOptions = nativeSettingsAudioOptions(state.baseline, routes)
+        audioOptions = nativeSettingsAudioOptions(current.baseline, routes)
         draft.undo()
         refreshBattery()
         refreshMoveAvailability()
     }
 
     fun themeChanged(owner: Any, value: AppThemeMode) {
-        if (!acceptsInput(owner) || value == snapshot.themeMode) return
-        editSnapshot(snapshot.copy(themeMode = value))
+        if (!acceptsInput(owner)) return
+        val current = snapshot
+        if (value == current.themeMode) return
+        editSnapshot(current.copy(themeMode = value))
         draft.previewTheme(value)
     }
 
     fun retentionModeChanged(owner: Any, mode: RetentionMode) {
         if (!acceptsInput(owner)) return
-        val change = settingsRetentionModeChange(snapshot.retentionMode, mode) ?: return
-        editSnapshot(snapshot.copy(retentionMode = change.mode))
+        val current = snapshot
+        val change = settingsRetentionModeChange(current.retentionMode, mode) ?: return
+        editSnapshot(current.copy(retentionMode = change.mode))
     }
 
     fun oneShotTimeChanged(owner: Any, raw: String) {
@@ -345,16 +356,22 @@ internal class NativeSettingsOwner(
     }
 
     fun silenceChanged(owner: Any, rendered: SilenceGateConfig, revision: Long, next: SilenceGateConfig) {
-        if (featureInputReady(owner) && decodeSilenceGate(snapshot.silenceGate) == rendered &&
-            state.editRevision == revision) editSnapshot(snapshot.copy(silenceGate = encodeSilenceGate(next)))
+        if (!featureInputReady(owner)) return
+        val current = state
+        val value = current.displayed.snapshot
+        if (decodeSilenceGate(value.silenceGate) == rendered && current.editRevision == revision)
+            editSnapshot(value.copy(silenceGate = encodeSilenceGate(next)))
     }
 
-    fun beginTimedCalibration() = calibration.beginTimed(
-        decodeSilenceGate(snapshot.silenceGate), state.baseline.silenceCalibrationInput(),
-    )
+    fun beginTimedCalibration() {
+        val current = state
+        calibration.beginTimed(decodeSilenceGate(current.displayed.snapshot.silenceGate),
+            current.baseline.silenceCalibrationInput())
+    }
     fun beginHeldCalibration(): Boolean {
         if (calibration.running) return false
-        calibration.beginHeld(decodeSilenceGate(snapshot.silenceGate), state.baseline.silenceCalibrationInput())
+        val current = state
+        calibration.beginHeld(decodeSilenceGate(current.displayed.snapshot.silenceGate), current.baseline.silenceCalibrationInput())
         return calibration.running && calibration.holding
     }
 
@@ -383,8 +400,9 @@ internal class NativeSettingsOwner(
     }
 
     private fun editResolvedAudio(next: SettingsSnapshot) {
-        val resolved = resolveNativeSettingsRestoredDraft(state.displayed.copy(snapshot = next), routes,
-            fallbackRate = snapshot.sampleRate)
+        val current = state.displayed
+        val resolved = resolveNativeSettingsRestoredDraft(current.copy(snapshot = next), routes,
+            fallbackRate = current.snapshot.sampleRate)
         audioOptions = nativeSettingsAudioOptions(resolved.snapshot, routes)
         draft.edited(resolved)
     }
@@ -436,8 +454,10 @@ internal class NativeSettingsOwner(
     }
 
     fun moveExistingRecordings(renderedActivation: Any) {
-        if (!acceptsInput(renderedActivation) || state.persisting) return
-        val moveTargetTreeUri = snapshot.exportDirectoryUri?.let(Uri::parse)
+        if (!acceptsInput(renderedActivation)) return
+        val current = state
+        if (current.persisting) return
+        val moveTargetTreeUri = current.displayed.snapshot.exportDirectoryUri?.let(Uri::parse)
         val appContext = context.applicationContext
         val appResources = appContext.resources
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -513,7 +533,7 @@ internal class NativeSettingsOwner(
             moveAvailability.hide()
             return
         }
-        val target = getOutputDirectoryId(context.applicationContext, snapshot.exportDirectoryUri?.let(Uri::parse))
+        val target = getOutputDirectoryId(context.applicationContext, current.displayed.snapshot.exportDirectoryUri?.let(Uri::parse))
         if (forceRefresh) moveRevision++
         moveAvailability.request(target, moveRevision)
     }

@@ -55,13 +55,18 @@ internal class NativeSettingsSections(
     }
 
     private fun theme(): NativeSettingsSection {
-        var activation = owner.state.activation
-        val body = SettingsThemeSection(context, owner.snapshot.themeMode, environment(), inputRoot) {
+        val initial = owner.state
+        var activation = initial.activation
+        val body = SettingsThemeSection(context, initial.displayed.snapshot.themeMode, environment(), inputRoot) {
             owner.themeChanged(activation, it)
         }
         return object : NativeSettingsSection {
             override val view = body
-            override fun bind() { activation = owner.state.activation; body.bind(owner.snapshot.themeMode, environment()) }
+            override fun bind() {
+                val state = owner.state
+                activation = state.activation
+                body.bind(state.displayed.snapshot.themeMode, environment())
+            }
             override fun close() = body.close()
         }
     }
@@ -171,7 +176,8 @@ internal class NativeSettingsSections(
             notification.callbacks(owner::notificationSecondsChanged, owner::notificationEditRevision,
                 owner::childInteractionChanged)
             notification.bind(notificationState(), env)
-            view.bind(owner.snapshot.format == ExportFormat.FLAC && owner.snapshot.sampleFormat != PcmSampleFormat.PCM_16, env)
+            val value = owner.snapshot
+            view.bind(value.format == ExportFormat.FLAC && value.sampleFormat != PcmSampleFormat.PCM_16, env)
             structureChanged()
         }
 
@@ -200,7 +206,8 @@ internal class NativeSettingsSections(
             )
         }
         private fun silenceState(): SettingsSilenceState {
-            val value = owner.snapshot
+            val state = owner.state
+            val value = state.displayed.snapshot
             if (silenceRaw != value.silenceGate) { silenceRaw = value.silenceGate; silence = decodeSilenceGate(value.silenceGate) }
             if (histogramRaw != value.silenceHistogram) {
                 histogramRaw = value.silenceHistogram
@@ -209,10 +216,10 @@ internal class NativeSettingsSections(
             val input = value.silenceCalibrationInput()
             return SettingsSilenceState(
                 config = silence,
-                enabled = owner.state.interactionReady && !owner.state.persisting,
+                enabled = state.interactionReady && !state.persisting,
                 maximumHz = minOf(SILENCE_MAX_HZ, value.sampleRate / 2),
                 sampledPeaks = histogram?.peaksFor(input),
-                calibrationAllowed = owner.state.baseline.silenceCalibrationInput() == input,
+                calibrationAllowed = state.baseline.silenceCalibrationInput() == input,
                 calibrating = owner.calibration.running,
                 holdingCalibration = owner.calibration.holding,
                 calibrationProgress = owner.calibration.progress,
@@ -221,8 +228,9 @@ internal class NativeSettingsSections(
             )
         }
         private fun silenceActions(): SettingsSilenceActions {
-            val token = owner.state.activation
-            val revision = owner.state.editRevision
+            val state = owner.state
+            val token = state.activation
+            val revision = state.editRevision
             val rendered = silence
             return object : SettingsSilenceActions {
                 override fun configChanged(config: SilenceGateConfig) = owner.silenceChanged(token, rendered, revision, config)
@@ -234,13 +242,14 @@ internal class NativeSettingsSections(
             }
         }
         private fun notificationState(): SettingsNotificationSaveState {
-            val value = owner.snapshot
+            val state = owner.state
+            val value = state.displayed.snapshot
             return SettingsNotificationSaveState(
                 value.quickSaveEnabled, value.quickSaveSeconds,
                 exportDurationLimitExactSeconds(requireNotNull(value.format), ExportCodec.PCM_16,
                     value.sampleRate, requireNotNull(value.channelMode).channelCount, value.sampleFormat)
                     .toInt().coerceIn(1, 86_400),
-                owner.state.interactionReady && !owner.state.persisting, owner.state.editRevision,
+                state.interactionReady && !state.persisting, state.editRevision,
             )
         }
         override fun close() {
@@ -253,9 +262,12 @@ internal class NativeSettingsSections(
     }
 
     private fun tiles(): NativeSettingsSection {
-        fun inputs() = NativeQuickTilesInputs(owner.state.active,
-            owner.state.interactionReady && !owner.state.persisting,
-            owner.tileCapacityDraftReady(), owner.state.editRevision)
+        fun inputs(): NativeQuickTilesInputs {
+            val state = owner.state
+            return NativeQuickTilesInputs(state.active,
+                state.interactionReady && !state.persisting,
+                owner.tileCapacityDraftReady(), state.editRevision)
+        }
         val controller = NativeQuickSettingsTilesOwner(context, lifecycle, animationScope, owner.quickTileEditorState,
             inputs(), owner::tileActionAdmission, owner::tileActionRevision, owner::tileDraftAdmission, owner::tileDraftRevision)
         val body = SettingsQuickTilesView(context, controller, environment(), inputRoot, animationScope,
@@ -268,27 +280,39 @@ internal class NativeSettingsSections(
     }
 
     private fun storage(): NativeSettingsSection {
-        var activation = owner.state.activation
-        fun state() = SettingsStorageState(owner.exportPathText, owner.snapshot.exportDirectoryUri != null,
-            owner.canMove, owner.state.persisting)
-        val body = SettingsStorageSection(context, state(), environment(), inputRoot,
+        val initial = owner.state
+        var activation = initial.activation
+        fun state(current: SettingsDraftPresentation) = SettingsStorageState(
+            owner.exportPathText, current.displayed.snapshot.exportDirectoryUri != null,
+            owner.canMove, current.persisting)
+        val body = SettingsStorageSection(context, state(initial), environment(), inputRoot,
             { owner.useDefaultDirectory(activation) }, { owner.chooseDirectory(activation) },
             { owner.moveExistingRecordings(activation) })
         return object : NativeSettingsSection {
             override val view = body
-            override fun bind() { activation = owner.state.activation; body.bind(state(), environment()); structureChanged() }
+            override fun bind() {
+                val current = owner.state
+                activation = current.activation
+                body.bind(state(current), environment())
+                structureChanged()
+            }
             override fun close() = body.close()
         }
     }
 
     private fun wakeLock(): NativeSettingsSection {
-        var activation = owner.state.activation
-        val body = SettingsWakeLockView(context, owner.snapshot.wakeLockEnabled, environment(), inputRoot) {
+        val initial = owner.state
+        var activation = initial.activation
+        val body = SettingsWakeLockView(context, initial.displayed.snapshot.wakeLockEnabled, environment(), inputRoot) {
             owner.wakeLockChanged(activation, it)
         }
         return object : NativeSettingsSection {
             override val view = body
-            override fun bind() { activation = owner.state.activation; body.bind(owner.snapshot.wakeLockEnabled, environment()) }
+            override fun bind() {
+                val state = owner.state
+                activation = state.activation
+                body.bind(state.displayed.snapshot.wakeLockEnabled, environment())
+            }
             override fun close() = body.close()
         }
     }
