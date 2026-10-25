@@ -50,6 +50,7 @@ internal class NativeLibraryPredictiveBack(
     private var enabledEffect: Job? = null
     private var activeChannel: Channel<BackEventCompat>? = null
     private var activeJob: Job? = null
+    private var activeJobStarted = false
     private var predictive = false
     private var closed = false
     /** Main's retained panels use the same released completion marker as inline Library owners. */
@@ -109,6 +110,7 @@ internal class NativeLibraryPredictiveBack(
         // Main.immediate may run the body before launch returns. Install ownership first.
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val owner = currentCoroutineContext()[Job]
+            if (activeJob === owner) activeJobStarted = true
             var completed = false
             try {
                 if (!callback.isEnabled) return@launch
@@ -134,33 +136,45 @@ internal class NativeLibraryPredictiveBack(
                 if (!currentCoroutineContext().isActive) throw cancelled
                 progress.animateTo(0f, tween(160, easing = FastOutSlowInEasing)) { publish() }
             } finally {
-                // Replacement/close revokes ownership before cancellation can resume this body.
-                if (activeJob === owner) {
-                    activeJob = null
-                    activeChannel = null
-                    predictive = false
-                    if (!completed) committed = false
-                    gestureActive = false
-                    edge = BackEventCompat.EDGE_NONE
-                    publish()
-                }
+                finishGesture(owner, completed)
             }
         }
+        activeJobStarted = false
         activeJob = job
         job.start()
         return channel
     }
     private fun cancelGesture() {
+        val job = activeJob
         val channel = activeChannel
+        val started = activeJobStarted
         activeChannel = null
         predictive = false
-        // Cancel the event stream, retaining the job that owns the 160ms return animation.
+        // The released handler cancels the gesture job as well as its event stream. Keep its
+        // ownership until terminal cleanup publishes, and capture both before that can reenter.
+        job?.cancel()
         channel?.cancel(CancellationException("onBack cancelled"))
+        // A dispatched job cancelled before body entry never reaches its finally block.
+        if (job != null && !started) finishGesture(job, completed = false)
+    }
+    private fun finishGesture(owner: Job?, completed: Boolean) {
+        // Replacement/close revokes ownership before an old gesture can publish cleanup.
+        if (activeJob === owner) {
+            activeJob = null
+            activeJobStarted = false
+            activeChannel = null
+            predictive = false
+            if (!completed) committed = false
+            gestureActive = false
+            edge = BackEventCompat.EDGE_NONE
+            publish()
+        }
     }
     private fun retireGesture() {
         val job = activeJob
         val channel = activeChannel
         activeJob = null
+        activeJobStarted = false
         activeChannel = null
         predictive = false
         job?.cancel()
