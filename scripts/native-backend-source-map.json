@@ -130,7 +130,7 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "2b480c11eedd388e3a1b8673f3fe6ac58d6261c00258042ab4f714f36cb4a2b1",
+      "compiled_sha256": "051d809521d1233391529b41da45ca59767167a66752a5af44bbaffc1dbd9ed0",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
         {
@@ -148,6 +148,12 @@
         {
           "from": "app.smallthingz.nativeui.",
           "to": "androidx.compose.ui.",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            untilSeconds = window.endSeconds.toDouble(),\n            onStarted = {",
+          "to": "            untilSeconds = window.endSeconds.toDouble(),\n            onProgress = {},\n            onStarted = {",
           "count": 1,
           "word": false
         }

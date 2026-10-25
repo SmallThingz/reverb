@@ -113,7 +113,7 @@ allprojects {
                     }
                     // Native backends change namespaces; approved Incidents reference exceptions are explicit.
                     // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != 'f50b1b039b0d254887df4696e2d18eaae5339edb09eb45294363d46d699566bd') {
+                    if (splitSha256(backendSourceMapFile.bytes) != 'e89afbb05f2635049b477efef57d564ffadf67eef07eee1079f2e0d79c3f76d9') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]
