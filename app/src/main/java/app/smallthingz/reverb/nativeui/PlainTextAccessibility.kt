@@ -230,13 +230,14 @@ internal class PlainTextAccessibility(
         info.maxTextLength = -1
         info.movementGranularities = 0
         val text = snapshot().originalText
-        // Pinned getInfoText/trimToSize: cap the node payload without splitting a surrogate pair.
-        // Traversal and selection still use the original untrimmed String, as the delegate does.
-        val end = if (text.length <= 100000) text.length
-            else if (Character.isHighSurrogate(text[99999]) && Character.isLowSurrogate(text[100000])) 99999
-            else 100000
-        val nodeText = SpannableString(if (end == text.length) text else text.substring(0, end))
-        if (descriptionOnly) info.contentDescription = text else info.text = nodeText
+        if (descriptionOnly) info.contentDescription = text else {
+            // Pinned getInfoText/trimToSize: cap the node payload without splitting a surrogate pair.
+            // Traversal and selection still use the original untrimmed String, as the delegate does.
+            val end = if (text.length <= 100000) text.length
+                else if (Character.isHighSurrogate(text[99999]) && Character.isLowSurrogate(text[100000])) 99999
+                else 100000
+            info.text = SpannableString(if (end == text.length) text else text.substring(0, end))
+        }
         info.isEditable = false
         if (text.isEmpty()) return
         info.setTextSelection(window.cursor, window.cursor)

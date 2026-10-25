@@ -826,9 +826,11 @@ private fun bindAboutDescription(
             info.isImportantForAccessibility = exposed() && !aboutHasTransparentAncestor(host)
             info.isScreenReaderFocusable = speakingLeaf && exposed() && !aboutHasTransparentAncestor(host)
             info.isClickable = clickable; info.isFocusable = focusable; info.isFocused = focused
-            actions.filter { it.id == AccessibilityNodeInfo.ACTION_CLICK ||
-                it.id == AccessibilityNodeInfo.ACTION_FOCUS || it.id == AccessibilityNodeInfo.ACTION_CLEAR_FOCUS }
-                .forEach(info::addAction)
+            for (action in actions) {
+                if (action.id == AccessibilityNodeInfo.ACTION_CLICK ||
+                    action.id == AccessibilityNodeInfo.ACTION_FOCUS || action.id == AccessibilityNodeInfo.ACTION_CLEAR_FOCUS)
+                    info.addAction(action)
+            }
         }
         override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean =
             description.performAction(action, args) ?: super.performAccessibilityAction(view, action, args)
