@@ -10,7 +10,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.NativeClickPhaseEndpoint
 import app.smallthingz.reverb.NativeClickPhaseHost
@@ -33,7 +32,7 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
         icon.bind(value, value.palette.primary)
         value.bindParagraphStyle(title, ReverbTextRole.LABEL_LARGE, value.palette.ink)
         duration.setText(formatRangeTimeInput((state.trimEndMillis - state.trimStartMillis).coerceAtLeast(0) / 1000.0))
-        duration.setTypography(ReverbParagraphStyles[ReverbTextRole.BODY_SMALL].copy(fontFamily = FontFamily.Monospace),
+        duration.setTypography(playerTimeTypography,
             value.textDensity, value.sharedFontResolver)
         duration.setTextColor(value.palette.muted)
     }

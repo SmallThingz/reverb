@@ -292,7 +292,7 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
 }
 
-private val playerTimeTypography =
+internal val playerTimeTypography =
     ReverbParagraphStyles[ReverbTextRole.BODY_SMALL].copy(fontFamily = FontFamily.Monospace)
 
 /** Match the formatter's exact units, including its Double rounding before flooring trim tenths. */
