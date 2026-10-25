@@ -170,8 +170,13 @@ internal class ReverbLibraryScreenContent(
         input.dismiss, input.brand, input.incidents, input.settings,
         owner::clearSelection, owner::shareSelection, owner::deleteSelected)
 
-    private fun publish(value: NativeLibraryPresentation) {
+    private fun publish(next: NativeLibraryPresentation) {
         if (closed) return
+        // Hiding must reach retained players before the owner's queued publication. Keep the
+        // clamped snapshot so a quick reopen waits for fresh owner state before admitting playback.
+        val value = if (!input.owner.active && next.list.screenActive) {
+            next.copy(list = next.list.copy(screenActive = false))
+        } else next
         presentation = value
         pull.bind(value.isRefreshing) { owner.refresh(showSpinner = true) }
         fallbackBack.isEnabled = input.owner.active && value.list.expandedOwner != null && value.selectedCount == 0
