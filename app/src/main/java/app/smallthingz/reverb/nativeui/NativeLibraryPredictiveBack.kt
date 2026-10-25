@@ -16,11 +16,13 @@ import app.smallthingz.reverb.predictiveBackCommitDurationMillis
 import app.smallthingz.reverb.predictiveBackHorizontalDirection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.isActive
@@ -62,16 +64,17 @@ internal class NativeLibraryPredictiveBack(
 
     private val callback = object : OnBackPressedCallback(false) {
         override fun handleOnBackStarted(backEvent: BackEventCompat) {
-            cancelGesture()
+            retireGesture()
             if (isEnabled) { predictive = true; launchGesture() }
         }
         override fun handleOnBackProgressed(backEvent: BackEventCompat) { activeChannel?.trySend(backEvent) }
         override fun handleOnBackCancelled() = cancelGesture()
         override fun handleOnBackPressed() {
-            if (activeChannel != null && !predictive) cancelGesture()
-            if (activeChannel == null) { predictive = false; launchGesture() }
-            activeChannel?.close()
+            if (activeChannel != null && !predictive) retireGesture()
             predictive = false
+            // Initial publication can synchronously replace this gesture. Close only its channel.
+            val channel = activeChannel ?: run { retireGesture(); launchGesture() }
+            channel.close()
         }
     }
     init { dispatcher.addCallback(lifecycleOwner, callback) }
@@ -100,25 +103,30 @@ internal class NativeLibraryPredictiveBack(
         if (!closed) frame(gestureActive, progress.value, predictiveBackHorizontalDirection(edge))
     }
 
-    private fun launchGesture() {
+    private fun launchGesture(): Channel<BackEventCompat> {
         val channel = Channel<BackEventCompat>(Channel.BUFFERED, BufferOverflow.SUSPEND)
         activeChannel = channel
-        activeJob = scope.launch {
-            if (!callback.isEnabled) return@launch
-            committed = false
-            progress.snapTo(0f)
-            gestureActive = true
-            publish()
+        // Main.immediate may run the body before launch returns. Install ownership first.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val owner = currentCoroutineContext()[Job]
             var completed = false
             try {
+                if (!callback.isEnabled) return@launch
+                committed = false
+                progress.snapTo(0f)
+                gestureActive = true
+                publish()
+                currentCoroutineContext().ensureActive()
                 channel.consumeAsFlow().collect { event ->
                     edge = event.swipeEdge
                     progress.snapTo(event.progress.coerceIn(0f, 1f))
                     publish()
+                    currentCoroutineContext().ensureActive()
                 }
                 val duration = predictiveBackCommitDurationMillis(progress.value)
                 if (duration == 0) { progress.snapTo(1f); publish() }
                 else progress.animateTo(1f, tween(duration, easing = FastOutSlowInEasing)) { publish() }
+                currentCoroutineContext().ensureActive()
                 completed = true
                 committed = true
                 onBack()
@@ -126,25 +134,43 @@ internal class NativeLibraryPredictiveBack(
                 if (!currentCoroutineContext().isActive) throw cancelled
                 progress.animateTo(0f, tween(160, easing = FastOutSlowInEasing)) { publish() }
             } finally {
-                if (!completed) committed = false
-                gestureActive = false
-                edge = BackEventCompat.EDGE_NONE
-                publish()
+                // Replacement/close revokes ownership before cancellation can resume this body.
+                if (activeJob === owner) {
+                    activeJob = null
+                    activeChannel = null
+                    predictive = false
+                    if (!completed) committed = false
+                    gestureActive = false
+                    edge = BackEventCompat.EDGE_NONE
+                    publish()
+                }
             }
         }
+        activeJob = job
+        job.start()
+        return channel
     }
     private fun cancelGesture() {
-        activeChannel?.cancel(CancellationException("onBack cancelled"))
-        activeJob?.cancel()
+        val channel = activeChannel
         activeChannel = null
-        activeJob = null
         predictive = false
+        // Cancel the event stream, retaining the job that owns the 160ms return animation.
+        channel?.cancel(CancellationException("onBack cancelled"))
+    }
+    private fun retireGesture() {
+        val job = activeJob
+        val channel = activeChannel
+        activeJob = null
+        activeChannel = null
+        predictive = false
+        job?.cancel()
+        channel?.cancel()
     }
     override fun close() {
         if (closed) return
         closed = true
         callback.remove()
-        cancelGesture()
+        retireGesture()
         scope.cancel()
     }
 }
