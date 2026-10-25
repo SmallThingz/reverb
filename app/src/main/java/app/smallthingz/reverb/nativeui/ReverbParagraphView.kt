@@ -100,6 +100,8 @@ internal class ReverbParagraphView(
         var previousDirection: LayoutDirection? = null
         var layoutSize = IntSize.Zero
         var didOverflow = false
+        var intrinsicHeightWidth = -1
+        var intrinsicHeight = -1
 
         fun invalidateMetrics() {
             intrinsics = null
@@ -108,6 +110,8 @@ internal class ReverbParagraphView(
             previousDirection = null
             layoutSize = IntSize.Zero
             didOverflow = false
+            intrinsicHeightWidth = -1
+            intrinsicHeight = -1
         }
     }
 
@@ -388,6 +392,8 @@ internal class ReverbParagraphView(
         cache.paragraph = null
         cache.previousConstraints = null
         cache.previousDirection = direction
+        cache.intrinsicHeightWidth = -1
+        cache.intrinsicHeight = -1
         return created
     }
 
@@ -494,7 +500,12 @@ internal class ReverbParagraphView(
         require(widthPx >= 0)
         val cache = cacheForMeasure()
         val current = ensureIntrinsics(cache, paragraphDirection())
-        return ceilPixel(layoutParagraph(cache, current, Constraints(maxWidth = widthPx)).height)
+        // Check density, direction and resolved-font freshness before reusing this cache's height.
+        if (cache.intrinsicHeightWidth == widthPx) return cache.intrinsicHeight
+        val height = ceilPixel(layoutParagraph(cache, current, Constraints(maxWidth = widthPx)).height)
+        cache.intrinsicHeightWidth = widthPx
+        cache.intrinsicHeight = height
+        return height
     }
 
     override fun getBaseline(): Int = if (firstBaseline >= 0) paddingTop + firstBaseline else -1
