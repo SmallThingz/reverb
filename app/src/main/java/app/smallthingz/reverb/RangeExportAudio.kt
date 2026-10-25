@@ -520,7 +520,7 @@ internal class TimelineAudioPreviewController(
         snapshot: ReverbService.TimelineSnapshot,
         fromSeconds: Double,
         untilSeconds: Double = snapshot.durationSeconds,
-        onProgress: (Double) -> Unit,
+        onProgress: ((Double) -> Unit)? = null,
         onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: (Throwable) -> Unit,
@@ -538,7 +538,7 @@ internal class TimelineAudioPreviewController(
                 startSeconds = start,
                 endSeconds = end,
                 volume = 1f,
-                reportProgress = true,
+                samplePlaybackHead = true,
                 onProgress = onProgress,
                 onStarted = onStarted,
                 onFinished = onFinished,
@@ -562,8 +562,8 @@ internal class TimelineAudioPreviewController(
                 startSeconds = start,
                 endSeconds = end,
                 volume = 0.72f,
-                reportProgress = false,
-                onProgress = {},
+                samplePlaybackHead = false,
+                onProgress = null,
                 onStarted = {},
                 onFinished = {},
                 onError = null,
@@ -956,8 +956,8 @@ internal class TimelineAudioPreviewController(
         startSeconds: Double,
         endSeconds: Double,
         volume: Float,
-        reportProgress: Boolean,
-        onProgress: (Double) -> Unit,
+        samplePlaybackHead: Boolean,
+        onProgress: ((Double) -> Unit)?,
         onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: ((Throwable) -> Unit)?,
@@ -1005,16 +1005,19 @@ internal class TimelineAudioPreviewController(
                         startedCallbackSent = true
                         postIfCurrent(token, onStarted)
                     }
-                    if (reportProgress) {
+                    if (samplePlaybackHead) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastProgressAt >= PREVIEW_PROGRESS_INTERVAL_MILLIS) {
                             lastProgressAt = now
+                            // Long playback must unwrap the head even without a progress observer.
                             val played = playbackHead.update(track.playbackHeadPosition)
-                            postIfCurrent(token) {
-                                onProgress(
-                                    (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
-                                        .coerceAtMost(endSeconds),
-                                )
+                            if (onProgress != null) {
+                                postIfCurrent(token) {
+                                    onProgress(
+                                        (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
+                                            .coerceAtMost(endSeconds),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1038,7 +1041,7 @@ internal class TimelineAudioPreviewController(
                 } else if (previewPlaybackDrainStalled(lastPlaybackAdvanceAt, now)) {
                     throw IOException("Audio preview playback stalled")
                 }
-                if (reportProgress) {
+                if (samplePlaybackHead && onProgress != null) {
                     postIfCurrent(token) {
                         onProgress(
                             (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())

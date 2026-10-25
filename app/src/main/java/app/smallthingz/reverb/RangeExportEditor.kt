@@ -964,7 +964,6 @@ internal class RangeExportEditorState(
             snapshot = readySnapshot,
             fromSeconds = window.startSeconds.toDouble(),
             untilSeconds = window.endSeconds.toDouble(),
-            onProgress = {},
             onStarted = {
                 previewStarting = false
                 isPlaying = true
