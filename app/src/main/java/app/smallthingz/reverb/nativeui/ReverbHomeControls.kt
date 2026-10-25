@@ -147,7 +147,8 @@ internal class ReverbHomeControls(
         val horizontalPadding = dp(6) * 2
         val maxSegmentHeight = (selectorHeight - dp(6) * 2).coerceAtLeast(0)
         var remaining = (selectorWidth - horizontalPadding).coerceAtLeast(0)
-        for (segment in listOf(oneShot, looping)) {
+        for (index in 0..1) {
+            val segment = if (index == 0) oneShot else looping
             val segmentWidth = min(dp(112), remaining)
             segment.measure(MeasureSpec.makeMeasureSpec(segmentWidth, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(maxSegmentHeight, MeasureSpec.AT_MOST))
@@ -158,7 +159,8 @@ internal class ReverbHomeControls(
         val actionHeight = min(dp(70), height)
         var actionRemaining = (actionWidth - dp(8) * 2).coerceAtLeast(0)
         val actionMaxHeight = (actionHeight - dp(8) * 2).coerceAtLeast(0)
-        for (button in buttons) {
+        for (index in buttons.indices) {
+            val button = buttons[index]
             val childWidth = min(dp(54), actionRemaining)
             val childHeight = min(dp(54), actionMaxHeight)
             button.measure(MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY),
@@ -175,7 +177,8 @@ internal class ReverbHomeControls(
         val selectorLeft = ((width - selectorWidth) / 2f).roundToInt()
         val selectorInnerHeight = (selectorHeight - dp(6) * 2).coerceAtLeast(0)
         var logicalX = dp(6)
-        for (segment in listOf(oneShot, looping)) {
+        for (index in 0..1) {
+            val segment = if (index == 0) oneShot else looping
             val x = selectorLeft + if (layoutDirection == LAYOUT_DIRECTION_RTL)
                 selectorWidth - logicalX - segment.measuredWidth else logicalX
             val y = dp(6) + ((selectorInnerHeight - segment.measuredHeight) / 2f).roundToInt()
@@ -188,7 +191,8 @@ internal class ReverbHomeControls(
         val actionTop = height - actionHeight
         val innerHeight = (actionHeight - dp(8) * 2).coerceAtLeast(0)
         logicalX = dp(8)
-        for (button in buttons) {
+        for (index in buttons.indices) {
+            val button = buttons[index]
             val x = actionLeft + if (layoutDirection == LAYOUT_DIRECTION_RTL)
                 actionWidth - logicalX - button.measuredWidth else logicalX
             val y = actionTop + dp(8) + ((innerHeight - button.measuredHeight) / 2f).roundToInt()
