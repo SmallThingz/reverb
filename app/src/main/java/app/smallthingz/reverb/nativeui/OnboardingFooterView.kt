@@ -347,8 +347,9 @@ private class FooterButton(
                           geometry: NativePlainTextViewGeometry,
                           sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
                           exposed: (View) -> Boolean): AutoCloseable {
-        val role = mergedRowAccessibility.bindGeometry(geometry,
-            sourceNode?.let { node -> { node(this) } }, sourceNode?.let { node -> { child -> node(child).present } }) { exposed(this) }
+        val role = if (sourceNode != null) {
+            mergedRowAccessibility.bindSourceGeometry(geometry, sourceNode) { exposed(this) }
+        } else mergedRowAccessibility.bindGeometry(geometry) { exposed(this) }
         val text = try { label.bindPlainTextAccessibility(cursor, geometry,
             sourceNode?.let { node -> { node(label) } }) { exposed(label) } }
         catch (error: Throwable) {

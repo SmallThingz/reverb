@@ -210,7 +210,11 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     private val endpoint=ReverbClickPhaseEndpoint(controller)
     private val click=NativeClickPhaseNode(visual,endpoint,host.interestedParent)
     private val clipLease=host.registerTextClip(surface)
-    private val parentLease=visual.mergedRowAccessibility.bindGeometry(host.textGeometry,
+    private val parentLease=if(host.sourceProvider!=null) {
+        visual.mergedRowAccessibility.bindSourceGeometry(host.textGeometry,host.sourceProvider) {
+            !host.sourceNode(visual).hidden
+        }
+    } else visual.mergedRowAccessibility.bindGeometry(host.textGeometry,
         {host.sourceNode(visual,48f*environment.textDensity.density)},{host.sourceNode(it).present},
         {!host.sourceNode(visual).hidden})
     private val glyphLease=visual.glyph.bindDescriptionAccessibility(host.textWindow,

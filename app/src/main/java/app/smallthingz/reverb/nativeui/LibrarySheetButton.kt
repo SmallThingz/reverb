@@ -34,6 +34,8 @@ internal class NativeMaterialButtonHost(
     private val createHit:(View,List<NativeViewPhasePointerNode>,()->List<NativeViewPointerHitLayout>,
                            (Offset)->Boolean)->NativeViewPointerHitLayout,
     val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
+    // Supply only when provider facts match sourceFacts for every requested minimum-touch override.
+    val sourceProvider:NativeSourceAccessibilityNodeProvider?=null,
 ) {
     fun sourceNode(view:View,minimumTouch:Float=0f)=sourceFacts(view,minimumTouch)
     fun hit(view:View,nodes:List<NativeViewPhasePointerNode>,
@@ -186,7 +188,11 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         accessibilityDelegate=mergedRowAccessibility
         setOnClickListener {if(isEnabled&&isAttachedToWindow)action()}
         if(android.os.Build.VERSION.SDK_INT>=29)isForceDarkAllowed=false
-        leases+=mergedRowAccessibility.bindGeometry(host.textGeometry,{host.sourceNode(this,48f*environment.textDensity.density)},
+        leases+=if(host.sourceProvider!=null) {
+            mergedRowAccessibility.bindSourceGeometry(host.textGeometry,host.sourceProvider) {
+                host.sourceNode(this,48f*environment.textDensity.density).present
+            }
+        } else mergedRowAccessibility.bindGeometry(host.textGeometry,{host.sourceNode(this,48f*environment.textDensity.density)},
             {host.sourceNode(it).present}){host.sourceNode(this,48f*environment.textDensity.density).present}
         leases+=label.bindPlainTextAccessibility(host.textWindow,host.textGeometry,{host.sourceNode(label)}){host.sourceNode(label).present}
         val clipLease=host.registerTextClip(content)

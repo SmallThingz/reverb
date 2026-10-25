@@ -566,8 +566,7 @@ private class ReverbTopBarDescriptionView(context: Context, description: String)
 private fun bindTopBarActionAccessibility(host: ViewGroup, parent: ReverbMergedRowAccessibility,
     description: ReverbTopBarDescriptionView, cursor: PlainTextAccessibilityWindowScope,
     geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable {
-    val parentLease = parent.bindGeometry(geometry, { sourceNode(host) },
-        { sourceNode(it).present }, { sourceNode(host).present })
+    val parentLease = parent.bindSourceGeometry(geometry, sourceNode) { sourceNode(host).present }
     val childLease = try { description.bindAccessibility(cursor) { sourceNode(description) } }
     catch (error: Throwable) {
         closeTopBarAccessibilityLeases(listOf(parentLease), error)

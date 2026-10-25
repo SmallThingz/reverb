@@ -88,8 +88,8 @@ internal class ReverbStandardIconButtonView(
         geometry: NativePlainTextViewGeometry,
         sourceNode: (View) -> NativeSourceAccessibilityNode,
     ): AutoCloseable {
-        val parentLease = visual.mergedRowAccessibility.bindGeometry(
-            geometry, { sourceNode(visual) }, { sourceNode(it).present }, { !sourceNode(visual).hidden })
+        val parentLease = visual.mergedRowAccessibility.bindSourceGeometry(
+            geometry, sourceNode, { !sourceNode(visual).hidden })
         val childLease = visual.glyph.bindDescriptionAccessibility(
             window, { sourceNode(visual.glyph) }, { !sourceNode(visual.glyph).hidden })
         return AutoCloseable { childLease.close(); parentLease.close() }

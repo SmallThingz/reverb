@@ -581,7 +581,7 @@ internal class NativeMainScreenView private constructor(
         registerTextClip = { view ->
             val token = Any(); clipLeases[view] = token
             AutoCloseable { if (clipLeases[view] === token) clipLeases.remove(view) }
-        }, createHit = ::directHit, admitChildren = source::retainPresentSemanticChildren)
+        }, createHit = ::directHit, admitChildren = source::retainPresentSemanticChildren, sourceProvider = source)
 
     private fun directHit(view: View, nodes: List<NativeViewPhasePointerNode>,
         children: () -> List<NativeViewPointerHitLayout> = { emptyList() },

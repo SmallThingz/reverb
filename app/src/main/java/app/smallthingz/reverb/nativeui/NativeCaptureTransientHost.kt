@@ -209,7 +209,9 @@ private class CaptureStatusBranch(
         { NativeMergedRowAccessibilityState(true, null, null,
             row.paragraphLeaves.filter { it.visibility != GONE }, clickable = false, rolePresent = false) },
         { false })
-    private val mergedLease = mergedRowAccessibility.bindGeometry(host.textGeometry,
+    private val mergedLease = if (host.sourceProvider != null) {
+        mergedRowAccessibility.bindSourceGeometry(host.textGeometry, host.sourceProvider) { !host.sourceNode(this).hidden }
+    } else mergedRowAccessibility.bindGeometry(host.textGeometry,
         { host.sourceNode(this) }, { host.sourceNode(it).present }, { !host.sourceNode(this).hidden })
     private val surfaceShield = object : NativeViewPhasePointerNode {
         override val view get() = row.summarySurface
@@ -317,9 +319,9 @@ private class CaptureStatusBranch(
                 val button = ReverbStandardIconButtonView(context, environment, { host.inputRoot })
                 cancel = button
                 cancelNode = NativeClickPhaseNode(button.visual, button.visual.nativeClickEndpoint, host.interestedParent)
-                cancelLease = button.bindAccessibility(host.textWindow, host.textGeometry) { view ->
+                cancelLease = button.bindAccessibility(host.textWindow, host.textGeometry, host.sourceProvider ?: { view ->
                     host.sourceNode(view, if (view === button.visual) button.minimumTouchTargetPx else 0f)
-                }
+                })
                 row.setSummarySlots(progress, button)
             }
             bindCancelButton(checkNotNull(cancel))
