@@ -163,28 +163,6 @@ class OnboardingAudioPreferencesTest {
             forInput, forInput.sampleRate, List(SILENCE_GRAPH_BINS) { db }))
 
     @Test
-    fun absentFeaturesDefaultOnWithoutReplacingTheDurableBaseline() {
-        val original = OnboardingAudioSelection(false, false)
-        val selected = initialOnboardingAudioSelection(original, false, false, true)
-        assertFalse(original.outputCompressionEnabled)
-        assertFalse(original.skipSilenceEnabled)
-        assertTrue(selected.outputCompressionEnabled)
-        assertTrue(selected.skipSilenceEnabled)
-        assertEquals(ExportFormat.FLAC, requireNotNull(resolveOnboardingAudioSelection(
-            original, selected, ExportFormat.WAV, customCurve, PcmSampleFormat.PCM_16)).outputFormat)
-    }
-
-    @Test
-    fun explicitOffAndUnsupportedCompressionStayOff() {
-        val off = OnboardingAudioSelection(false, false)
-        assertEquals(off, initialOnboardingAudioSelection(off, true, true, true))
-        assertEquals(OnboardingAudioSelection(false, true),
-            initialOnboardingAudioSelection(off, false, false, false))
-        assertEquals(OnboardingAudioSelection(true, false),
-            initialOnboardingAudioSelection(off, false, true, true))
-    }
-
-    @Test
     fun untouchedLevelAndMeasurementFollowFreshDurableValues() {
         val old = OnboardingAudioSelection(true, true, 5, customCurve, histogram())
         val nextInput = input.copy(sampleRate = 48_000)
@@ -263,14 +241,36 @@ class OnboardingAudioPreferencesTest {
     }
 
     @Test
-    fun effectiveEnabledSilenceRequiresActualCurrentMeasurement() {
-        val old = OnboardingAudioSelection(false, false, 5, customCurve, null)
-        assertNull(resolveOnboardingAudioSelection(old, old, ExportFormat.WAV,
-            customCurve.copy(enabled = true), PcmSampleFormat.PCM_16, 5, null, input))
-        assertNull(resolveOnboardingAudioSelection(old, old.copy(skipSilenceEnabled = true), ExportFormat.WAV,
-            customCurve, PcmSampleFormat.PCM_16, 5, "invalid", input))
-        assertNotNull(resolveOnboardingAudioSelection(old, old, ExportFormat.WAV,
-            customCurve, PcmSampleFormat.PCM_16, 5, null, input))
+    fun enablingOrKeepingSilenceDoesNotRequireANewMeasurement() {
+        val original = OnboardingAudioSelection(false, false, 5, customCurve, null)
+        for (format in PcmSampleFormat.entries) {
+            // Actual native drafts carry a curve even when the user only changes the switch.
+            val explicit = requireNotNull(resolveOnboardingAudioSelection(original,
+                original.copy(skipSilenceEnabled = true), ExportFormat.WAV,
+                customCurve, format, 7, null, input.copy(sampleFormat = format)))
+            assertTrue(explicit.silenceConfig.enabled)
+            assertEquals(customCurve.points, explicit.silenceConfig.points)
+            assertEquals(7, explicit.flacCompression)
+            assertNull(explicit.silenceHistogram)
+            val concurrent = requireNotNull(resolveOnboardingAudioSelection(original, original,
+                ExportFormat.WAV, customCurve.copy(enabled = true), format, 7, null,
+                input.copy(sampleFormat = format)))
+            assertEquals(explicit, concurrent)
+        }
+    }
+
+    @Test
+    fun untouchedProfileAndMeasurementRemainDurableWhenTogglingSilence() {
+        val original = OnboardingAudioSelection(false, false, 5, customCurve, null)
+        val freshCurve = customCurve.copy(points = customCurve.points.map { it.copy(db = -70) })
+        for (stored in listOf(null, "invalid", histogram(input.copy(sampleRate = 48_000)))) {
+            val result = requireNotNull(resolveOnboardingAudioSelection(original,
+                original.copy(skipSilenceEnabled = true), ExportFormat.WAV, freshCurve,
+                PcmSampleFormat.PCM_16, 8, stored, input))
+            assertEquals(freshCurve.copy(enabled = true), result.silenceConfig)
+            assertEquals(stored, result.silenceHistogram)
+            assertEquals(8, result.flacCompression)
+        }
     }
 
     @Test
@@ -280,14 +280,6 @@ class OnboardingAudioPreferencesTest {
         val concurrent = customCurve.copy(points = customCurve.points.map { it.copy(db = -75) })
         assertNull(resolveOnboardingAudioSelection(old, selected, ExportFormat.FLAC, concurrent,
             PcmSampleFormat.PCM_16, 5, histogram(), input))
-    }
-
-    @Test
-    fun calibrationMustCompleteBeforePrimaryActionCanFinish() {
-        assertEquals(OnboardingAudioPrimaryAction.CALIBRATE, onboardingAudioPrimaryAction(true, false))
-        assertEquals(OnboardingAudioPrimaryAction.WAIT, onboardingAudioPrimaryAction(true, true))
-        assertEquals(OnboardingAudioPrimaryAction.WAIT, onboardingAudioPrimaryAction(false, true))
-        assertEquals(OnboardingAudioPrimaryAction.FINISH, onboardingAudioPrimaryAction(false, false))
     }
 
 }

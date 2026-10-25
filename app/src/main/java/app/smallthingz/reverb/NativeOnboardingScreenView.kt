@@ -218,8 +218,7 @@ internal class NativeOnboardingScreenView private constructor(
             buildList {
                 fun visit(view: View) {
                     if (view.visibility != View.VISIBLE) return
-                    if (view.isFocusable && (view is NativeClickPhaseHost || view is SilenceCurveView ||
-                        (view.parent is CompressionSliderView && (view.parent as CompressionSliderView).pointerView === view))) add(view)
+                    if (view.isFocusable && view is NativeClickPhaseHost) add(view)
                     if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
                 }
                 visit(pages[page])
@@ -303,12 +302,6 @@ internal class NativeOnboardingScreenView private constructor(
     private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost, interactions,
-        inputRoot = { this },
-        parentInterested = { change ->
-            (this::horizontal.isInitialized && horizontal.interested(change)) ||
-                vertical[pages[page].sourceVerticalViewport]?.interested(change) == true
-        },
-        audioStructureChanged = pointer::retireRemovedClicks,
     )
 
     private fun addVertical(page: OnboardingPageContentView) {
@@ -335,9 +328,7 @@ internal class NativeOnboardingScreenView private constructor(
         val page = target?.sourcePage ?: pager.settledPage
         val footerPage = target?.sourcePage ?: minOf(page, pager.targetPage)
         footer.bind(OnboardingFooterState(page, footerPage,
-            footerPage != 0 || state.permissions.isReadyForHighlightedContinue(), stateIsFinishing,
-            calibrationRequired = state.skipSilence && state.calibrationRequired,
-            calibrating = state.silenceState.calibrating),
+            footerPage != 0 || state.permissions.isReadyForHighlightedContinue(), stateIsFinishing),
             environment.palette)
         if (this::horizontal.isInitialized) horizontal.updateEnabled()
         backCallback.isEnabled = (page > 0 || target != null) && !stateIsFinishing && !closed
@@ -361,8 +352,7 @@ internal class NativeOnboardingScreenView private constructor(
     private fun continueOrFinish() {
         val current = minOf(pager.settledPage, pager.targetPage)
         if (current < 2) navigate(current + 1)
-        else if (!state.silenceState.calibrating &&
-            navigation.mayFinish(pager.settledPage == 2, pager.isScrollInProgress, backMotion.active)) onFinish()
+        else if (navigation.mayFinish(pager.settledPage == 2, pager.isScrollInProgress, backMotion.active)) onFinish()
     }
 
     private fun beginBack() {
@@ -523,9 +513,6 @@ internal class NativeOnboardingScreenView private constructor(
     }
 
     internal fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
-        if (view is SilenceCurveView) return listOf(pointer.interop(view))
-        val audio = pages[2].pointerNodes(view)
-        if (audio.isNotEmpty()) return audio
         return when {
         view === viewport -> horizontal.nodes
         view is NativeVerticalViewport -> vertical[view]?.let { listOf(it.observerNode, it.dragNode) } ?: emptyList()
@@ -564,13 +551,9 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
     lateinit var root: NativeOnboardingScreenView
     val coordinates = NativeWindowPointerCoordinates { root }
     private val clicks = java.util.IdentityHashMap<View, NativeClickPhaseNode>()
-    private val interop = java.util.IdentityHashMap<View, NativeAndroidInteropNode>()
     val rootLayout: NativeViewPointerHitLayout = Layout { root }
     fun click(view: View, endpoint: NativeClickPhaseEndpoint, interested: (NativeDragPointerChange) -> Boolean) =
         clicks.getOrPut(view) { NativeClickPhaseNode(view, endpoint, interested) }
-    fun interop(view: SilenceCurveView) = interop.getOrPut(view) {
-        NativeAndroidInteropNode(view, (view.parent as NativeAndroidInteropHost).nativeInteropRequests)
-    }
 
     fun retireRemovedClicks() {
         fun belongs(view: View): Boolean {
@@ -582,14 +565,11 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
             return false
         }
         clicks.keys.filterNot(::belongs).forEach { clicks.remove(it)?.cancel() }
-        interop.keys.filterNot(::belongs).forEach { interop.remove(it)?.close() }
     }
 
     fun close() {
         clicks.values.forEach { it.cancel() }
         clicks.clear()
-        interop.values.forEach(AutoCloseable::close)
-        interop.clear()
     }
 
     private inner class Layout(private val getView: () -> View) : NativeViewPointerHitLayout {

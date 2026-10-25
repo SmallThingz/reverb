@@ -21,47 +21,32 @@ class OnboardingPermissionRequestSequenceTest {
         interactionEnabled = true,
     )
 
-    @Test fun automaticRequestsOnlyRunOnReadyVisibleForegroundPage() {
+    @Test fun lifecycleEventsAloneNeverClaimAPermission() {
         val sequence = OnboardingPermissionRequestSequence()
-        assertNull(sequence.claimNext(missing, pageVisible = false, resumed = true))
-        assertNull(sequence.claimNext(missing, pageVisible = true, resumed = false))
-        assertNull(sequence.claimNext(missing.copy(interactionEnabled = false), true, true))
+        repeat(4) { sequence.leftForeground(); sequence.returnedToForeground() }
+        assertNull(sequence.pending)
         assertEquals(0, sequence.attemptedMask)
-        assertEquals(OnboardingPermission.MICROPHONE, sequence.claimNext(missing, true, true))
     }
 
-    @Test fun pendingRequestPreventsAutomaticAndManualOverlap() {
+    @Test fun explicitRequestPreventsManualOverlap() {
         val sequence = OnboardingPermissionRequestSequence()
-        assertEquals(OnboardingPermission.MICROPHONE, sequence.claimNext(missing, true, true))
-        assertNull(sequence.claimNext(missing, true, true))
+        assertTrue(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true))
         assertFalse(sequence.claimManual(OnboardingPermission.NOTIFICATIONS, missing, true))
         assertFalse(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true))
     }
 
-    @Test fun everyDenialAdvancesToNextDistinctPermissionWithoutAutomaticRetry() {
+    @Test fun completionNeverClaimsTheNextPermissionAndExplicitTapCanRetry() {
         val sequence = OnboardingPermissionRequestSequence()
         for (permission in OnboardingPermission.entries) {
-            assertEquals(permission, sequence.claimNext(missing, true, true))
+            assertFalse(sequence.claimManual(permission, missing, false))
+            assertTrue(sequence.claimManual(permission, missing, true))
             sequence.completed(permission)
+            sequence.leftForeground(); sequence.returnedToForeground()
+            assertNull(sequence.pending)
+            assertTrue(sequence.claimManual(permission, missing, true))
+            sequence.completed(permission)
+            assertNull(sequence.pending)
         }
-        repeat(4) { assertNull(sequence.claimNext(missing, true, true)) }
-    }
-
-    @Test fun allowedAndUnsupportedPermissionsAreSkipped() {
-        val sequence = OnboardingPermissionRequestSequence()
-        val status = missing.copy(microphoneAllowed = true, storageRequired = false,
-            recoveryRequired = false, notificationPermissionRequired = false)
-        assertEquals(OnboardingPermission.BATTERY, sequence.claimNext(status, true, true))
-        sequence.completed(OnboardingPermission.BATTERY)
-        assertNull(sequence.claimNext(status, true, true))
-    }
-
-    @Test fun explicitRowTapCanRetryDeniedPermissionWithoutRestartingAutomaticSequence() {
-        val sequence = OnboardingPermissionRequestSequence(setOf(OnboardingPermission.MICROPHONE))
-        assertFalse(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, false))
-        assertTrue(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true))
-        sequence.completed(OnboardingPermission.MICROPHONE)
-        assertEquals(OnboardingPermission.STORAGE, sequence.claimNext(missing, true, true))
     }
 
     @Test fun manualRequestsRespectReadinessAndApplicability() {
@@ -77,20 +62,20 @@ class OnboardingPermissionRequestSequenceTest {
 
     @Test fun unrelatedCallbackCannotReleaseCurrentRequest() {
         val sequence = OnboardingPermissionRequestSequence()
-        sequence.claimNext(missing, true, true)
+        sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true)
         sequence.completed(OnboardingPermission.NOTIFICATIONS)
         assertEquals(OnboardingPermission.MICROPHONE, sequence.pending)
-        assertNull(sequence.claimNext(missing, true, true))
+        assertFalse(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true))
     }
 
     @Test fun runtimePermissionWaitsForItsResultEvenAcrossPauseResume() {
         val sequence = OnboardingPermissionRequestSequence()
-        sequence.claimNext(missing, true, true)
+        sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true)
         sequence.leftForeground()
         sequence.returnedToForeground()
         assertEquals(OnboardingPermission.MICROPHONE, sequence.pending)
         sequence.completed(OnboardingPermission.MICROPHONE)
-        assertEquals(OnboardingPermission.STORAGE, sequence.claimNext(missing, true, true))
+        assertNull(sequence.pending)
     }
 
     @Test fun batteryReviewRequiresRealDepartureBeforeReturnCompletesIt() {
@@ -107,19 +92,21 @@ class OnboardingPermissionRequestSequenceTest {
 
     @Test fun recreationRetainsAttemptedAndPendingStateWithoutDuplicateLaunch() {
         val original = OnboardingPermissionRequestSequence()
-        original.claimNext(missing, true, true)
+        original.claimManual(OnboardingPermission.MICROPHONE, missing, true)
         val restored = OnboardingPermissionRequestSequence(
             OnboardingPermissionRequestSequence.attemptedFromMask(original.attemptedMask),
             original.pending, original.batteryLeftForeground)
-        assertNull(restored.claimNext(missing, true, true))
+        assertFalse(restored.claimManual(OnboardingPermission.STORAGE, missing, true))
         restored.completed(OnboardingPermission.MICROPHONE)
-        assertEquals(OnboardingPermission.STORAGE, restored.claimNext(missing, true, true))
+        assertNull(restored.pending)
     }
 
     @Test fun restoredPendingImpliesAttemptedEvenWhenOlderSavedMaskOmitsIt() {
         val restored = OnboardingPermissionRequestSequence(pending = OnboardingPermission.MICROPHONE)
+        assertEquals(setOf(OnboardingPermission.MICROPHONE),
+            OnboardingPermissionRequestSequence.attemptedFromMask(restored.attemptedMask))
         restored.completed(OnboardingPermission.MICROPHONE)
-        assertEquals(OnboardingPermission.STORAGE, restored.claimNext(missing, true, true))
+        assertNull(restored.pending)
     }
 
     @Test fun restoredBatteryReturnDoesNotRelaunchTheDeniedReview() {
@@ -131,6 +118,6 @@ class OnboardingPermissionRequestSequenceTest {
             original.pending, original.batteryLeftForeground)
         restored.returnedToForeground()
         assertNull(restored.pending)
-        assertNull(restored.claimNext(missing, true, true))
+        assertTrue(restored.claimManual(OnboardingPermission.BATTERY, missing, true))
     }
 }

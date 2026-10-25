@@ -16,8 +16,6 @@ import app.smallthingz.reverb.nativeui.OnboardingPageActions
 import app.smallthingz.reverb.nativeui.OnboardingPageContentState
 import app.smallthingz.reverb.nativeui.OnboardingPermission
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
-import app.smallthingz.reverb.nativeui.SettingsSilenceActions
-import app.smallthingz.reverb.nativeui.SettingsSilenceState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,9 +57,8 @@ internal data class NativeOnboardingScreenSnapshot(
  * No launcher registration order changes,
  * new permission contract, permission escalation, renderer, Composition or process-wide state.
  *
- * The visible permission page requests missing access once, serially. Row taps can retry a denial.
- * Audio calibration edits the onboarding draft through the same bounded Settings sampler; only
- * the existing atomic Finish transaction publishes these choices.
+ * Permission prompts require explicit row taps. Only the existing atomic Finish transaction
+ * publishes the buffer and two audio-switch choices.
  */
 @MainThread
 internal class NativeOnboardingScreenOwner(
@@ -97,14 +94,8 @@ internal class NativeOnboardingScreenOwner(
         batteryLeftForeground = savedInstanceState?.getBoolean(STATE_BATTERY_LEFT_FOREGROUND) ?: false,
     )
     private var visiblePage = -1
-    private var editRevision = 0L
-    private var calibrationBinding: NativeSettingsCalibrationBinding? = null
     private var inputRefreshJob: Job? = null
     private var inputRefreshPending = false
-    private var calibrationBaseline: OnboardingAudioSelection? = null
-    private var inputRefreshError: String? = null
-    private var calibrationAttempt = 0L
-    private var refreshedFailureAttempt = -1L
 
     private var microphoneAllowed = hasMicrophonePermission()
     private var storageAllowed = hasLegacyStoragePermission()
@@ -133,7 +124,6 @@ internal class NativeOnboardingScreenOwner(
                     refreshOptionalPermissionStatus()
                     refreshAudioInput()
                     publish()
-                    requestNextOnboardingPermission()
                 }
             }
             else -> Unit
@@ -153,18 +143,6 @@ internal class NativeOnboardingScreenOwner(
             if (!selected || configuration?.compressionAvailable == true) edit { outputCompression = selected }
         },
         skipSilenceChanged = { selected -> edit { skipSilence = selected } },
-        compressionLevelChanged = { selected -> if (validFlacCompression(selected)) edit { compressionLevel = selected } },
-        silenceActions = object : SettingsSilenceActions {
-            override fun configChanged(config: SilenceGateConfig) {
-                config.validate()
-                edit { silenceConfig = config; skipSilence = config.enabled }
-            }
-            override fun calibrate() = beginTimedCalibration()
-            override fun beginHeld(): Boolean = beginCalibration(held = true)
-            override fun completeTap() { calibrationBinding?.controller?.completeTap() }
-            override fun finishHeld() { calibrationBinding?.controller?.finishHeld() }
-            override fun cancel() { calibrationBinding?.controller?.cancel() }
-        },
         pageChanged = ::pageChanged,
     )
 
@@ -181,13 +159,9 @@ internal class NativeOnboardingScreenOwner(
                     outputCompression = current.outputCompression,
                     skipSilence = current.skipSilence,
                     compressionAvailable = loaded.compressionAvailable,
-                    silenceValid = loaded.silenceValid || current.silenceConfig.points != current.originalAudio.silenceConfig?.points ||
-                        (current.silenceHistogram != current.originalAudio.silenceHistogram && current.histogram != null),
+                    silenceValid = loaded.silenceValid,
                     controlsEnabled = !finishing,
                     interactionEnabled = !finishing,
-                    compressionLevel = current.compressionLevel,
-                    silenceState = silenceState(current, loaded, !finishing),
-                    calibrationRequired = current.calibrationRequired(loaded.input),
                 )
             } else null
             return NativeOnboardingScreenSnapshot(showingOnboarding, page, finishing,
@@ -236,7 +210,6 @@ internal class NativeOnboardingScreenOwner(
         showPermissionDenied = !microphoneAllowed && !showingOnboarding
         if (microphoneAllowed && !showingOnboarding) beginPermissionFlow()
         publish()
-        requestNextOnboardingPermission()
     }
 
     fun onStoragePermissionResult(granted: Boolean) {
@@ -247,7 +220,6 @@ internal class NativeOnboardingScreenOwner(
         showPermissionDenied = !storageAllowed && !showingOnboarding
         if (storageAllowed && !showingOnboarding) beginPermissionFlow()
         publish()
-        requestNextOnboardingPermission()
     }
 
     fun onRecoveryPermissionResult(granted: Boolean) {
@@ -257,7 +229,6 @@ internal class NativeOnboardingScreenOwner(
         if (recoveryAllowed) AppFeedbackCenter.post(
             activity.getString(R.string.recording_recovery_enabled), FeedbackTone.SUCCESS)
         publish()
-        requestNextOnboardingPermission()
     }
 
     fun onNotificationPermissionResult(granted: Boolean) {
@@ -266,7 +237,6 @@ internal class NativeOnboardingScreenOwner(
         // Deliberately use the actual result, as the released callback does, rather than reread.
         notificationAllowed = granted
         publish()
-        requestNextOnboardingPermission()
     }
 
     fun dismissPermissionDenied() {
@@ -283,12 +253,6 @@ internal class NativeOnboardingScreenOwner(
     fun finish() {
         if (closed || !showingOnboarding || visiblePage != 2) return
         val current = draft ?: return
-        when (onboardingAudioPrimaryAction(current.calibrationRequired(configuration?.input),
-            calibrationBinding?.controller?.running == true)) {
-            OnboardingAudioPrimaryAction.WAIT -> return
-            OnboardingAudioPrimaryAction.CALIBRATE -> { beginTimedCalibration(); return }
-            OnboardingAudioPrimaryAction.FINISH -> Unit
-        }
         val oneShot = current.oneShotEnabled
         val looping = current.loopingEnabled
         val originalAudio = current.originalAudio
@@ -337,12 +301,6 @@ internal class NativeOnboardingScreenOwner(
                 activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) launchPermission(permission)
     }
 
-    private fun requestNextOnboardingPermission() {
-        if (closed || !attached || !showingOnboarding || configuration == null) return
-        permissionSequence.claimNext(permissionStatus(), visiblePage == 0,
-            activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))?.let(::launchPermission)
-    }
-
     private fun launchPermission(permission: OnboardingPermission) {
         try {
             when (permission) {
@@ -377,92 +335,14 @@ internal class NativeOnboardingScreenOwner(
                 appContext, "onboarding permission request", failure)
             AppFeedbackCenter.post(activity.getString(R.string.no_app_available), FeedbackTone.ERROR)
         }
-        requestNextOnboardingPermission()
     }
 
     private fun pageChanged(page: Int) {
         if (closed || visiblePage == page) return
         visiblePage = page
-        if (page != 2) calibrationBinding?.controller?.cancel()
-        requestNextOnboardingPermission()
     }
 
-    private fun silenceState(current: NativeOnboardingDraft, loaded: OnboardingConfiguration, enabled: Boolean): SettingsSilenceState {
-        val controller = calibrationBinding?.controller
-        return SettingsSilenceState(
-            config = current.currentSilence,
-            enabled = enabled,
-            maximumHz = minOf(SILENCE_MAX_HZ, (loaded.input?.sampleRate ?: 40_000) / 2),
-            sampledPeaks = loaded.input?.let { current.histogram?.peaksFor(it) },
-            calibrationAllowed = microphoneAllowed && loaded.input != null,
-            calibrating = controller?.running == true,
-            holdingCalibration = controller?.holding == true,
-            calibrationProgress = controller?.progress,
-            calibrationError = controller?.error?.let { error ->
-                if (error == activity.getString(R.string.silence_input_changed))
-                    activity.getString(R.string.onboarding_silence_input_changed) else error
-            } ?: inputRefreshError,
-            calibrationUnavailableReason = activity.getString(if (!microphoneAllowed)
-                R.string.permission_required_message else R.string.audio_input_init_failed),
-        )
-    }
-
-    private fun calibrationController(): SettingsSilenceCalibration {
-        calibrationBinding?.let { return it.controller }
-        return NativeSettingsCalibrationBinding(activity, scope, activity.window.decorView, activity.lifecycle,
-            readOwner = { config, input ->
-                val current = draft
-                if (!closed && showingOnboarding && visiblePage == 2 && microphoneAllowed &&
-                    finishState == OnboardingFinishState.IDLE && current?.currentSilence == config &&
-                    configuration?.input == input && config.enabled) editRevision to 0 else null
-            },
-            onCalibrated = { config, histogram ->
-                draft?.let { current ->
-                    current.calibrated(config, histogram, checkNotNull(calibrationBaseline))
-                    editRevision++
-                    publish()
-                }
-            },
-            onChanged = ::calibrationChanged,
-        ).also { calibrationBinding = it }.controller
-    }
-
-    private fun beginTimedCalibration() { beginCalibration(held = false) }
-
-    private fun beginCalibration(held: Boolean): Boolean {
-        if (closed || !showingOnboarding || visiblePage != 2 || finishState != OnboardingFinishState.IDLE) return false
-        val current = draft ?: return false
-        if (!current.skipSilence) return false
-        if (!microphoneAllowed) {
-            AppFeedbackCenter.post(activity.getString(R.string.permission_required_message), FeedbackTone.ERROR)
-            requestPermission(OnboardingPermission.MICROPHONE)
-            return false
-        }
-        val input = configuration?.input ?: run {
-            AppFeedbackCenter.post(activity.getString(R.string.audio_input_init_failed), FeedbackTone.ERROR)
-            refreshAudioInput()
-            return false
-        }
-        val controller = calibrationController()
-        if (controller.running) return false
-        calibrationAttempt++
-        calibrationBaseline = checkNotNull(configuration).audio
-        inputRefreshError = null
-        if (held) controller.beginHeld(current.currentSilence, input) else controller.beginTimed(current.currentSilence, input)
-        return controller.running
-    }
-
-    private fun calibrationChanged() {
-        val controller = calibrationBinding?.controller
-        if (controller != null && !controller.running && controller.error != null &&
-            refreshedFailureAttempt != calibrationAttempt) {
-            refreshedFailureAttempt = calibrationAttempt
-            refreshAudioInput()
-        }
-        publish()
-    }
-
-    /** Event-driven IO refresh; progress frames never read preferences or queue another sample. */
+    /** Event-driven IO refresh preserves untouched choices without reading preferences on UI frames. */
     private fun refreshAudioInput() {
         if (closed || !showingOnboarding || configuration == null) return
         inputRefreshPending = true
@@ -476,24 +356,16 @@ internal class NativeOnboardingScreenOwner(
                         val loaded = configuration
                         val current = draft
                         if (!closed && showingOnboarding && loaded != null && current != null) {
-                            inputRefreshError = null
-                            val profileChanged = loaded.input != fresh.input ||
-                                loaded.audio.silenceConfig != fresh.audio.silenceConfig ||
-                                loaded.audio.silenceHistogram != fresh.audio.silenceHistogram
-                            if (profileChanged) editRevision++
                             current.refreshUntouchedAudio(fresh.audio)
                             configuration = loaded.copy(input = fresh.input, audio = fresh.audio,
                                 compressionAvailable = fresh.compressionAvailable, silenceValid = fresh.silenceValid)
-                            val controller = calibrationBinding?.controller
-                            if (profileChanged && controller != null) controller.cancel(clearMeasurement = true)
-                            else publish()
+                            publish()
                         }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
                         if (!closed && showingOnboarding) {
-                            inputRefreshError = activity.getString(R.string.audio_input_init_failed)
-                            publish()
+                            AppFeedbackCenter.post(activity.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
                         }
                     }
                 } while (inputRefreshPending && !closed && showingOnboarding)
@@ -506,11 +378,8 @@ internal class NativeOnboardingScreenOwner(
     private inline fun edit(update: NativeOnboardingDraft.() -> Unit) {
         if (closed || !showingOnboarding || finishState != OnboardingFinishState.IDLE) return
         val current = draft ?: return
-        // The revision revokes the old sample before mutation; cancel then publishes the new draft once.
-        editRevision++
         current.update()
-        val controller = calibrationBinding?.controller
-        if (controller == null) publish() else controller.cancel(clearMeasurement = true)
+        publish()
     }
 
     private fun hydrateConfiguration() {
@@ -530,7 +399,6 @@ internal class NativeOnboardingScreenOwner(
                         configuration = loaded
                         draft = NativeOnboardingDraft.restore(loaded, restoredDraft)
                         publish()
-                        requestNextOnboardingPermission()
                     }
                     return@launch
                 }
@@ -551,8 +419,6 @@ internal class NativeOnboardingScreenOwner(
                     if (state == OnboardingFinishState.SUCCEEDED && showingOnboarding &&
                         !activity.isFinishing && !activity.isDestroyed &&
                         activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                        calibrationBinding?.close()
-                        calibrationBinding = null
                         configuration = null
                         draft = null
                         showingOnboarding = false
@@ -633,9 +499,7 @@ internal class NativeOnboardingScreenOwner(
         closed = true
         publishTarget = null
         activity.lifecycle.removeObserver(lifecycleObserver)
-        calibrationBinding?.close()
-        calibrationBinding = null
-        scope.cancel() // Only UI hydration/observation/sample. Never cancels an accepted process commit.
+        scope.cancel() // Only UI hydration/observation. Never cancels an accepted process commit.
     }
 
     private companion object {

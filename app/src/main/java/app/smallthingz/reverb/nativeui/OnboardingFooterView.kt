@@ -38,8 +38,6 @@ internal data class OnboardingFooterState(
     /** Exact existing host expression; false changes colors, never Continue click admission. */
     val ready: Boolean,
     val finishing: Boolean,
-    val calibrationRequired: Boolean = false,
-    val calibrating: Boolean = false,
 ) {
     init {
         require(page in 0..2 && footerPage in 0..2)
@@ -174,12 +172,10 @@ internal class OnboardingFooterView(
             content = if (!value.finishing && value.page > 0) colors.primary
                 else reverbColorWithAlpha(colors.onSurfaceVariant, 0.38f),
         )
-        val enabled = !value.finishing && !(value.footerPage == 2 && value.calibrating)
+        val enabled = !value.finishing
         next.bind(
             context.getString(when {
                 value.footerPage < 2 -> R.string.onboarding_continue
-                value.calibrating -> R.string.silence_sampling
-                value.calibrationRequired -> R.string.silence_calibrate
                 else -> R.string.onboarding_get_started
             }),
             enabled = enabled,

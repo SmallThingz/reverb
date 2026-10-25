@@ -3,7 +3,7 @@ package app.smallthingz.reverb
 import app.smallthingz.reverb.nativeui.OnboardingPermission
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
 
-/** One foreground prompt at a time; denial advances the automatic sequence, never repeats it. */
+/** Serializes explicit permission-row taps; lifecycle and results never claim another prompt. */
 internal class OnboardingPermissionRequestSequence(
     attempted: Set<OnboardingPermission> = emptySet(),
     pending: OnboardingPermission? = null,
@@ -16,21 +16,6 @@ internal class OnboardingPermissionRequestSequence(
         private set
     var batteryLeftForeground: Boolean = batteryLeftForeground && pending == OnboardingPermission.BATTERY
         private set
-
-    fun claimNext(
-        status: OnboardingPermissionStatus,
-        pageVisible: Boolean,
-        resumed: Boolean,
-    ): OnboardingPermission? {
-        if (!pageVisible || !resumed || !status.interactionEnabled || pending != null) return null
-        for (permission in OnboardingPermission.entries) {
-            if (attemptedMask and bit(permission) == 0 && missing(status, permission)) {
-                claim(permission)
-                return permission
-            }
-        }
-        return null
-    }
 
     /** Explicit row taps may retry a denial, but cannot overlap another system request. */
     fun claimManual(permission: OnboardingPermission, status: OnboardingPermissionStatus, resumed: Boolean): Boolean {

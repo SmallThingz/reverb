@@ -17,6 +17,15 @@ internal data class OnboardingAudioCommit(
     val silenceHistogram: String? = null,
 )
 
+/** Older drafts may contain hidden editor choices; only the two released switches survive. */
+internal fun restoreOnboardingAudioSelection(
+    configured: OnboardingAudioSelection,
+    restored: OnboardingAudioSelection,
+): OnboardingAudioSelection = configured.copy(
+    outputCompressionEnabled = restored.outputCompressionEnabled,
+    skipSilenceEnabled = restored.skipSilenceEnabled,
+)
+
 internal data class OnboardingSilenceConfiguration(
     val config: SilenceGateConfig,
     val valid: Boolean,
@@ -35,18 +44,6 @@ internal fun decodeOnboardingSilence(rawPreferences: Map<String, *>): Onboarding
     }
     return OnboardingSilenceConfiguration(config ?: SilenceGateConfig(), valid = config != null)
 }
-
-/** New choices default on; a stored false is still an explicit existing choice. */
-internal fun initialOnboardingAudioSelection(
-    original: OnboardingAudioSelection,
-    outputPreferencePresent: Boolean,
-    silencePreferencePresent: Boolean,
-    compressionAvailable: Boolean,
-): OnboardingAudioSelection = original.copy(
-    outputCompressionEnabled = original.outputCompressionEnabled ||
-        (!outputPreferencePresent && compressionAvailable),
-    skipSilenceEnabled = original.skipSilenceEnabled || !silencePreferencePresent,
-)
 
 /** Untouched fields follow fresh durable state; Finish owns only the edited fields. */
 internal fun resolveOnboardingAudioSelection(
@@ -87,11 +84,6 @@ internal fun resolveOnboardingAudioSelection(
     val measured = decodeSilenceCalibrationHistogram(histogram)
     if (histogramChanged && histogram != null && measured == null) return null
     if (histogramChanged && measured != null && currentInput != null && measured.input != currentInput) return null
-    // Validate the effective merged selection, not a stale untouched draft measurement.
-    // Legacy callers without a curve retain their original two-switch merge contract.
-    if (silenceEnabled && selectedCurve != null) {
-        if (measured == null || (currentInput != null && measured.input != currentInput)) return null
-    }
     // A dormant manually edited curve does not claim a calibration measurement.
     if (silenceEnabled && curveChanged && currentInput != null &&
         decodeSilenceCalibrationHistogram(selected.silenceHistogram)?.input != currentInput
@@ -104,7 +96,6 @@ internal data class OnboardingConfiguration(
     val audio: OnboardingAudioSelection,
     val compressionAvailable: Boolean,
     val silenceValid: Boolean,
-    val initialAudio: OnboardingAudioSelection = audio,
     val input: SilenceCalibrationInput? = null,
 )
 
@@ -126,18 +117,6 @@ internal fun getOnboardingConfiguration(context: Context): OnboardingConfigurati
             audio = audio,
             compressionAvailable = compressionAvailable,
             silenceValid = silence.valid,
-            initialAudio = initialOnboardingAudioSelection(audio,
-                preferences.contains(PrefKey.OUTPUT_FORMAT), preferences.contains(PrefKey.SILENCE_GATE),
-                compressionAvailable),
             input = input,
         )
-    }
-
-/** The footer never converts an unfinished or failed sample into a successful Finish. */
-internal enum class OnboardingAudioPrimaryAction { CALIBRATE, WAIT, FINISH }
-internal fun onboardingAudioPrimaryAction(calibrationRequired: Boolean, calibrating: Boolean): OnboardingAudioPrimaryAction =
-    when {
-        calibrating -> OnboardingAudioPrimaryAction.WAIT
-        calibrationRequired -> OnboardingAudioPrimaryAction.CALIBRATE
-        else -> OnboardingAudioPrimaryAction.FINISH
     }

@@ -4,9 +4,7 @@ import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
 import android.graphics.Rect
-import android.os.Bundle
 import android.os.SystemClock
-import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -19,9 +17,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * New authorized onboarding UI, not an altered released oracle. All state belongs to this isolated
- * fixture. Synthetic calibration publications exercise real renderers/actions, never a microphone,
- * production owner, permission launcher, preference write, or invented successful measurement.
+ * Restored two-switch onboarding flow. All state belongs to this isolated fixture. Synthetic
+ * permission and Finish callbacks exercise real renderers/actions, never a microphone, production
+ * owner, permission launcher, or preference write. Captures are not released pixel comparisons.
  */
 internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, report: StringBuilder) {
     check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
@@ -31,21 +29,19 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
     val cases = JSONArray()
     val pointerAttempts = JSONArray()
     val scrollAttempts = JSONArray()
-    val expected = listOf("permission-missing", "permission-granted", "buffers-default", "audio-default-on-top",
-        "audio-default-on-graph", "slider-input", "toggles-off", "toggles-on",
-        "calibration-running", "calibration-error", "calibration-cancelled",
-        "calibration-success", "retained-false", "retirement")
+    val expected = listOf("permission-missing", "permission-granted", "buffers-default", "audio-configured-off",
+        "toggles-on", "toggles-off", "direct-finish", "audio-configured-on", "retained-off", "retirement")
     val result = JSONObject().put("selector", "native_onboarding_audio_flow")
-        .put("qualification", "native UI of authorized onboarding change; no released pixel comparison")
-        .put("calibration", "SYNTHETIC callback and publication fixture; no audio capture")
-        .put("dispatch", "own-root MotionEvents, actual View key handlers and semantic actions")
+        .put("qualification", "restored two-switch native onboarding fixture; no released pixel comparison")
+        .put("callbacks", "SYNTHETIC permission and Finish callbacks; no production owner or audio capture")
+        .put("dispatch", "own-root MotionEvents and actual View semantic actions")
         .put("accessibility_connection", "public FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES")
         .put("expected_cases_per_palette", JSONArray(expected)).put("expected_case_count", expected.size * 2)
         .put("cases", cases).put("passed", false)
         .put("pointer_attempts", pointerAttempts).put("scroll_attempts", scrollAttempts)
-        .put("unqualified", JSONArray(listOf("actual microphone calibration", "production owner timed-calibration invocation",
+        .put("unqualified", JSONArray(listOf("audio capture", "production owner Finish transaction",
             "system permission prompts/automatic sequence", "TalkBack delivery", "physical keyboard delivery",
-            "released pixel parity of intentionally changed onboarding", "production preference persistence")))
+            "released pixel parity", "switch animation timing", "production preference persistence")))
     var host: NativeParityActivity? = null
     var fixture: OnboardingAudioQaFixture? = null
     var failure: Throwable? = null
@@ -81,13 +77,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                         val scrollIdle = descendants.filterIsInstance<NativeVerticalViewport>()
                             .all { !it.state.isScrollInProgress }
                         val audioReady = intendedPage != 2 || (
-                            (f.compression().currentSlider != null) == f.state.outputCompression &&
-                            (f.silence().curveView != null) == f.state.skipSilence &&
-                            descendants.filterIsInstance<SettingsExpansionView>().all { expansion ->
-                                val content = expansion.content?.view
-                                content == null || (content.alpha == 1f && expansion.width == content.width &&
-                                    expansion.height == content.height && !expansion.isLayoutRequested)
-                            })
+                            descendants.filterIsInstance<OnboardingAudioRow>().size == 2 &&
+                            f.compression().isEnabled && f.silence().isEnabled)
                         pageReady && !f.view.isLayoutRequested && scrollIdle && audioReady
                     }
                     consecutive = if (ready) consecutive + 1 else 0
@@ -113,10 +104,6 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                             .put("intended_page", intendedPage).put("observed_page", viewport.page)
                             .put("state", f.evidence()).put("geometry", onboardingGeometryEvidence(f.view, false))
                             .put("nodes", nodes)
-                            .also {
-                                if (name == "calibration-running")
-                                    it.put("progress_node", onboardingAudioQaProgress(f.view, nodes))
-                            }
                     }
                     File(directory, "$stem.json").writeText(entry.toString(2))
                     cases.put(entry)
@@ -137,7 +124,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                     main {
                         val v = target()
                         // The native viewport's existing responder maps this precise descendant
-                        // rectangle. Page-sized scroll actions can oscillate around a tall graph.
+                        // rectangle. Page-sized scroll actions can overshoot an individual control.
                         check(v.requestRectangleOnScreen(Rect(0, 0, v.width, v.height), false)) {
                             "Target's existing bring-into-view path rejected the rectangle"
                         }
@@ -170,7 +157,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             }
 
             main {
-                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = false, page = intendedPage)
+                fixture = OnboardingAudioQaFixture(activity, dark, configuredOn = false, page = intendedPage)
                 activity.fixtureRoot.addView(current().view, FrameLayout.LayoutParams(-1, -1))
             }
             capture("permission-missing")
@@ -194,143 +181,76 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             capture("buffers-default")
             continueTo(2)
             main {
-                check(current().state.outputCompression && current().state.skipSilence)
-                check(current().compression().currentSlider != null && current().silence().curveView != null)
-                check(footer(R.string.silence_calibrate).isEnabled)
-                check(current().settledPages.last() == 2)
-            }
-            capture("audio-default-on-top")
-            scrollTo { checkNotNull(current().silence().curveView) }
-            capture("audio-default-on-graph")
-            scrollTo { checkNotNull(current().compression().currentSlider).pointerView }
-            main {
-                val slider = checkNotNull(current().compression().currentSlider).pointerView
-                check(slider.isEnabled && slider.isFocusable && !slider.defaultFocusHighlightEnabled)
-                val touchMode = slider.isInTouchMode
-                if (!touchMode) check(slider.requestFocus() && slider.isFocused)
-                current().focus = JSONObject().put("touch_mode", touchMode)
-                    .put("explicit_focus", if (touchMode) "not attempted in touch mode" else "accepted")
-                val args = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 2f) }
-                check(slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, args))
-                check(slider.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
-                check(slider.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT)))
-                check(current().state.compressionLevel == 3)
-            }
-            settle()
-            val beforePointer = nativeParityOnMain(instrumentation) { current().compressionEdits }
-            main {
-                val slider = checkNotNull(current().compression().currentSlider).pointerView
-                val bounds = Rect(); check(slider.getGlobalVisibleRect(bounds))
-                onboardingAudioQaTap(current().view, slider, bounds.left + bounds.width() * .8f,
-                    bounds.exactCenterY(), pointerAttempts)
-            }
-            settle()
-            check(nativeParityOnMain(instrumentation) { current().compressionEdits > beforePointer }) {
-                "Real root slider pointer produced no callback"
-            }
-            capture("slider-input")
-            val collapsedSlider = nativeParityOnMain(instrumentation) { checkNotNull(current().compression().currentSlider).pointerView }
-            val collapsedCurve = nativeParityOnMain(instrumentation) { checkNotNull(current().silence().curveView) }
-            click { row(R.string.output_compression) }
-            click { row(R.string.silence_title) }
-            settle()
-            main {
                 check(!current().state.outputCompression && !current().state.skipSilence)
-                check(current().compression().currentSlider == null && current().silence().curveView == null)
-                check(!collapsedSlider.isAttachedToWindow && !collapsedCurve.isAttachedToWindow)
-                val before = current().compressionEdits
-                collapsedSlider.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
-                check(current().compressionEdits == before) { "Retired expansion slider delivered a stale callback" }
-            }
-            capture("toggles-off")
-            click { row(R.string.output_compression) }
-            click { row(R.string.silence_title) }
-            settle()
-            main {
-                val slider = checkNotNull(current().compression().currentSlider).pointerView
-                check(slider !== collapsedSlider && current().silence().curveView !== collapsedCurve)
-                check(slider.isAttachedToWindow && checkNotNull(current().silence().curveView).isAttachedToWindow)
-                val args = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
-                    if (current().state.compressionLevel == 0) 1f else 0f) }
-                val before = current().compressionEdits
-                check(slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, args))
-                check(current().compressionEdits == before + 1) { "Replacement slider callback was not rebound" }
-            }
-            capture("toggles-on")
-            click { footer(R.string.silence_calibrate) }
-            main {
-                check(current().calibrationRequests == 1 && current().state.silenceState.calibrating)
-                val listening = footer(R.string.silence_sampling)
-                check(!listening.isEnabled)
-                val before = current().calibrationRequests
-                listening.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
-                check(current().calibrationRequests == before)
-            }
-            scrollTo { onboardingViewDescendants(current().silence()).filterIsInstance<SettingsCalibrationProgressView>().single() }
-            capture("calibration-running")
-            main { current().publishError() }
-            scrollTo { onboardingViewDescendants(current().silence()).filterIsInstance<ReverbParagraphView>()
-                .single { it.getText() == ONBOARDING_QA_ERROR } }
-            main {
-                check(current().state.calibrationRequired && current().state.silenceState.calibrationError == ONBOARDING_QA_ERROR)
-                check(onboardingViewDescendants(current().view).filterIsInstance<ReverbParagraphView>()
-                    .any { it.getText() == ONBOARDING_QA_ERROR && it.visibility == View.VISIBLE })
-            }
-            capture("calibration-error")
-            click { footer(R.string.silence_calibrate) }
-            settle()
-            scrollTo { onboardingAudioQaRow(current().silence(), activity.getString(R.string.cancel)) }
-            click { onboardingAudioQaRow(current().silence(), activity.getString(R.string.cancel)) }
-            main {
-                check(current().cancelRequests == 1 && !current().state.silenceState.calibrating)
-                check(current().state.calibrationRequired && current().state.silenceState.calibrationError == null)
-            }
-            capture("calibration-cancelled")
-            click { footer(R.string.silence_calibrate) }
-            main {
-                check(current().calibrationRequests == 3)
-                current().publishSuccess()
-                check(!current().state.calibrationRequired && current().state.silenceState.sampledPeaks == ONBOARDING_QA_PEAKS)
+                check(onboardingViewDescendants(current().view).filterIsInstance<OnboardingAudioRow>().size == 2)
                 check(footer(R.string.onboarding_get_started).isEnabled)
+                check(current().settledPages.last() == 2 && current().finishRequests == 0)
             }
-            capture("calibration-success")
+            capture("audio-configured-off")
+            click { current().compression() }
+            click { current().silence() }
+            main { check(current().state.outputCompression && current().state.skipSilence) }
+            capture("toggles-on")
+            click { current().compression() }
+            click { current().silence() }
+            main { check(!current().state.outputCompression && !current().state.skipSilence) }
+            capture("toggles-off")
+            click { current().compression() }
+            click { current().silence() }
+            settle()
+            main {
+                check(current().state.outputCompression && current().state.skipSilence)
+                check(current().compressionEdits == 3 && current().silenceEdits == 3)
+                check(current().finishRequests == 0)
+            }
             click { footer(R.string.onboarding_get_started) }
             main { check(current().finishRequests == 1) }
+            capture("direct-finish")
             val retired = current()
-            val oldSlider = nativeParityOnMain(instrumentation) { checkNotNull(retired.compression().currentSlider).pointerView }
+            val oldCompression = nativeParityOnMain(instrumentation) { retired.compression() }
+            val oldSilence = nativeParityOnMain(instrumentation) { retired.silence() }
             val oldFinish = nativeParityOnMain(instrumentation) { retired.footer(activity.getString(R.string.onboarding_get_started)) }
             main {
                 retired.close()
                 check(retired.settledPages.last() == -1) { "Closed screen did not retire settled-page publication" }
                 activity.fixtureRoot.removeAllViews()
-                intendedPage = 2
-                fixture = OnboardingAudioQaFixture(activity, dark, storedFalse = true, page = intendedPage)
+                fixture = OnboardingAudioQaFixture(activity, dark, configuredOn = true, page = intendedPage)
+                activity.fixtureRoot.addView(current().view, FrameLayout.LayoutParams(-1, -1))
+            }
+            main { check(current().state.outputCompression && current().state.skipSilence) }
+            capture("audio-configured-on")
+            main {
+                current().close()
+                activity.fixtureRoot.removeAllViews()
+                fixture = OnboardingAudioQaFixture(activity, dark, configuredOn = true,
+                    restoreOff = true, page = intendedPage)
                 activity.fixtureRoot.addView(current().view, FrameLayout.LayoutParams(-1, -1))
             }
             settle()
             main {
                 check(!current().state.outputCompression && !current().state.skipSilence)
-                check(current().compression().currentSlider == null && current().silence().curveView == null)
                 check(footer(R.string.onboarding_get_started).isEnabled)
+                check(current().finishRequests == 0)
             }
-            capture("retained-false")
+            capture("retained-off")
             main {
                 val before = retired.evidence().toString()
-                oldSlider.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
+                oldCompression.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+                oldSilence.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
                 oldFinish.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
                 check(retired.evidence().toString() == before) { "Retired control delivered a stale callback" }
-                check(!oldSlider.isAttachedToWindow && !oldFinish.isAttachedToWindow)
+                check(!oldCompression.isAttachedToWindow && !oldSilence.isAttachedToWindow && !oldFinish.isAttachedToWindow)
             }
             check(seen.add("retirement"))
             cases.put(JSONObject().put("palette", paletteName).put("case", "retirement").put("passed", true)
-                .put("scope", "actual disposed slider key and footer semantic callbacks; no model callback guard"))
+                .put("scope", "actual disposed switch and footer semantic callbacks; no model callback guard"))
             check(seen == expected.toSet()) { "Missing native onboarding case: ${expected.toSet() - seen}" }
             main { current().close(); activity.fixtureRoot.removeAllViews(); fixture = null }
         }
         check(cases.length() == expected.size * 2)
         check((0 until cases.length()).all { cases.getJSONObject(it).getBoolean("passed") })
         result.put("passed", true)
-        report.appendLine("PASS native_onboarding_audio_flow cases=${cases.length()}; calibration UI is synthetic, no sampling claim")
+        report.appendLine("PASS native_onboarding_audio_flow cases=${cases.length()}; permission/Finish callbacks are synthetic, no production or pixel-parity claim")
     } catch (error: Throwable) {
         failure = error
         throw error
@@ -352,19 +272,20 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
     }
 }
 
-private const val ONBOARDING_QA_ERROR = "QA synthetic calibration error"
-private val ONBOARDING_QA_PEAKS = List(64) { index -> -78f + (index % 7) * 2f }
-
-private class OnboardingAudioQaFixture(host: NativeParityActivity, dark: Boolean, storedFalse: Boolean, page: Int = 0) : AutoCloseable {
+private class OnboardingAudioQaFixture(
+    host: NativeParityActivity,
+    dark: Boolean,
+    private val configuredOn: Boolean,
+    private val restoreOff: Boolean = false,
+    page: Int = 0,
+) : AutoCloseable {
     private val runtime = NativeAboutWindowRuntime().apply { setStarted(true) }
     val view: NativeOnboardingScreenView
     val render: ScreenParityRender
     var permissionRequests = 0
     var compressionEdits = 0
-    var calibrationRequests = 0
-    var cancelRequests = 0
+    var silenceEdits = 0
     var finishRequests = 0
-    var focus: JSONObject? = null
     val settledPages = mutableListOf<Int>()
     private val events = mutableListOf<String>()
     var state: OnboardingPageContentState
@@ -377,39 +298,15 @@ private class OnboardingAudioQaFixture(host: NativeParityActivity, dark: Boolean
         val context = host.createConfigurationContext(config)
         val palette = ReverbPalette.resolve(context, dark)
         host.fixtureRoot.setBackgroundColor(palette.background)
-        val original = OnboardingAudioSelection(false, false, 5, SilenceGateConfig())
-        val selection = initialOnboardingAudioSelection(original,
-            outputPreferencePresent = storedFalse, silencePreferencePresent = storedFalse, compressionAvailable = true)
-        val configuration = OnboardingConfiguration(ConfiguredBufferAvailability(true, true),
-            original, true, true, initialAudio = selection)
-        val draft = NativeOnboardingDraft.restore(configuration, null)
-        if (storedFalse) {
-            val newDefaults = configuration.copy(initialAudio = initialOnboardingAudioSelection(original,
-                outputPreferencePresent = false, silencePreferencePresent = false, compressionAvailable = true))
-            val restoredFalse = NativeOnboardingDraft.restore(newDefaults, draft.save())
-            check(!restoredFalse.outputCompression && !restoredFalse.skipSilence)
-        }
+        val audio = OnboardingAudioSelection(configuredOn, configuredOn, 5, SilenceGateConfig(enabled = configuredOn))
+        val configuration = OnboardingConfiguration(ConfiguredBufferAvailability(true, true), audio, true, true)
+        val saved = if (restoreOff) NativeOnboardingDraft.restore(configuration.copy(audio = audio.copy(
+            outputCompressionEnabled = false, skipSilenceEnabled = false,
+            silenceConfig = SilenceGateConfig(enabled = false))), null).save() else null
+        val draft = NativeOnboardingDraft.restore(configuration, saved)
         state = OnboardingPageContentState(
             OnboardingPermissionStatus(false, false, true, false, true, true, true, true, true),
-            draft.oneShotEnabled, draft.loopingEnabled, draft.outputCompression, draft.skipSilence, true, true, true, true,
-            compressionLevel = draft.compressionLevel, silenceState = SettingsSilenceState(draft.currentSilence),
-            calibrationRequired = draft.skipSilence)
-        val silence = object : SettingsSilenceActions {
-            override fun configChanged(config: SilenceGateConfig) {
-                events += "silence:${config.enabled}"
-                update(state.copy(skipSilence = config.enabled, silenceState = state.silenceState.copy(config = config),
-                    calibrationRequired = config.enabled && state.silenceState.sampledPeaks == null))
-            }
-            override fun calibrate() = beginSynthetic()
-            override fun beginHeld(): Boolean = error("Held calibration is outside this no-microphone fixture")
-            override fun completeTap() = error("Held calibration is outside this no-microphone fixture")
-            override fun finishHeld() = error("Held calibration is outside this no-microphone fixture")
-            override fun cancel() {
-                cancelRequests++; events += "synthetic-cancel"
-                update(state.copy(silenceState = state.silenceState.copy(calibrating = false,
-                    calibrationProgress = null, calibrationError = null)))
-            }
-        }
+            draft.oneShotEnabled, draft.loopingEnabled, draft.outputCompression, draft.skipSilence, true, true, true, true)
         try {
             view = NativeOnboardingScreenView.create(context,
                 nativeParityEnvironment(context, Density(context.resources.displayMetrics.density, config.fontScale), palette),
@@ -421,50 +318,30 @@ private class OnboardingAudioQaFixture(host: NativeParityActivity, dark: Boolean
                     },
                     oneShotChanged = { update(state.copy(oneShotEnabled = it)) },
                     loopingChanged = { update(state.copy(loopingEnabled = it)) },
-                    compressionChanged = { events += "compression:$it"; update(state.copy(outputCompression = it)) },
-                    skipSilenceChanged = { silence.configChanged(state.silenceState.config.copy(enabled = it)) },
-                    compressionLevelChanged = {
-                        compressionEdits++; events += "level:$it"; update(state.copy(compressionLevel = it))
+                    compressionChanged = {
+                        compressionEdits++; events += "compression:$it"; update(state.copy(outputCompression = it))
                     },
-                    silenceActions = silence,
+                    skipSilenceChanged = {
+                        silenceEdits++; events += "silence:$it"; update(state.copy(skipSilence = it))
+                    },
                     pageChanged = { settledPages += it; events += "page:$it" },
                 ), {
-                    if (state.calibrationRequired) beginSynthetic() else { finishRequests++; events += "synthetic-finish" }
+                    finishRequests++; events += "synthetic-finish"
                 }, runtime.scope, host.onBackPressedDispatcher, NativeOnboardingViewportSavedState(page = page))
             render = ScreenParityRender(view, false, view::saveViewportState, ::close)
         } catch (error: Throwable) { runtime.close(); throw error }
     }
     private fun update(next: OnboardingPageContentState) { state = next; view.bind(next) }
-    private fun beginSynthetic() {
-        calibrationRequests++; events += "synthetic-timed-request"
-        update(state.copy(silenceState = state.silenceState.copy(calibrating = true,
-            calibrationProgress = .35f, calibrationError = null)))
-    }
-    fun publishError() {
-        events += "synthetic-error-publication"
-        update(state.copy(silenceState = state.silenceState.copy(calibrating = false,
-            calibrationProgress = null, calibrationError = ONBOARDING_QA_ERROR)))
-    }
-    fun publishSuccess() {
-        events += "synthetic-success-publication"
-        update(state.copy(calibrationRequired = false, silenceState = state.silenceState.copy(
-            calibrating = false, calibrationProgress = null, calibrationError = null, sampledPeaks = ONBOARDING_QA_PEAKS)))
-    }
-    fun compression() = onboardingViewDescendants(view).filterIsInstance<SettingsOutputCompressionView>().single()
-    fun silence() = onboardingViewDescendants(view).filterIsInstance<SettingsSilenceView>().single()
+    fun compression() = onboardingAudioQaRow(view, view.context.getString(R.string.output_compression)) as OnboardingAudioRow
+    fun silence() = onboardingAudioQaRow(view, view.context.getString(R.string.silence_title)) as OnboardingAudioRow
     fun footer(label: String) = onboardingAudioQaRow(
         onboardingViewDescendants(view).filterIsInstance<OnboardingFooterView>().single(), label)
     fun evidence(): JSONObject = JSONObject().put("output_compression", state.outputCompression)
-        .put("skip_silence", state.skipSilence).put("compression_level", state.compressionLevel)
-        .put("calibration_required", state.calibrationRequired).put("calibrating", state.silenceState.calibrating)
-        .put("calibration_error", state.silenceState.calibrationError ?: JSONObject.NULL)
-        .put("synthetic_peaks", state.silenceState.sampledPeaks?.let { JSONArray(it) } ?: JSONObject.NULL)
-        .put("initial_selection_source", "actual initialOnboardingAudioSelection and NativeOnboardingDraft.restore; synthetic configuration")
-        .put("permission_requests", permissionRequests).put("calibration_requests", calibrationRequests)
-        .put("cancel_requests", cancelRequests).put("finish_requests", finishRequests)
-        .put("compression_edits", compressionEdits).put("events", JSONArray(events))
+        .put("skip_silence", state.skipSilence).put("configured_on", configuredOn).put("restored_off", restoreOff)
+        .put("initial_selection_source", "actual NativeOnboardingDraft.restore; synthetic configuration and saved draft")
+        .put("permission_requests", permissionRequests).put("finish_requests", finishRequests)
+        .put("compression_edits", compressionEdits).put("silence_edits", silenceEdits).put("events", JSONArray(events))
         .put("settled_pages", JSONArray(settledPages))
-        .put("focus", focus ?: JSONObject.NULL)
     override fun close() { try { view.close() } finally { runtime.close() } }
 }
 
@@ -473,31 +350,6 @@ private fun onboardingAudioQaRow(root: View, label: String): View =
         candidate is NativeMergedRowAccessibilityHost && onboardingViewDescendants(candidate)
             .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
     }.single()
-
-/** Compare actual direct and platform nodes, including clipped bounds, without enabling a service. */
-private fun onboardingAudioQaProgress(root: View, tree: JSONObject): JSONObject {
-    val progress = onboardingViewDescendants(root).filterIsInstance<SettingsCalibrationProgressView>().single()
-    val node = checkNotNull(progress.createAccessibilityNodeInfo())
-    try {
-        check(node.isVisibleToUser && node.className == "android.widget.ProgressBar")
-        check(node.rangeInfo?.current == .35f && node.rangeInfo?.min == 0f && node.rangeInfo?.max == 1f)
-        val bounds = Rect(); node.getBoundsInScreen(bounds)
-        var parent = progress.parent as? View
-        while (parent != null && parent !is NativeVerticalViewport) parent = parent.parent as? View
-        val viewport = checkNotNull(parent)
-        val clip = Rect(); check(viewport.getGlobalVisibleRect(clip) && clip.contains(bounds))
-        val origin = IntArray(2); root.getLocationOnScreen(origin)
-        val relative = JSONArray(listOf(bounds.left - origin[0], bounds.top - origin[1],
-            bounds.right - origin[0], bounds.bottom - origin[1]))
-        val raw = tree.getJSONArray("raw")
-        val platform = (0 until raw.length()).map(raw::getJSONObject)
-            .single { it.optString("class") == "android.widget.ProgressBar" && it.getBoolean("visible") }
-        check(platform.getJSONArray("bounds").toString() == relative.toString())
-        check(platform.optString("state_description") == androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString())
-        return JSONObject().put("current", .35).put("bounds", relative).put("platform_equal", true)
-            .put("viewport_clipped", true).put("state_description", platform.getString("state_description"))
-    } finally { node.recycle() }
-}
 
 private data class OnboardingAudioQaVisibleGeometry(
     val target: Rect,
@@ -536,7 +388,7 @@ private fun onboardingAudioQaVisibleGeometry(root: View, target: View): Onboardi
     }
     val visible = Rect()
     if (!target.getGlobalVisibleRect(visible) || !visible.intersect(clip)) visible.setEmpty()
-    // Fitting controls must be wholly visible. A graph larger than the current viewport must
+    // Fitting controls must be wholly visible. A control larger than the current viewport must
     // span the available clipped axis; partial visibility is recorded, never called full visibility.
     val usable = bounds.width() > 0 && bounds.height() > 0 && !clip.isEmpty && !visible.isEmpty &&
         visible.width() >= minOf(bounds.width(), clip.width()) &&

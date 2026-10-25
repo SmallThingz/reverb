@@ -8,13 +8,10 @@ OnboardingNativeInteractionsFactory joins ReverbClickController, ReverbRowIndica
 
 Shared dependencies: resolved ReverbPalette, caller-supplied exact TextStyle/Density/resolver, ReverbParagraphView, ReverbIconDrawable, ReverbGroupLayout, and ReverbMaterialSwitchView. Configuration replacement recreates these immutable rendering inputs; the owner saves/restores per-page scroll after layout.
 
-The user's 2026-10-22 amendment explicitly departs from released onboarding in these bounded ways:
+The page bodies and footer follow released v0.1.2: the permission intro precedes its group by16dp; permission and buffer explanations use the original resources. Requests are explicit row actions. The audio group contains only the compression and skip-silence switches and the original warnings, and its footer remains Get started. Configured preferences determine initial switch values.
 
-- Seven concise native-only body strings replace verbose page-one/two copy; the redundant permission intro is removed. Released oracle strings remain unchanged, including the original explanatory copy.
-- Missing permission status uses a dashed circle; granted status keeps its check. Whole-row request hitboxes remain, and the owner sequences automatic requests on the visible permission page.
-- The third page reuses `SettingsOutputCompressionView` and `SettingsSilenceView`: enabled compression exposes its slider, and enabled silence exposes its curve/histogram and calibration controls. These are the existing native leaves, not duplicate widgets or a new UI framework.
-- New choices default on without overwriting durable choices. The audio footer shows Calibrate when a current-input measurement is required; running, failed or cancelled sampling cannot silently Finish. Draft ownership, permission delivery and persistence stay with the screen owner.
+The richer calibration/level controls, shortened text, force-on defaults and automatic permission flow introduced in `dcbead5` are superseded. The old `native_onboarding_audio_flow` calibration fixture and any historical results describe that earlier implementation; they do not establish current parity.
 
-These exceptions do not authorize Home geometry, palette, outlines or icon-library changes. Permission text and icon contentDescription stay separate; toggle stateDescription uses the pinned localized state_on/state_off resources.
+Permission text and icon contentDescription stay separate; toggle stateDescription uses the pinned localized state_on/state_off resources. Current-owner callbacks, predictive-preview interaction disabling, offscreen semantics, pager/scroll ownership and cleanup remain in place.
 
-ReverbButtonElevationTest and NativeSwitchParityProbe retain their separate source/math and static/motion scopes. This document does not establish page/footer pixel parity, frame timing, keyboard/accessibility delivery or lifecycle correctness. The changed onboarding requires focused current-source checks and actual-device captures; historical migration results are not automatically credited to these new behaviors.
+ReverbButtonElevationTest and NativeSwitchParityProbe retain their separate source/math and static/motion scopes. This document does not establish page/footer pixel parity, frame timing, keyboard/accessibility delivery or lifecycle correctness. Current-source checks and actual-device captures remain necessary; historical migration results are not automatically credited.
