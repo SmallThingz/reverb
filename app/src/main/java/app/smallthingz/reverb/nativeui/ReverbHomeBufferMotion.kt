@@ -48,10 +48,16 @@ internal class ReverbHomeBufferMotion(initialSelection: BufferSlot) {
         saving = isSaving
         if (observedSelection == selectedBuffer) return
         observedSelection = selectedBuffer
-        if (selectedBuffer == displayedBuffer) return
         dragging = false
         dragProgress = 0f
+        dragPixels = 0f
         pendingCommit = null
+        if (selectedBuffer == displayedBuffer) {
+            // External authority can return before the outgoing flip completes. Keep its
+            // source/target geometry and reverse the progress, including before the first frame.
+            if (target != null) animateTo(0f, durationScale)
+            return
+        }
         target = selectedBuffer
         animateTo(1f, durationScale)
     }
