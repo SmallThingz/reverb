@@ -10,6 +10,11 @@ import android.view.ViewTreeObserver
 import smallthingz.ui.focus.FocusDirection
 import smallthingz.ui.geometry.Rect as FocusRect
 
+/** Source placement order can differ from the native child order used for drawing. */
+internal interface NativeSourceFocusChildOrder {
+    fun sourceFocusChildAt(index: Int): View
+}
+
 /**
  * Window-owner focus policy for Views which replace the released Compose focus targets.
  * Traversal uses the current placed Views only when a focus request occurs.
@@ -107,10 +112,12 @@ internal class NativeSourceFocusPolicy(
     }
 
     private fun search(direction: Int, previousRect: Rect?, active: View?): Boolean {
+        val oneDimensional = direction == View.FOCUS_FORWARD || direction == View.FOCUS_BACKWARD
         val all = ArrayList<View>()
         fun collect(group: ViewGroup) {
             for (index in 0 until group.childCount) {
-                val child = group.getChildAt(index)
+                val child = if (oneDimensional && group is NativeSourceFocusChildOrder)
+                    group.sourceFocusChildAt(index) else group.getChildAt(index)
                 if (child.visibility != View.VISIBLE || !child.isAttachedToWindow) continue
                 all += child
                 if (child is ViewGroup) collect(child)
@@ -118,7 +125,7 @@ internal class NativeSourceFocusPolicy(
         }
         collect(root)
         val candidates = all.filter(::canFocus)
-        if (direction == View.FOCUS_FORWARD || direction == View.FOCUS_BACKWARD) {
+        if (oneDimensional) {
             val order = if (direction == View.FOCUS_FORWARD) all else all.asReversed()
             val activeIndex = active?.let(order::indexOf) ?: -1
             for (index in activeIndex + 1 until order.size) {

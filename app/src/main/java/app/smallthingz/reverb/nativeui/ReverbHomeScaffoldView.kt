@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import app.smallthingz.reverb.NativeSourceFocusChildOrder
 
 /** The released Home Scaffold itself; its direct body slot is Capture or the permission branch. */
 internal open class ReverbHomeScaffoldView(
@@ -13,7 +14,7 @@ internal open class ReverbHomeScaffoldView(
     initialHasIncidents: Boolean,
     initialInsets: ReverbHomeInsets,
     nativeInputRoot: View,
-) : ViewGroup(context) {
+) : ViewGroup(context), NativeSourceFocusChildOrder {
     private var environment = initialEnvironment
     private var insets = initialInsets
     private var navigation = initialNavigation
@@ -41,6 +42,10 @@ internal open class ReverbHomeScaffoldView(
         body = value
         if (value != null) addView(value)
     }
+
+    // Material3 Scaffold places its body before the top bar for one-dimensional focus search.
+    override fun sourceFocusChildAt(index: Int): View =
+        getChildAt(if (body != null && childCount > 1 && index < 2) 1 - index else index)
 
     fun bindShell(navigation: ReverbAppTopBarActions, hasIncidents: Boolean, nextInsets: ReverbHomeInsets) {
         if (insets != nextInsets) { insets = nextInsets; requestLayout() }
