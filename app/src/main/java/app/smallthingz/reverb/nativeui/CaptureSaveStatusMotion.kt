@@ -14,6 +14,12 @@ import kotlin.math.roundToLong
 
 /** Slide/fade never changes measured card height; only the completed exit removes the subtree. */
 internal class CaptureSaveStatusMotion(initiallyVisible: Boolean) {
+    private companion object {
+        // Repeated measurements share policy, not the per-transition vectorized animation.
+        private val slideSpec = spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset(1, 1))
+        private val fadeSpec = spring<Float>(stiffness = Spring.StiffnessMediumLow)
+    }
+
     private enum class Phase { PreEnter, Visible, PostExit }
     private var current = if (initiallyVisible) Phase.Visible else Phase.PreEnter
     private var target = current
@@ -61,10 +67,8 @@ internal class CaptureSaveStatusMotion(initiallyVisible: Boolean) {
             opacity.snap(1f)
             return
         }
-        position.target(offset(target), spring(stiffness = Spring.StiffnessMediumLow,
-            visibilityThreshold = IntOffset(1, 1)), playTime, stateUpdate)
-        opacity.target(if (visibleTarget) 1f else 0f, spring(stiffness = Spring.StiffnessMediumLow),
-            playTime, stateUpdate)
+        position.target(offset(target), slideSpec, playTime, stateUpdate)
+        opacity.target(if (visibleTarget) 1f else 0f, fadeSpec, playTime, stateUpdate)
         stateUpdate = false
     }
 

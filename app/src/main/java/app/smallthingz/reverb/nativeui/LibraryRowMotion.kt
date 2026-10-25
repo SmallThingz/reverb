@@ -34,6 +34,16 @@ internal fun librarySizeTween(initial: IntSize) = LibraryTweenValue(initial, Int
 
 /** One AnimatedVisibility lifetime. Full-size measurement precedes the deferred size animation. */
 internal class LibraryExpansionMotion(initiallyVisible: Boolean) {
+    private companion object {
+        // Specs are immutable policy; each transition still owns its vectorized animation.
+        private val enterSizeSpec = tween<IntSize>(320, easing = FastOutSlowInEasing)
+        private val exitSizeSpec = tween<IntSize>(260, easing = FastOutSlowInEasing)
+        private val defaultSizeSpec = spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntSize(1, 1))
+        private val enterAlphaSpec = tween<Float>(220, delayMillis = 70)
+        private val exitAlphaSpec = tween<Float>(140)
+        private val defaultAlphaSpec = spring<Float>(stiffness = Spring.StiffnessMediumLow)
+    }
+
     private enum class Phase { PreEnter, Visible, PostExit }
     private var current = if (initiallyVisible) Phase.Visible else Phase.PreEnter
     private var target = current
@@ -84,14 +94,14 @@ internal class LibraryExpansionMotion(initiallyVisible: Boolean) {
         val entering = segmentFrom == Phase.PreEnter && target == Phase.Visible
         val exiting = segmentFrom == Phase.Visible && target == Phase.PostExit
         val sizeSpec: FiniteAnimationSpec<IntSize> = when {
-            entering -> tween(320, easing = FastOutSlowInEasing)
-            exiting -> tween(260, easing = FastOutSlowInEasing)
-            else -> spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntSize(1, 1))
+            entering -> enterSizeSpec
+            exiting -> exitSizeSpec
+            else -> defaultSizeSpec
         }
         val alphaSpec: FiniteAnimationSpec<Float> = when {
-            entering -> tween(220, delayMillis = 70)
-            exiting -> tween(140)
-            else -> spring(stiffness = Spring.StiffnessMediumLow)
+            entering -> enterAlphaSpec
+            exiting -> exitAlphaSpec
+            else -> defaultAlphaSpec
         }
         height.target(if (visibleTarget) full else IntSize(full.width, 0), sizeSpec, playTime, stateUpdate)
         opacity.target(if (visibleTarget) 1f else 0f, alphaSpec, playTime, stateUpdate)
