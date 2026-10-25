@@ -36,7 +36,8 @@ internal class ReverbHomeBodyOwner(
     private var state = initialState
     private var actions = initialActions
     private val motion = ReverbHomeBufferMotion(initialSelection)
-    private var pointerKey = initialSelection to initialState.saving
+    private var pointerBuffer = initialSelection
+    private var pointerSaving = initialState.saving
     private var closed = false
     private val detector: NativeHomeHorizontalDrag = NativeHomeHorizontalDrag(
         touchSlop = { ViewConfiguration.get(context).scaledTouchSlop.toFloat() },
@@ -117,9 +118,11 @@ internal class ReverbHomeBodyOwner(
 
     private fun render() {
         if (closed) return
-        val nextKey = motion.displayedBuffer to state.saving
-        if (nextKey != pointerKey) {
-            pointerKey = nextKey
+        val nextBuffer = motion.displayedBuffer
+        val nextSaving = state.saving
+        if (nextBuffer != pointerBuffer || nextSaving != pointerSaving) {
+            pointerBuffer = nextBuffer
+            pointerSaving = nextSaving
             restartHomeDragInput(motion, detector, frames.durationScale)
         }
         view.bind(state, motion.renderedBuffer, motion.flipFrame, presentationActions)
