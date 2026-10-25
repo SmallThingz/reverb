@@ -89,7 +89,7 @@ internal class ReverbHomeBodyOwner(
         override fun onViewAttachedToWindow(v: View) = requestFrame()
         override fun onViewDetachedFromWindow(v: View) {
             removeFrame()
-            detector.restart()
+            restartHomeDragInput(motion, detector, frames.durationScale)
         }
     }
 
@@ -120,9 +120,7 @@ internal class ReverbHomeBodyOwner(
         val nextKey = motion.displayedBuffer to state.saving
         if (nextKey != pointerKey) {
             pointerKey = nextKey
-            // pointerInput(displayedBuffer,isSaving) retires its detector coroutine. It does not
-            // call the source onDragCancel lambda merely because one of those keys changed.
-            detector.restart()
+            restartHomeDragInput(motion, detector, frames.durationScale)
         }
         view.bind(state, motion.renderedBuffer, motion.flipFrame, presentationActions)
     }
@@ -136,7 +134,7 @@ internal class ReverbHomeBodyOwner(
         removeFrame()
         view.removeOnAttachStateChangeListener(attachment)
         (view.swipeSurface as NativePagerTouchRoot).cancelPointerInput()
-        detector.restart()
+        restartHomeDragInput(motion, detector, frames.durationScale)
         view.close()
     }
 }
