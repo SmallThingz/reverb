@@ -302,8 +302,10 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
             MeasureSpec.makeMeasureSpec(iconHeight, MeasureSpec.EXACTLY))
         var usedHeight = icon.measuredHeight
         var usedWidth = icon.measuredWidth
-        for ((label, gap) in listOf(primary to 10, secondary to 2)) {
+        for (index in 0..1) {
+            val label = if (index == 0) primary else secondary
             if (label.visibility == GONE) continue
+            val gap = if (index == 0) 10 else 2
             usedHeight += dp(gap).coerceAtMost((maxHeight - usedHeight).coerceAtLeast(0))
             label.measure(MeasureSpec.makeMeasureSpec(maxWidth, MeasureSpec.AT_MOST),
                 MeasureSpec.makeMeasureSpec((maxHeight - usedHeight).coerceAtLeast(0), MeasureSpec.AT_MOST))
@@ -314,16 +316,17 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         var y = 0
-        fun place(view: View) {
-            val x = ((width - view.measuredWidth) / 2f).roundToInt()
-            view.layout(x, y, x + view.measuredWidth, y + view.measuredHeight)
-            y += view.measuredHeight
-        }
-        place(icon)
-        for ((label, gap) in listOf(primary to 10, secondary to 2)) {
+        val iconX = ((width - icon.measuredWidth) / 2f).roundToInt()
+        icon.layout(iconX, y, iconX + icon.measuredWidth, y + icon.measuredHeight)
+        y += icon.measuredHeight
+        for (index in 0..1) {
+            val label = if (index == 0) primary else secondary
             if (label.visibility == GONE) continue
+            val gap = if (index == 0) 10 else 2
             y += dp(gap).coerceAtMost((height - y).coerceAtLeast(0))
-            place(label)
+            val x = ((width - label.measuredWidth) / 2f).roundToInt()
+            label.layout(x, y, x + label.measuredWidth, y + label.measuredHeight)
+            y += label.measuredHeight
         }
     }
 }
