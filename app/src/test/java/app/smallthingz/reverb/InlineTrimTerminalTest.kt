@@ -210,4 +210,36 @@ class InlineTrimTerminalTest {
         assertEquals(listOf("fallback", "terminal"), events)
     }
 
+    @Test
+    fun terminalCallbackVisibilityChange_controlsFallbackAfterCallbackReturns() {
+        for (success in listOf(true, false)) for (visibleAfterCallback in listOf(true, false)) {
+            val events = mutableListOf<String>()
+            val saved = recording()
+            val failure = IOException("trim failed")
+            lateinit var receiver: InlineTrimResultReceiver
+            fun callback() {
+                events += "callback"
+                // A busy-state callback can synchronously rebind the retained row.
+                receiver.setUiVisible(visibleAfterCallback)
+            }
+            receiver = InlineTrimResultReceiver(
+                onSaved = { assertSame(saved, it); callback() },
+                onFailed = { assertSame(failure, it); callback() },
+                uiVisible = !visibleAfterCallback,
+                onDetachedSuccess = { assertSame(saved, it); events += "fallback" },
+                onDetachedFailure = { assertSame(failure, it); events += "fallback" },
+                onTerminal = { events += "terminal" },
+            )
+            val result = if (success) Result.success(saved) else Result.failure(failure)
+            receiver.terminal(result)
+            receiver.terminal(result)
+
+            assertEquals(
+                if (visibleAfterCallback) listOf("callback", "terminal")
+                else listOf("callback", "fallback", "terminal"),
+                events,
+            )
+        }
+    }
+
 }

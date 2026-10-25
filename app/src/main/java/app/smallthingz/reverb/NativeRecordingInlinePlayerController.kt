@@ -115,14 +115,15 @@ internal class NativeRecordingInlinePlayerController(
         check(!closed) { "An inline player row has been disposed" }
         require(next.recording.id == recordingId) { "A player row cannot adopt another recording" }
         val previous = input
-        val nextKey = revisionKey(next.recording)
-        if (nextKey != session.key) {
-            session.close()
-            input = next
+        val revisionChanged = revisionKey(next.recording) != session.key
+        if (revisionChanged) session.close()
+        input = next
+        // A queued trim terminal may run before the coalesced presentation is delivered.
+        activeTrimReceiver.get()?.setUiVisible(input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        if (revisionChanged) {
             session = Revision(next.recording)
             session.start()
         } else {
-            input = next
             if (previous.playbackOwner !== next.playbackOwner) {
                 session.playbackBookkeeping.retireExpansion(session::pauseInlinePlayback)
                 session.bindExpansion()
