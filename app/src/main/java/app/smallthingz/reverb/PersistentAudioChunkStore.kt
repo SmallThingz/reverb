@@ -1030,15 +1030,20 @@ internal class PersistentAudioChunkStore internal constructor(
             targetChannelCount: Int,
             targetSampleFormat: PcmSampleFormat,
             consumer: Consumer,
-        ): ReadResult = readNormalized(targetSampleRate, targetChannelCount, targetSampleFormat, Long.MAX_VALUE, consumer)
+        ): ReadResult = readNormalized(targetSampleRate, targetChannelCount, targetSampleFormat,
+            Long.MAX_VALUE, consumer = consumer)
 
-        /** Caps after source-frame rounding and rate conversion, preserving the newest output frames. */
+        /**
+         * Caps after source-frame rounding and rate conversion, preserving the newest output frames.
+         * Smaller output batches feed real-time consumers without resetting the conversion phase.
+         */
         @Synchronized
         fun readNormalized(
             targetSampleRate: Int,
             targetChannelCount: Int,
             targetSampleFormat: PcmSampleFormat,
             maximumOutputFrames: Long,
+            maximumOutputBatchBytes: Int = PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES,
             consumer: Consumer,
         ): ReadResult {
             check(!closedLease) { "RangeLease is closed" }
@@ -1046,6 +1051,7 @@ internal class PersistentAudioChunkStore internal constructor(
             require(maximumOutputFrames >= 0L)
             checkPcmConversionNotInterrupted()
             val outputFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
+            require(maximumOutputBatchBytes in outputFrameBytes..PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES)
             val plannedFrames = (durationSeconds * targetSampleRate.toDouble()).roundToLong()
             var framesToDrop = (plannedFrames - maximumOutputFrames).coerceAtLeast(0L)
             var totalOutputBytes = 0L
@@ -1069,7 +1075,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 if (targetFrames > 0 && framesToDrop < targetFrames) {
                     totalOutputBytes += PcmStreamNormalizer.normalize(
                         segments.subList(first, end), targetFrames, framesToDrop,
-                        targetChannelCount, targetSampleFormat, consumer,
+                        targetChannelCount, targetSampleFormat, maximumOutputBatchBytes, consumer,
                     )
                     framesToDrop = 0L
                 } else {

@@ -988,6 +988,10 @@ internal class TimelineAudioPreviewController(
                 targetSampleRate = PREVIEW_SAMPLE_RATE,
                 targetChannelCount = 1,
                 targetSampleFormat = PcmSampleFormat.PCM_16,
+                maximumOutputFrames = Long.MAX_VALUE,
+                // Feed each 50 ms quantum before converting the next, rather than letting
+                // a 64 KiB conversion burst exhaust the playing track's queued audio.
+                maximumOutputBatchBytes = PREVIEW_WRITE_BYTES,
             ) { array, offset, count ->
                 var position = offset
                 val limit = offset + count

@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
 
 /** Export-only PCM conversion. Recording stores exactly what AudioRecord produced. */
 internal object PcmNormalizer {
-    private const val OUTPUT_BUFFER_BYTES = 64 * 1024
+    const val DEFAULT_OUTPUT_BATCH_BYTES = 64 * 1024
     private const val CRC_SCRATCH_BYTES = 64 * 1024
 
     fun normalizeSegment(
@@ -22,13 +22,18 @@ internal object PcmNormalizer {
         targetFrameCount: Long,
         targetChannelCount: Int,
         targetSampleFormat: PcmSampleFormat,
+        maximumOutputBatchBytes: Int = DEFAULT_OUTPUT_BATCH_BYTES,
         consumer: PersistentAudioChunkStore.Consumer,
     ): Long {
         checkPcmConversionNotInterrupted()
+        require(maximumOutputBatchBytes in 1..DEFAULT_OUTPUT_BATCH_BYTES)
         if (sourceFrameCount <= 0L || targetFrameCount <= 0L) return 0L
         require(sourceFrameCount <= Int.MAX_VALUE.toLong()) { "Chunk segment too large" }
         require(sourceChannelCount in 1..2 && targetChannelCount in 1..2)
         require(sourceSampleRate > 0)
+        val targetFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
+        require(maximumOutputBatchBytes >= targetFrameBytes)
+        val outputBatchBytes = maximumOutputBatchBytes / targetFrameBytes * targetFrameBytes
 
         val sourceFrameBytes = sourceChannelCount * sourceSampleFormat.bytesPerSample
         val sourceByteCountLong = sourceFrameCount * sourceFrameBytes.toLong()
@@ -50,6 +55,7 @@ internal object PcmNormalizer {
                 expectedPayloadChecksum = expectedPayloadChecksum,
                 segmentByteOffset = payloadByteOffset,
                 segmentByteCount = sourceByteCountLong,
+                outputBatchBytes = outputBatchBytes,
                 consumer = consumer,
             )
         }
@@ -85,8 +91,7 @@ internal object PcmNormalizer {
             samples[frame * sourceChannelCount + channel]
         }
 
-        val targetFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
-        val framesPerOutputBuffer = maxOf(1, OUTPUT_BUFFER_BYTES / targetFrameBytes)
+        val framesPerOutputBuffer = outputBatchBytes / targetFrameBytes
         val output = ByteArray(framesPerOutputBuffer * targetFrameBytes)
         var producedFrames = 0L
         var producedBytes = 0L
@@ -130,6 +135,7 @@ internal object PcmNormalizer {
         expectedPayloadChecksum: Int,
         segmentByteOffset: Long,
         segmentByteCount: Long,
+        outputBatchBytes: Int,
         consumer: PersistentAudioChunkStore.Consumer,
     ): Long {
         val segmentBytes = readVerifiedSegment(
@@ -144,7 +150,7 @@ internal object PcmNormalizer {
         var offset = 0
         while (offset < segmentBytes.size) {
             checkPcmConversionNotInterrupted()
-            val count = minOf(OUTPUT_BUFFER_BYTES, segmentBytes.size - offset)
+            val count = minOf(outputBatchBytes, segmentBytes.size - offset)
             if (consumer.consume(segmentBytes, offset, count) != count) {
                 throw java.io.IOException("PCM consumer rejected output")
             }

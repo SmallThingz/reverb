@@ -5,18 +5,20 @@ import kotlin.math.floor
 
 /** A lease-proven continuous run shares one phase, independent of storage chunk boundaries. */
 internal object PcmStreamNormalizer {
-    private const val OUTPUT_BYTES = 64 * 1024
-
     fun normalize(
         segments: List<PersistentAudioChunkStore.Segment>,
         targetFrameCount: Long,
         firstTargetFrame: Long,
         targetChannelCount: Int,
         targetSampleFormat: PcmSampleFormat,
+        maximumOutputBatchBytes: Int,
         consumer: PersistentAudioChunkStore.Consumer,
     ): Long {
         checkPcmConversionNotInterrupted()
         require(segments.isNotEmpty() && firstTargetFrame in 0..targetFrameCount)
+        require(targetChannelCount in 1..2)
+        val outputFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
+        require(maximumOutputBatchBytes in outputFrameBytes..PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES)
         if (firstTargetFrame == targetFrameCount) return 0L
         val first = segments.first()
         val last = segments.last()
@@ -41,7 +43,7 @@ internal object PcmStreamNormalizer {
                     segment.record.file, segment.payloadOffsetBytes, segment.payloadBytesAtAcquire,
                     segment.payloadChecksumAtAcquire, (segment.startFrame + skip) * frameBytes,
                     count, segment.record.sampleRate, channels, format, count,
-                    targetChannelCount, targetSampleFormat, consumer,
+                    targetChannelCount, targetSampleFormat, maximumOutputBatchBytes, consumer,
                 )
                 skip = 0L
             }
@@ -61,8 +63,7 @@ internal object PcmStreamNormalizer {
             val logical = (base + frame).coerceIn(0L, bufferedFrames - 1)
             window[(logical % capacity).toInt() * channels + channel]
         }
-        val outputFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
-        val framesPerBatch = OUTPUT_BYTES / outputFrameBytes
+        val framesPerBatch = maximumOutputBatchBytes / outputFrameBytes
         val output = ByteArray(framesPerBatch * outputFrameBytes)
         var targetIndex = firstTargetFrame
         var nextFrame = -1L
