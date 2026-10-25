@@ -176,7 +176,7 @@ internal class NativeOnboardingScreenView private constructor(
         for (page in pages) {
             addVertical(page)
             pageActions += page.connect(lifecycleOwner, actions)
-            pageText += page.bindTextAccessibility(windowText, accessibility::node) { child ->
+            pageText += page.bindTextAccessibility(windowText, accessibility) { child ->
                 !closed && accessibility.node(child).present
             }
         }
@@ -191,7 +191,7 @@ internal class NativeOnboardingScreenView private constructor(
             { navigate((pager.settledPage - 1).coerceAtLeast(0)) },
             ::continueOrFinish,
         )
-        footerText = footer.bindTextAccessibility(windowText, accessibility::node) { child ->
+        footerText = footer.bindTextAccessibility(windowText, accessibility) { child ->
             !closed && accessibility.node(child).present
         }
         dispatcher.addCallback(lifecycleOwner, backCallback)
@@ -376,7 +376,7 @@ internal class NativeOnboardingScreenView private constructor(
         previewActions = shown.connect(lifecycleOwner, OnboardingPageActions({}, {}, {}, {}, {}))
         // The preview's source own semantics node is hidden, not all of its descendants.
         // Its children remain present where the translated pager does not cover their bounds.
-        previewText = shown.bindTextAccessibility(windowText, accessibility::node) { child ->
+        previewText = shown.bindTextAccessibility(windowText, accessibility) { child ->
             !closed && accessibility.node(child).present
         }
         pageArea.addView(shown, 0, FrameLayout.LayoutParams(-1, -1))

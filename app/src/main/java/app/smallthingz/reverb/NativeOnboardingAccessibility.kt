@@ -28,7 +28,7 @@ internal class NativeOnboardingAccessibility(
     private val footer: OnboardingFooterView,
     private val externalOcclusion: () -> List<Rect> = { emptyList() },
     private val transformPolicy: NativeTextSemanticsTransformPolicy? = null,
-) {
+) : NativeSourceAccessibilityNodeProvider {
     val geometry = NativePlainTextViewGeometry(root, NativeTextSemanticsClipPolicy(::clip),
         rootContentClip = { ComposeRect(0f, 0f, root.width.toFloat(), root.height.toFloat()) },
         transformPolicy = transformPolicy)
@@ -44,6 +44,10 @@ internal class NativeOnboardingAccessibility(
 
     fun node(view: View): NativeSourceAccessibilityNode =
         capture()[view] ?: NativeSourceAccessibilityNode.absent()
+
+    override fun invoke(view: View): NativeSourceAccessibilityNode = node(view)
+
+    override fun snapshotNodes(): Map<View, NativeSourceAccessibilityNode> = capture()
 
     fun children(view: View): List<View> {
         val captured = capture()
