@@ -68,6 +68,11 @@ internal class ReverbSpringFineSeekView(
     private val field = Path()
     private val paint = Paint(PAINT_FLAGS)
     private val dotPaint = Paint(PAINT_FLAGS)
+    private var fieldGradient: LinearGradient? = null
+    private var gradientLeftBits = 0
+    private var gradientRightBits = 0
+    private var gradientEdgeColor = 0
+    private var gradientCenterColor = 0
     private val model = NativeSpringFineSeekState(::visualChanged, ::requestFrames)
     private val puck = PuckView(context)
     private var geometry = SpringFineSeekGeometry(0, 0, environment.density.density)
@@ -132,6 +137,7 @@ internal class ReverbSpringFineSeekView(
     /** Recycler/presentation owner retires callbacks before binding a different recording. */
     fun release() {
         model.release()
+        fieldGradient = null
         binding = null
         puck.controller.bind(null)
         frameJob?.cancel(); frameJob = null
@@ -150,6 +156,7 @@ internal class ReverbSpringFineSeekView(
     override fun onDetachedFromWindow() {
         inputActive = false
         model.cancel()
+        fieldGradient = null
         frameJob?.cancel(); frameJob = null
         attachedScope?.cancel(); attachedScope = null
         super.onDetachedFromWindow()
@@ -228,9 +235,8 @@ internal class ReverbSpringFineSeekView(
         val alpha = .12f + .13f * power + .06f * yMagnitude
         paint.color = android.graphics.Color.BLACK
         paint.alpha = 255
-        paint.shader = LinearGradient(left, 0f, right, 0f, intArrayOf(
-            color.copy(alpha = .018f).toArgb(), color.copy(alpha = alpha).toArgb(),
-            color.copy(alpha = .018f).toArgb()), null, Shader.TileMode.CLAMP)
+        paint.shader = gradient(left, right, color.copy(alpha = .018f).toArgb(),
+            color.copy(alpha = alpha).toArgb())
         canvas.drawPath(field, paint)
         paint.shader = null
         paint.color = color.copy(alpha = .035f + .045f * yMagnitude).toArgb()
@@ -241,6 +247,26 @@ internal class ReverbSpringFineSeekView(
             dotPaint.color = color.copy(alpha = .055f + .055f * power).toArgb()
             canvas.drawCircle(puckX, puckY, radius * 1.28f, dotPaint)
         }
+    }
+
+    private fun gradient(left: Float, right: Float, edgeColor: Int, centerColor: Int): LinearGradient {
+        val leftBits = left.toRawBits()
+        val rightBits = right.toRawBits()
+        val cached = fieldGradient
+        if (cached != null && gradientLeftBits == leftBits && gradientRightBits == rightBits &&
+            gradientEdgeColor == edgeColor && gradientCenterColor == centerColor) return cached
+        val next = LinearGradient(left, 0f, right, 0f, intArrayOf(edgeColor, centerColor, edgeColor),
+            null, Shader.TileMode.CLAMP)
+        if (left.isFinite() && right.isFinite()) {
+            gradientLeftBits = leftBits
+            gradientRightBits = rightBits
+            gradientEdgeColor = edgeColor
+            gradientCenterColor = centerColor
+            fieldGradient = next
+        } else {
+            fieldGradient = null
+        }
+        return next
     }
 
     private inner class PuckView(context: Context) : ViewGroup(context), NativeMergedRowAccessibilityHost {
