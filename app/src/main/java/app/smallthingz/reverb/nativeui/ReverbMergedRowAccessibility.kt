@@ -115,6 +115,7 @@ internal class ReverbMergedRowAccessibility(
     private var geometryToken: Any? = null
     private var sourceNode: (() -> NativeSourceAccessibilityNode)? = null
     private var sourceChildPresent: ((View) -> Boolean)? = null
+    private var sourceRequest: (() -> Map<View, NativeSourceAccessibilityNode>)? = null
 
     fun sourceOrderedChildren(): List<View> = sourceState().orderedChildren
 
@@ -124,13 +125,32 @@ internal class ReverbMergedRowAccessibility(
     fun bindGeometry(value: NativePlainTextViewGeometry,
                      node: (() -> NativeSourceAccessibilityNode)?,
                      childPresent: ((View) -> Boolean)?,
-                     exposed: () -> Boolean): AutoCloseable {
+                     exposed: () -> Boolean): AutoCloseable =
+        bindGeometry(value, node, childPresent, null, exposed)
+
+    fun bindSourceGeometry(value: NativePlainTextViewGeometry,
+                           node: (View) -> NativeSourceAccessibilityNode,
+                           exposed: () -> Boolean): AutoCloseable {
+        val provider = node as? NativeSourceAccessibilityNodeProvider
+        return if (provider != null) {
+            bindGeometry(value, null, null, provider::snapshotNodes, exposed)
+        } else {
+            bindGeometry(value, { node(host) }, { child -> node(child).present }, null, exposed)
+        }
+    }
+
+    private fun bindGeometry(value: NativePlainTextViewGeometry,
+                             node: (() -> NativeSourceAccessibilityNode)?,
+                             childPresent: ((View) -> Boolean)?,
+                             request: (() -> Map<View, NativeSourceAccessibilityNode>)?,
+                             exposed: () -> Boolean): AutoCloseable {
         val token = Any()
         geometryToken = token
         geometry = value
         sourceExposure = exposed
         sourceNode = node
         sourceChildPresent = childPresent
+        sourceRequest = request
         return AutoCloseable {
             if (geometryToken === token) {
                 geometryToken = null
@@ -138,6 +158,7 @@ internal class ReverbMergedRowAccessibility(
                 sourceExposure = null
                 sourceNode = null
                 sourceChildPresent = null
+                sourceRequest = null
             }
         }
     }
@@ -148,7 +169,8 @@ internal class ReverbMergedRowAccessibility(
             ?: ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat())
         val mapped = geometry?.capture(host, Offset.Zero,
             localBounds)
-        val node = sourceNode?.invoke()
+        val nodes = sourceRequest?.invoke()
+        val node = if (nodes != null) nodes[host] ?: NativeSourceAccessibilityNode.absent() else sourceNode?.invoke()
         val hidden = node?.hidden ?: (sourceExposure?.invoke() != true || !host.isShown || hasTransparentAncestor(host))
         val present = mapped != null && host.isAttachedToWindow && !mapped.visibleBoundsInRoot.isEmpty
         val bounds = mapped?.let { nativeMergedRoleBoundsInScreen(it, host.isLaidOut) } ?: Rect()
@@ -157,7 +179,10 @@ internal class ReverbMergedRowAccessibility(
         // page invariants the adjusted touch bounds equal the parent clipped rectangle.
         return NativeMergedRowAccessibilitySnapshot(node?.present ?: present, node?.hidden ?: hidden,
             node?.visibleToUser ?: (present && !hidden), state.enabled, state.checked, state.clickLabel,
-            state.orderedChildren.filter { sourceChildPresent?.invoke(it) != false }, state.orderedChildren.size,
+            state.orderedChildren.filter {
+                if (nodes != null) nodes[it]?.present == true else sourceChildPresent?.invoke(it) != false
+            },
+            state.orderedChildren.size,
             node?.boundsInScreen ?: bounds, bounds, state.selected, state.contentDescription,
             state.clickable, state.longClickable, state.longClickLabel, state.rolePresent)
     }

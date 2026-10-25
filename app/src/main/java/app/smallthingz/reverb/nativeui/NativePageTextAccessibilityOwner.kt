@@ -181,8 +181,9 @@ internal class NativePageTextAccessibilityOwner internal constructor(
             if (!leases.containsKey(view)) leases[view] = when (view) {
                 is ReverbParagraphView -> view.bindPlainTextAccessibility(cursor, geometry,
                     sourceNode?.let { node -> { node(view) } }) { exposed(view) }
-                is NativeMergedRowAccessibilityHost -> view.mergedRowAccessibility.bindGeometry(geometry,
-                    sourceNode?.let { node -> { node(view) } }, sourceNode?.let { node -> { child -> node(child).present } }) { exposed(view) }
+                is NativeMergedRowAccessibilityHost -> if (sourceNode != null) {
+                    view.mergedRowAccessibility.bindSourceGeometry(geometry, sourceNode) { exposed(view) }
+                } else view.mergedRowAccessibility.bindGeometry(geometry) { exposed(view) }
                 is OnboardingIconView -> view.bindDescriptionAccessibility(cursor,
                     sourceNode?.let { node -> { node(view) } }) { exposed(view) }
                 else -> error("Unexpected page accessibility binding")

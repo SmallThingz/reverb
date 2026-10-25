@@ -29,7 +29,7 @@ internal class NativeMainAccessibility(
     private val ownNodeHidden: (View) -> Boolean,
     private val clip: (View) -> NativeTextSemanticsClip,
     private val minimumTouch: (View) -> Float,
-) {
+) : NativeSourceAccessibilityNodeProvider {
     val geometry = NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy(clip))
     private val unclipped = NativePlainTextViewGeometry(windowRoot,
         NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
@@ -37,6 +37,10 @@ internal class NativeMainAccessibility(
     /** Every node uses its OWN source minimum, independently of which node is queried. */
     fun node(view: View): NativeSourceAccessibilityNode =
         capture()[view] ?: NativeSourceAccessibilityNode.absent()
+
+    override fun invoke(view: View): NativeSourceAccessibilityNode = node(view)
+
+    override fun snapshotNodes(): Map<View, NativeSourceAccessibilityNode> = capture()
 
     /** Keep Android's ordering/importance traversal, but never advertise an absent source layer.
      * With INCLUDE_NOT_IMPORTANT_VIEWS the candidates are layout layers; ordinary traversal can

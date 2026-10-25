@@ -111,7 +111,7 @@ internal class NativeMainScreenView private constructor(
     private val scrollEvents = windowText.openScrollEvents(scope,
         onScrollGeometryChanged = { invalidate() }, onBatchFinished = {})
     private val incidents = NativeIncidentsScreenView(context, environment, incidentsOwner, scope,
-        lifecycleOwner, dispatcher, this, windowText, source::node,
+        lifecycleOwner, dispatcher, this, windowText, source,
         overlayVisibilityChanged = { visible ->
             navigation.bindIncidentsOverlayVisibility(visible)
             requestRender()
@@ -122,7 +122,7 @@ internal class NativeMainScreenView private constructor(
     private val home = ReverbHomeScaffoldView(context, environment, homeNavigation(), hasIncidentAlert,
         homeInsets(), this)
     private val feedback = NativeAppFeedbackHostView(context, environment, windowRoot, lifecycleOwner,
-        scope, accessibilityManager, windowText, source::node)
+        scope, accessibilityManager, windowText, source)
     private val vertical = NativeHomeVerticalDrag(
         touchSlop = { ViewConfiguration.get(context).scaledTouchSlop.toFloat() },
         onStart = { point ->
@@ -147,7 +147,7 @@ internal class NativeMainScreenView private constructor(
     }
     private val incidentsPointer = NativeIncidentsPointerBinding(incidents, pointer.coordinates,
         frames, scope) { false }
-    private val homeText = home.topBar.bindAccessibility(windowText.textWindow, source.geometry, source::node,
+    private val homeText = home.topBar.bindAccessibility(windowText.textWindow, source.geometry, source,
         source::retainPresentSemanticChildren)
 
     private val noNestedScroll = object : NativeVerticalNestedHost {
@@ -278,7 +278,7 @@ internal class NativeMainScreenView private constructor(
         settings = content
         addView(content)
         settingsPointer = NativeSettingsPointerBinding(content, pointer.coordinates, frames, scope, parentInterested = { false })
-        settingsText = NativeSettingsAccessibilityBinding(content, windowText, source::node, scrollEvents,
+        settingsText = NativeSettingsAccessibilityBinding(content, windowText, source, scrollEvents,
             source::retainPresentSemanticChildren)
         content.start()
         settingsNodesChanged()
@@ -303,7 +303,7 @@ internal class NativeMainScreenView private constructor(
         library = content
         libraryLayer = NativeMainLibraryLayer(context, environment, content).also(::addView)
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
-        libraryText = NativeLibraryAccessibilityBinding(content, windowText, source::node, scrollEvents,
+        libraryText = NativeLibraryAccessibilityBinding(content, windowText, source, scrollEvents,
             source::retainPresentSemanticChildren)
         libraryNodesChanged()
     }
@@ -371,7 +371,7 @@ internal class NativeMainScreenView private constructor(
                 captureOwner = owner
                 val content = NativeCaptureContentView(context, environment, owner, lifecycleOwner,
                     dispatcher, scope, windowRoot, this, pointer.coordinates, windowText, source.geometry,
-                    source::node, ::materialButtons, ::homeNodesChanged)
+                    source, ::materialButtons, ::homeNodesChanged)
                 captureContent = content
                 home.setBody(content)
                 captureCollection = scope.launch { owner.state.collect { state ->
@@ -445,7 +445,7 @@ internal class NativeMainScreenView private constructor(
             // All toolbar inputs change through requestRender; motion only changes its membership.
             if (created || bindToolbar) toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
             if (libraryToolbarText == null) libraryToolbarText = toolbar.bindAccessibility(
-                windowText.textWindow, source.geometry, source::node, source::retainPresentSemanticChildren)
+                windowText.textWindow, source.geometry, source, source::retainPresentSemanticChildren)
         } else if (libraryToolbar != null) {
             val old = libraryToolbar!!
             libraryToolbar = null
