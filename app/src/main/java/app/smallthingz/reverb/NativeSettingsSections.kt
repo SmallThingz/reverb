@@ -191,10 +191,14 @@ internal class NativeSettingsSections(
                 requireNotNull(value.route), options.routes, emptySet(),
             )
         }
-        private fun compressionState() = SettingsOutputCompressionState(
-            owner.snapshot.format == ExportFormat.FLAC, owner.snapshot.flacCompression,
-            owner.state.interactionReady && !owner.state.persisting,
-        )
+        private fun compressionState(): SettingsOutputCompressionState {
+            val state = owner.state
+            val value = state.displayed.snapshot
+            return SettingsOutputCompressionState(
+                value.format == ExportFormat.FLAC, value.flacCompression,
+                state.interactionReady && !state.persisting,
+            )
+        }
         private fun silenceState(): SettingsSilenceState {
             val value = owner.snapshot
             if (silenceRaw != value.silenceGate) { silenceRaw = value.silenceGate; silence = decodeSilenceGate(value.silenceGate) }
