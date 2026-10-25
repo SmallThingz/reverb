@@ -307,6 +307,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundMotion = colorMotion(Color.Transparent)
     private val foregroundMotion = colorMotion(Color(currentEnvironment.palette.muted))
+    private val transitionInk = HomeBufferInk()
     private var initialized = false
     private var selection = false
     private var recording = false
@@ -364,6 +365,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
             selection -> p.onPrimaryContainer
             else -> reverbColorWithAlpha(p.muted, if (bufferEnabled) .52f else .30f)
         })
+        transitionInk.target(p.field, p.ink, background.toArgb(), foreground.toArgb())
         if (!initialized) {
             initialized = true; backgroundMotion.snap(background); foregroundMotion.snap(foreground)
         } else {
@@ -376,7 +378,8 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     }
     private fun applyColors() {
         fill.color = backgroundMotion.value.toArgb()
-        val tint = foregroundMotion.value.toArgb()
+        val tint = transitionInk.foreground(fill.color, foregroundMotion.value.toArgb(),
+            backgroundMotion.running || foregroundMotion.running)
         glyph.setTint(tint); label.setTextColor(tint); invalidate()
     }
     private fun requestFrame() = frames.request()
