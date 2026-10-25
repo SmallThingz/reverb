@@ -237,29 +237,36 @@ internal class ReverbLibraryListView(
         private fun submitCatalog(items: List<LibraryListItem>) {
             val previous = entries
             val ids = previous.associate { it.key to it.stableId }
-            val next = items.mapIndexed { index, item ->
+            val next = ArrayList<Entry>(items.size + 1)
+            var recordingCount = 0
+            items.forEachIndexed { index, item ->
                 val key = libraryListItemKey(item)
                 val id = ids[key] ?: nextStableId++
-                when (item) {
+                next.add(when (item) {
                     is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
-                    is LibraryListItem.Recording -> Entry(key, id, recording = item.recording,
-                        edges = ReverbRecordingGroupEdges(
-                            first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
-                            last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
-                }
+                    is LibraryListItem.Recording -> {
+                        recordingCount++
+                        Entry(key, id, recording = item.recording,
+                            edges = ReverbRecordingGroupEdges(
+                                first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
+                                last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
+                    }
+                })
             }
             // Released LazyColumn always appends item { Spacer(Modifier.height(84.dp)) }.
-            val withFooter = next + Entry("library-footer", ids["library-footer"] ?: nextStableId++, footer = true)
+            next.add(Entry("library-footer", ids["library-footer"] ?: nextStableId++, footer = true))
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                 override fun getOldListSize() = previous.size
-                override fun getNewListSize() = withFooter.size
+                override fun getNewListSize() = next.size
                 override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int) =
-                    previous[oldItemPosition].key == withFooter[newItemPosition].key
+                    previous[oldItemPosition].key == next[newItemPosition].key
                 override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int) =
-                    previous[oldItemPosition] == withFooter[newItemPosition]
+                    previous[oldItemPosition] == next[newItemPosition]
             })
-            entries = withFooter
-            recordingsById = withFooter.mapNotNull { entry -> entry.recording?.id?.let { it to entry } }.toMap()
+            entries = next
+            val nextRecordings = LinkedHashMap<String, Entry>((recordingCount / 0.75f + 1f).toInt())
+            for (entry in next) entry.recording?.id?.let { nextRecordings[it] = entry }
+            recordingsById = nextRecordings
             currentRecordingIds = recordingsById.keys
             diff.dispatchUpdatesTo(this)
         }
