@@ -214,7 +214,7 @@ internal class ReverbLibraryRecordingRow(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         surface.measure(widthMeasureSpec, heightMeasureSpec)
         val natural = IntSize(surface.measuredWidth, surface.measuredHeight)
-        val size = outerSizeMotion ?: LibraryTweenValue.size(natural).also { outerSizeMotion = it }
+        val size = outerSizeMotion ?: librarySizeTween(natural).also { outerSizeMotion = it }
         size.target(natural, frames.durationScale)
         setMeasuredDimension(resolveSize(size.value.width, widthMeasureSpec),
             resolveSize(size.value.height, heightMeasureSpec))

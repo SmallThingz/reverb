@@ -5,16 +5,12 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.animation.VectorConverter
-import smallthingz.ui.animation.core.AnimationVector
 import smallthingz.ui.animation.core.AnimationVector1D
 import smallthingz.ui.animation.core.AnimationVector2D
 import smallthingz.ui.animation.core.AnimationVector4D
 import smallthingz.ui.animation.core.FastOutSlowInEasing
 import smallthingz.ui.animation.core.FiniteAnimationSpec
 import smallthingz.ui.animation.core.Spring
-import smallthingz.ui.animation.core.SpringSpec
-import smallthingz.ui.animation.core.TargetBasedAnimation
-import smallthingz.ui.animation.core.TwoWayConverter
 import smallthingz.ui.animation.core.VectorConverter
 import smallthingz.ui.animation.core.spring
 import smallthingz.ui.animation.core.tween
@@ -23,103 +19,18 @@ import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.unit.IntSize
 import kotlin.math.roundToLong
 
-/** Animatable clock/velocity semantics used by animateAsState and animateContentSize. */
-internal class LibraryTweenValue<T, V : AnimationVector>(
-    initial: T,
-    private val converter: TwoWayConverter<T, V>,
-    private val spec: FiniteAnimationSpec<T>,
-    private val zero: () -> V,
-) {
-    var value = initial
-        private set
-    var target = initial
-        private set
-    val running get() = animation != null
-    private var animation: TargetBasedAnimation<T, V>? = null
-    private var velocity = zero()
-    private var startFrame: Long? = null
-    private var lastFrame: Long? = null
+internal typealias LibraryTweenValue<T, V> = smallthingz.ui.animation.AnimatedValue<T, V>
+internal typealias LibraryTransitionValue<T, V> = smallthingz.ui.animation.TransitionValue<T, V>
 
-    fun target(next: T, scale: Float) {
-        if (target == next && (running || value == next)) return
-        val previousFrame = lastFrame
-        // Animatable.animateTo defaults initialVelocity to velocity:T. This conversion matters for
-        // Color (Oklab -> packed Color -> Oklab) and IntSize (integer quantization) on interruption.
-        animation = TargetBasedAnimation(spec, converter, value, next,
-            initialVelocity = converter.convertFromVector(velocity))
-        target = next
-        startFrame = previousFrame
-        if (previousFrame != null) frame(previousFrame, scale)
-    }
-
-    fun frame(time: Long, scale: Float) {
-        val active = animation ?: return
-        require(scale >= 0f) { "negative scale factor" }
-        val start = startFrame ?: time.also { startFrame = it }
-        val play = if (scale == 0f) active.durationNanos else ((time - start) / scale).toLong()
-        lastFrame = time
-        value = active.getValueFromNanos(play)
-        velocity = active.getVelocityVectorFromNanos(play)
-        if (active.isFinishedFromNanos(play)) stop()
-    }
-
-    fun stop() {
-        animation = null
-        velocity = zero()
-        startFrame = null
-        lastFrame = null
-    }
-
-    fun snap(next: T) { stop(); value = next; target = next }
-
-    companion object {
-        fun color(initial: Color) = LibraryTweenValue(initial,
-            (Color.VectorConverter)(initial.colorSpace),
-            tween<Color>(180, easing = FastOutSlowInEasing),
-            { AnimationVector4D(0f, 0f, 0f, 0f) })
-        fun alpha(initial: Float) = LibraryTweenValue(initial, Float.VectorConverter,
-            tween<Float>(180, easing = FastOutSlowInEasing), { AnimationVector1D(0f) })
-        fun size(initial: IntSize) = LibraryTweenValue(initial, IntSize.VectorConverter,
-            tween<IntSize>(320, easing = FastOutSlowInEasing), { AnimationVector2D(0f, 0f) })
-    }
-}
-
-/** Transition child state: interrupted non-spring specs use the default spring, with raw velocity. */
-internal class LibraryTransitionValue<T, V : AnimationVector>(
-    initial: T,
-    private val converter: TwoWayConverter<T, V>,
-    private val interruptionSpec: SpringSpec<T>,
-    private val zero: () -> V,
-) {
-    var value = initial
-        private set
-    var target = initial
-        private set
-    val running get() = animation != null
-    private var animation: TargetBasedAnimation<T, V>? = null
-    private var velocity = zero()
-    private var offset = 0L
-
-    fun target(next: T, spec: FiniteAnimationSpec<T>, playTime: Long, force: Boolean = false) {
-        if (!force && target == next) return
-        val selected = if (running && spec !is SpringSpec<*>) interruptionSpec else spec
-        animation = TargetBasedAnimation(selected, converter, value, next, initialVelocityVector = velocity)
-        target = next
-        // Equivalent to Transition.delayed(spec, playTimeNanos), including a shared global clock.
-        offset = playTime.coerceAtLeast(0L)
-    }
-
-    fun frame(playTime: Long, toEnd: Boolean) {
-        val active = animation ?: return
-        val local = if (toEnd) active.durationNanos else (playTime - offset).coerceAtLeast(0L)
-        value = active.getValueFromNanos(local)
-        velocity = active.getVelocityVectorFromNanos(local)
-        if (active.isFinishedFromNanos(local)) animation = null
-        // Unlike Animatable, Transition leaves its sampled velocity vector intact at completion.
-    }
-
-    fun snap(next: T) { value = next; target = next; animation = null; velocity = zero(); offset = 0L }
-}
+// Reverb owns the selected-row and content-size durations; the samplers are generic.
+internal fun libraryColorTween(initial: Color) = LibraryTweenValue(initial,
+    (Color.VectorConverter)(initial.colorSpace),
+    tween<Color>(180, easing = FastOutSlowInEasing),
+    { AnimationVector4D(0f, 0f, 0f, 0f) })
+internal fun libraryAlphaTween(initial: Float) = LibraryTweenValue(initial, Float.VectorConverter,
+    tween<Float>(180, easing = FastOutSlowInEasing), { AnimationVector1D(0f) })
+internal fun librarySizeTween(initial: IntSize) = LibraryTweenValue(initial, IntSize.VectorConverter,
+    tween<IntSize>(320, easing = FastOutSlowInEasing), { AnimationVector2D(0f, 0f) })
 
 /** One AnimatedVisibility lifetime. Full-size measurement precedes the deferred size animation. */
 internal class LibraryExpansionMotion(initiallyVisible: Boolean) {
@@ -205,11 +116,11 @@ internal class LibraryExpansionMotion(initiallyVisible: Boolean) {
 
 /** Stores original Color values between frames; ARGB is only the final native paint boundary. */
 internal class LibrarySelectionMotion(initial: LibraryRecordingRowFrame) {
-    private val background = LibraryTweenValue.color(Color(initial.background))
-    private val border = LibraryTweenValue.color(Color(initial.border))
-    private val disc = LibraryTweenValue.color(Color(initial.disc))
-    private val icon = LibraryTweenValue.color(Color(initial.icon))
-    private val alpha = LibraryTweenValue.alpha(initial.contentAlpha)
+    private val background = libraryColorTween(Color(initial.background))
+    private val border = libraryColorTween(Color(initial.border))
+    private val disc = libraryColorTween(Color(initial.disc))
+    private val icon = libraryColorTween(Color(initial.icon))
+    private val alpha = libraryAlphaTween(initial.contentAlpha)
     val running get() = background.running || border.running || disc.running || icon.running || alpha.running
     val value get() = LibraryRecordingRowFrame(background.value.toArgb(), border.value.toArgb(),
         disc.value.toArgb(), icon.value.toArgb(), alpha.value)

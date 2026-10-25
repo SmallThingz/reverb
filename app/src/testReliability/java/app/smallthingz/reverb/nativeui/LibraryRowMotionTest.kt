@@ -80,7 +80,7 @@ class LibraryRowMotionTest {
     @Test fun selectionMidpointUsesOklabAndPreservesPackedColorAtRetarget() {
         val start = Color(0xff2868bd)
         val target = Color(0xffd09a32)
-        val channel = LibraryTweenValue.color(start)
+        val channel = libraryColorTween(start)
         channel.target(target, 1f)
         channel.frame(0L, 1f)
         channel.frame(90_000_000L, 1f)
@@ -97,7 +97,7 @@ class LibraryRowMotionTest {
     }
 
     @Test fun contentSizeUsesItsOwnFullThreeHundredTwentyMillisecondTween() {
-        val channel = LibraryTweenValue.size(IntSize(401, 68))
+        val channel = librarySizeTween(IntSize(401, 68))
         channel.target(IntSize(401, 68), 1f)
         assertFalse(channel.running)
         channel.target(IntSize(401, 301), 1f)
