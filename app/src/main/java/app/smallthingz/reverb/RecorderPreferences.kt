@@ -870,9 +870,13 @@ fun orderSampleRatesByPreference(
             else -> lower.add(rate)
         }
     }
-    higher.sortBy { it - requestedRate }
-    lower.sortByDescending { it }
-    return exact + higher + lower
+    higher.sort()
+    lower.sortDescending()
+    return ArrayList<Int>(seen.size).apply {
+        addAll(exact)
+        addAll(higher)
+        addAll(lower)
+    }
 }
 
 internal fun captureIntentPersistenceRequired(

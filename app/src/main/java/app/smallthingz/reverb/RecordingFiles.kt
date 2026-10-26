@@ -24,6 +24,7 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileDescriptor
 import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -3039,8 +3040,9 @@ private fun listFileDirectoryRecordings(
                             afterReadDescriptorIdentity = afterReadDescriptorIdentity,
                         )
                     }
-                } catch (_: NoSuchFileException) {
-                    return@mapNotNull null
+                } catch (error: FileNotFoundException) {
+                    if (storagePathState(file) == StoragePathState.MISSING) return@mapNotNull null
+                    throw IOException("Unable to validate discovered recording $file", error)
                 } catch (error: Exception) {
                     throw IOException("Unable to validate discovered recording $file", error)
                 }

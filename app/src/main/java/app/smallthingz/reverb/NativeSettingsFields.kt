@@ -23,7 +23,7 @@ internal fun nativeSettingsAudioOptions(
             buildList {
                 if (preferred > 0) add(preferred)
                 addAll(standardSampleRates())
-            }.distinct(),
+            },
             preferred,
         ),
     )

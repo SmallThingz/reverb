@@ -8,12 +8,14 @@ import android.system.StructStat
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.ArrayDeque
@@ -764,9 +766,13 @@ internal class PersistentAudioChunkStore internal constructor(
             FileChannel.open(snapshot.file.toPath(), StandardOpenOption.WRITE).use { channel ->
                 channel.force(true)
             }
-        } catch (_: NoSuchFileException) {
-            // Finalization force-syncs before retirement, so disappearance here means
-            // another synchronized store operation already made this snapshot obsolete.
+        } catch (error: NoSuchFileException) {
+            synchronized(this) {
+                // Only a superseded snapshot can disappear through retirement. A missing
+                // still-current active chunk is storage loss, not a completed sync.
+                val record = activeRecord
+                if (record != null && snapshot.identity.matches(record)) throw error
+            }
             return 0L
         }
 
@@ -3569,8 +3575,9 @@ internal class PersistentAudioChunkStore internal constructor(
                     }
                 }
             }
-        } catch (_: NoSuchFileException) {
-            return null
+        } catch (error: FileNotFoundException) {
+            if (storagePathState(file) == StoragePathState.MISSING) return null
+            throw IOException("Unable to read chunk index: ${file.absolutePath}", error)
         } catch (error: IOException) {
             throw IOException("Unable to read chunk index: ${file.absolutePath}", error)
         } catch (error: SecurityException) {

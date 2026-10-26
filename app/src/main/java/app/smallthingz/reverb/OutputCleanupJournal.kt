@@ -10,7 +10,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.Base64
 import java.util.UUID
