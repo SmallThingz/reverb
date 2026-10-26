@@ -38,7 +38,6 @@ internal class ReverbRecordingInfoBody(
     private var viewportTop = 0
     private var closed = false
     private var restoredClip: (() -> Unit)? = null
-    private val surfaceLayouts = ArrayList<NativeViewPointerHitLayout>()
     val hitLayout: NativeViewPointerHitLayout
 
     init {
@@ -49,6 +48,7 @@ internal class ReverbRecordingInfoBody(
         viewport.setContent(rows)
         addView(viewport)
         bind(recording)
+        val surfaceLayouts = ArrayList<NativeViewPointerHitLayout>(rows.items.size)
         for (row in rows.items) {
             val surface = row.surface
             val shield = object : NativeViewPhasePointerNode {
@@ -59,13 +59,16 @@ internal class ReverbRecordingInfoBody(
             }
             surfaceLayouts += host.hit(surface, listOf(shield), clip = { surface.containsVisualPoint(it.x, it.y) })
         }
-        val listHit = host.hit(rows, emptyList(), children = { surfaceLayouts.asReversed() })
-        val scrollHit = host.hit(viewport, listOf(scroll.observerNode, scroll.dragNode), children = { listOf(listHit) },
+        val reversedSurfaceLayouts = surfaceLayouts.asReversed()
+        val listHit = host.hit(rows, emptyList(), children = { reversedSurfaceLayouts })
+        val listHitChildren = listOf(listHit)
+        val scrollHit = host.hit(viewport, listOf(scroll.observerNode, scroll.dragNode), children = { listHitChildren },
             clip = {
                 val extra = dp(30f)
                 it.x >= -extra && it.x < viewport.width + extra && it.y >= 0f && it.y < viewport.height
             })
-        hitLayout = host.hit(this, emptyList(), children = { listOf(scrollHit) })
+        val scrollHitChildren = listOf(scrollHit)
+        hitLayout = host.hit(this, emptyList(), children = { scrollHitChildren })
         val accessibility = host.accessibility
         viewport.sourceAccessibilityNode = { accessibility.sourceNode(viewport) }
         viewport.sourceAccessibilityChildren = {

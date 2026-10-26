@@ -166,7 +166,6 @@ internal class ReverbActionSheetDialog(
         appContent.setContent(body,actions)
         pointer.setContentHits(hitLayouts)
     }
-    fun updateContentHitLayouts(hitLayouts:List<NativeViewPointerHitLayout>)=pointer.setContentHits(hitLayouts)
     /** Callback and title updates never recreate bodies, accepted actions, draft fields or gestures. */
     fun bind(title:String,onDismiss:()->Unit) {
         onOwnerDismiss=onDismiss;appContent.bind(title) {onOwnerDismiss()}
@@ -414,6 +413,8 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
     val geometry=NativeWindowPointerCoordinates {checkNotNull(root)}
     private var sheets=emptyList<NativeViewPointerHitLayout>()
     private var contentHits=emptyList<NativeViewPointerHitLayout>()
+    private var fixedContentHits=emptyList<NativeViewPointerHitLayout>()
+    private var combinedContentHits=emptyList<NativeViewPointerHitLayout>()
     val layout=object:NativeViewPointerHitLayout {
         override val placed get()=root?.isAttachedToWindow==true
         override val size get()=Size((root?.width?:0).toFloat(),(root?.height?:0).toFloat())
@@ -440,9 +441,10 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
             override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass)=Unit
             override fun cancel()=Unit
         }
-        val fixedContentHits=listOf(closeHit,handleHit)
+        fixedContentHits=listOf(closeHit,handleHit)
+        refreshContentHits()
         val contentHit=NativeActionSheetHitLayout(surface.painted,geometry,minimum,listOf(shield),
-            children={contentHits+fixedContentHits},clip=surface::containsShape)
+            children={combinedContentHits},clip=surface::containsShape)
         val surfaceChildren=listOf(contentHit)
         val surfaceHit=NativeActionSheetHitLayout(surface,geometry,minimum,listOf(drag),
             children={surfaceChildren})
@@ -450,8 +452,17 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
             listOf(NativeSheetScrimTapNode(scrim,{density}) {scrim.performClick()}))
         sheets=listOf(surfaceHit,scrimHit)
     }
-    fun setContentHits(value:List<NativeViewPointerHitLayout>) {contentHits=value}
-    override fun close() {root?.cancelPointerInput();sheets=emptyList();contentHits=emptyList();root=null}
+    fun setContentHits(value:List<NativeViewPointerHitLayout>) {
+        contentHits=value
+        refreshContentHits()
+    }
+    private fun refreshContentHits() {
+        combinedContentHits=if(contentHits.isEmpty())fixedContentHits else contentHits+fixedContentHits
+    }
+    override fun close() {
+        root?.cancelPointerInput()
+        sheets=emptyList();contentHits=emptyList();fixedContentHits=emptyList();combinedContentHits=emptyList();root=null
+    }
 }
 private fun sheetWindowExact(value:Int)=View.MeasureSpec.makeMeasureSpec(value,View.MeasureSpec.EXACTLY)
 private fun sheetWindowAtMost(value:Int)=View.MeasureSpec.makeMeasureSpec(value,View.MeasureSpec.AT_MOST)

@@ -221,9 +221,11 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         {!host.sourceNode(visual).hidden})
     private val glyphLease=visual.glyph.bindDescriptionAccessibility(host.textWindow,
         {host.sourceNode(visual.glyph)},{!host.sourceNode(visual.glyph).hidden})
-    val hitLayout=host.hit(surface,emptyList(),children={
-        listOf(host.hit(visual,listOf(click),clip={surface.containsVisualPoint(it.x,it.y)}))
-    },clip={surface.containsVisualPoint(it.x,it.y)})
+    val hitLayout=run {
+        val children=listOf(host.hit(visual,listOf(click),clip={surface.containsVisualPoint(it.x,it.y)}))
+        host.hit(surface,emptyList(),children={children},
+            clip={surface.containsVisualPoint(it.x,it.y)})
+    }
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
         surface.setPalette(environment.palette.surfaceContainerHigh,Color.TRANSPARENT)

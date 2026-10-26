@@ -69,7 +69,7 @@ private class CaptureSaveStatusView(
         publishFrame()
         if (motion.exitCompleted) disposeExitedContent()
     }
-    val hitLayout = host.hit(this, emptyList(), children = { branch?.let { listOf(it.hitLayout) } ?: emptyList() })
+    val hitLayout = host.hit(this, emptyList(), children = { branch?.parentHitChildren ?: emptyList() })
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -192,6 +192,7 @@ private class CaptureStatusBranch(
     } else null
     private var cancel: ReverbStandardIconButtonView? = null
     private var cancelNode: NativeClickPhaseNode? = null
+    private var cancelHitChildren: List<NativeViewPointerHitLayout> = emptyList()
     private var cancelLease: AutoCloseable? = null
     private var closed = false
     private val noActions = LibraryRecordingRowActions(null, null, null)
@@ -218,23 +219,17 @@ private class CaptureStatusBranch(
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
         override fun cancel() = Unit
     }
-    val hitLayout = host.hit(this, emptyList(), children = {
-        listOf(host.hit(row, emptyList(), children = {
-            listOf(host.hit(row.summarySurface, listOf(surfaceShield), children = {
-                val button = cancel
-                val node = cancelNode
-                if (button == null || node == null) emptyList() else listOf(
-                    host.hit(button, emptyList(), children = {
-                        listOf(host.hit(button.visual, listOf(node), clip = { position ->
-                            val radius = minOf(button.visual.width, button.visual.height) * .5f
-                            val dx = position.x - button.visual.width * .5f
-                            val dy = position.y - button.visual.height * .5f
-                            dx * dx + dy * dy <= radius * radius
-                        }))
-                    }))
-            }, clip = { row.summarySurface.containsVisualPoint(it.x, it.y) }))
-        }, clip = { it.x >= 0f && it.x < row.width && it.y >= 0f && it.y < row.height }))
-    })
+    val hitLayout = run {
+        val surfaceHit = host.hit(row.summarySurface, listOf(surfaceShield),
+            children = { cancelHitChildren },
+            clip = { row.summarySurface.containsVisualPoint(it.x, it.y) })
+        val surfaceHitChildren = listOf(surfaceHit)
+        val rowHit = host.hit(row, emptyList(), children = { surfaceHitChildren },
+            clip = { it.x >= 0f && it.x < row.width && it.y >= 0f && it.y < row.height })
+        val rowHitChildren = listOf(rowHit)
+        host.hit(this, emptyList(), children = { rowHitChildren })
+    }
+    val parentHitChildren = listOf(hitLayout)
 
     init {
         clipChildren = false; clipToPadding = false
@@ -310,6 +305,7 @@ private class CaptureStatusBranch(
         if (!present) {
             val old = cancel
             cancel = null
+            cancelHitChildren = emptyList()
             val oldNode = cancelNode; cancelNode = null
             val oldLease = cancelLease; cancelLease = null
             row.setSummarySlots(progress, null)
@@ -318,7 +314,16 @@ private class CaptureStatusBranch(
             if (cancel == null) {
                 val button = ReverbStandardIconButtonView(context, environment, { host.inputRoot })
                 cancel = button
-                cancelNode = NativeClickPhaseNode(button.visual, button.visual.nativeClickEndpoint, host.interestedParent)
+                val node = NativeClickPhaseNode(button.visual, button.visual.nativeClickEndpoint, host.interestedParent)
+                cancelNode = node
+                val visualHit = host.hit(button.visual, listOf(node), clip = { position ->
+                    val radius = minOf(button.visual.width, button.visual.height) * .5f
+                    val dx = position.x - button.visual.width * .5f
+                    val dy = position.y - button.visual.height * .5f
+                    dx * dx + dy * dy <= radius * radius
+                })
+                val visualHitChildren = listOf(visualHit)
+                cancelHitChildren = listOf(host.hit(button, emptyList(), children = { visualHitChildren }))
                 cancelLease = button.bindAccessibility(host.textWindow, host.textGeometry, host.sourceProvider ?: { view ->
                     host.sourceNode(view, if (view === button.visual) button.minimumTouchTargetPx else 0f)
                 })
@@ -348,6 +353,7 @@ private class CaptureStatusBranch(
         if (closed) return
         closed = true
         val node = cancelNode; cancelNode = null
+        cancelHitChildren = emptyList()
         val button = cancel; cancel = null
         val lease = cancelLease; cancelLease = null
         captureReleaseAll(listOf<() -> Unit>({ node?.cancel() }, { button?.cancelInput() }, { lease?.close() },

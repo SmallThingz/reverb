@@ -77,9 +77,14 @@ internal class LibrarySheetButton(
     private val surface = ButtonSurface(context,host,filled,text,onClick,leadingIcon,errorColors)
     private val click = NativeClickPhaseNode(surface,surface.nativeClickEndpoint,host.interestedParent)
     private var closed=false
-    val hitLayout: NativeViewPointerHitLayout = host.hit(this,emptyList(),children = {
-        listOf(host.hit(surface,listOf(click),clip = { surface.containsPointerLayer(it.x,it.y) }))
-    })
+    val hitLayout: NativeViewPointerHitLayout = run {
+        val surfaceNodes=listOf(click)
+        val surfaceClip:(Offset)->Boolean={surface.containsPointerLayer(it.x,it.y)}
+        host.hit(this,emptyList(),children = {
+            // Sheet hosts capture their current minimum target when creating this wrapper.
+            listOf(host.hit(surface,surfaceNodes,clip=surfaceClip))
+        })
+    }
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
         addView(surface)
