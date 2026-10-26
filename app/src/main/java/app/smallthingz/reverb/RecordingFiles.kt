@@ -2756,10 +2756,9 @@ private fun recoverStagedFileOutputs(
     files.forEach { file ->
         if (file.absolutePath in suppressedIds) return@forEach
         val name = file.name
+        if (!isStagingOutputName(name)) return@forEach
         val pathObservation = observeStoragePath(file)
-        if (pathObservation.state != StoragePathState.PRESENT || !pathObservation.isRegularFile ||
-            !isStagingOutputName(name)
-        ) return@forEach
+        if (pathObservation.state != StoragePathState.PRESENT || !pathObservation.isRegularFile) return@forEach
         val recovery = resolveStagingOutputRecovery(name) {
             verifiedExportStagingRecovery(context, RecordingStorageType.FILE, file.absolutePath)
         } ?: return@forEach

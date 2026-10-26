@@ -334,12 +334,48 @@ class RecordingIncidentStoreTest {
     }
 
     @Test
-    fun serviceStopRetry_deduplicatesSameProcessSession() {
-        val session = IncidentRetrySessionKey(pid = 42, processStartElapsedRealtimeMillis = 9_000L)
-        val other = IncidentRetrySessionKey(pid = 43, processStartElapsedRealtimeMillis = 9_001L)
-
-        assertFalse(serviceStopRetryShouldAppend(listOf(session), session))
-        assertTrue(serviceStopRetryShouldAppend(listOf(session), other))
+    fun serviceStopRetry_deduplicatesActualQueueAndSignalsEveryAttempt() {
+        val store = RecordingIncidentStore
+        val retryType = Class.forName("app.smallthingz.reverb.PendingProcessIncidentRetry")
+        val constructor = retryType.getDeclaredConstructor(
+            java.lang.Long.TYPE, String::class.java, java.lang.Integer.TYPE,
+            java.lang.Long.TYPE, RecordingIncident::class.java,
+        ).apply { isAccessible = true }
+        val enqueue = store.javaClass.getDeclaredMethod("enqueueServiceStopIncidentRetry", retryType)
+            .apply { isAccessible = true }
+        val queueField = store.javaClass.getDeclaredField("pendingServiceStopIncidentRetries")
+            .apply { isAccessible = true }
+        val revisionField = store.javaClass.getDeclaredField("mutableHistoryRevision")
+            .apply { isAccessible = true }
+        synchronized(store) {
+            @Suppress("UNCHECKED_CAST")
+            val queue = queueField.get(store) as MutableList<Any>
+            @Suppress("UNCHECKED_CAST")
+            val revision = revisionField.get(store) as kotlinx.coroutines.flow.MutableStateFlow<Long>
+            val originalQueue = queue.toList()
+            val originalRevision = revision.value
+            try {
+                queue.clear()
+                val first = constructor.newInstance(10_000L, "first boundary", 42, 9_000L, null)
+                val duplicate = constructor.newInstance(20_000L, "later boundary", 42, 9_000L,
+                    RecordingIncident(occurredAtMillis = 20_000L))
+                val otherPid = constructor.newInstance(10_000L, "other pid", 43, 9_000L, null)
+                val otherStart = constructor.newInstance(10_000L, "other start", 42, 9_001L, null)
+                for (retry in listOf(first, duplicate, otherPid, otherStart, first)) {
+                    val before = revision.value
+                    enqueue.invoke(store, retry)
+                    assertEquals(before + 1L, revision.value)
+                }
+                assertEquals(3, queue.size)
+                assertSame(first, queue[0])
+                assertSame(otherPid, queue[1])
+                assertSame(otherStart, queue[2])
+            } finally {
+                queue.clear()
+                queue.addAll(originalQueue)
+                revision.value = originalRevision
+            }
+        }
     }
 
     @Test
@@ -569,6 +605,42 @@ class RecordingIncidentStoreTest {
         )
         assertFalse(incident.recoveryPending)
         assertTrue(recordingIncidentDowntimeMillis(incident) == 2_500L)
+    }
+
+    @Test
+    fun captureResumeWithoutEligibleIncidentRetainsTheOriginalList() {
+        val empty = emptyList<RecordingIncident>()
+        assertSame(empty, completeRecordingIncidentDowntimes(empty, 3_000L))
+        val incidents = listOf(
+            RecordingIncident(occurredAtMillis = 1_000L, resumedAtMillis = 2_000L),
+            RecordingIncident(occurredAtMillis = 4_000L, resumedAtMillis = 0L),
+            RecordingIncident(occurredAtMillis = 1_000L, resumedAtMillis = 0L,
+                kind = RecordingIncidentKind.UNEXPECTED_ERROR),
+        )
+        assertSame(incidents, completeRecordingIncidentDowntimes(incidents, 3_000L))
+    }
+
+    @Test
+    fun captureResumeCopiesOnlyEligibleRowsAndNeverMutatesTheOriginalList() {
+        for (pendingIndex in 0..2) {
+            val incidents = MutableList(3) { index ->
+                RecordingIncident(occurredAtMillis = 1_000L + index, resumedAtMillis = 2_000L)
+            }
+            incidents[pendingIndex] = incidents[pendingIndex].copy(
+                resumedAtMillis = 0L, acknowledgedAtMillis = Long.MIN_VALUE,
+            )
+            val original = incidents.toList()
+            val updated = completeRecordingIncidentDowntimes(incidents, 3_000L)
+            assertFalse(updated === incidents)
+            assertEquals(original, incidents)
+            for (index in incidents.indices) {
+                if (index == pendingIndex) {
+                    assertEquals(original[index].copy(resumedAtMillis = 3_000L), updated[index])
+                    assertTrue(updated[index].deleted)
+                } else assertSame(original[index], updated[index])
+            }
+            assertSame(updated, completeRecordingIncidentDowntimes(updated, 4_000L))
+        }
     }
 
     @Test

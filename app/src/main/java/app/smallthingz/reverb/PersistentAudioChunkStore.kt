@@ -1283,7 +1283,11 @@ internal class PersistentAudioChunkStore internal constructor(
         ;
 
         companion object {
-            fun fromCode(code: Int): ChunkState? = entries.firstOrNull { it.code.toInt() == code }
+            fun fromCode(code: Int): ChunkState? = when (code) {
+                ACTIVE.code.toInt() -> ACTIVE
+                FINALIZED.code.toInt() -> FINALIZED
+                else -> null
+            }
         }
     }
 

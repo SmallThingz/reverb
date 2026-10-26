@@ -565,19 +565,7 @@ private data class PendingProcessIncidentRetry(
     val expectedPid: Int,
     val expectedProcessStartElapsedRealtimeMillis: Long,
     val incident: RecordingIncident? = null,
-) {
-    fun sessionKey() = IncidentRetrySessionKey(expectedPid, expectedProcessStartElapsedRealtimeMillis)
-}
-
-internal data class IncidentRetrySessionKey(
-    val pid: Int,
-    val processStartElapsedRealtimeMillis: Long,
 )
-
-internal fun serviceStopRetryShouldAppend(
-    existing: List<IncidentRetrySessionKey>,
-    incoming: IncidentRetrySessionKey,
-): Boolean = incoming !in existing
 
 internal enum class RecordingExitDisposition {
     INCIDENT,
@@ -756,19 +744,17 @@ internal fun completeRecordingIncidentDowntimes(
     incidents: List<RecordingIncident>,
     resumedAtMillis: Long,
 ): List<RecordingIncident> {
-    var changed = false
-    val updated = incidents.map { incident ->
+    var updated: MutableList<RecordingIncident>? = null
+    incidents.forEachIndexed { index, incident ->
         if (
             incident.recoveryPending &&
             resumedAtMillis >= incident.occurredAtMillis
         ) {
-            changed = true
-            incident.copy(resumedAtMillis = resumedAtMillis)
-        } else {
-            incident
+            val result = updated ?: incidents.toMutableList().also { updated = it }
+            result[index] = incident.copy(resumedAtMillis = resumedAtMillis)
         }
     }
-    return if (changed) updated else incidents
+    return updated ?: incidents
 }
 
 internal object RecordingIncidentStore {
@@ -1213,10 +1199,11 @@ internal object RecordingIncidentStore {
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
 
     private fun enqueueServiceStopIncidentRetry(retry: PendingProcessIncidentRetry) {
-        if (serviceStopRetryShouldAppend(
-                existing = pendingServiceStopIncidentRetries.map(PendingProcessIncidentRetry::sessionKey),
-                incoming = retry.sessionKey(),
-            )
+        if (pendingServiceStopIncidentRetries.none { pending ->
+                pending.expectedPid == retry.expectedPid &&
+                    pending.expectedProcessStartElapsedRealtimeMillis ==
+                    retry.expectedProcessStartElapsedRealtimeMillis
+            }
         ) {
             pendingServiceStopIncidentRetries += retry
         }

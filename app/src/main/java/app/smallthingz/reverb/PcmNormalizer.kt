@@ -167,6 +167,7 @@ internal object PcmNormalizer {
         segmentByteOffset: Long,
         segmentByteCount: Long,
     ): ByteArray {
+        require(payloadBytes >= 0L) { "Negative PCM payload size" }
         require(segmentByteCount <= Int.MAX_VALUE.toLong()) { "PCM segment too large" }
         require(segmentByteOffset >= 0L && segmentByteCount >= 0L)
         require(segmentByteOffset <= payloadBytes - segmentByteCount) { "PCM segment outside payload" }
@@ -175,7 +176,7 @@ internal object PcmNormalizer {
         val segmentBytes = ByteArray(segmentByteCount.toInt())
         val segmentEnd = segmentByteOffset + segmentByteCount
         val crc = CRC32()
-        val scratch = ByteArray(CRC_SCRATCH_BYTES)
+        val scratch = ByteArray(minOf(CRC_SCRATCH_BYTES.toLong(), payloadBytes).toInt())
         RandomAccessFile(file, "r").use { input ->
             input.seek(payloadDataOffset)
             var remaining = payloadBytes

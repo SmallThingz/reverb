@@ -63,12 +63,13 @@ internal data class NativeTooltipPlacement(val x:Int,val y:Int)
 internal fun nativeTooltipAbove(
     anchorLeft:Int,anchorTop:Int,anchorRight:Int,anchorBottom:Int,
     width:Int,height:Int,windowWidth:Int,spacing:Int,
+    previous:NativeTooltipPlacement?=null,
 ):NativeTooltipPlacement {
     var x=anchorLeft+(anchorRight-anchorLeft-width)/2
     if(x<0)x=anchorLeft else if(x+width>windowWidth)x=anchorRight-width
     var y=anchorTop-height-spacing
     if(y<0)y=anchorBottom+spacing
-    return NativeTooltipPlacement(x,y)
+    return if(previous!=null&&previous.x==x&&previous.y==y)previous else NativeTooltipPlacement(x,y)
 }
 
 /** Process-wide native counterpart of BasicTooltipDefaults.GlobalMutatorMutex. */
@@ -364,7 +365,7 @@ private class NativePlainTooltipWindow(
         anchor.getLocationInWindow(location)
         val next=nativeTooltipAbove(location[0],location[1],location[0]+anchor.width,
             location[1]+anchor.height,bubble.width,bubble.height,visibleFrame.width(),
-            (4f*environment.textDensity.density).roundToInt())
+            (4f*environment.textDensity.density).roundToInt(),previousPosition)
         if(!force&&next==previousPosition)return
         previousPosition=next;params.x=next.x;params.y=next.y
         if(Build.VERSION.SDK_INT>=29)systemGestureExclusionRects=listOf(Rect(0,0,visibleFrame.width(),visibleFrame.height()))

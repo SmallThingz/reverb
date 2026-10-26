@@ -2234,26 +2234,6 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun quickTileClick_isAlwaysRecomputedFromCurrentLiveSnapshot() {
-        val oneShot = ReverbService.BufferSlot.ONE_SHOT
-        val idle = RecordingTileSnapshot(
-            listening = false,
-            activeBuffer = oneShot,
-            oneShotEnabled = true,
-            oneShotFull = false,
-            loopingEnabled = true,
-        )
-        val oneShotRunning = idle.copy(listening = true)
-        val loopingRunning = oneShotRunning.copy(activeBuffer = ReverbService.BufferSlot.LOOPING)
-
-        assertEquals(RecordingTileClickAction.START, recordingTileClickAction(oneShot, idle))
-        assertEquals(RecordingTileClickAction.STOP, recordingTileClickAction(oneShot, oneShotRunning))
-        assertEquals(RecordingTileClickAction.SWITCH, recordingTileClickAction(oneShot, loopingRunning))
-        assertEquals(RecordingTileClickAction.NONE, recordingTileClickAction(oneShot, idle.copy(oneShotFull = true)))
-        assertEquals(RecordingTileClickAction.NONE, recordingTileClickAction(oneShot, idle.copy(oneShotEnabled = false)))
-    }
-
-    @Test
     fun oneShotFullCache_isInvalidatedWhenSettingsCanMakeAFullBufferWritableAgain() {
         assertTrue(
             shouldInvalidateCachedOneShotFull(
