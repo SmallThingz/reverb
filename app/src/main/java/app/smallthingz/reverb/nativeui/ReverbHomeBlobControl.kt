@@ -346,12 +346,10 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
 }
 
 private class HomeBlobIcon(context: Context, environment: ReverbViewEnvironment) : View(context) {
-    private val icons = mapOf(
-        ReverbIcon.Check to ReverbIconDrawable(ReverbIcon.Check, environment.textDensity.density, environment.palette.ink),
-        ReverbIcon.Pause to ReverbIconDrawable(ReverbIcon.Pause, environment.textDensity.density, environment.palette.ink),
-        ReverbIcon.Capture to ReverbIconDrawable(ReverbIcon.Capture, environment.textDensity.density, environment.palette.ink),
-    )
-    private var drawable = checkNotNull(icons[ReverbIcon.Capture])
+    private val checkIcon = ReverbIconDrawable(ReverbIcon.Check, environment.textDensity.density, environment.palette.ink)
+    private val pauseIcon = ReverbIconDrawable(ReverbIcon.Pause, environment.textDensity.density, environment.palette.ink)
+    private val captureIcon = ReverbIconDrawable(ReverbIcon.Capture, environment.textDensity.density, environment.palette.ink)
+    private var drawable = captureIcon
     private var boundIcon: ReverbIcon? = null
     private var boundTint = 0
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES }
@@ -360,7 +358,12 @@ private class HomeBlobIcon(context: Context, environment: ReverbViewEnvironment)
         if (appearanceChanged) {
             boundIcon = icon
             boundTint = color
-            drawable = checkNotNull(icons[icon])
+            drawable = checkNotNull(when {
+                icon === ReverbIcon.Check -> checkIcon
+                icon === ReverbIcon.Pause -> pauseIcon
+                icon === ReverbIcon.Capture -> captureIcon
+                else -> null
+            })
             drawable.setTint(color)
             drawable.setBounds(0, 0, width, height)
         }
