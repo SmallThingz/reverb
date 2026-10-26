@@ -142,6 +142,7 @@ object RecordingRepository {
         return visibleCatalogRecordings(
             dao(context).listAll(),
             pending,
+            pendingOutputCleanupIds(context),
         )
     }
 
@@ -159,6 +160,7 @@ object RecordingRepository {
                     visibleCatalogRecordings(
                         dao(context).listAll(),
                         pending,
+                        pendingOutputCleanupIds(context),
                     )
                 } catch (corrupt: SQLiteDatabaseCorruptException) {
                     // The preservation handler froze and copied the corrupt database before
@@ -215,6 +217,7 @@ object RecordingRepository {
                     recordings = dao.listAll(),
                     targetDirectoryId = targetDirectoryId,
                     pendingDeletionIds = pendingIds,
+                    pendingOutputCleanupIds = pendingOutputCleanupIds(context),
                     nowMillis = nowMillis,
                     mutationIsActive = recordingMutations::isActive,
                     assetState = { selectedRecordingAssetState(context, it) },
@@ -696,6 +699,7 @@ object RecordingRepository {
                 if (current.isEmpty()) {
                     return@withLock MoveResult()
                 }
+                val suppressedOutputIds = pendingOutputCleanupIds(context)
 
                 // The caller pins one destination before this IO transaction begins. Later
                 // Settings saves must not retarget or split an already-submitted move batch.
@@ -706,7 +710,7 @@ object RecordingRepository {
                 val nowMillis = System.currentTimeMillis()
 
                 current.forEach { recording ->
-                    if (!isRecordingEligibleForMove(recording.id, pendingIds)) {
+                    if (!isRecordingEligibleForMove(recording.id, pendingIds, suppressedOutputIds)) {
                         skipped++
                         return@forEach
                     }
@@ -898,10 +902,11 @@ object RecordingRepository {
     private suspend fun migrateLegacyAppStorageLocked(context: Context, legacyDirectoryId: String) {
         val dao = dao(context)
         val pendingIds = pendingDeletionIds(context)
+        val suppressedOutputIds = pendingOutputCleanupIds(context)
         val legacy = dao.listByDirectory(legacyDirectoryId)
 
         for (source in legacy) {
-            if (!isRecordingEligibleForMove(source.id, pendingIds)) continue
+            if (!isRecordingEligibleForMove(source.id, pendingIds, suppressedOutputIds)) continue
             if (selectedRecordingAssetState(context, source) != RecordingAssetState.PRESENT) continue
             if (!recordingDestructiveIdentityMatches(context, source)) continue
             val operation = recordingMutations.tryBegin(source.id) ?: continue
@@ -1093,9 +1098,10 @@ internal fun scanForMovableRecording(
     assetState: (RecordingEntity) -> RecordingAssetState,
     destructiveIdentityMatches: (RecordingEntity) -> Boolean,
     collectUpdate: (RecordingEntity) -> Unit,
+    pendingOutputCleanupIds: Set<String> = emptySet(),
 ): Boolean {
     for (recording in recordings) {
-        if (!isRecordingEligibleForMove(recording.id, pendingDeletionIds)) continue
+        if (!isRecordingEligibleForMove(recording.id, pendingDeletionIds, pendingOutputCleanupIds)) continue
         if (mutationIsActive(recording.id)) continue
         if (recording.directoryId == targetDirectoryId) continue
         var movable = false
@@ -1630,8 +1636,11 @@ internal fun ByteArray.toHexString(): String {
     return String(encoded)
 }
 
-internal fun isRecordingEligibleForMove(id: String, pendingDeletionIds: Set<String>): Boolean =
-    id !in pendingDeletionIds
+internal fun isRecordingEligibleForMove(
+    id: String,
+    pendingDeletionIds: Set<String>,
+    pendingOutputCleanupIds: Set<String> = emptySet(),
+): Boolean = id !in pendingDeletionIds && id !in pendingOutputCleanupIds
 
 internal fun recordingCatalogIdentityIsCurrent(
     stableIdentityAvailable: Boolean,
@@ -1689,8 +1698,10 @@ internal fun verifiedMoveCommitResult(
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,
     pendingDeletionIds: Set<String> = emptySet(),
+    pendingOutputCleanupIds: Set<String> = emptySet(),
 ): List<RecordingEntity> = recordings.filter { recording ->
-    recording.id !in pendingDeletionIds && recording.missingSinceMillis == null
+    recording.id !in pendingDeletionIds && recording.id !in pendingOutputCleanupIds &&
+        recording.missingSinceMillis == null
 }
 
 // Preserve existing opaque identity equality, but admit legacy birth normalization only

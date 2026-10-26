@@ -139,6 +139,38 @@ class RecordingMoveAvailabilityScanTest {
         assertEquals(0, updates)
     }
 
+    @Test
+    fun suppressedOutputNeverReachesStorageOrMutationCallbacks() {
+        val suppressed = recording("failed-output")
+        assertFalse(isRecordingEligibleForMove(suppressed.id, emptySet(), setOf(suppressed.id)))
+        assertFalse(scanForMovableRecording(
+            recordings = listOf(suppressed),
+            targetDirectoryId = "target",
+            pendingDeletionIds = emptySet(),
+            pendingOutputCleanupIds = setOf(suppressed.id),
+            nowMillis = 100L,
+            mutationIsActive = { error("suppressed output must not reach mutation admission") },
+            assetState = { error("suppressed output must not touch storage") },
+            destructiveIdentityMatches = { error("suppressed output must not resolve identity") },
+            collectUpdate = { error("suppressed output must not change its catalog row") },
+        ))
+    }
+
+    @Test
+    fun catalogSuppressionPreservesRowsAndDoesNotHideUnrelatedRecordings() {
+        val suppressed = recording("failed-output")
+        val kept = recording("kept")
+        val deleted = recording("deleted")
+        val missing = recording("missing").copy(missingSinceMillis = 2L)
+        val rows = listOf(suppressed, kept, deleted, missing)
+        val outputIds = setOf(suppressed.id)
+        assertEquals(listOf(kept), visibleCatalogRecordings(rows, setOf(deleted.id), outputIds))
+        assertEquals(listOf(suppressed, kept, deleted, missing), rows)
+        assertSame(suppressed, rows.first())
+        assertEquals(setOf("failed-output"), outputIds)
+        assertEquals(listOf(suppressed, kept), visibleCatalogRecordings(rows, setOf(deleted.id)))
+    }
+
     private fun recording(id: String, directoryId: String = "source") = RecordingEntity(
         id = id,
         displayName = "$id.wav",

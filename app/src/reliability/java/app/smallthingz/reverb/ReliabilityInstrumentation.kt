@@ -357,6 +357,18 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 .append(Log.getStackTraceString(error)).append('\n')
                         }
                     }
+                    if (requestedTest == "catalog_output_suppression") {
+                        executed++
+                        try {
+                            verifyCatalogOutputSuppression(targetContext, tree, provider)
+                            report.append("PASS catalog_output_suppression\n")
+                        } catch (error: Throwable) {
+                            failures++
+                            report.append("FAIL catalog_output_suppression\n")
+                                .append(Log.getStackTraceString(error)).append('\n')
+                            throw ProviderFixtureAbort()
+                        }
+                    }
                     if (requestedTest == null || requestedTest == "staged_recovery_suppression") {
                         verifyStagedRecoverySuppression(targetContext, tree, provider) { name, test ->
                             executed++
