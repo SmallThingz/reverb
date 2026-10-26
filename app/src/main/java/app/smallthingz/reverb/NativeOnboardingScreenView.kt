@@ -515,7 +515,7 @@ internal class NativeOnboardingScreenView private constructor(
     internal fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
         return when {
         view === viewport -> horizontal.nodes
-        view is NativeVerticalViewport -> vertical[view]?.let { listOf(it.observerNode, it.dragNode) } ?: emptyList()
+        view is NativeVerticalViewport -> vertical[view]?.nodes ?: emptyList()
         view is NativeClickPhaseHost -> listOf(pointer.click(view, view.nativeClickEndpoint) { change ->
             var parent = view.parent
             while (parent is View) {

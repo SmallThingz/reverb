@@ -37,7 +37,7 @@ internal class SettingsMenuPointerBinding(
     private val columnLayout = Layout(content.column,emptyList(),{ reversedRows })
     private val viewportChildren = listOf(columnLayout)
     private val viewportLayout = Layout(
-        content.viewport,listOf(vertical.observerNode,vertical.dragNode),{ viewportChildren },
+        content.viewport,vertical.nodes,{ viewportChildren },
         clip = { local ->
             val extra = (30f*density.density).roundToInt()
             local.x >= -extra && local.x < content.viewport.width+extra &&

@@ -720,7 +720,7 @@ private class AboutInputGeometry(private val density: Float) : AutoCloseable {
         }
         val viewport = surface.viewport
         val inflation = (30f * density).roundToInt()
-        val viewportHit = Hit(viewport, listOf(vertical.observerNode, vertical.dragNode),
+        val viewportHit = Hit(viewport, vertical.nodes,
             listOf(repositoryHit, closeHit)) { p ->
             p.x >= -inflation && p.x < viewport.width + inflation && p.y >= 0f && p.y < viewport.height
         }

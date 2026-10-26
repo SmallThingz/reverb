@@ -62,7 +62,7 @@ internal class ReverbRecordingInfoBody(
         val reversedSurfaceLayouts = surfaceLayouts.asReversed()
         val listHit = host.hit(rows, emptyList(), children = { reversedSurfaceLayouts })
         val listHitChildren = listOf(listHit)
-        val scrollHit = host.hit(viewport, listOf(scroll.observerNode, scroll.dragNode), children = { listHitChildren },
+        val scrollHit = host.hit(viewport, scroll.nodes, children = { listHitChildren },
             clip = {
                 val extra = dp(30f)
                 it.x >= -extra && it.x < viewport.width + extra && it.y >= 0f && it.y < viewport.height

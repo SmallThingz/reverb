@@ -59,6 +59,8 @@ internal class NativeVerticalPhaseBinding(
         override fun cancel() = Unit // Drag cancel still uses the owner's zero-velocity release path.
     }
 
+    val nodes: List<NativeViewPhasePointerNode> = listOf(observerNode, dragNode)
+
     init {
         viewport.addOnAttachStateChangeListener(this)
         if (viewport.isAttachedToWindow) onViewAttachedToWindow(viewport)

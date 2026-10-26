@@ -528,7 +528,7 @@ private class FineLeafPointerGeometry(private val density: Density) {
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = Size(48f * density.density, 48f * density.density)
         override val nodes: List<NativeViewPhasePointerNode> get() = when (view) {
-            viewport -> listOf(vertical.observerNode, vertical.dragNode)
+            viewport -> vertical.nodes
             fine -> listOf(fine.fineSeekNode)
             fine.puckClickView -> listOf(fine.puckClickNode)
             else -> emptyList()

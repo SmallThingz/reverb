@@ -101,7 +101,7 @@ internal class NativeLibraryPointerBinding(
                 NativeVerticalPhaseBinding(it, { configuration.scaledTouchSlop.toFloat() },
                     { configuration.scaledMaximumFlingVelocity.toFloat() }, parentInterested)
             }
-            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, it.dragNode)) }
+            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(it.nodes) }
                 ?: emptyList()
         }
         val obsolete = layouts.keys.filter { !it.isAttachedToWindow }

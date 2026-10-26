@@ -535,11 +535,6 @@ fun getConfiguredPcmSampleFormat(context: Context): PcmSampleFormat = readByteBa
     fromLegacyPrefValue = PcmSampleFormat::fromLegacyPrefValue,
 )
 
-fun isCodecCompatibleWithFormat(
-    format: ExportFormat,
-    codec: ExportCodec,
-): Boolean = format in ExportFormat.entries && codec == ExportCodec.PCM_16
-
 fun getConfiguredAudioSourceMode(context: Context): AudioSourceMode =
     AudioSourceMode.fromStorageCode(
         getRecorderPreferences(context).safeInt(PrefKey.AUDIO_SOURCE, AudioSourceMode.defaultMode().storageCode.toInt()),
@@ -831,8 +826,7 @@ fun isCodecSupported(
     codec: ExportCodec,
     sampleRate: Int,
     channelMode: ChannelMode,
-): Boolean = isCodecCompatibleWithFormat(format, codec) &&
-    isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
+): Boolean = isExportConfigurationSupported(format, codec, sampleRate, channelMode.channelCount)
 private fun bytesPerSecond(
     sampleRate: Int,
     channelCount: Int,
