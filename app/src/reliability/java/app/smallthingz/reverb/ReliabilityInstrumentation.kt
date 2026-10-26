@@ -319,10 +319,12 @@ class ReliabilityInstrumentation : Instrumentation() {
                             try {
                                 test()
                                 report.append("PASS ").append(name).append('\n')
+                                true
                             } catch (error: Throwable) {
                                 failures++
                                 report.append("FAIL ").append(name).append('\n')
                                     .append(Log.getStackTraceString(error)).append('\n')
+                                false
                             }
                         }
                     }

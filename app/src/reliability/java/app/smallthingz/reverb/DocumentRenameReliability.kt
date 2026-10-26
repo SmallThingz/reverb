@@ -10,10 +10,10 @@ internal fun verifyDocumentRenameNullResponse(
     context: Context,
     tree: Uri,
     provider: ReliabilityDocumentsProvider,
-    runCase: (String, () -> Unit) -> Unit,
+    runCase: (String, () -> Unit) -> Boolean,
 ) {
     check(context.packageName.endsWith(".reliability"))
-    runCase("document_contract_returns_null_after_committed_checked_failure") {
+    if (!runCase("document_contract_returns_null_after_committed_checked_failure") {
         val original = prepareRenameFixture(context, tree, provider)
         val bytes = provider.retainedBytes().single()
         provider.prepareRenameResponse(ReliabilityDocumentsProvider.Mode.RENAME_THEN_IO_FAILURE)
@@ -24,8 +24,8 @@ internal fun verifyDocumentRenameNullResponse(
         check(returned == null) { "This platform did not exercise DocumentsContract's null-result branch" }
         check(provider.deleteCalls == 0)
         check(provider.retainedBytes().single().contentEquals(bytes))
-    }
-    runCase("document_null_rename_recovers_verified_final_document") {
+    }) return
+    if (!runCase("document_null_rename_recovers_verified_final_document") {
         val original = prepareRenameFixture(context, tree, provider)
         val bytes = provider.retainedBytes().single()
         provider.prepareRenameResponse(ReliabilityDocumentsProvider.Mode.RENAME_THEN_IO_FAILURE)
@@ -38,7 +38,7 @@ internal fun verifyDocumentRenameNullResponse(
         check(actual.contentEquals(bytes))
         check(provider.deleteCalls == 0)
         check(provider.retainedBytes().single().contentEquals(bytes))
-    }
+    }) return
     runCase("document_null_rename_with_unavailable_listing_remains_uncertain") {
         val original = prepareRenameFixture(context, tree, provider)
         val bytes = provider.retainedBytes().single()
